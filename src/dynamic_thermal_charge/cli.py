@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime
+import logging
 from pathlib import Path
 
 from .config import load_config
+from .logging_config import configure_logging
 from .scheduler import ChargeScheduler
+
+
+logger = logging.getLogger(__name__)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -19,6 +24,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="charge window start in ISO format (default: current time)",
     )
+    parser.add_argument(
+        "--log-level",
+        type=str.upper,
+        choices=("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"),
+        default=None,
+        help="override the YAML log level",
+    )
     return parser
 
 
@@ -26,6 +38,12 @@ def main() -> int:
     args = build_parser().parse_args()
     try:
         config = load_config(args.config)
+        configure_logging(args.log_level or config.logging.level)
+        logger.info(
+            "Loaded configuration %s with %d heaters",
+            args.config,
+            len(config.heaters),
+        )
         start = args.start or datetime.now().replace(second=0, microsecond=0)
         result = ChargeScheduler().build(config.site, config.heaters, start)
     except ValueError as exc:

@@ -7,7 +7,7 @@ from typing import Any, Mapping
 
 import yaml
 
-from .models import AppConfig, Heater, OutputConfig, SiteConfig
+from .models import AppConfig, Heater, LoggingConfig, OutputConfig, SiteConfig
 
 
 def _mapping(value: Any, label: str) -> Mapping[str, Any]:
@@ -27,6 +27,7 @@ def load_config(path: str | Path) -> AppConfig:
 
     root = _mapping(raw, "configuration")
     site_raw = _mapping(root.get("site"), "site")
+    logging_raw = _mapping(root.get("logging", {}), "logging")
     heaters_raw = root.get("heaters")
     if not isinstance(heaters_raw, list) or not heaters_raw:
         raise ValueError("heaters must be a non-empty list")
@@ -38,9 +39,10 @@ def load_config(path: str | Path) -> AppConfig:
             window_minutes=round(float(site_raw.get("window_hours", 8)) * 60),
         )
         heaters = tuple(_load_heater(item, index) for index, item in enumerate(heaters_raw))
+        logging_config = LoggingConfig(level=str(logging_raw.get("level", "INFO")))
     except (KeyError, TypeError, ValueError) as exc:
         raise ValueError(f"invalid configuration: {exc}") from exc
-    return AppConfig(site=site, heaters=heaters)
+    return AppConfig(site=site, heaters=heaters, logging=logging_config)
 
 
 def _load_heater(raw: Any, index: int) -> Heater:

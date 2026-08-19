@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import logging
 from typing import Protocol
+
+
+logger = logging.getLogger(__name__)
 
 
 class OutputDriver(Protocol):
@@ -26,6 +30,8 @@ class SimulatedOutputDriver:
 
     def set_state(self, heater_id: str, enabled: bool, at: datetime) -> None:
         if self._state.get(heater_id, False) == enabled:
+            logger.debug("Ignoring unchanged simulated output %s=%s", heater_id, enabled)
             return
         self._state[heater_id] = enabled
         self.changes.append(StateChange(at=at, heater_id=heater_id, enabled=enabled))
+        logger.info("Simulated output changed: %s=%s at %s", heater_id, enabled, at)

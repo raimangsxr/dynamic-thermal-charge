@@ -10,6 +10,7 @@ def test_loads_example_configuration() -> None:
 
     assert config.site.max_total_power_w == 5500
     assert config.site.slot_minutes == 30
+    assert config.logging.level == "INFO"
     assert [heater.id for heater in config.heaters] == [
         "salon",
         "entrada",
@@ -32,4 +33,20 @@ heaters:
     )
 
     with pytest.raises(ValueError, match="unique"):
+        load_config(config_file)
+
+
+def test_rejects_unknown_log_level(tmp_path: Path) -> None:
+    config_file = tmp_path / "logging.yaml"
+    config_file.write_text(
+        """
+logging: {level: VERBOSE}
+site: {max_total_power_kw: 5, slot_minutes: 30, window_hours: 8}
+heaters:
+  - {id: one, power_kw: 1, full_charge_hours: 8}
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="unsupported log level"):
         load_config(config_file)

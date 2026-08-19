@@ -4,8 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+import logging
 
 from .models import Heater, SiteConfig
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -33,10 +37,17 @@ class ChargeScheduler:
         start: datetime,
     ) -> ScheduleResult:
         enabled = tuple(heater for heater in heaters if heater.enabled)
+        logger.info(
+            "Building %d-minute charge plan for %d enabled heaters with %d W limit",
+            site.window_minutes,
+            len(enabled),
+            site.max_total_power_w,
+        )
         requested_slots = {
             heater.id: _ceil_div(heater.requested_charge_minutes, site.slot_minutes)
             for heater in enabled
         }
+        logger.debug("Requested slots by heater: %s", requested_slots)
         remaining = requested_slots.copy()
         allocated = {heater.id: 0 for heater in enabled}
         slots: list[ScheduleSlot] = []
@@ -64,6 +75,12 @@ class ChargeScheduler:
                     total_power_w=used_power,
                 )
             )
+            logger.debug(
+                "Slot %s: selected=%s power_w=%d",
+                slot_start.isoformat(timespec="minutes"),
+                selected,
+                used_power,
+            )
 
         allocated_minutes = {
             heater_id: count * site.slot_minutes for heater_id, count in allocated.items()
@@ -73,6 +90,12 @@ class ChargeScheduler:
             for heater_id, count in remaining.items()
             if count > 0
         }
+        logger.info(
+            "Charge plan built: %d slots, allocated_minutes=%s, unmet_minutes=%s",
+            len(slots),
+            allocated_minutes,
+            unmet_minutes,
+        )
         return ScheduleResult(tuple(slots), allocated_minutes, unmet_minutes)
 
 

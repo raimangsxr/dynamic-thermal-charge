@@ -1,3 +1,6 @@
+logging:
+  level: INFO
+
 site:
   max_total_power_kw: 5.5
   slot_minutes: 30

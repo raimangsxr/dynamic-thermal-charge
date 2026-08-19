@@ -42,6 +42,22 @@ prioridades u objetivos de carga sin modificar el código.
 - `target_charge`: fracción de carga solicitada para esta simulación (`0..1`).
 - `priority`: los valores mayores se atienden primero cuando falta capacidad.
 
+El nivel de log se configura globalmente en el YAML:
+
+```yaml
+logging:
+  level: INFO  # DEBUG, INFO, WARNING, ERROR o CRITICAL
+```
+
+Puede sobrescribirse para una ejecución concreta sin editar el fichero:
+
+```bash
+dynamic-thermal-charge examples/home.yaml --log-level DEBUG
+```
+
+Los logs se escriben en la salida de error y el plan legible permanece en la
+salida estándar, lo que permite redirigirlos de forma independiente.
+
 Las salidas declaradas como `simulated` no accionan ningún pin. El futuro
 driver GPIO usará numeración BCM y mantendrá las librerías de Raspberry fuera
 del núcleo.

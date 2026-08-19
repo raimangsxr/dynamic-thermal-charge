@@ -63,9 +63,21 @@ class SiteConfig:
 
 
 @dataclass(frozen=True)
+class LoggingConfig:
+    level: str = "INFO"
+
+    def __post_init__(self) -> None:
+        normalized_level = self.level.upper()
+        if normalized_level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
+            raise ValueError(f"unsupported log level: {self.level}")
+        object.__setattr__(self, "level", normalized_level)
+
+
+@dataclass(frozen=True)
 class AppConfig:
     site: SiteConfig
     heaters: tuple[Heater, ...]
+    logging: LoggingConfig = LoggingConfig()
 
     def __post_init__(self) -> None:
         ids = [heater.id for heater in self.heaters]
