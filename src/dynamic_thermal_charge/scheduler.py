@@ -1,0 +1,80 @@
+"""Deterministic slot-based charge scheduler."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+
+from .models import Heater, SiteConfig
+
+
+@dataclass(frozen=True)
+class ScheduleSlot:
+    start: datetime
+    end: datetime
+    heater_ids: tuple[str, ...]
+    total_power_w: int
+
+
+@dataclass(frozen=True)
+class ScheduleResult:
+    slots: tuple[ScheduleSlot, ...]
+    allocated_minutes: dict[str, int]
+    unmet_minutes: dict[str, int]
+
+
+class ChargeScheduler:
+    """Allocate complete slots, giving constrained capacity to higher priorities."""
+
+    def build(
+        self,
+        site: SiteConfig,
+        heaters: tuple[Heater, ...],
+        start: datetime,
+    ) -> ScheduleResult:
+        enabled = tuple(heater for heater in heaters if heater.enabled)
+        requested_slots = {
+            heater.id: _ceil_div(heater.requested_charge_minutes, site.slot_minutes)
+            for heater in enabled
+        }
+        remaining = requested_slots.copy()
+        allocated = {heater.id: 0 for heater in enabled}
+        slots: list[ScheduleSlot] = []
+
+        for slot_index in range(site.window_minutes // site.slot_minutes):
+            used_power = 0
+            selected: list[str] = []
+            candidates = sorted(
+                (heater for heater in enabled if remaining[heater.id] > 0),
+                key=lambda heater: (-heater.priority, -remaining[heater.id], heater.id),
+            )
+            for heater in candidates:
+                if used_power + heater.power_w <= site.max_total_power_w:
+                    selected.append(heater.id)
+                    used_power += heater.power_w
+                    remaining[heater.id] -= 1
+                    allocated[heater.id] += 1
+
+            slot_start = start + timedelta(minutes=slot_index * site.slot_minutes)
+            slots.append(
+                ScheduleSlot(
+                    start=slot_start,
+                    end=slot_start + timedelta(minutes=site.slot_minutes),
+                    heater_ids=tuple(selected),
+                    total_power_w=used_power,
+                )
+            )
+
+        allocated_minutes = {
+            heater_id: count * site.slot_minutes for heater_id, count in allocated.items()
+        }
+        unmet_minutes = {
+            heater_id: count * site.slot_minutes
+            for heater_id, count in remaining.items()
+            if count > 0
+        }
+        return ScheduleResult(tuple(slots), allocated_minutes, unmet_minutes)
+
+
+def _ceil_div(value: int, divisor: int) -> int:
+    return (value + divisor - 1) // divisor

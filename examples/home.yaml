@@ -1,0 +1,45 @@
+site:
+  max_total_power_kw: 5.5
+  slot_minutes: 30
+  window_hours: 8
+
+heaters:
+  - id: salon
+    name: Salón
+    model: ADS-2812
+    power_kw: 2.8
+    full_charge_hours: 8
+    target_charge: 0.75
+    priority: 90
+    output:
+      type: simulated
+
+  - id: entrada
+    name: Entrada
+    model: ADS-2412
+    power_kw: 2.4
+    full_charge_hours: 8
+    target_charge: 0.50
+    priority: 50
+    output:
+      type: simulated
+
+  - id: habitaciones
+    name: Habitaciones
+    model: ADS-2412
+    power_kw: 2.4
+    full_charge_hours: 8
+    target_charge: 0.75
+    priority: 100
+    output:
+      type: simulated
+
+  - id: buhardilla
+    name: Buhardilla
+    model: ADS-2412
+    power_kw: 2.4
+    full_charge_hours: 8
+    target_charge: 0.25
+    priority: 40
+    output:
+      type: simulated

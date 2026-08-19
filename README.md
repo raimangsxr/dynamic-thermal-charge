@@ -1,1 +1,55 @@
-# dynamic-thermal-charge
+# Dynamic Thermal Charge
+
+Planificador configurable de carga para acumuladores eléctricos, pensado para
+funcionar en una Raspberry Pi 2B sin acoplar la lógica de negocio al hardware.
+
+El proyecto se encuentra en una primera fase funcional: carga una instalación
+desde YAML y calcula un plan por intervalos respetando el límite de potencia.
+Incluye un driver simulado como frontera de salida. La previsión meteorológica,
+el modelo térmico y el GPIO real se añadirán como componentes independientes.
+
+## Requisitos
+
+- Python 3.12 o superior
+- PyYAML 6
+
+## Puesta en marcha
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e '.[dev]'
+dynamic-thermal-charge examples/home.yaml
+pytest
+```
+
+También puede ejecutarse sin instalar el comando:
+
+```bash
+PYTHONPATH=src python -m dynamic_thermal_charge examples/home.yaml
+```
+
+## Configuración
+
+`examples/home.yaml` representa una instalación de ejemplo, no una restricción
+del programa. Se pueden añadir o quitar acumuladores y cambiar sus potencias,
+prioridades u objetivos de carga sin modificar el código.
+
+- `max_total_power_kw`: potencia máxima simultánea dedicada a acumuladores.
+- `slot_minutes`: resolución del plan.
+- `window_hours`: duración de la ventana de carga.
+- `full_charge_hours`: tiempo requerido por el aparato para una carga completa.
+- `target_charge`: fracción de carga solicitada para esta simulación (`0..1`).
+- `priority`: los valores mayores se atienden primero cuando falta capacidad.
+
+Las salidas declaradas como `simulated` no accionan ningún pin. El futuro
+driver GPIO usará numeración BCM y mantendrá las librerías de Raspberry fuera
+del núcleo.
+
+## Decisiones de diseño
+
+- Dependencias mínimas para los recursos de una Raspberry Pi 2B.
+- Cálculos enteros en vatios y minutos para evitar errores de coma flotante.
+- Planificador determinista y comprobable mediante tests.
+- Las peticiones no atendidas se muestran explícitamente; nunca se oculta una
+  sobrecarga o una ventana de carga insuficiente.
