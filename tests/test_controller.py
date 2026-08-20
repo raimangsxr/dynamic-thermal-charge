@@ -1,5 +1,8 @@
 from datetime import datetime, timedelta
 
+import pytest
+
+from dynamic_thermal_charge.cli import _handle_termination_signal
 from dynamic_thermal_charge.controller import ChargeController
 from dynamic_thermal_charge.scheduler import ScheduleResult, ScheduleSlot
 
@@ -81,3 +84,8 @@ def test_ignores_unknown_heaters_from_persisted_plan(caplog) -> None:
 
     assert not any(call[0] == "removed-heater" for call in driver.calls)
     assert "Ignoring unknown heater ids" in caplog.text
+
+
+def test_sigterm_is_converted_to_controlled_shutdown() -> None:
+    with pytest.raises(KeyboardInterrupt):
+        _handle_termination_signal(None, None)

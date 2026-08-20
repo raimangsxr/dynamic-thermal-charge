@@ -6,6 +6,7 @@ import argparse
 from datetime import datetime
 import logging
 from pathlib import Path
+import signal
 import time
 from typing import Callable
 from zoneinfo import ZoneInfo
@@ -58,6 +59,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="run the persistent controller with simulated outputs",
     )
+    persistent_mode.add_argument(
+        "--check-config",
+        action="store_true",
+        help="validate configuration without fetching weather or building a plan",
+    )
     return parser
 
 
@@ -71,6 +77,9 @@ def main() -> int:
             args.config,
             len(config.heaters),
         )
+        if args.check_config:
+            logger.info("Configuration validation succeeded")
+            return 0
         provider = (
             build_weather_provider(config.weather)
             if config.weather is not None
@@ -199,7 +208,17 @@ def _run_controller(config: AppConfig, provider: WeatherProvider) -> int:
         poll_seconds=config.runtime.poll_seconds,
         error_retry_seconds=config.weather.watchdog.retry_minutes * 60,
     )
-    return service.run()
+    previous_sigterm_handler = signal.getsignal(signal.SIGTERM)
+    signal.signal(signal.SIGTERM, _handle_termination_signal)
+    try:
+        return service.run()
+    finally:
+        signal.signal(signal.SIGTERM, previous_sigterm_handler)
+
+
+def _handle_termination_signal(_signum, _frame) -> None:
+    logger.info("Termination signal received")
+    raise KeyboardInterrupt
 
 
 def _print_plan(config: AppConfig, result: ScheduleResult) -> None:

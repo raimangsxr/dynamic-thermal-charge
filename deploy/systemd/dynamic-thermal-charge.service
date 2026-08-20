@@ -1,0 +1,35 @@
+[Unit]
+Description=Dynamic Thermal Charge controller
+Documentation=https://github.com/raimangsxr/dynamic-thermal-charge
+Wants=network-online.target time-sync.target
+After=network-online.target time-sync.target
+
+[Service]
+Type=simple
+User=dynamic-thermal-charge
+Group=dynamic-thermal-charge
+WorkingDirectory=/var/lib/dynamic-thermal-charge
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+EnvironmentFile=/etc/dynamic-thermal-charge/environment
+ExecStartPre=/opt/dynamic-thermal-charge/venv/bin/dynamic-thermal-charge /etc/dynamic-thermal-charge/config.yaml --check-config
+ExecStart=/opt/dynamic-thermal-charge/venv/bin/dynamic-thermal-charge /etc/dynamic-thermal-charge/config.yaml --run-controller
+Restart=on-failure
+RestartSec=30s
+TimeoutStopSec=30s
+KillSignal=SIGTERM
+UMask=0077
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/var/lib/dynamic-thermal-charge
+
+[Install]
+WantedBy=multi-user.target

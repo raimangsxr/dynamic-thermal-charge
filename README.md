@@ -158,6 +158,50 @@ Por seguridad, `--run-controller` utiliza exclusivamente
 `SimulatedOutputDriver`, aunque el YAML declare salidas GPIO. El soporte GPIO
 real todavía no está habilitado.
 
+## Instalación como servicio systemd
+
+En Raspberry Pi OS con Python 3.12, ejecutar desde el repositorio:
+
+```bash
+sudo ./scripts/install-service.sh
+```
+
+El instalador crea un usuario sin shell, un entorno virtual aislado y estas
+rutas:
+
+- `/opt/dynamic-thermal-charge/venv`: aplicación instalada.
+- `/etc/dynamic-thermal-charge/config.yaml`: configuración, conservada en las
+  actualizaciones posteriores.
+- `/etc/dynamic-thermal-charge/environment`: API key, modo `0600` y también
+  conservada en actualizaciones.
+- `/var/lib/dynamic-thermal-charge/active-plan.json`: último plan válido.
+
+Antes de iniciar, configurar el secreto y revisar el código municipal, límites
+de potencia y horarios:
+
+```bash
+sudoedit /etc/dynamic-thermal-charge/environment
+sudoedit /etc/dynamic-thermal-charge/config.yaml
+sudo systemctl start dynamic-thermal-charge
+sudo systemctl enable dynamic-thermal-charge
+```
+
+Operación y diagnóstico:
+
+```bash
+systemctl status dynamic-thermal-charge
+journalctl -u dynamic-thermal-charge -f
+sudo systemctl restart dynamic-thermal-charge
+sudo systemctl stop dynamic-thermal-charge
+```
+
+La unidad valida la configuración antes de arrancar, espera a que red y reloj
+estén disponibles, reinicia el proceso tras fallos y aplica restricciones de
+seguridad de systemd. `SIGTERM` se transforma en una parada controlada para que
+el controlador apague las salidas en su bloque `finally`. La instalación no
+habilita ni arranca automáticamente el servicio y continúa usando salidas
+simuladas.
+
 Una configuración de despliegue puede definir la ventana mediante horarios:
 
 ```yaml
