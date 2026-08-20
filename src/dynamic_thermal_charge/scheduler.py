@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 import logging
+import math
 
 from .models import Heater, SiteConfig
 
@@ -36,6 +37,13 @@ class ChargeScheduler:
         heaters: tuple[Heater, ...],
         start: datetime,
     ) -> ScheduleResult:
+        aligned_start = align_to_slot(start, site.slot_minutes)
+        if aligned_start != start:
+            logger.info(
+                "Aligned planning start from %s to %s",
+                start.isoformat(timespec="seconds"),
+                aligned_start.isoformat(timespec="minutes"),
+            )
         enabled = tuple(heater for heater in heaters if heater.enabled)
         logger.info(
             "Building %d-minute charge plan for %d enabled heaters with %d W limit",
@@ -66,7 +74,9 @@ class ChargeScheduler:
                     remaining[heater.id] -= 1
                     allocated[heater.id] += 1
 
-            slot_start = start + timedelta(minutes=slot_index * site.slot_minutes)
+            slot_start = aligned_start + timedelta(
+                minutes=slot_index * site.slot_minutes
+            )
             slots.append(
                 ScheduleSlot(
                     start=slot_start,
@@ -90,6 +100,8 @@ class ChargeScheduler:
             for heater_id, count in remaining.items()
             if count > 0
         }
+        if unmet_minutes:
+            logger.warning("Unmet charge demand (minutes): %s", unmet_minutes)
         logger.info(
             "Charge plan built: %d slots, allocated_minutes=%s, unmet_minutes=%s",
             len(slots),
@@ -101,3 +113,12 @@ class ChargeScheduler:
 
 def _ceil_div(value: int, divisor: int) -> int:
     return (value + divisor - 1) // divisor
+
+
+def align_to_slot(value: datetime, slot_minutes: int) -> datetime:
+    """Round a datetime up to the next wall-clock slot boundary."""
+    midnight = value.replace(hour=0, minute=0, second=0, microsecond=0)
+    elapsed_seconds = (value - midnight).total_seconds()
+    slot_seconds = slot_minutes * 60
+    elapsed_slots = math.ceil(elapsed_seconds / slot_seconds)
+    return midnight + timedelta(seconds=elapsed_slots * slot_seconds)

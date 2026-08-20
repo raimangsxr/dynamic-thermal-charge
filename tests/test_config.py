@@ -50,3 +50,18 @@ heaters:
 
     with pytest.raises(ValueError, match="unsupported log level"):
         load_config(config_file)
+
+
+def test_rejects_slots_that_do_not_align_with_the_clock(tmp_path: Path) -> None:
+    config_file = tmp_path / "slots.yaml"
+    config_file.write_text(
+        """
+site: {max_total_power_kw: 5, slot_minutes: 45, window_hours: 9}
+heaters:
+  - {id: one, power_kw: 1, full_charge_hours: 8}
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="divisor of 60"):
+        load_config(config_file)

@@ -56,6 +56,8 @@ class SiteConfig:
             raise ValueError("max_total_power must be positive")
         if self.slot_minutes <= 0:
             raise ValueError("slot_minutes must be positive")
+        if self.slot_minutes > 60 or 60 % self.slot_minutes:
+            raise ValueError("slot_minutes must be a divisor of 60")
         if self.window_minutes <= 0:
             raise ValueError("window_hours must be positive")
         if self.window_minutes % self.slot_minutes:

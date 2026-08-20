@@ -57,6 +57,13 @@ dynamic-thermal-charge examples/home.yaml --log-level DEBUG
 
 Los logs se escriben en la salida de error y el plan legible permanece en la
 salida estándar, lo que permite redirigirlos de forma independiente.
+Si el plan no puede cubrir toda la carga solicitada, se genera además un log
+`WARNING` con los minutos pendientes de cada acumulador.
+
+Los intervalos siempre se alinean con el reloj. Por ejemplo, una planificación
+de 30 minutos iniciada a las 22:17 comenzará a las 22:30 y continuará a las
+23:00, 23:30, etc. Para conservar límites naturales, `slot_minutes` debe ser un
+divisor de 60 (por ejemplo, 15, 20, 30 o 60).
 
 Las salidas declaradas como `simulated` no accionan ningún pin. El futuro
 driver GPIO usará numeración BCM y mantendrá las librerías de Raspberry fuera
