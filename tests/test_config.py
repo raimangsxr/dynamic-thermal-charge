@@ -77,8 +77,12 @@ def test_loads_raspberry_pi_deployment_configuration() -> None:
     assert config.schedule.window_minutes == 480
     assert config.site.window_minutes == 480
     assert config.weather is not None
-    assert config.weather.provider == "simulated"
-    assert config.weather.average_temperature_c == 8.0
+    assert config.weather.provider == "aemet"
+    assert config.weather.aemet is not None
+    assert len(config.weather.aemet.municipality_code) == 5
+    assert config.weather.aemet.municipality_code.isdigit()
+    assert config.weather.fallback is not None
+    assert config.weather.fallback.average_temperature_c == 8.0
     assert [heater.output.pin for heater in config.heaters] == [17, 18, 22, 23]
     assert all(heater.output.kind == "gpio" for heater in config.heaters)
     assert all(not heater.output.active_high for heater in config.heaters)

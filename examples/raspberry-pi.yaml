@@ -3,7 +3,7 @@
 # dimensionados por un electricista. Nunca conecte un acumulador directamente al GPIO.
 
 logging:
-  level: INFO
+  level: DEBUG
 
 schedule:
   timezone: Europe/Madrid
@@ -19,10 +19,14 @@ schedule:
     - sunday
 
 weather:
-  # Proveedor determinista para desarrollar y probar sin depender de Internet.
-  # La siguiente fase sustituirá este bloque por el proveedor AEMET.
-  provider: simulated
-  simulated:
+  provider: aemet
+  aemet:
+    # Código INE de 5 dígitos del municipio de la vivienda.
+    municipality_code: "15057"
+    api_key_env: AEMET_API_KEY
+    timeout_seconds: 10
+  # Valores conservadores usados si falta la API key, la red o falla AEMET.
+  fallback:
     average_temperature_c: 8.0
     minimum_temperature_c: 3.0
 

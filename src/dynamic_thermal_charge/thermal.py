@@ -20,10 +20,11 @@ class ThermalDemandEngine:
         forecast: OutdoorForecast,
     ) -> dict[str, int]:
         logger.info(
-            "Calculating thermal demand from %s forecast: average=%.1f C, minimum=%.1f C",
+            "Calculating thermal demand from %s forecast: average=%.1f C, minimum=%.1f C, maximum=%.1f C",
             forecast.source,
             forecast.average_temperature_c,
             forecast.minimum_temperature_c,
+            forecast.maximum_temperature_c,
         )
         demands: dict[str, int] = {}
         for heater in heaters:

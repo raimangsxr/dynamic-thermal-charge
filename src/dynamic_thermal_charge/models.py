@@ -98,16 +98,44 @@ class LoggingConfig:
 
 
 @dataclass(frozen=True)
-class WeatherConfig:
-    provider: str
+class SimulatedForecastConfig:
     average_temperature_c: float
     minimum_temperature_c: float
 
     def __post_init__(self) -> None:
-        if self.provider != "simulated":
-            raise ValueError(f"unsupported weather provider: {self.provider}")
         if self.minimum_temperature_c > self.average_temperature_c:
             raise ValueError("minimum temperature cannot exceed average temperature")
+
+
+@dataclass(frozen=True)
+class AemetConfig:
+    municipality_code: str
+    api_key_env: str = "AEMET_API_KEY"
+    timeout_seconds: float = 10.0
+
+    def __post_init__(self) -> None:
+        if len(self.municipality_code) != 5 or not self.municipality_code.isdigit():
+            raise ValueError("AEMET municipality_code must contain 5 digits")
+        if not self.api_key_env:
+            raise ValueError("AEMET api_key_env cannot be empty")
+        if self.timeout_seconds <= 0:
+            raise ValueError("AEMET timeout_seconds must be positive")
+
+
+@dataclass(frozen=True)
+class WeatherConfig:
+    provider: str
+    simulated: SimulatedForecastConfig | None = None
+    aemet: AemetConfig | None = None
+    fallback: SimulatedForecastConfig | None = None
+
+    def __post_init__(self) -> None:
+        if self.provider not in {"simulated", "aemet"}:
+            raise ValueError(f"unsupported weather provider: {self.provider}")
+        if self.provider == "simulated" and self.simulated is None:
+            raise ValueError("simulated weather provider requires simulated values")
+        if self.provider == "aemet" and self.aemet is None:
+            raise ValueError("AEMET weather provider requires AEMET configuration")
 
 
 @dataclass(frozen=True)

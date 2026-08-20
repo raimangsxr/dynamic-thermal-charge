@@ -12,7 +12,7 @@ from .config import load_config
 from .logging_config import configure_logging
 from .scheduler import ChargeScheduler
 from .thermal import ThermalDemandEngine
-from .weather import SimulatedWeatherProvider
+from .weather import WeatherProviderError, build_weather_provider
 
 
 logger = logging.getLogger(__name__)
@@ -61,7 +61,16 @@ def main() -> int:
             start = datetime.now().replace(second=0, microsecond=0)
         requested_charge_minutes = None
         if config.weather is not None:
-            forecast = SimulatedWeatherProvider(config.weather).forecast_for(start.date())
+            forecast = build_weather_provider(config.weather).forecast_for(start.date())
+            logger.info(
+                "Weather forecast: date=%s source=%s location=%s min=%.1f C avg=%.1f C max=%.1f C",
+                forecast.date.isoformat(),
+                forecast.source,
+                forecast.location or "n/a",
+                forecast.minimum_temperature_c,
+                forecast.average_temperature_c,
+                forecast.maximum_temperature_c,
+            )
             requested_charge_minutes = ThermalDemandEngine().calculate(
                 config.heaters,
                 forecast,
@@ -74,6 +83,8 @@ def main() -> int:
         )
     except ValueError as exc:
         raise SystemExit(f"Configuration error: {exc}") from exc
+    except WeatherProviderError as exc:
+        raise SystemExit(f"Weather error: {exc}") from exc
 
     print("Charge plan")
     for slot in result.slots:

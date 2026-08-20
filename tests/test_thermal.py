@@ -36,6 +36,7 @@ def forecast(average_temperature_c: float) -> OutdoorForecast:
         date=date(2026, 1, 1),
         average_temperature_c=average_temperature_c,
         minimum_temperature_c=average_temperature_c - 3,
+        maximum_temperature_c=average_temperature_c + 3,
         source="test",
     )
 

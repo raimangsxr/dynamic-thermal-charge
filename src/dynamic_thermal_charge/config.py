@@ -10,10 +10,12 @@ import yaml
 
 from .models import (
     AppConfig,
+    AemetConfig,
     Heater,
     LoggingConfig,
     OutputConfig,
     ScheduleConfig,
+    SimulatedForecastConfig,
     SiteConfig,
     ThermalProfile,
     WeatherConfig,
@@ -130,11 +132,42 @@ def _validate_schedule_alignment(schedule: ScheduleConfig, slot_minutes: int) ->
 
 
 def _load_weather(raw: Mapping[str, Any]) -> WeatherConfig:
-    simulated = _mapping(raw.get("simulated", {}), "weather simulated")
+    provider = str(raw.get("provider", "simulated")).lower()
+    simulated_raw = raw.get("simulated")
+    aemet_raw = raw.get("aemet")
+    fallback_raw = raw.get("fallback")
     return WeatherConfig(
-        provider=str(raw.get("provider", "simulated")),
-        average_temperature_c=float(simulated["average_temperature_c"]),
-        minimum_temperature_c=float(simulated["minimum_temperature_c"]),
+        provider=provider,
+        simulated=(
+            _load_simulated_forecast(_mapping(simulated_raw, "weather simulated"))
+            if simulated_raw is not None
+            else None
+        ),
+        aemet=(
+            _load_aemet(_mapping(aemet_raw, "weather aemet"))
+            if aemet_raw is not None
+            else None
+        ),
+        fallback=(
+            _load_simulated_forecast(_mapping(fallback_raw, "weather fallback"))
+            if fallback_raw is not None
+            else None
+        ),
+    )
+
+
+def _load_simulated_forecast(raw: Mapping[str, Any]) -> SimulatedForecastConfig:
+    return SimulatedForecastConfig(
+        average_temperature_c=float(raw["average_temperature_c"]),
+        minimum_temperature_c=float(raw["minimum_temperature_c"]),
+    )
+
+
+def _load_aemet(raw: Mapping[str, Any]) -> AemetConfig:
+    return AemetConfig(
+        municipality_code=str(raw["municipality_code"]),
+        api_key_env=str(raw.get("api_key_env", "AEMET_API_KEY")),
+        timeout_seconds=float(raw.get("timeout_seconds", 10)),
     )
 
 

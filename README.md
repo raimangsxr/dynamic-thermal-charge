@@ -66,9 +66,45 @@ heaters:
 
 El motor calcula una fracción lineal entre la temperatura exterior media de
 diseño (carga completa) y la temperatura objetivo (sin carga), aplica el factor
-térmico de la estancia y respeta los límites configurados. El proveedor
-`simulated` hace que los tests y las pruebas locales sean deterministas; todavía
-no consulta servicios meteorológicos externos.
+térmico de la estancia y respeta los límites configurados.
+
+### AEMET OpenData
+
+La configuración de Raspberry usa la predicción diaria de AEMET por municipio:
+
+```yaml
+weather:
+  provider: aemet
+  aemet:
+    municipality_code: "28079"
+    api_key_env: AEMET_API_KEY
+    timeout_seconds: 10
+  fallback:
+    average_temperature_c: 8.0
+    minimum_temperature_c: 3.0
+```
+
+`28079` es únicamente el ejemplo de Madrid; debe sustituirse por el código INE
+de cinco dígitos de la vivienda. La API key nunca se guarda en YAML:
+
+```bash
+export AEMET_API_KEY='clave-obtenida-en-AEMET-OpenData'
+dynamic-thermal-charge examples/raspberry-pi.yaml
+```
+
+El cliente solicita primero el recurso de predicción y después la URL segura
+de datos devuelta por AEMET. Para cada fecha obtiene mínima y máxima y usa su
+media en el motor térmico. Ante ausencia de credenciales, error HTTP, timeout o
+respuesta inválida, se registra un `WARNING` y se emplean los valores de
+fallback. Como AEMET no siempre hace coincidir el charset anunciado con el
+cuerpo, el cliente prueba primero UTF-8 y admite después su codificación
+heredada ISO-8859-15. El proveedor `simulated` sigue disponible para pruebas
+deterministas.
+
+Cada ejecución registra a nivel `INFO` la fecha, proveedor, municipio (cuando
+lo proporciona AEMET) y temperaturas mínima, media y máxima utilizadas por el
+motor térmico. Si se activa el fallback, el campo `source` muestra
+`simulated`.
 
 Una configuración de despliegue puede definir la ventana mediante horarios:
 
