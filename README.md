@@ -131,6 +131,33 @@ recupera, registra la recuperación y recalcula el plan con la predicción real.
 Mientras el proveedor funciona, renueva la previsión y el plan cada
 `refresh_minutes`. `Ctrl+C` detiene el watchdog de forma limpia.
 
+### Controlador persistente
+
+El controlador ejecuta el plan activo contra el driver simulado:
+
+```bash
+dynamic-thermal-charge examples/raspberry-pi.yaml --run-controller
+```
+
+Su estado se configura de forma independiente:
+
+```yaml
+runtime:
+  state_file: ../var/active-plan.json
+  poll_seconds: 5
+```
+
+El servicio fuerza todas las salidas a OFF al arrancar, guarda cada plan nuevo
+de forma atómica y recupera el último plan válido tras un reinicio. Comprueba el
+slot activo cada `poll_seconds` y solo genera acciones cuando cambia el estado.
+Ante un fallo de actualización conserva el último plan persistido; si no hay
+ninguno válido mantiene todas las salidas apagadas. Al recibir `Ctrl+C` o una
+excepción fuerza de nuevo todas las salidas a OFF.
+
+Por seguridad, `--run-controller` utiliza exclusivamente
+`SimulatedOutputDriver`, aunque el YAML declare salidas GPIO. El soporte GPIO
+real todavía no está habilitado.
+
 Una configuración de despliegue puede definir la ventana mediante horarios:
 
 ```yaml

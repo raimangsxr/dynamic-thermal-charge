@@ -98,6 +98,18 @@ class LoggingConfig:
 
 
 @dataclass(frozen=True)
+class RuntimeConfig:
+    state_file: str = "var/active-plan.json"
+    poll_seconds: float = 5.0
+
+    def __post_init__(self) -> None:
+        if not self.state_file:
+            raise ValueError("runtime state_file cannot be empty")
+        if self.poll_seconds <= 0:
+            raise ValueError("runtime poll_seconds must be positive")
+
+
+@dataclass(frozen=True)
 class SimulatedForecastConfig:
     average_temperature_c: float
     minimum_temperature_c: float
@@ -195,6 +207,24 @@ class ScheduleConfig:
                 return candidate
         raise ValueError("schedule has no next start in the configured week")
 
+    def active_or_next_start(self, reference: datetime) -> datetime:
+        zone = ZoneInfo(self.timezone)
+        local_reference = (
+            reference.replace(tzinfo=zone)
+            if reference.tzinfo is None
+            else reference.astimezone(zone)
+        )
+        for day_offset in (0, -1):
+            candidate_date = local_reference.date() + timedelta(days=day_offset)
+            if candidate_date.weekday() not in self.weekdays:
+                continue
+            candidate = datetime.combine(candidate_date, self.start_time, tzinfo=zone)
+            if candidate <= local_reference < candidate + timedelta(
+                minutes=self.window_minutes
+            ):
+                return candidate
+        return self.next_start(local_reference)
+
 
 @dataclass(frozen=True)
 class AppConfig:
@@ -203,6 +233,7 @@ class AppConfig:
     logging: LoggingConfig = LoggingConfig()
     schedule: ScheduleConfig | None = None
     weather: WeatherConfig | None = None
+    runtime: RuntimeConfig = RuntimeConfig()
 
     def __post_init__(self) -> None:
         ids = [heater.id for heater in self.heaters]

@@ -5,6 +5,10 @@
 logging:
   level: DEBUG
 
+runtime:
+  state_file: ../var/active-plan.json
+  poll_seconds: 5
+
 schedule:
   timezone: Europe/Madrid
   start_time: "00:00"

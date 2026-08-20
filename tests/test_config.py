@@ -85,6 +85,8 @@ def test_loads_raspberry_pi_deployment_configuration() -> None:
     assert config.weather.fallback.average_temperature_c == 8.0
     assert config.weather.watchdog.retry_minutes == 15
     assert config.weather.watchdog.refresh_minutes == 180
+    assert config.runtime.poll_seconds == 5
+    assert config.runtime.state_file.endswith("var/active-plan.json")
     assert [heater.output.pin for heater in config.heaters] == [17, 18, 22, 23]
     assert all(heater.output.kind == "gpio" for heater in config.heaters)
     assert all(not heater.output.active_high for heater in config.heaters)

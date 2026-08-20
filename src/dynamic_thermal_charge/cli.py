@@ -11,9 +11,13 @@ from typing import Callable
 from zoneinfo import ZoneInfo
 
 from .config import load_config
+from .controller import ChargeController
+from .drivers import SimulatedOutputDriver
 from .logging_config import configure_logging
 from .models import AppConfig
 from .scheduler import ChargeScheduler, ScheduleResult
+from .service import ControllerService, PlanRefresh
+from .state import PlanStore
 from .thermal import ThermalDemandEngine
 from .watchdog import ForecastWatchdog
 from .weather import (
@@ -43,10 +47,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="override the YAML log level",
     )
-    parser.add_argument(
+    persistent_mode = parser.add_mutually_exclusive_group()
+    persistent_mode.add_argument(
         "--watch-weather",
         action="store_true",
         help="keep refreshing weather and retry the primary provider after failures",
+    )
+    persistent_mode.add_argument(
+        "--run-controller",
+        action="store_true",
+        help="run the persistent controller with simulated outputs",
     )
     return parser
 
@@ -72,6 +82,12 @@ def main() -> int:
             if config.weather.provider == "aemet" and config.weather.fallback is None:
                 raise ValueError("--watch-weather requires weather fallback values")
             return _run_watchdog(config, args.start, provider)
+        if args.run_controller:
+            if args.start is not None:
+                raise ValueError("--run-controller does not accept --start")
+            if config.weather is None or provider is None:
+                raise ValueError("--run-controller requires weather configuration")
+            return _run_controller(config, provider)
 
         start = _select_start(config, args.start)
         forecast = provider.forecast_for(start.date()) if provider is not None else None
@@ -150,6 +166,40 @@ def _run_watchdog(
     except KeyboardInterrupt:
         logger.info("Weather watchdog stopped")
         return 0
+
+
+def _run_controller(config: AppConfig, provider: WeatherProvider) -> int:
+    assert config.weather is not None
+    logger.warning("Controller is running with simulated outputs only")
+    driver = SimulatedOutputDriver()
+    controller = ChargeController(
+        tuple(heater.id for heater in config.heaters if heater.enabled),
+        driver,
+    )
+    watchdog = ForecastWatchdog(
+        provider,
+        expected_source=config.weather.provider,
+        config=config.weather.watchdog,
+    )
+
+    def refresh_plan(now: datetime) -> PlanRefresh:
+        start = (
+            config.schedule.active_or_next_start(now)
+            if config.schedule is not None
+            else now
+        )
+        cycle = watchdog.poll(start.date())
+        plan = _build_plan(config, start, cycle.forecast)
+        return PlanRefresh(plan=plan, next_refresh_seconds=cycle.next_poll_seconds)
+
+    service = ControllerService(
+        controller=controller,
+        store=PlanStore(config.runtime.state_file),
+        refresh_plan=refresh_plan,
+        poll_seconds=config.runtime.poll_seconds,
+        error_retry_seconds=config.weather.watchdog.retry_minutes * 60,
+    )
+    return service.run()
 
 
 def _print_plan(config: AppConfig, result: ScheduleResult) -> None:

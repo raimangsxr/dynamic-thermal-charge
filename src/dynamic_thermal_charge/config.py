@@ -14,6 +14,7 @@ from .models import (
     Heater,
     LoggingConfig,
     OutputConfig,
+    RuntimeConfig,
     ScheduleConfig,
     SimulatedForecastConfig,
     SiteConfig,
@@ -52,6 +53,7 @@ def load_config(path: str | Path) -> AppConfig:
     root = _mapping(raw, "configuration")
     site_raw = _mapping(root.get("site"), "site")
     logging_raw = _mapping(root.get("logging", {}), "logging")
+    runtime_raw = _mapping(root.get("runtime", {}), "runtime")
     schedule_raw = root.get("schedule")
     weather_raw = root.get("weather")
     heaters_raw = root.get("heaters")
@@ -83,6 +85,13 @@ def load_config(path: str | Path) -> AppConfig:
             _validate_schedule_alignment(schedule, site.slot_minutes)
         heaters = tuple(_load_heater(item, index) for index, item in enumerate(heaters_raw))
         logging_config = LoggingConfig(level=str(logging_raw.get("level", "INFO")))
+        state_file = Path(str(runtime_raw.get("state_file", "../var/active-plan.json")))
+        if not state_file.is_absolute():
+            state_file = (config_path.parent / state_file).resolve()
+        runtime_config = RuntimeConfig(
+            state_file=str(state_file),
+            poll_seconds=float(runtime_raw.get("poll_seconds", 5)),
+        )
     except (KeyError, TypeError, ValueError) as exc:
         raise ValueError(f"invalid configuration: {exc}") from exc
     return AppConfig(
@@ -91,6 +100,7 @@ def load_config(path: str | Path) -> AppConfig:
         logging=logging_config,
         schedule=schedule,
         weather=weather,
+        runtime=runtime_config,
     )
 
 

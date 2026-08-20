@@ -33,3 +33,12 @@ def test_accepts_exact_scheduled_start() -> None:
     now = datetime(2026, 8, 21, 0, 0, tzinfo=ZoneInfo("Europe/Madrid"))
 
     assert schedule.next_start(now) == now
+
+
+def test_returns_active_window_after_it_has_started() -> None:
+    schedule = configured_schedule()
+    now = datetime(2026, 8, 21, 3, 0, tzinfo=ZoneInfo("Europe/Madrid"))
+
+    assert schedule.active_or_next_start(now) == datetime(
+        2026, 8, 21, 0, 0, tzinfo=ZoneInfo("Europe/Madrid")
+    )
