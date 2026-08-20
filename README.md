@@ -4,9 +4,10 @@ Planificador configurable de carga para acumuladores eléctricos, pensado para
 funcionar en una Raspberry Pi 2B sin acoplar la lógica de negocio al hardware.
 
 El proyecto se encuentra en una primera fase funcional: carga una instalación
-desde YAML y calcula un plan por intervalos respetando el límite de potencia.
-Incluye un driver simulado como frontera de salida. La previsión meteorológica,
-el modelo térmico y el GPIO real se añadirán como componentes independientes.
+desde YAML, calcula la demanda mediante un modelo térmico y crea un plan por
+intervalos respetando el límite de potencia. Incluye meteorología y salidas
+simuladas; los proveedores meteorológicos externos y el GPIO real se añadirán
+como componentes independientes.
 
 ## Requisitos
 
@@ -41,6 +42,33 @@ Pi 2B. Ninguna de las dos configuraciones limita el número de acumuladores.
 - `full_charge_hours`: tiempo requerido por el aparato para una carga completa.
 - `target_charge`: fracción de carga solicitada para esta simulación (`0..1`).
 - `priority`: los valores mayores se atienden primero cuando falta capacidad.
+
+En la configuración de despliegue, un perfil térmico sustituye el porcentaje
+manual:
+
+```yaml
+weather:
+  provider: simulated
+  simulated:
+    average_temperature_c: 8.0
+    minimum_temperature_c: 3.0
+
+heaters:
+  - id: salon
+    # ...
+    thermal:
+      target_temperature_c: 21.0
+      design_outdoor_temperature_c: -2.0
+      thermal_factor: 1.0
+      min_charge: 0.10
+      max_charge: 1.0
+```
+
+El motor calcula una fracción lineal entre la temperatura exterior media de
+diseño (carga completa) y la temperatura objetivo (sin carga), aplica el factor
+térmico de la estancia y respeta los límites configurados. El proveedor
+`simulated` hace que los tests y las pruebas locales sean deterministas; todavía
+no consulta servicios meteorológicos externos.
 
 Una configuración de despliegue puede definir la ventana mediante horarios:
 

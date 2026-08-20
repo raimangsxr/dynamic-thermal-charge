@@ -15,6 +15,8 @@ from .models import (
     OutputConfig,
     ScheduleConfig,
     SiteConfig,
+    ThermalProfile,
+    WeatherConfig,
 )
 
 
@@ -48,6 +50,7 @@ def load_config(path: str | Path) -> AppConfig:
     site_raw = _mapping(root.get("site"), "site")
     logging_raw = _mapping(root.get("logging", {}), "logging")
     schedule_raw = root.get("schedule")
+    weather_raw = root.get("weather")
     heaters_raw = root.get("heaters")
     if not isinstance(heaters_raw, list) or not heaters_raw:
         raise ValueError("heaters must be a non-empty list")
@@ -56,6 +59,11 @@ def load_config(path: str | Path) -> AppConfig:
         schedule = (
             _load_schedule(_mapping(schedule_raw, "schedule"))
             if schedule_raw is not None
+            else None
+        )
+        weather = (
+            _load_weather(_mapping(weather_raw, "weather"))
+            if weather_raw is not None
             else None
         )
         window_minutes = (
@@ -79,6 +87,7 @@ def load_config(path: str | Path) -> AppConfig:
         heaters=heaters,
         logging=logging_config,
         schedule=schedule,
+        weather=weather,
     )
 
 
@@ -120,9 +129,19 @@ def _validate_schedule_alignment(schedule: ScheduleConfig, slot_minutes: int) ->
             raise ValueError(f"schedule {label} must align with slot_minutes")
 
 
+def _load_weather(raw: Mapping[str, Any]) -> WeatherConfig:
+    simulated = _mapping(raw.get("simulated", {}), "weather simulated")
+    return WeatherConfig(
+        provider=str(raw.get("provider", "simulated")),
+        average_temperature_c=float(simulated["average_temperature_c"]),
+        minimum_temperature_c=float(simulated["minimum_temperature_c"]),
+    )
+
+
 def _load_heater(raw: Any, index: int) -> Heater:
     item = _mapping(raw, f"heaters[{index}]")
     output_raw = _mapping(item.get("output", {"type": "simulated"}), "output")
+    thermal_raw = item.get("thermal")
     heater_id = str(item["id"])
     return Heater(
         id=heater_id,
@@ -133,9 +152,24 @@ def _load_heater(raw: Any, index: int) -> Heater:
         target_charge=float(item.get("target_charge", 1.0)),
         priority=int(item.get("priority", 0)),
         enabled=bool(item.get("enabled", True)),
+        thermal=(
+            _load_thermal_profile(_mapping(thermal_raw, "thermal"))
+            if thermal_raw is not None
+            else None
+        ),
         output=OutputConfig(
             kind=str(output_raw.get("type", "simulated")),
             pin=int(output_raw["pin"]) if output_raw.get("pin") is not None else None,
             active_high=bool(output_raw.get("active_high", True)),
         ),
+    )
+
+
+def _load_thermal_profile(raw: Mapping[str, Any]) -> ThermalProfile:
+    return ThermalProfile(
+        target_temperature_c=float(raw["target_temperature_c"]),
+        design_outdoor_temperature_c=float(raw["design_outdoor_temperature_c"]),
+        thermal_factor=float(raw.get("thermal_factor", 1.0)),
+        min_charge=float(raw.get("min_charge", 0.0)),
+        max_charge=float(raw.get("max_charge", 1.0)),
     )

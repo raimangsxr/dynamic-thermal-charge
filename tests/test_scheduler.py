@@ -80,3 +80,18 @@ def test_alignment_can_advance_to_next_day() -> None:
     start = datetime(2026, 1, 1, 23, 59, 59)
 
     assert align_to_slot(start, 30) == datetime(2026, 1, 2, 0, 0)
+
+
+def test_uses_calculated_charge_minutes_when_provided() -> None:
+    site = SiteConfig(max_total_power_w=3000, slot_minutes=30, window_minutes=120)
+
+    result = ChargeScheduler().build(
+        site,
+        (heater("a", 2400, 10),),
+        datetime(2026, 1, 1),
+        requested_charge_minutes={"a": 30},
+    )
+
+    assert result.allocated_minutes == {"a": 30}
+    assert result.slots[0].heater_ids == ("a",)
+    assert all(not slot.heater_ids for slot in result.slots[1:])

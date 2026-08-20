@@ -23,6 +23,23 @@ class OutputConfig:
 
 
 @dataclass(frozen=True)
+class ThermalProfile:
+    target_temperature_c: float
+    design_outdoor_temperature_c: float
+    thermal_factor: float = 1.0
+    min_charge: float = 0.0
+    max_charge: float = 1.0
+
+    def __post_init__(self) -> None:
+        if self.design_outdoor_temperature_c >= self.target_temperature_c:
+            raise ValueError("design outdoor temperature must be below target temperature")
+        if self.thermal_factor <= 0:
+            raise ValueError("thermal_factor must be positive")
+        if not 0 <= self.min_charge <= self.max_charge <= 1:
+            raise ValueError("thermal charge limits must satisfy 0 <= min <= max <= 1")
+
+
+@dataclass(frozen=True)
 class Heater:
     id: str
     name: str
@@ -31,6 +48,7 @@ class Heater:
     target_charge: float
     priority: int
     output: OutputConfig
+    thermal: ThermalProfile | None = None
     model: str | None = None
     enabled: bool = True
 
@@ -77,6 +95,19 @@ class LoggingConfig:
         if normalized_level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
             raise ValueError(f"unsupported log level: {self.level}")
         object.__setattr__(self, "level", normalized_level)
+
+
+@dataclass(frozen=True)
+class WeatherConfig:
+    provider: str
+    average_temperature_c: float
+    minimum_temperature_c: float
+
+    def __post_init__(self) -> None:
+        if self.provider != "simulated":
+            raise ValueError(f"unsupported weather provider: {self.provider}")
+        if self.minimum_temperature_c > self.average_temperature_c:
+            raise ValueError("minimum temperature cannot exceed average temperature")
 
 
 @dataclass(frozen=True)
@@ -130,6 +161,7 @@ class AppConfig:
     heaters: tuple[Heater, ...]
     logging: LoggingConfig = LoggingConfig()
     schedule: ScheduleConfig | None = None
+    weather: WeatherConfig | None = None
 
     def __post_init__(self) -> None:
         ids = [heater.id for heater in self.heaters]
@@ -142,3 +174,6 @@ class AppConfig:
         ]
         if len(gpio_pins) != len(set(gpio_pins)):
             raise ValueError("GPIO BCM pins must be unique")
+        if any(heater.thermal is not None for heater in self.heaters):
+            if self.weather is None:
+                raise ValueError("thermal profiles require a weather provider")

@@ -11,6 +11,8 @@ from zoneinfo import ZoneInfo
 from .config import load_config
 from .logging_config import configure_logging
 from .scheduler import ChargeScheduler
+from .thermal import ThermalDemandEngine
+from .weather import SimulatedWeatherProvider
 
 
 logger = logging.getLogger(__name__)
@@ -57,7 +59,19 @@ def main() -> int:
             )
         else:
             start = datetime.now().replace(second=0, microsecond=0)
-        result = ChargeScheduler().build(config.site, config.heaters, start)
+        requested_charge_minutes = None
+        if config.weather is not None:
+            forecast = SimulatedWeatherProvider(config.weather).forecast_for(start.date())
+            requested_charge_minutes = ThermalDemandEngine().calculate(
+                config.heaters,
+                forecast,
+            )
+        result = ChargeScheduler().build(
+            config.site,
+            config.heaters,
+            start,
+            requested_charge_minutes=requested_charge_minutes,
+        )
     except ValueError as exc:
         raise SystemExit(f"Configuration error: {exc}") from exc
 

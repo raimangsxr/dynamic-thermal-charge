@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 import logging
 import math
+from typing import Mapping
 
 from .models import Heater, SiteConfig
 
@@ -36,6 +37,7 @@ class ChargeScheduler:
         site: SiteConfig,
         heaters: tuple[Heater, ...],
         start: datetime,
+        requested_charge_minutes: Mapping[str, int] | None = None,
     ) -> ScheduleResult:
         aligned_start = align_to_slot(start, site.slot_minutes)
         if aligned_start != start:
@@ -52,21 +54,64 @@ class ChargeScheduler:
             site.max_total_power_w,
         )
         requested_slots = {
-            heater.id: _ceil_div(heater.requested_charge_minutes, site.slot_minutes)
+            heater.id: _ceil_div(
+                (
+                    requested_charge_minutes[heater.id]
+                    if requested_charge_minutes is not None
+                    and heater.id in requested_charge_minutes
+                    else heater.requested_charge_minutes
+                ),
+                site.slot_minutes,
+            )
             for heater in enabled
         }
+        if any(count < 0 for count in requested_slots.values()):
+            raise ValueError("requested charge minutes cannot be negative")
         logger.debug("Requested slots by heater: %s", requested_slots)
         remaining = requested_slots.copy()
         allocated = {heater.id: 0 for heater in enabled}
         slots: list[ScheduleSlot] = []
 
-        for slot_index in range(site.window_minutes // site.slot_minutes):
+        total_slots = site.window_minutes // site.slot_minutes
+        requested_power_slots = sum(
+            heater.power_w * requested_slots[heater.id] for heater in enabled
+        )
+        capacity_constrained = (
+            requested_power_slots > site.max_total_power_w * total_slots
+        )
+        logger.debug(
+            "Scheduling mode: %s",
+            "priority" if capacity_constrained else "balanced",
+        )
+        for slot_index in range(total_slots):
             used_power = 0
             selected: list[str] = []
-            candidates = sorted(
-                (heater for heater in enabled if remaining[heater.id] > 0),
-                key=lambda heater: (-heater.priority, -remaining[heater.id], heater.id),
+            slots_left = total_slots - slot_index
+            candidates = tuple(
+                heater for heater in enabled if remaining[heater.id] > 0
             )
+            if capacity_constrained:
+                candidates = tuple(
+                    sorted(
+                        candidates,
+                        key=lambda heater: (
+                            -heater.priority,
+                            -remaining[heater.id],
+                            heater.id,
+                        ),
+                    )
+                )
+            else:
+                candidates = tuple(
+                    sorted(
+                        candidates,
+                        key=lambda heater: (
+                            -(remaining[heater.id] / slots_left),
+                            -heater.priority,
+                            heater.id,
+                        ),
+                    )
+                )
             for heater in candidates:
                 if used_power + heater.power_w <= site.max_total_power_w:
                     selected.append(heater.id)

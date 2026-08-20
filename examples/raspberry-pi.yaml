@@ -18,6 +18,14 @@ schedule:
     - saturday
     - sunday
 
+weather:
+  # Proveedor determinista para desarrollar y probar sin depender de Internet.
+  # La siguiente fase sustituirá este bloque por el proveedor AEMET.
+  provider: simulated
+  simulated:
+    average_temperature_c: 8.0
+    minimum_temperature_c: 3.0
+
 site:
   # Límite exclusivo para los acumuladores. Debe ajustarse a la instalación,
   # potencia contratada y margen necesario para el resto de la vivienda.
@@ -30,8 +38,13 @@ heaters:
     model: ADS-2812
     power_kw: 2.8
     full_charge_hours: 8
-    target_charge: 0.625
     priority: 90
+    thermal:
+      target_temperature_c: 21.0
+      design_outdoor_temperature_c: -2.0
+      thermal_factor: 1.0
+      min_charge: 0.10
+      max_charge: 1.0
     output:
       type: gpio
       pin: 17  # BCM 17, pin físico 11
@@ -42,8 +55,13 @@ heaters:
     model: ADS-2412
     power_kw: 2.4
     full_charge_hours: 8
-    target_charge: 0.375
     priority: 50
+    thermal:
+      target_temperature_c: 18.0
+      design_outdoor_temperature_c: 0.0
+      thermal_factor: 0.70
+      min_charge: 0.0
+      max_charge: 0.80
     output:
       type: gpio
       pin: 18  # BCM 18, pin físico 12
@@ -54,8 +72,13 @@ heaters:
     model: ADS-2412
     power_kw: 2.4
     full_charge_hours: 8
-    target_charge: 0.625
     priority: 100
+    thermal:
+      target_temperature_c: 20.5
+      design_outdoor_temperature_c: -2.0
+      thermal_factor: 1.05
+      min_charge: 0.10
+      max_charge: 1.0
     output:
       type: gpio
       pin: 22  # BCM 22, pin físico 15
@@ -66,8 +89,13 @@ heaters:
     model: ADS-2412
     power_kw: 2.4
     full_charge_hours: 8
-    target_charge: 0.25
     priority: 40
+    thermal:
+      target_temperature_c: 17.0
+      design_outdoor_temperature_c: -2.0
+      thermal_factor: 0.65
+      min_charge: 0.0
+      max_charge: 0.75
     output:
       type: gpio
       pin: 23  # BCM 23, pin físico 16

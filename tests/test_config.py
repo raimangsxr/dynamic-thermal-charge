@@ -76,9 +76,13 @@ def test_loads_raspberry_pi_deployment_configuration() -> None:
     assert config.schedule.timezone == "Europe/Madrid"
     assert config.schedule.window_minutes == 480
     assert config.site.window_minutes == 480
+    assert config.weather is not None
+    assert config.weather.provider == "simulated"
+    assert config.weather.average_temperature_c == 8.0
     assert [heater.output.pin for heater in config.heaters] == [17, 18, 22, 23]
     assert all(heater.output.kind == "gpio" for heater in config.heaters)
     assert all(not heater.output.active_high for heater in config.heaters)
+    assert all(heater.thermal is not None for heater in config.heaters)
 
 
 def test_rejects_duplicate_gpio_pins(tmp_path: Path) -> None:
@@ -120,4 +124,26 @@ heaters:
     )
 
     with pytest.raises(ValueError, match="start_time must align"):
+        load_config(config_file)
+
+
+def test_requires_weather_when_thermal_profiles_are_configured(
+    tmp_path: Path,
+) -> None:
+    config_file = tmp_path / "thermal.yaml"
+    config_file.write_text(
+        """
+site: {max_total_power_kw: 5, slot_minutes: 30, window_hours: 8}
+heaters:
+  - id: one
+    power_kw: 1
+    full_charge_hours: 8
+    thermal:
+      target_temperature_c: 21
+      design_outdoor_temperature_c: 0
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="require a weather provider"):
         load_config(config_file)
