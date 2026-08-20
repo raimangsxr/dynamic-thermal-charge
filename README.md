@@ -31,9 +31,9 @@ PYTHONPATH=src python -m dynamic_thermal_charge examples/home.yaml
 
 ## Configuración
 
-`examples/home.yaml` representa una instalación de ejemplo, no una restricción
-del programa. Se pueden añadir o quitar acumuladores y cambiar sus potencias,
-prioridades u objetivos de carga sin modificar el código.
+`examples/home.yaml` representa una simulación. `examples/raspberry-pi.yaml`
+añade una ventana nocturna y asignaciones GPIO para un despliegue en Raspberry
+Pi 2B. Ninguna de las dos configuraciones limita el número de acumuladores.
 
 - `max_total_power_kw`: potencia máxima simultánea dedicada a acumuladores.
 - `slot_minutes`: resolución del plan.
@@ -41,6 +41,20 @@ prioridades u objetivos de carga sin modificar el código.
 - `full_charge_hours`: tiempo requerido por el aparato para una carga completa.
 - `target_charge`: fracción de carga solicitada para esta simulación (`0..1`).
 - `priority`: los valores mayores se atienden primero cuando falta capacidad.
+
+Una configuración de despliegue puede definir la ventana mediante horarios:
+
+```yaml
+schedule:
+  timezone: Europe/Madrid
+  start_time: "00:00"
+  end_time: "08:00"
+  weekdays: [monday, tuesday, wednesday, thursday, friday, saturday, sunday]
+```
+
+Cuando no se proporciona `--start`, la CLI selecciona el siguiente inicio
+permitido. La duración se obtiene de `start_time` y `end_time`, incluyendo las
+ventanas que atraviesan medianoche.
 
 El nivel de log se configura globalmente en el YAML:
 
@@ -68,6 +82,12 @@ divisor de 60 (por ejemplo, 15, 20, 30 o 60).
 Las salidas declaradas como `simulated` no accionan ningún pin. El futuro
 driver GPIO usará numeración BCM y mantendrá las librerías de Raspberry fuera
 del núcleo.
+
+La configuración GPIO de ejemplo usa BCM 17, 18, 22 y 23 con salidas activas a
+nivel bajo. Es imprescindible adaptarla al módulo de relés concreto. Los GPIO
+solo pueden controlar entradas aisladas de relés o contactores correctamente
+dimensionados; nunca deben alimentar ni conmutar directamente un acumulador.
+Esta versión valida la configuración, pero todavía no acciona GPIO reales.
 
 ## Decisiones de diseño
 

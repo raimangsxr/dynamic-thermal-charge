@@ -6,6 +6,7 @@ import argparse
 from datetime import datetime
 import logging
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from .config import load_config
 from .logging_config import configure_logging
@@ -22,7 +23,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--start",
         type=datetime.fromisoformat,
         default=None,
-        help="charge window start in ISO format (default: current time)",
+        help="override the configured window start using ISO format",
     )
     parser.add_argument(
         "--log-level",
@@ -44,7 +45,18 @@ def main() -> int:
             args.config,
             len(config.heaters),
         )
-        start = args.start or datetime.now().replace(second=0, microsecond=0)
+        if args.start is not None:
+            start = args.start
+            if start.tzinfo is None and config.schedule is not None:
+                start = start.replace(tzinfo=ZoneInfo(config.schedule.timezone))
+        elif config.schedule is not None:
+            start = config.schedule.next_start(datetime.now().astimezone())
+            logger.info(
+                "Selected next configured charge window at %s",
+                start.isoformat(timespec="minutes"),
+            )
+        else:
+            start = datetime.now().replace(second=0, microsecond=0)
         result = ChargeScheduler().build(config.site, config.heaters, start)
     except ValueError as exc:
         raise SystemExit(f"Configuration error: {exc}") from exc

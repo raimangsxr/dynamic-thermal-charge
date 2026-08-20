@@ -1,0 +1,74 @@
+# Ejemplo de despliegue para Raspberry Pi 2B.
+# IMPORTANTE: los GPIO solo deben gobernar entradas aisladas de relés/contactores
+# dimensionados por un electricista. Nunca conecte un acumulador directamente al GPIO.
+
+logging:
+  level: INFO
+
+schedule:
+  timezone: Europe/Madrid
+  start_time: "00:00"
+  end_time: "08:00"
+  weekdays:
+    - monday
+    - tuesday
+    - wednesday
+    - thursday
+    - friday
+    - saturday
+    - sunday
+
+site:
+  # Límite exclusivo para los acumuladores. Debe ajustarse a la instalación,
+  # potencia contratada y margen necesario para el resto de la vivienda.
+  max_total_power_kw: 5.2
+  slot_minutes: 30
+
+heaters:
+  - id: salon
+    name: Salón
+    model: ADS-2812
+    power_kw: 2.8
+    full_charge_hours: 8
+    target_charge: 0.625
+    priority: 90
+    output:
+      type: gpio
+      pin: 17  # BCM 17, pin físico 11
+      active_high: false
+
+  - id: entrada
+    name: Entrada
+    model: ADS-2412
+    power_kw: 2.4
+    full_charge_hours: 8
+    target_charge: 0.375
+    priority: 50
+    output:
+      type: gpio
+      pin: 18  # BCM 18, pin físico 12
+      active_high: false
+
+  - id: habitaciones
+    name: Habitaciones
+    model: ADS-2412
+    power_kw: 2.4
+    full_charge_hours: 8
+    target_charge: 0.625
+    priority: 100
+    output:
+      type: gpio
+      pin: 22  # BCM 22, pin físico 15
+      active_high: false
+
+  - id: buhardilla
+    name: Buhardilla
+    model: ADS-2412
+    power_kw: 2.4
+    full_charge_hours: 8
+    target_charge: 0.25
+    priority: 40
+    output:
+      type: gpio
+      pin: 23  # BCM 23, pin físico 16
+      active_high: false
