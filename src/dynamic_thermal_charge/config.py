@@ -19,6 +19,7 @@ from .models import (
     SiteConfig,
     ThermalProfile,
     WeatherConfig,
+    WeatherWatchdogConfig,
 )
 
 
@@ -136,6 +137,7 @@ def _load_weather(raw: Mapping[str, Any]) -> WeatherConfig:
     simulated_raw = raw.get("simulated")
     aemet_raw = raw.get("aemet")
     fallback_raw = raw.get("fallback")
+    watchdog_raw = _mapping(raw.get("watchdog", {}), "weather watchdog")
     return WeatherConfig(
         provider=provider,
         simulated=(
@@ -152,6 +154,10 @@ def _load_weather(raw: Mapping[str, Any]) -> WeatherConfig:
             _load_simulated_forecast(_mapping(fallback_raw, "weather fallback"))
             if fallback_raw is not None
             else None
+        ),
+        watchdog=WeatherWatchdogConfig(
+            retry_minutes=int(watchdog_raw.get("retry_minutes", 15)),
+            refresh_minutes=int(watchdog_raw.get("refresh_minutes", 180)),
         ),
     )
 

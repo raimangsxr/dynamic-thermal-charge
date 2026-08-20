@@ -123,11 +123,24 @@ class AemetConfig:
 
 
 @dataclass(frozen=True)
+class WeatherWatchdogConfig:
+    retry_minutes: int = 15
+    refresh_minutes: int = 180
+
+    def __post_init__(self) -> None:
+        if self.retry_minutes <= 0:
+            raise ValueError("weather watchdog retry_minutes must be positive")
+        if self.refresh_minutes <= 0:
+            raise ValueError("weather watchdog refresh_minutes must be positive")
+
+
+@dataclass(frozen=True)
 class WeatherConfig:
     provider: str
     simulated: SimulatedForecastConfig | None = None
     aemet: AemetConfig | None = None
     fallback: SimulatedForecastConfig | None = None
+    watchdog: WeatherWatchdogConfig = WeatherWatchdogConfig()
 
     def __post_init__(self) -> None:
         if self.provider not in {"simulated", "aemet"}:

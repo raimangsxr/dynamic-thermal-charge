@@ -29,6 +29,9 @@ weather:
   fallback:
     average_temperature_c: 8.0
     minimum_temperature_c: 3.0
+  watchdog:
+    retry_minutes: 15
+    refresh_minutes: 180
 
 site:
   # Límite exclusivo para los acumuladores. Debe ajustarse a la instalación,

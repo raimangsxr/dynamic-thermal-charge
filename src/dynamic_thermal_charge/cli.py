@@ -6,13 +6,22 @@ import argparse
 from datetime import datetime
 import logging
 from pathlib import Path
+import time
+from typing import Callable
 from zoneinfo import ZoneInfo
 
 from .config import load_config
 from .logging_config import configure_logging
-from .scheduler import ChargeScheduler
+from .models import AppConfig
+from .scheduler import ChargeScheduler, ScheduleResult
 from .thermal import ThermalDemandEngine
-from .weather import WeatherProviderError, build_weather_provider
+from .watchdog import ForecastWatchdog
+from .weather import (
+    OutdoorForecast,
+    WeatherProvider,
+    WeatherProviderError,
+    build_weather_provider,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -34,6 +43,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="override the YAML log level",
     )
+    parser.add_argument(
+        "--watch-weather",
+        action="store_true",
+        help="keep refreshing weather and retry the primary provider after failures",
+    )
     return parser
 
 
@@ -47,45 +61,98 @@ def main() -> int:
             args.config,
             len(config.heaters),
         )
-        if args.start is not None:
-            start = args.start
-            if start.tzinfo is None and config.schedule is not None:
-                start = start.replace(tzinfo=ZoneInfo(config.schedule.timezone))
-        elif config.schedule is not None:
-            start = config.schedule.next_start(datetime.now().astimezone())
-            logger.info(
-                "Selected next configured charge window at %s",
-                start.isoformat(timespec="minutes"),
-            )
-        else:
-            start = datetime.now().replace(second=0, microsecond=0)
-        requested_charge_minutes = None
-        if config.weather is not None:
-            forecast = build_weather_provider(config.weather).forecast_for(start.date())
-            logger.info(
-                "Weather forecast: date=%s source=%s location=%s min=%.1f C avg=%.1f C max=%.1f C",
-                forecast.date.isoformat(),
-                forecast.source,
-                forecast.location or "n/a",
-                forecast.minimum_temperature_c,
-                forecast.average_temperature_c,
-                forecast.maximum_temperature_c,
-            )
-            requested_charge_minutes = ThermalDemandEngine().calculate(
-                config.heaters,
-                forecast,
-            )
-        result = ChargeScheduler().build(
-            config.site,
-            config.heaters,
-            start,
-            requested_charge_minutes=requested_charge_minutes,
+        provider = (
+            build_weather_provider(config.weather)
+            if config.weather is not None
+            else None
         )
+        if args.watch_weather:
+            if config.weather is None or provider is None:
+                raise ValueError("--watch-weather requires weather configuration")
+            if config.weather.provider == "aemet" and config.weather.fallback is None:
+                raise ValueError("--watch-weather requires weather fallback values")
+            return _run_watchdog(config, args.start, provider)
+
+        start = _select_start(config, args.start)
+        forecast = provider.forecast_for(start.date()) if provider is not None else None
+        result = _build_plan(config, start, forecast)
     except ValueError as exc:
         raise SystemExit(f"Configuration error: {exc}") from exc
     except WeatherProviderError as exc:
         raise SystemExit(f"Weather error: {exc}") from exc
 
+    _print_plan(config, result)
+    return 2 if result.unmet_minutes else 0
+
+
+def _select_start(config: AppConfig, explicit_start: datetime | None) -> datetime:
+    if explicit_start is not None:
+        if explicit_start.tzinfo is None and config.schedule is not None:
+            return explicit_start.replace(tzinfo=ZoneInfo(config.schedule.timezone))
+        return explicit_start
+    if config.schedule is not None:
+        start = config.schedule.next_start(datetime.now().astimezone())
+        logger.info(
+            "Selected next configured charge window at %s",
+            start.isoformat(timespec="minutes"),
+        )
+        return start
+    return datetime.now().replace(second=0, microsecond=0)
+
+
+def _build_plan(
+    config: AppConfig,
+    start: datetime,
+    forecast: OutdoorForecast | None,
+) -> ScheduleResult:
+    requested_charge_minutes = None
+    if forecast is not None:
+        logger.info(
+            "Weather forecast: date=%s source=%s location=%s min=%.1f C avg=%.1f C max=%.1f C",
+            forecast.date.isoformat(),
+            forecast.source,
+            forecast.location or "n/a",
+            forecast.minimum_temperature_c,
+            forecast.average_temperature_c,
+            forecast.maximum_temperature_c,
+        )
+        requested_charge_minutes = ThermalDemandEngine().calculate(
+            config.heaters,
+            forecast,
+        )
+    return ChargeScheduler().build(
+        config.site,
+        config.heaters,
+        start,
+        requested_charge_minutes=requested_charge_minutes,
+    )
+
+
+def _run_watchdog(
+    config: AppConfig,
+    explicit_start: datetime | None,
+    provider: WeatherProvider,
+    wait: Callable[[float], None] = time.sleep,
+) -> int:
+    assert config.weather is not None
+    watchdog = ForecastWatchdog(
+        provider,
+        expected_source=config.weather.provider,
+        config=config.weather.watchdog,
+    )
+    try:
+        while True:
+            start = _select_start(config, explicit_start)
+            cycle = watchdog.poll(start.date())
+            result = _build_plan(config, start, cycle.forecast)
+            _print_plan(config, result)
+            wait(cycle.next_poll_seconds)
+    except KeyboardInterrupt:
+        logger.info("Weather watchdog stopped")
+        return 0
+
+
+def _print_plan(config: AppConfig, result: ScheduleResult) -> None:
     print("Charge plan")
     for slot in result.slots:
         active = ", ".join(slot.heater_ids) or "—"
@@ -102,5 +169,3 @@ def main() -> int:
         print("\nUnmet demand:")
         for heater_id, minutes in result.unmet_minutes.items():
             print(f"- {heater_id}: {minutes / 60:g} h")
-        return 2
-    return 0

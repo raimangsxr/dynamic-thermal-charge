@@ -106,6 +106,31 @@ lo proporciona AEMET) y temperaturas mínima, media y máxima utilizadas por el
 motor térmico. Si se activa el fallback, el campo `source` muestra
 `simulated`.
 
+### Watchdog meteorológico
+
+Para producción, el modo persistente mantiene viva la supervisión de la
+previsión:
+
+```bash
+dynamic-thermal-charge examples/raspberry-pi.yaml --watch-weather
+```
+
+Sus intervalos se configuran en minutos:
+
+```yaml
+weather:
+  # proveedor, credenciales y fallback...
+  watchdog:
+    retry_minutes: 15
+    refresh_minutes: 180
+```
+
+Si AEMET falla, el primer plan se crea inmediatamente con el fallback y el
+proceso reintenta el proveedor primario cada `retry_minutes`. Cuando AEMET se
+recupera, registra la recuperación y recalcula el plan con la predicción real.
+Mientras el proveedor funciona, renueva la previsión y el plan cada
+`refresh_minutes`. `Ctrl+C` detiene el watchdog de forma limpia.
+
 Una configuración de despliegue puede definir la ventana mediante horarios:
 
 ```yaml
