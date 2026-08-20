@@ -38,7 +38,14 @@ class ChargeController:
     def shutdown(self, at: datetime) -> None:
         logger.info("Shutting down controller outputs")
         for heater_id in self._heater_ids:
-            self._driver.set_state(heater_id, False, at)
+            try:
+                self._driver.set_state(heater_id, False, at)
+            except Exception:
+                logger.exception("Failed to force output %s OFF", heater_id)
+        try:
+            self._driver.close()
+        except Exception:
+            logger.exception("Failed to close output driver")
         self._active.clear()
 
     def _desired_outputs(self, plan: ScheduleResult | None, at: datetime) -> set[str]:

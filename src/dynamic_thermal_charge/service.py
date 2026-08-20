@@ -43,11 +43,11 @@ class ControllerService:
 
     def run(self, max_cycles: int | None = None) -> int:
         now = self._clock()
-        self._controller.initialize(now)
-        plan = self._store.load()
-        next_refresh = now
-        cycles = 0
         try:
+            self._controller.initialize(now)
+            plan = self._store.load()
+            next_refresh = now
+            cycles = 0
             while max_cycles is None or cycles < max_cycles:
                 now = self._clock()
                 if now >= next_refresh:

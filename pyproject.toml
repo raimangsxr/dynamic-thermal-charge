@@ -13,6 +13,7 @@ dependencies = ["PyYAML>=6.0,<7"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<10"]
+gpio = ["gpiozero>=2.0.1,<3", "lgpio>=0.2.2.0"]
 
 [project.scripts]
 dynamic-thermal-charge = "dynamic_thermal_charge.cli:main"

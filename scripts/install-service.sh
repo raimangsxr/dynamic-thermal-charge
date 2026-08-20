@@ -8,6 +8,14 @@ CONFIG_ROOT="/etc/${SERVICE_NAME}"
 STATE_ROOT="/var/lib/${SERVICE_NAME}"
 UNIT_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+WITH_GPIO=false
+
+if [[ ${1:-} == "--with-gpio" ]]; then
+  WITH_GPIO=true
+elif [[ $# -gt 0 ]]; then
+  echo "Usage: sudo $0 [--with-gpio]" >&2
+  exit 1
+fi
 
 if [[ ${EUID} -ne 0 ]]; then
   echo "Run this installer as root: sudo $0" >&2
@@ -37,7 +45,18 @@ install -d -m 0750 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${STATE_ROOT}"
 if [[ ! -x "${INSTALL_ROOT}/venv/bin/python" ]]; then
   python3.12 -m venv "${INSTALL_ROOT}/venv"
 fi
-"${INSTALL_ROOT}/venv/bin/python" -m pip install --upgrade "${PROJECT_ROOT}"
+if [[ ${WITH_GPIO} == true ]]; then
+  apt-get update
+  apt-get install -y swig liblgpio-dev
+  "${INSTALL_ROOT}/venv/bin/python" -m pip install --upgrade "${PROJECT_ROOT}[gpio]"
+  if ! getent group gpio >/dev/null; then
+    echo "The gpio group is missing; cannot grant gpiochip access" >&2
+    exit 1
+  fi
+  usermod --append --groups gpio "${SERVICE_USER}"
+else
+  "${INSTALL_ROOT}/venv/bin/python" -m pip install --upgrade "${PROJECT_ROOT}"
+fi
 
 if [[ ! -e "${CONFIG_ROOT}/config.yaml" ]]; then
   sed \
@@ -61,6 +80,9 @@ fi
 install -m 0644 -o root -g root \
   "${PROJECT_ROOT}/deploy/systemd/${SERVICE_NAME}.service" \
   "${UNIT_PATH}"
+install -m 0644 -o root -g root \
+  "${PROJECT_ROOT}/deploy/systemd/gpio.conf.example" \
+  "${CONFIG_ROOT}/gpio-systemd-override.conf.example"
 
 systemctl daemon-reload
 
@@ -72,3 +94,6 @@ echo "  3. Validate: systemctl start ${SERVICE_NAME}"
 echo "  4. Enable at boot: systemctl enable ${SERVICE_NAME}"
 echo
 echo "The controller remains simulated; this service does not access GPIO."
+if [[ ${WITH_GPIO} == true ]]; then
+  echo "GPIO dependencies and group membership are ready, but real outputs remain disabled."
+fi

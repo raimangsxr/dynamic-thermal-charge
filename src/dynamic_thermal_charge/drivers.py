@@ -15,6 +15,9 @@ class OutputDriver(Protocol):
     def set_state(self, heater_id: str, enabled: bool, at: datetime) -> None:
         """Apply an output state at a particular instant."""
 
+    def close(self) -> None:
+        """Release driver resources after leaving every output off."""
+
 
 @dataclass(frozen=True)
 class StateChange:
@@ -35,3 +38,6 @@ class SimulatedOutputDriver:
         self._state[heater_id] = enabled
         self.changes.append(StateChange(at=at, heater_id=heater_id, enabled=enabled))
         logger.info("Simulated output changed: %s=%s at %s", heater_id, enabled, at)
+
+    def close(self) -> None:
+        logger.debug("Closed simulated output driver")

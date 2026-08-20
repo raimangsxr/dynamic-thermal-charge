@@ -25,6 +25,15 @@ def test_systemd_unit_runs_safe_simulated_controller() -> None:
     assert "ReadWritePaths=/var/lib/dynamic-thermal-charge" in unit
 
 
+def test_gpio_override_requires_explicit_real_driver_and_gpio_group() -> None:
+    override = (
+        ROOT / "deploy" / "systemd" / "gpio.conf.example"
+    ).read_text(encoding="utf-8")
+
+    assert "SupplementaryGroups=gpio" in override
+    assert "--driver gpio" in override
+
+
 def test_environment_example_contains_no_secret() -> None:
     environment = (ROOT / "deploy" / "environment.example").read_text(
         encoding="utf-8"

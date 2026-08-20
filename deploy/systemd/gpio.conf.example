@@ -1,0 +1,4 @@
+[Service]
+SupplementaryGroups=gpio
+ExecStart=
+ExecStart=/opt/dynamic-thermal-charge/venv/bin/dynamic-thermal-charge /etc/dynamic-thermal-charge/config.yaml --run-controller --driver gpio

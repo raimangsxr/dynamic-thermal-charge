@@ -2,7 +2,10 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from dynamic_thermal_charge.cli import _handle_termination_signal
+from dynamic_thermal_charge.cli import (
+    _handle_termination_signal,
+    _run_output_self_test,
+)
 from dynamic_thermal_charge.controller import ChargeController
 from dynamic_thermal_charge.scheduler import ScheduleResult, ScheduleSlot
 
@@ -10,9 +13,20 @@ from dynamic_thermal_charge.scheduler import ScheduleResult, ScheduleSlot
 class RecordingDriver:
     def __init__(self) -> None:
         self.calls = []
+        self.closed = False
 
     def set_state(self, heater_id, enabled, at):
         self.calls.append((heater_id, enabled, at))
+
+    def close(self):
+        self.closed = True
+
+
+class PartiallyFailingDriver(RecordingDriver):
+    def set_state(self, heater_id, enabled, at):
+        super().set_state(heater_id, enabled, at)
+        if heater_id == "a" and not enabled:
+            raise RuntimeError("relay a unavailable")
 
 
 def plan(start: datetime) -> ScheduleResult:
@@ -60,6 +74,21 @@ def test_shutdown_forces_every_output_off() -> None:
         ("a", False),
         ("b", False),
     ]
+    assert driver.closed is True
+
+
+def test_shutdown_continues_after_one_output_fails(caplog) -> None:
+    driver = PartiallyFailingDriver()
+    controller = ChargeController(("a", "b"), driver)
+
+    controller.shutdown(datetime(2026, 1, 1))
+
+    assert [(heater_id, enabled) for heater_id, enabled, _ in driver.calls] == [
+        ("a", False),
+        ("b", False),
+    ]
+    assert driver.closed is True
+    assert "Failed to force output a OFF" in caplog.text
 
 
 def test_ignores_unknown_heaters_from_persisted_plan(caplog) -> None:
@@ -89,3 +118,29 @@ def test_ignores_unknown_heaters_from_persisted_plan(caplog) -> None:
 def test_sigterm_is_converted_to_controlled_shutdown() -> None:
     with pytest.raises(KeyboardInterrupt):
         _handle_termination_signal(None, None)
+
+
+def test_output_self_test_activates_one_heater_at_a_time() -> None:
+    from dynamic_thermal_charge.config import load_config
+
+    config = load_config("examples/raspberry-pi.yaml")
+    driver = RecordingDriver()
+    waits = []
+
+    status = _run_output_self_test(
+        config,
+        driver,
+        duration_seconds=0.25,
+        wait=waits.append,
+    )
+
+    on_calls = [(heater_id, enabled) for heater_id, enabled, _ in driver.calls if enabled]
+    assert status == 0
+    assert on_calls == [
+        ("salon", True),
+        ("entrada", True),
+        ("habitaciones", True),
+        ("buhardilla", True),
+    ]
+    assert waits == [0.25, 0.25, 0.25, 0.25]
+    assert driver.closed is True
