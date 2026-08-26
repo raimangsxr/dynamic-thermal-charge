@@ -87,7 +87,9 @@ El estado del momento. La operación central, pensada para consultarse cada poco
   "heaters": [
     {
       "id": "salon", "name": "Salón", "enabled": true,
-      "power_w": 2800, "output_on": true,
+      "power_w": 2800,
+      "output_on": true,
+      "last_known_output_on": true,
       "changed_at": "2026-01-16T01:00:00Z"
     }
   ],
@@ -114,8 +116,13 @@ El estado del momento. La operación central, pensada para consultarse cada poco
 vigencia es `stale` o `never_seen`. En ese caso:
 
 - `power` es `null`. No se publica una potencia que nadie puede confirmar.
-- Los acumuladores llevan `output_on` como **último estado conocido**, con su `changed_at`, y la
-  respuesta **no** afirma que ninguno esté activo ahora.
+- `output_on` de cada acumulador es **`null`**, no `false`. Son cosas distintas: `false` dice
+  «está apagado», `null` dice «no tengo prueba de nada». Colapsarlas permitiría que un panel
+  afirmase algo que no puede saber. El último valor registrado sigue disponible en
+  `last_known_output_on`, con su `changed_at`, para que el cliente lo muestre como historia y no
+  como presente.
+- Un cliente que solo lea `output_on` **nunca** puede pintar un acumulador de 2,8 kW como
+  cargando sin prueba. Eso es lo que exige FR-016, y es la razón de que el campo sea anulable.
 - `liveness` distingue `live`, `live_degraded`, `stale` y `never_seen`.
 
 `plan` es `null` cuando ninguna ventana contiene el instante de la consulta: no se devuelve el

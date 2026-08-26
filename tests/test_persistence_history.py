@@ -251,3 +251,135 @@ def test_history_outlives_the_heater_it_refers_to(initialised_store, recorder):
         assert any(
             row["heater_id"] == "salon" for row in _rows(initialised_store, table)
         ), f"{table.name} lost its history when the heater was removed"
+
+
+# --------------------------------------------------------------------------- #
+# Paged reads (FR-032 to FR-036). The previous phase only wrote and pruned.
+# --------------------------------------------------------------------------- #
+
+@pytest.fixture
+def reader(initialised_store):
+    from dynamic_thermal_charge.persistence.history import SqlHistoryReader
+
+    return SqlHistoryReader(
+        initialised_store.engine,
+        initialised_store.repository.installation_id(),
+        initialised_store.location,
+    )
+
+
+def _seed_nights(store, nights: int, end: datetime, heaters=("salon", "entrada")):
+    from test_persistence_retention import _seed_history
+
+    _seed_history(store, nights=nights, end=end, heaters=heaters)
+
+
+SEED_END = datetime(2026, 8, 26, 12, 0, tzinfo=timezone.utc)
+
+
+def test_the_default_page_is_bounded(initialised_store, reader):
+    _seed_nights(initialised_store, nights=120, end=SEED_END)
+    page = reader.plans()
+    assert page.limit_applied == 50
+    assert len(page.items) == 50
+    assert page.has_more is True
+    assert page.next_cursor is not None
+
+
+def test_a_request_never_returns_the_whole_history(initialised_store, reader):
+    _seed_nights(initialised_store, nights=200, end=SEED_END)
+    assert len(reader.plans().items) < 200
+    assert len(reader.transitions().items) < 200
+
+
+def test_an_oversized_limit_is_capped(initialised_store, reader):
+    _seed_nights(initialised_store, nights=10, end=SEED_END)
+    page = reader.plans(limit=99999)
+    assert page.limit_applied == 500
+
+
+def test_results_come_newest_first(initialised_store, reader):
+    _seed_nights(initialised_store, nights=5, end=SEED_END)
+    instants = [item["created_at"] for item in reader.plans().items]
+    assert instants == sorted(instants, reverse=True)
+
+
+def test_the_cursor_walks_the_whole_history_without_repeats_or_gaps(
+    initialised_store, reader
+):
+    _seed_nights(initialised_store, nights=37, end=SEED_END)
+    seen: list[int] = []
+    cursor = None
+    for _ in range(20):  # generous bound; the walk must finish well before this
+        page = reader.plans(limit=10, cursor=cursor)
+        seen.extend(item["id"] for item in page.items)
+        if not page.has_more:
+            break
+        cursor = page.next_cursor
+    assert len(seen) == 37
+    assert len(set(seen)) == 37, "the cursor returned a repeated item"
+
+
+def test_an_insert_between_pages_does_not_shift_the_walk(initialised_store, reader):
+    """The reason the cursor is a (instant, id) pair and not an offset."""
+    _seed_nights(initialised_store, nights=20, end=SEED_END)
+    first = reader.plans(limit=10)
+    # A brand-new plan arrives, as the controller would produce one.
+    _seed_nights(initialised_store, nights=1, end=SEED_END + timedelta(days=1))
+    second = reader.plans(limit=10, cursor=first.next_cursor)
+    assert not (
+        {item["id"] for item in first.items} & {item["id"] for item in second.items}
+    ), "an insert between pages produced a repeated item"
+
+
+def test_a_tampered_cursor_is_rejected_not_ignored(reader):
+    from dynamic_thermal_charge.persistence.history import CursorError
+
+    with pytest.raises(CursorError):
+        reader.plans(cursor="not-a-cursor")
+
+
+def test_a_range_selects_only_what_it_covers(initialised_store, reader):
+    _seed_nights(initialised_store, nights=30, end=SEED_END)
+    since = SEED_END - timedelta(days=5)
+    page = reader.plans(since=since)
+    assert page.items
+    assert all(item["created_at"] >= since for item in page.items)
+
+
+def test_an_empty_range_returns_an_empty_page(initialised_store, reader):
+    _seed_nights(initialised_store, nights=5, end=SEED_END)
+    page = reader.plans(
+        since=SEED_END + timedelta(days=100), until=SEED_END + timedelta(days=200)
+    )
+    assert page.items == []
+    assert page.has_more is False
+    assert page.next_cursor is None
+
+
+def test_transitions_can_be_filtered_by_heater(initialised_store, reader):
+    _seed_nights(initialised_store, nights=5, end=SEED_END)
+    page = reader.transitions(heater_id="salon")
+    assert page.items
+    assert {item["heater_id"] for item in page.items} == {"salon"}
+
+
+def test_a_removed_heater_keeps_its_transitions(initialised_store, reader):
+    _seed_nights(initialised_store, nights=3, end=SEED_END)
+    _, revision = initialised_store.repository.current()
+    initialised_store.repository.remove_heater(revision, "salon")
+    page = reader.transitions(heater_id="salon")
+    assert page.items, "the history of a removed heater disappeared"
+
+
+def test_an_unknown_heater_returns_an_empty_page(initialised_store, reader):
+    """It may have existed and been removed: absence is not an error."""
+    _seed_nights(initialised_store, nights=3, end=SEED_END)
+    assert reader.transitions(heater_id="never-existed").items == []
+
+
+def test_instants_come_back_as_aware_utc(initialised_store, reader):
+    _seed_nights(initialised_store, nights=2, end=SEED_END)
+    for item in reader.plans().items:
+        assert item["created_at"].tzinfo is not None
+        assert item["created_at"].utcoffset() == timedelta(0)

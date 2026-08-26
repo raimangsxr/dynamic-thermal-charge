@@ -67,6 +67,100 @@ def recorder(initialised_store):
     )
 
 
+# --------------------------------------------------------------------------- #
+# API fixtures. The client runs the app in process over the ASGI transport: no
+# port is ever opened (FR-048).
+# --------------------------------------------------------------------------- #
+
+API_TOKEN = "test-token-" + "z" * 32
+AUTH = {"Authorization": f"Bearer {API_TOKEN}"}
+
+
+@pytest.fixture
+def api_clock() -> "ControlledClock":
+    return ControlledClock(API_NOW)
+
+
+@pytest.fixture
+def api_settings():
+    from dynamic_thermal_charge.api.settings import ApiSettings
+
+    return ApiSettings(token=API_TOKEN)
+
+
+@pytest.fixture
+def api_app(initialised_store, api_settings, api_clock, store_env):
+    from dynamic_thermal_charge.api import create_app
+    from dynamic_thermal_charge.persistence.bootstrap import open_store
+
+    return create_app(
+        settings=api_settings,
+        store_factory=lambda: open_store(store_env),
+        clock=api_clock,
+    )
+
+
+@pytest.fixture
+def client(api_app):
+    from starlette.testclient import TestClient
+
+    return TestClient(api_app)
+
+
+@pytest.fixture
+def heartbeat(initialised_store):
+    """A publisher whose runner and start instant the test controls."""
+    from dynamic_thermal_charge.persistence.heartbeat import SqlHeartbeatPublisher
+
+    return SqlHeartbeatPublisher(
+        initialised_store.engine,
+        initialised_store.repository.installation_id(),
+        poll_seconds=5.0,
+        driver_kind="gpio",
+        started_at=API_NOW - timedelta(hours=3),
+        runner_id="runner-a",
+        location=initialised_store.location,
+    )
+
+
+def iter_routes(app) -> list[tuple[str, str, bool]]:
+    """Every served route as (full path, method, in_schema), flattened.
+
+    FastAPI 0.141 wraps an included router in ``_IncludedRouter``, so
+    ``app.routes`` is not a flat list of routes carrying ``.path``. A test that
+    assumed it was would find nothing and pass vacuously, which is worse than
+    failing: it looks like a guard while guarding nothing.
+    """
+    found: list[tuple[str, str, bool]] = []
+    visited: set[int] = set()
+
+    def _walk(container, prefix: str) -> None:
+        if id(container) in visited:
+            return
+        visited.add(id(container))
+        for route in getattr(container, "routes", []):
+            path = getattr(route, "path", None)
+            methods = getattr(route, "methods", None)
+            if path and methods:
+                in_schema = getattr(route, "include_in_schema", True)
+                for method in methods:
+                    if method not in ("HEAD", "OPTIONS"):
+                        found.append((prefix + path, method.lower(), in_schema))
+                continue
+            context = getattr(route, "include_context", None)
+            nested = getattr(context, "included_router", None) or getattr(
+                route, "original_router", None
+            )
+            if nested is not None:
+                _walk(nested, prefix + getattr(context, "prefix", ""))
+
+    _walk(app, "")
+    _walk(getattr(app, "router", None) or app, "")
+    assert found, "no route was found: the walker is broken, not the app"
+    return found
+
+
+API_NOW = datetime(2026, 1, 16, 1, 0, tzinfo=timezone.utc)
 FIXED_NOW = datetime(2026, 1, 15, 22, 0, tzinfo=timezone.utc)
 
 

@@ -154,6 +154,16 @@ class PlanRef:
 
 
 @dataclass(frozen=True)
+class HistoryPage:
+    """A bounded slice of history, plus how to ask for the next one."""
+
+    items: list[dict]
+    limit_applied: int
+    has_more: bool
+    next_cursor: str | None = None
+
+
+@dataclass(frozen=True)
 class PruneReport:
     deleted: dict[str, int]
 
@@ -241,6 +251,7 @@ __all__ = [
     "ConfigChange",
     "Heartbeat",
     "HeartbeatPublisher",
+    "HistoryPage",
     "Liveness",
     "ConfigConflictError",
     "ConfigRepository",

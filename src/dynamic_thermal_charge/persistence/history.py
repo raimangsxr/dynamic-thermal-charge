@@ -11,15 +11,16 @@ relay to close; without an audit record, there is.
 
 from __future__ import annotations
 
+import base64
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping, Sequence
 
 from sqlalchemy import delete, func, insert, select
 from sqlalchemy.engine import Engine
 
-from . import ForecastRef, PlanRef, PruneReport
-from .mapping import to_utc
+from . import ForecastRef, HistoryPage, PlanRef, PruneReport
+from .mapping import from_utc, to_utc
 from .schema import (
     RETAINED_TABLES,
     forecast as forecast_table,
@@ -262,4 +263,317 @@ def _now_of(forecast: Any) -> datetime:
     return datetime.now(timezone.utc)
 
 
-__all__ = ["SqlHistoryRecorder"]
+# --------------------------------------------------------------------------- #
+# Paged reads. The previous phase only ever wrote history and pruned it; the API
+# needs to read it back without ever returning the whole thing.
+#
+# The cursor encodes the (instant, id) pair of the last item returned, not an
+# offset. History receives inserts while a client pages through it: with an
+# offset, a plan inserted between two pages would shift everything and the client
+# would see a repeated item or skip one. The id breaks ties between two records
+# sharing the same instant, which happens whenever several transitions land in
+# the same second.
+# --------------------------------------------------------------------------- #
+
+DEFAULT_PAGE_SIZE = 50
+MAX_PAGE_SIZE = 500
+
+
+class CursorError(ValueError):
+    """The continuation cursor is unreadable or was tampered with."""
+
+
+def encode_cursor(instant: datetime, row_id: int) -> str:
+    payload = f"{to_utc(instant).isoformat()}|{row_id}"
+    return base64.urlsafe_b64encode(payload.encode("utf-8")).decode("ascii")
+
+
+def decode_cursor(cursor: str) -> tuple[datetime, int]:
+    """Returns an aware UTC instant: the temporal boundary refuses naive ones."""
+    try:
+        payload = base64.urlsafe_b64decode(cursor.encode("ascii")).decode("utf-8")
+        raw_instant, raw_id = payload.split("|")
+        instant = datetime.fromisoformat(raw_instant)
+        if instant.tzinfo is None:
+            instant = instant.replace(tzinfo=timezone.utc)
+        return instant, int(raw_id)
+    except Exception as exc:
+        # Never silently ignored: falling back to the first page would look like
+        # nothing happened while the client silently re-reads what it already had.
+        raise CursorError(
+            "the continuation cursor is unreadable; request the first page again "
+            "without a cursor"
+        ) from exc
+
+
+def _page_size(limit: int | None) -> int:
+    if limit is None:
+        return DEFAULT_PAGE_SIZE
+    return max(1, min(int(limit), MAX_PAGE_SIZE))
+
+
+class SqlHistoryReader:
+    """Paged, filtered reads over the audit trail."""
+
+    def __init__(
+        self,
+        engine: Engine,
+        installation_id: int,
+        location: StoreLocation | None = None,
+    ) -> None:
+        self._engine = engine
+        self._installation_id = installation_id
+        self._location = location
+
+    def plans(self, since=None, until=None, limit=None, cursor=None) -> HistoryPage:
+        return self._page(
+            plan_table, plan_table.c.created_at, since, until, limit, cursor
+        )
+
+    def forecasts(self, since=None, until=None, limit=None, cursor=None) -> HistoryPage:
+        return self._page(
+            forecast_table,
+            forecast_table.c.retrieved_at,
+            since,
+            until,
+            limit,
+            cursor,
+        )
+
+    def transitions(
+        self, since=None, until=None, limit=None, cursor=None, heater_id=None
+    ) -> HistoryPage:
+        extra = None
+        if heater_id is not None:
+            # Resolved against the text column, so transitions of a heater that
+            # has since been removed keep showing up.
+            extra = output_transition.c.heater_id == heater_id
+        return self._page(
+            output_transition,
+            output_transition.c.occurred_at,
+            since,
+            until,
+            limit,
+            cursor,
+            extra=extra,
+        )
+
+    def _page(
+        self, table, timestamp, since, until, limit, cursor, extra=None
+    ) -> HistoryPage:
+        size = _page_size(limit)
+        condition = table.c.installation_id == self._installation_id
+        if since is not None:
+            condition = condition & (timestamp >= to_utc(since))
+        if until is not None:
+            condition = condition & (timestamp <= to_utc(until))
+        if extra is not None:
+            condition = condition & extra
+        if cursor is not None:
+            cursor_instant, cursor_id = decode_cursor(cursor)
+            cursor_utc = to_utc(cursor_instant)
+            condition = condition & (
+                (timestamp < cursor_utc)
+                | ((timestamp == cursor_utc) & (table.c.id < cursor_id))
+            )
+
+        from .engine import store_errors
+
+        with store_errors(self._location):
+            with self._engine.connect() as connection:
+                rows = (
+                    connection.execute(
+                        select(table)
+                        .where(condition)
+                        # One extra row is fetched to learn whether there is more,
+                        # without a second COUNT query.
+                        .order_by(timestamp.desc(), table.c.id.desc())
+                        .limit(size + 1)
+                    )
+                    .mappings()
+                    .all()
+                )
+
+        has_more = len(rows) > size
+        items = [dict(row) for row in rows[:size]]
+        next_cursor = None
+        if has_more and items:
+            last = items[-1]
+            next_cursor = encode_cursor(
+                from_utc(last[timestamp.name]), int(last["id"])
+            )
+        for item in items:
+            for key, value in list(item.items()):
+                if isinstance(value, datetime):
+                    item[key] = from_utc(value)
+        return HistoryPage(
+            items=items,
+            limit_applied=size,
+            has_more=has_more,
+            next_cursor=next_cursor,
+        )
+
+
+class SqlStatusReader:
+    """Reads what the status endpoint needs, so the API never issues SQL itself.
+
+    Keeping these queries here rather than in the route is principle II: the API
+    is an edge that depends on this boundary, not on SQLAlchemy. A guard test
+    fails if any module outside this package imports the driver stack.
+    """
+
+    def __init__(
+        self,
+        engine: Engine,
+        installation_id: int,
+        location: StoreLocation | None = None,
+    ) -> None:
+        self._engine = engine
+        self._installation_id = installation_id
+        self._location = location
+
+    def last_output_states(self) -> dict[str, tuple[bool, datetime]]:
+        """The last recorded transition per heater.
+
+        A heater with no transition at all is absent from the result and counts as
+        off, which is the state every driver initialises to (principle I).
+        """
+        from .engine import store_errors
+
+        with store_errors(self._location):
+            with self._engine.connect() as connection:
+                rows = (
+                    connection.execute(
+                        select(
+                            output_transition.c.heater_id,
+                            output_transition.c.state,
+                            output_transition.c.occurred_at,
+                        )
+                        .where(
+                            output_transition.c.installation_id == self._installation_id
+                        )
+                        .order_by(
+                            output_transition.c.occurred_at.desc(),
+                            output_transition.c.id.desc(),
+                        )
+                    )
+                    .mappings()
+                    .all()
+                )
+        latest: dict[str, tuple[bool, datetime]] = {}
+        for row in rows:
+            heater_id = str(row["heater_id"])
+            if heater_id not in latest:
+                latest[heater_id] = (bool(row["state"]), from_utc(row["occurred_at"]))
+        return latest
+
+    def plan_in_progress(self, at: datetime) -> dict | None:
+        """The plan whose window contains ``at``, with its slots and allocations.
+
+        Never the last past plan: presenting an expired window as if it were
+        running is the same kind of lie as presenting a stale output state as
+        current.
+        """
+        from .engine import store_errors
+
+        moment = to_utc(at)
+        with store_errors(self._location):
+            with self._engine.connect() as connection:
+                plan_row = (
+                    connection.execute(
+                        select(plan_table)
+                        .where(
+                            (plan_table.c.installation_id == self._installation_id)
+                            & (plan_table.c.window_start <= moment)
+                            & (plan_table.c.window_end > moment)
+                        )
+                        .order_by(plan_table.c.created_at.desc())
+                        .limit(1)
+                    )
+                    .mappings()
+                    .first()
+                )
+                if plan_row is None:
+                    return None
+                slots = (
+                    connection.execute(
+                        select(plan_slot)
+                        .where(plan_slot.c.plan_id == plan_row["id"])
+                        .order_by(plan_slot.c.slot_start, plan_slot.c.heater_id)
+                    )
+                    .mappings()
+                    .all()
+                )
+                allocations = (
+                    connection.execute(
+                        select(plan_allocation)
+                        .where(plan_allocation.c.plan_id == plan_row["id"])
+                        .order_by(plan_allocation.c.heater_id)
+                    )
+                    .mappings()
+                    .all()
+                )
+                forecast_row = None
+                if plan_row["forecast_id"] is not None:
+                    forecast_row = (
+                        connection.execute(
+                            select(forecast_table).where(
+                                forecast_table.c.id == plan_row["forecast_id"]
+                            )
+                        )
+                        .mappings()
+                        .first()
+                    )
+
+        return {
+            "plan": {
+                "window_start": from_utc(plan_row["window_start"]),
+                "window_end": from_utc(plan_row["window_end"]),
+                "slot_minutes": int(plan_row["slot_minutes"]),
+                "installation_revision": int(plan_row["installation_revision"]),
+                "created_at": from_utc(plan_row["created_at"]),
+            },
+            "slots": [
+                {
+                    "heater_id": str(row["heater_id"]),
+                    "slot_start": from_utc(row["slot_start"]),
+                    "slot_end": from_utc(row["slot_end"]),
+                }
+                for row in slots
+            ],
+            "allocations": [
+                {
+                    "heater_id": str(row["heater_id"]),
+                    "requested_minutes": int(row["requested_minutes"]),
+                    "allocated_minutes": int(row["allocated_minutes"]),
+                    "unmet_minutes": int(row["unmet_minutes"]),
+                }
+                for row in allocations
+            ],
+            "forecast": (
+                None
+                if forecast_row is None
+                else {
+                    "date": forecast_row["forecast_date"],
+                    "source": str(forecast_row["source"]),
+                    "average_temperature_c": float(
+                        forecast_row["average_temperature_c"]
+                    ),
+                    "minimum_temperature_c": forecast_row["minimum_temperature_c"],
+                    "maximum_temperature_c": forecast_row["maximum_temperature_c"],
+                    "municipality": forecast_row["municipality"],
+                }
+            ),
+        }
+
+
+__all__ = [
+    "DEFAULT_PAGE_SIZE",
+    "MAX_PAGE_SIZE",
+    "CursorError",
+    "SqlHistoryReader",
+    "SqlHistoryRecorder",
+    "SqlStatusReader",
+    "decode_cursor",
+    "encode_cursor",
+]

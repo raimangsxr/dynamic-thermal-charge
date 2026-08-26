@@ -64,10 +64,11 @@ class InitReport:
 def open_store(
     environ: Mapping[str, str] | None = None,
     clock: Callable[[], object] | None = None,
+    engine_timeouts: tuple[float, float] | None = None,
 ) -> Store:
     """Open the store without migrating or seeding anything."""
     location = resolve_location(environ)
-    engine = build_engine(location)
+    engine = build_engine(location, timeouts=engine_timeouts)
     return Store(
         location=location,
         engine=engine,
