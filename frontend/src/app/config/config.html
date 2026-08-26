@@ -1,0 +1,89 @@
+<section class="config">
+  <h1>Configuración</h1>
+
+  @if (banner(); as message) {
+    <div class="banner alert" role="alert" data-testid="banner">
+      <strong>{{ message.title }}</strong>
+      <p>{{ message.action }}</p>
+      @if (message.onDevice === false && message.title.includes('cambió')) {
+        <button type="button" (click)="load()" data-testid="reread">
+          Volver a leer la configuración
+        </button>
+      }
+    </div>
+  }
+
+  @if (saved(); as text) {
+    <p class="saved" role="status" data-testid="saved">Guardado — {{ text }}</p>
+  }
+
+  @if (confirming(); as edit) {
+    <div class="banner warn" role="alertdialog" data-testid="confirm">
+      <strong>Confirma el cambio</strong>
+      <p>{{ confirmationMessage() }}</p>
+      <button type="button" (click)="confirm()" data-testid="confirm-yes">
+        Sí, cambiar
+      </button>
+      <button type="button" (click)="cancelConfirmation()" data-testid="confirm-no">
+        Cancelar
+      </button>
+    </div>
+  }
+
+  @if (config(); as data) {
+    <p class="revisions">
+      Configuración rev. {{ data.config_revision }} · esquema {{ data.schema_revision }}
+    </p>
+
+    <h2>Instalación</h2>
+    <div class="fields">
+      @for (field of ['max_total_power_kw', 'slot_minutes', 'retention_days', 'poll_seconds', 'log_level']; track field) {
+        <div class="field" [attr.data-field]="field">
+          <label [for]="field">{{ field }}{{ register(field, null) }}</label>
+          <input
+            [id]="field"
+            [ngModel]="pending()[key(field, null)] ?? asText(data, field)"
+            (ngModelChange)="edit(field, null, $event)"
+            [name]="field"
+          />
+          <button type="button" (click)="submit(field, null)" [attr.data-save]="field">
+            Guardar
+          </button>
+          @if (fieldErrors()[key(field, null)]; as error) {
+            <p class="field-error" role="alert" [attr.data-error]="field">{{ error }}</p>
+          }
+        </div>
+      }
+    </div>
+
+    <h2>Acumuladores</h2>
+    @for (heater of data.heaters; track heater.id) {
+      <fieldset [attr.data-heater]="heater.id">
+        <legend>{{ heater.name }} ({{ heater.id }})</legend>
+        @for (field of ['target_charge', 'priority', 'pin', 'active_high']; track field) {
+          <div class="field" [attr.data-field]="heater.id + '.' + field">
+            <label [for]="heater.id + '-' + field">{{ field }}{{ register(field, heater.id) }}</label>
+            <input
+              [id]="heater.id + '-' + field"
+              [ngModel]="pending()[key(field, heater.id)] ?? heaterText(heater, field)"
+              (ngModelChange)="edit(field, heater.id, $event)"
+              [name]="heater.id + '-' + field"
+            />
+            <button
+              type="button"
+              (click)="submit(field, heater.id)"
+              [attr.data-save]="heater.id + '.' + field"
+            >
+              Guardar
+            </button>
+            @if (fieldErrors()[key(field, heater.id)]; as error) {
+              <p class="field-error" role="alert" [attr.data-error]="heater.id + '.' + field">
+                {{ error }}
+              </p>
+            }
+          </div>
+        }
+      </fieldset>
+    }
+  }
+</section>

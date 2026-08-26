@@ -92,6 +92,20 @@ Un panel de tres vistas debería quedar en torno a 350-450 kB en bruto y 100-130
 El presupuesto tiene margen y es lo bastante estrecho para que un descuido —importar una librería
 de gráficos «solo para probar»— falle la compilación en lugar de colarse.
 
+**Medición real del panel terminado**, con las tres vistas y sus tests:
+
+| Medida | Presupuesto | Real |
+| --- | ---: | ---: |
+| paquete inicial, en bruto | < 500 kB | **264,05 kB** |
+| paquete inicial, transferido | < 150 kB | **74,00 kB** |
+| `dist/panel/browser/` completo | — | 372 kB |
+| `main` (sin las vistas, que van diferidas) | — | 96,41 kB / 24,64 kB |
+
+Quedó por debajo incluso de la estimación: las tres vistas se cargan en fragmentos diferidos, así
+que el arranque solo trae el armazón, el acceso y lo compartido. Verificado además que el
+presupuesto **sabe fallar**, bajándolo temporalmente a 10 kB: la compilación se detuvo con
+«bundle initial exceeded maximum budget».
+
 Los 253 MB de `node_modules` viven **solo en la máquina de construcción**. En el dispositivo se
 copian 256 kB de ficheros estáticos y nada más: es la razón por la que compilar fuera no es una
 incomodidad sino la única opción sensata.

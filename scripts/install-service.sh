@@ -12,13 +12,17 @@ API_UNIT_PATH="/etc/systemd/system/${API_SERVICE_NAME}.service"
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WITH_GPIO=false
 WITH_API=false
+WITH_PANEL=false
+PANEL_ROOT="/var/www/${SERVICE_NAME}"
+NGINX_SITE="/etc/nginx/sites-available/${SERVICE_NAME}"
 
 while [[ $# -gt 0 ]]; do
   case ${1} in
     --with-gpio) WITH_GPIO=true ;;
     --with-api) WITH_API=true ;;
+    --with-panel) WITH_PANEL=true ;;
     *)
-      echo "Usage: sudo $0 [--with-gpio] [--with-api]" >&2
+      echo "Usage: sudo $0 [--with-gpio] [--with-api] [--with-panel]" >&2
       exit 1
       ;;
   esac
@@ -108,6 +112,20 @@ if [[ ${WITH_API} == true ]]; then
     "${API_UNIT_PATH}"
 fi
 
+# The web panel. NOTE: no Node, no npm, no build tooling is installed here. The
+# panel is compiled off-device and copied in; an npm install on a Cortex-A7 with
+# 1 GB does not finish, and the constitution forbids it.
+if [[ ${WITH_PANEL} == true ]]; then
+  install -d -m 0755 -o root -g root "${PANEL_ROOT}"
+  if [[ -d /etc/nginx/sites-available ]]; then
+    install -m 0644 -o root -g root \
+      "${PROJECT_ROOT}/deploy/nginx/${SERVICE_NAME}.conf" "${NGINX_SITE}"
+  else
+    echo "nginx is not installed; the site file is left at" >&2
+    echo "  ${PROJECT_ROOT}/deploy/nginx/${SERVICE_NAME}.conf" >&2
+  fi
+fi
+
 systemctl daemon-reload
 
 DTC="${INSTALL_ROOT}/venv/bin/dynamic-thermal-charge"
@@ -144,6 +162,24 @@ if [[ ${WITH_API} == true ]]; then
   echo "  cannot end up listening unprotected. It listens on 127.0.0.1 by"
   echo "  default; exposing it on the network is a deliberate change and it"
   echo "  serves in clear text. See the README before doing that."
+fi
+if [[ ${WITH_PANEL} == true ]]; then
+  echo
+  echo "  The web panel is NOT built here. Build it on your development machine"
+  echo "  and copy the result; this device has no Node and does not need one:"
+  echo "    cd frontend && npm run build"
+  echo "    rsync -a --delete dist/panel/browser/ this-host:/tmp/panel/"
+  echo "    sudo rsync -a --delete /tmp/panel/ ${PANEL_ROOT}/"
+  echo
+  echo "  Then enable the nginx site (it is installed but not enabled):"
+  echo "    sudo apt-get install -y nginx    # if it is not there yet"
+  echo "    sudo ln -sf ${NGINX_SITE} /etc/nginx/sites-enabled/"
+  echo "    sudo rm -f /etc/nginx/sites-enabled/default"
+  echo "    sudo nginx -t && sudo systemctl reload nginx"
+  echo
+  echo "  The panel and the API then share one origin, so the API stays on"
+  echo "  127.0.0.1 and never needs exposing. It serves in CLEAR TEXT: see the"
+  echo "  README before reaching it from outside a trusted network."
 fi
 echo
 echo "  Then: systemctl start ${SERVICE_NAME}"

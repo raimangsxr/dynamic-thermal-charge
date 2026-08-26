@@ -33,6 +33,20 @@ def _production_sources() -> list[Path]:
     ]
 
 
+def _code_only(text: str) -> str:
+    """Strip comments before scanning.
+
+    Every one of these guards documents its own ban in a comment next to the
+    code, and a naive substring search matches that prose. The phase-2 guard on
+    forbidden dependencies hit exactly this: it failed against the comment
+    explaining why uvicorn[standard] is banned. Scan code, not prose.
+    """
+    without_block = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+    return "\n".join(
+        line for line in without_block.splitlines() if not line.strip().startswith("//")
+    )
+
+
 # --------------------------------------------------------------------------- #
 # FR-016: ages come from the API, never from the browser clock.
 #
@@ -59,7 +73,7 @@ def test_no_module_computes_an_age_from_the_local_clock() -> None:
         key = path.relative_to(APP).as_posix()
         if key in CLOCK_ALLOWED:
             continue
-        text = path.read_text(encoding="utf-8")
+        text = _code_only(path.read_text(encoding="utf-8"))
         hits = []
         if "Date.now(" in text:
             hits.append("Date.now()")
@@ -85,7 +99,7 @@ def test_no_module_computes_an_age_from_the_local_clock() -> None:
 def test_the_credential_never_travels_in_a_url() -> None:
     offenders: dict[str, list[str]] = {}
     for path in _production_sources():
-        text = path.read_text(encoding="utf-8")
+        text = _code_only(path.read_text(encoding="utf-8"))
         hits = [
             line.strip()
             for line in text.splitlines()
@@ -100,7 +114,7 @@ def test_the_credential_is_not_written_to_persistent_storage() -> None:
     """FR-002: it must not survive closing the tab."""
     offenders: dict[str, list[str]] = {}
     for path in _production_sources():
-        text = path.read_text(encoding="utf-8")
+        text = _code_only(path.read_text(encoding="utf-8"))
         hits = [
             token
             for token in ("localStorage", "indexedDB", "document.cookie")
@@ -123,7 +137,7 @@ def test_the_panel_calls_no_operation_that_would_switch_an_output() -> None:
     forbidden = ("/override", "/boost", "/switch", "/outputs/", "/force")
     offenders: dict[str, list[str]] = {}
     for path in _production_sources():
-        text = path.read_text(encoding="utf-8")
+        text = _code_only(path.read_text(encoding="utf-8"))
         hits = [name for name in forbidden if name in text]
         if hits:
             offenders[path.relative_to(APP).as_posix()] = hits

@@ -507,6 +507,151 @@ La lista está vacía por defecto. No se admite comodín.
 | **409** al escribir | otro cliente escribió primero; relee y reintenta |
 | el navegador bloquea las peticiones | falta declarar su origen en `DTC_API_CORS_ORIGINS` |
 
+## Panel web
+
+Un panel de navegador para ver el estado, editar la configuración y consultar el histórico.
+Consume solo la API y **no puede accionar ninguna salida**: la API no ofrece esa operación.
+
+### Se compila fuera del dispositivo
+
+**En la Raspberry Pi no se instala Node, y no hace falta.** Un `npm install` en un Cortex-A7 con
+1 GB no termina, y las dependencias del panel son 253 MB frente a los ~260 kB que se copian al
+dispositivo. La constitución del proyecto lo prohíbe explícitamente, y el instalador no instala
+ninguna herramienta de construcción.
+
+Requisitos en tu máquina: **Node ≥ 22.22.3**, o ≥ 24.15, o ≥ 26.
+
+```bash
+node --version
+cd frontend && npm install
+```
+
+### Desarrollo local
+
+Necesitas la API en marcha:
+
+```bash
+# Terminal 1
+export DTC_DATABASE_URL="sqlite:///$(pwd)/var/dtc.db"
+export DTC_API_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+dtc db upgrade && dtc api
+
+# Terminal 2
+cd frontend && npm start        # http://localhost:4200
+```
+
+El servidor de desarrollo hace de intermediario hacia la API igual que nginx en el dispositivo,
+así que tampoco aquí hacen falta orígenes cruzados. El panel pide la credencial al abrirlo: es el
+valor de `DTC_API_TOKEN`.
+
+```bash
+cd frontend && npm test         # sin red, sin API real, sin navegador
+cd frontend && npm run build    # falla si el paquete supera el presupuesto
+```
+
+### Lo que el panel se niega a afirmar
+
+Lo primero que se lee en la pantalla de estado es si el controlador está visible. Como la API y el
+controlador son procesos distintos, la API deduce el estado de las salidas del histórico de
+transiciones, y si el controlador está parado ese histórico sigue ahí.
+
+Cuando el estado **no es vigente**, el panel:
+
+- **no muestra ninguna cifra de potencia**, ni un cero: un cero afirmaría que no se consume nada;
+- pinta cada acumulador como **«sin confirmar»**, con el último valor conocido etiquetado como
+  pasado y el instante en que cambió;
+- avisa desde cuándo no se ve al controlador.
+
+Eso **no es un fallo**. Es el panel negándose a afirmar algo que no puede saber. Un panel que diga
+que un acumulador de 2,8 kW está cargando cuando no lo está lleva a decisiones equivocadas sobre
+la instalación eléctrica.
+
+Los tres estados —cargando, en reposo y sin confirmar— se distinguen por texto y forma, no solo
+por color.
+
+Si el panel avisa de que **parece haber más de un controlador**, revísalo: dos procesos
+conmutando los mismos relés es un riesgo eléctrico.
+
+### Editar la configuración
+
+Cada escritura envía la revisión que se leyó. Si otra pestaña escribió antes, el panel avisa de
+que la configuración cambió y ofrece releer, sin sobrescribir. No es un error a evitar: es la
+protección funcionando.
+
+Tres campos piden confirmación explícita, y solo esos tres, porque su error se paga en el cuadro
+eléctrico: **potencia máxima simultánea, pin BCM y nivel activo**. El resto se cambia sin
+ceremonia; pedir confirmación para todo enseña a confirmar sin leer.
+
+### Desplegar en la Raspberry Pi
+
+```bash
+# 1. Compilar AQUÍ, nunca allí
+cd frontend && npm run build
+
+# 2. Copiar los ficheros
+rsync -a --delete dist/panel/browser/ pi:/tmp/panel/
+ssh pi 'sudo rsync -a --delete /tmp/panel/ /var/www/dynamic-thermal-charge/'
+
+# 3. Solo la primera vez: instalar el servicio y el sitio de nginx
+sudo ./scripts/install-service.sh --with-api --with-panel
+ssh pi 'sudo apt-get install -y nginx'
+ssh pi 'sudo ln -sf /etc/nginx/sites-available/dynamic-thermal-charge /etc/nginx/sites-enabled/ \
+        && sudo rm -f /etc/nginx/sites-enabled/default \
+        && sudo nginx -t && sudo systemctl reload nginx'
+```
+
+El panel queda en `http://<la-pi>/`. El instalador **no** habilita nginx ni arranca nada: imprime
+lo que hay que ejecutar.
+
+nginx sirve los ficheros y hace de intermediario hacia la API, así que el navegador ve un único
+origen. Consecuencia importante: **la API sigue escuchando solo en `127.0.0.1` y nunca necesita
+exponerse**. nginx es el único componente accesible desde la red.
+
+Comprobarlo merece la pena una vez:
+
+```bash
+ssh pi 'ss -tlnp | grep 8420'          # debe decir 127.0.0.1:8420, no 0.0.0.0
+curl -s http://<la-pi>:8420/health     # debe fallar: la API no escucha ahí fuera
+curl -s http://<la-pi>/health          # debe responder: nginx sí
+```
+
+### Actualizar el panel
+
+```bash
+cd frontend && npm run build
+rsync -a --delete dist/panel/browser/ pi:/tmp/panel/
+ssh pi 'sudo rsync -a --delete /tmp/panel/ /var/www/dynamic-thermal-charge/'
+```
+
+**No hay que recargar nginx ni borrar la caché del navegador.** Los recursos llevan una huella en
+el nombre y `index.html` se sirve sin cachear. Si alguna vez ves la interfaz antigua tras
+actualizar, lo primero que hay que revisar es que `index.html` no esté siendo cacheado.
+
+### Añadir cifrado en tránsito
+
+**Sin cifrado, el panel y la API sirven en claro.** Cualquiera con acceso a tu red puede leer la
+credencial al pasar, y quien la tenga puede cambiar la potencia máxima y la asignación de pines.
+En una red doméstica de confianza es razonable. **Publicarlo en internet no lo es.**
+
+`deploy/nginx/dynamic-thermal-charge.conf` lleva el bloque preparado y **comentado**. Activarlo
+requiere un certificado y su clave, descomentar el bloque y recargar nginx. No se activa por
+defecto porque implica gestionar certificados, y esa decisión es del operador.
+
+### Diagnóstico del panel
+
+| Síntoma | Causa probable |
+| --- | --- |
+| pide la credencial una y otra vez | el token no coincide con `DTC_API_TOKEN`, o se rotó en el servidor |
+| **404** al recargar una ruta interna | falta `try_files … /index.html` en la configuración de nginx |
+| tras actualizar sigue la interfaz antigua | `index.html` se está cacheando; debe ir con `no-cache` |
+| **502** desde nginx | la API no está en marcha: `systemctl status dynamic-thermal-charge-api` |
+| todo da **401** por nginx pero funciona en local | nginx no propaga la cabecera de autorización |
+| «estado no actual» de forma permanente | el controlador está parado o colgado: `systemctl status dynamic-thermal-charge` |
+| no se muestra potencia | correcto por diseño: sin latido reciente no se publica una cifra que nadie puede confirmar |
+| avisa de más de un controlador | revísalo: dos procesos sobre los mismos relés es un riesgo eléctrico |
+| dice que el esquema necesita atención | ejecuta `dtc db upgrade` **en el dispositivo**; el panel no puede |
+| no refresca con la pestaña de fondo | correcto por diseño: se detiene para no cargar la Pi y se reanuda al volver |
+
 ## GPIO real
 
 El driver real usa [GPIO Zero](https://gpiozero.readthedocs.io/en/stable/)

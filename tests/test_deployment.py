@@ -294,3 +294,152 @@ def test_the_readme_documents_the_api_and_its_risk() -> None:
     lowered = readme.lower()
     assert "en claro" in lowered or "clear text" in lowered
     assert "token_urlsafe" in readme
+
+
+# --------------------------------------------------------------------------- #
+# The web panel's nginx site: FR-038 to FR-043.
+# --------------------------------------------------------------------------- #
+
+NGINX_SITE = ROOT / "deploy" / "nginx" / "dynamic-thermal-charge.conf"
+
+
+def _nginx() -> str:
+    return NGINX_SITE.read_text(encoding="utf-8")
+
+
+def test_the_nginx_site_exists_and_serves_the_panel() -> None:
+    site = _nginx()
+    assert "root /var/www/dynamic-thermal-charge;" in site
+    assert "index index.html;" in site
+
+
+def test_reloading_an_internal_route_works() -> None:
+    """FR-040: without try_files, reloading /configuracion returns 404."""
+    assert "try_files $uri $uri/ /index.html;" in _nginx()
+
+
+def test_index_html_is_not_cached() -> None:
+    """FR-041: caching it is what makes a new version invisible after deploying."""
+    site = _nginx()
+    assert 'location = /index.html' in site
+    index_block = site.split("location = /index.html")[1].split("}")[0]
+    assert 'Cache-Control "no-cache"' in index_block
+
+
+def test_fingerprinted_assets_are_cached_as_immutable() -> None:
+    site = _nginx()
+    assert "immutable" in site
+    assert "max-age=31536000" in site
+
+
+def test_the_api_is_proxied_to_the_local_interface_only() -> None:
+    """FR-039: nginx is the only component exposed on the network."""
+    site = _nginx()
+    assert "proxy_pass http://127.0.0.1:8420;" in site
+    assert "proxy_pass http://0.0.0.0" not in site
+    for line in site.splitlines():
+        if "proxy_pass" in line and not line.strip().startswith("#"):
+            assert "127.0.0.1" in line, f"a proxy_pass leaves the device: {line.strip()}"
+
+
+def test_the_credential_header_is_propagated() -> None:
+    """Without it, everything through nginx would answer 401."""
+    assert "proxy_set_header Authorization $http_authorization;" in _nginx()
+
+
+def test_the_encryption_block_is_present_and_commented_out() -> None:
+    """FR-042: the path documented, not activated."""
+    site = _nginx()
+    assert "ssl_certificate" in site
+    for line in site.splitlines():
+        if "ssl_certificate" in line or "listen 443" in line:
+            assert line.strip().startswith("#"), (
+                f"the encryption block is active, not commented: {line.strip()}"
+            )
+    lowered = site.lower()
+    assert "clear text" in lowered
+    assert "internet" in lowered
+
+
+def test_the_site_does_not_serve_the_database_or_the_state() -> None:
+    site = _nginx()
+    assert "/var/lib" not in site
+    assert ".db" not in site
+
+
+def test_the_api_documentation_is_not_exposed_through_nginx() -> None:
+    """It needs the credential anyway, and the panel does not use it."""
+    site = _nginx()
+    for line in site.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        assert "/openapi.json" not in stripped
+        assert "location = /docs" not in stripped
+
+
+# --------------------------------------------------------------------------- #
+# The installer offers the panel without building anything on the device.
+# --------------------------------------------------------------------------- #
+
+def test_the_installer_offers_the_panel_without_forcing_it() -> None:
+    installer = INSTALLER.read_text(encoding="utf-8")
+    assert "--with-panel" in installer
+    assert "PANEL_ROOT" in installer
+    assert "NGINX_SITE" in installer
+
+
+def test_the_installer_installs_no_node_toolchain_on_the_device() -> None:
+    """FR-037: an npm install on a Cortex-A7 with 1 GB does not finish."""
+    installer = INSTALLER.read_text(encoding="utf-8")
+    offenders = []
+    for line in installer.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#") or stripped.startswith("echo"):
+            continue
+        for manager in ("npm ", "npx ", "yarn ", "pnpm ", "nodejs", "install -y node"):
+            if manager in stripped:
+                offenders.append(stripped)
+    assert not offenders, (
+        f"the installer would build on the device: {offenders}"
+    )
+
+
+def test_the_installer_does_not_enable_the_nginx_site_itself() -> None:
+    """FR-043: it leaves the site available and says what to run."""
+    installer = INSTALLER.read_text(encoding="utf-8")
+    for line in installer.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#") or stripped.startswith("echo"):
+            continue
+        assert "systemctl reload nginx" not in stripped
+        assert "sites-enabled" not in stripped
+
+
+def test_the_installer_tells_the_operator_to_build_off_device() -> None:
+    installer = INSTALLER.read_text(encoding="utf-8")
+    assert "npm run build" in installer  # inside an echo, as instructions
+    assert "off-device" in installer or "no Node" in installer
+
+
+def test_the_readme_documents_the_panel_and_where_it_is_built() -> None:
+    """FR-042, and the warning that matters most: never build on the device."""
+    readme = README.read_text(encoding="utf-8")
+    assert "Panel web" in readme
+    assert "npm run build" in readme
+    lowered = readme.lower()
+    # Built off-device, and said plainly.
+    assert "no se instala node" in lowered
+    assert "cortex-a7" in lowered
+    # The encryption gap, stated where the deployment is described.
+    assert "en claro" in lowered
+    assert "internet no lo es" in lowered
+    # And the property the whole nginx choice buys.
+    assert "127.0.0.1" in readme
+
+
+def test_the_readme_explains_what_the_panel_refuses_to_claim() -> None:
+    """The single most misusable field in the system, documented for the operator."""
+    readme = README.read_text(encoding="utf-8").lower()
+    assert "sin confirmar" in readme
+    assert "no muestra ninguna cifra de potencia" in readme

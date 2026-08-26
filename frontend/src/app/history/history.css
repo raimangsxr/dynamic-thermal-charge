@@ -1,0 +1,13 @@
+.history { max-width: 72rem; margin: 0 auto; padding: 1rem; }
+.tabs { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem; }
+.tabs button { font: inherit; padding: 0.4rem 0.8rem; cursor: pointer; background: #f4f4f4; border: 1px solid #ddd; }
+.tabs button.active { background: #05408a; color: #fff; border-color: #05408a; }
+.filters { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 1rem; }
+.filters input { padding: 0.35rem; font: inherit; }
+.filters button { font: inherit; padding: 0.35rem 0.8rem; cursor: pointer; }
+.banner { padding: 0.75rem 1rem; border-left: 4px solid #a00; background: #fdf0f0; margin: 1rem 0; }
+.error { color: #a00; font-weight: 600; }
+.empty { color: #555; font-style: italic; }
+.gone { color: #7a4a00; font-size: 0.85em; }
+.paging { display: flex; gap: 0.75rem; align-items: center; color: #555; }
+.paging button { font: inherit; padding: 0.35rem 0.8rem; cursor: pointer; }
