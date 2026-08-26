@@ -7,15 +7,23 @@ INSTALL_ROOT="/opt/${SERVICE_NAME}"
 CONFIG_ROOT="/etc/${SERVICE_NAME}"
 STATE_ROOT="/var/lib/${SERVICE_NAME}"
 UNIT_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
+API_SERVICE_NAME="${SERVICE_NAME}-api"
+API_UNIT_PATH="/etc/systemd/system/${API_SERVICE_NAME}.service"
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WITH_GPIO=false
+WITH_API=false
 
-if [[ ${1:-} == "--with-gpio" ]]; then
-  WITH_GPIO=true
-elif [[ $# -gt 0 ]]; then
-  echo "Usage: sudo $0 [--with-gpio]" >&2
-  exit 1
-fi
+while [[ $# -gt 0 ]]; do
+  case ${1} in
+    --with-gpio) WITH_GPIO=true ;;
+    --with-api) WITH_API=true ;;
+    *)
+      echo "Usage: sudo $0 [--with-gpio] [--with-api]" >&2
+      exit 1
+      ;;
+  esac
+  shift
+done
 
 if [[ ${EUID} -ne 0 ]]; then
   echo "Run this installer as root: sudo $0" >&2
@@ -48,14 +56,22 @@ fi
 if [[ ${WITH_GPIO} == true ]]; then
   apt-get update
   apt-get install -y swig liblgpio-dev
-  "${INSTALL_ROOT}/venv/bin/python" -m pip install --upgrade "${PROJECT_ROOT}[db,gpio]"
+  if [[ ${WITH_API} == true ]]; then
+    "${INSTALL_ROOT}/venv/bin/python" -m pip install --upgrade "${PROJECT_ROOT}[db,gpio,api]"
+  else
+    "${INSTALL_ROOT}/venv/bin/python" -m pip install --upgrade "${PROJECT_ROOT}[db,gpio]"
+  fi
   if ! getent group gpio >/dev/null; then
     echo "The gpio group is missing; cannot grant gpiochip access" >&2
     exit 1
   fi
   usermod --append --groups gpio "${SERVICE_USER}"
 else
-  "${INSTALL_ROOT}/venv/bin/python" -m pip install --upgrade "${PROJECT_ROOT}[db]"
+  if [[ ${WITH_API} == true ]]; then
+    "${INSTALL_ROOT}/venv/bin/python" -m pip install --upgrade "${PROJECT_ROOT}[db,api]"
+  else
+    "${INSTALL_ROOT}/venv/bin/python" -m pip install --upgrade "${PROJECT_ROOT}[db]"
+  fi
 fi
 
 # Configuration now lives in a database, not in a file. A leftover config.yaml
@@ -86,6 +102,12 @@ install -m 0644 -o root -g root \
   "${PROJECT_ROOT}/deploy/systemd/gpio.conf.example" \
   "${CONFIG_ROOT}/gpio-systemd-override.conf.example"
 
+if [[ ${WITH_API} == true ]]; then
+  install -m 0644 -o root -g root \
+    "${PROJECT_ROOT}/deploy/systemd/${API_SERVICE_NAME}.service" \
+    "${API_UNIT_PATH}"
+fi
+
 systemctl daemon-reload
 
 DTC="${INSTALL_ROOT}/venv/bin/dynamic-thermal-charge"
@@ -111,9 +133,27 @@ else
   echo "       ${DTC} db init"
   echo "  3. Review the seeded installation: ${DTC} config show"
 fi
+if [[ ${WITH_API} == true ]]; then
+  echo
+  echo "  The HTTP API is installed as a SEPARATE service. Before starting it,"
+  echo "  generate its credential and put it in ${CONFIG_ROOT}/environment:"
+  echo "    python3 -c 'import secrets; print(secrets.token_urlsafe(32))'"
+  echo "    # DTC_API_TOKEN=<the generated value>"
+  echo
+  echo "  The API refuses to start with an empty, short or example token, so it"
+  echo "  cannot end up listening unprotected. It listens on 127.0.0.1 by"
+  echo "  default; exposing it on the network is a deliberate change and it"
+  echo "  serves in clear text. See the README before doing that."
+fi
 echo
 echo "  Then: systemctl start ${SERVICE_NAME}"
 echo "  Enable at boot: systemctl enable ${SERVICE_NAME}"
+if [[ ${WITH_API} == true ]]; then
+  echo "  And the API: systemctl start ${API_SERVICE_NAME}"
+  echo "               systemctl enable ${API_SERVICE_NAME}"
+  echo
+  echo "  Stopping the API never affects the heating: the two are independent."
+fi
 echo
 echo "The controller remains simulated; this service does not access GPIO."
 if [[ ${WITH_GPIO} == true ]]; then

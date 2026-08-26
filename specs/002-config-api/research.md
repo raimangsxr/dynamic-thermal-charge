@@ -78,6 +78,22 @@ debe quedar declarado: la unidad de systemd necesita un `TimeoutStartSec` acorde
 Memoria: ~53 MB la API más los ~45 MB medidos para el controlador en la fase anterior son
 ~100 MB de 1 GB, en torno al 10 %. Sobra margen.
 
+**Medición real tras implementar**, con la aplicación construida de verdad:
+
+| Medida | Valor |
+| --- | ---: |
+| construir la aplicación completa (importación incluida) | 0,484 s |
+| desde importar hasta servir la primera respuesta autenticada | 0,225 s |
+| RSS con la aplicación construida | 64,9 MB |
+
+Extrapolado ×20, el arranque en la Pi ronda los 10 s, en el límite del presupuesto declarado y
+por encima de la estimación previa de 6-7 s, que solo contaba la importación y no la
+construcción de la aplicación. De ahí que la unidad declare `TimeoutStartSec=120s` y que **no**
+lleve `ExecStartPre`: pagaría el arranque del intérprete dos veces.
+
+La memoria, 65 MB frente al presupuesto de 120 MB, queda holgada; junto a los ~45 MB del
+controlador, unos 110 MB de 1 GB. Falta confirmarlo en el hardware real (tarea T117, manual).
+
 **Alternativa descartada**: compartir un solo proceso para ahorrar ~50 MB. Descartada por el
 usuario y por el Principio I: el fail-safe no puede depender de la salud de un servidor web.
 
