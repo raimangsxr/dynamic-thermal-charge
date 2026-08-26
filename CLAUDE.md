@@ -52,8 +52,9 @@ que no cambia comportamiento.
 Desactivar o eludir estos hooks requiere petición explícita del usuario.
 
 <!-- SPECKIT START -->
-Plan activo: `specs/003-web-panel/plan.md` (feature `003-web-panel`).
-Fases anteriores implementadas: `specs/001-config-database/`, `specs/002-config-api/`.
+Plan activo: `specs/004-home-assistant/plan.md` (feature `004-home-assistant`).
+Fases anteriores implementadas: `specs/001-config-database/`, `specs/002-config-api/`,
+`specs/003-web-panel/`.
 Para contexto técnico, estructura del proyecto, decisiones de dependencias y comandos,
 leer el plan activo y sus artefactos: `research.md`, `data-model.md`, `contracts/` y
 `quickstart.md`.
