@@ -226,6 +226,9 @@ class ScheduleConfig:
         return self.next_start(local_reference)
 
 
+DEFAULT_RETENTION_DAYS = 365
+
+
 @dataclass(frozen=True)
 class AppConfig:
     site: SiteConfig
@@ -234,8 +237,13 @@ class AppConfig:
     schedule: ScheduleConfig | None = None
     weather: WeatherConfig | None = None
     runtime: RuntimeConfig = RuntimeConfig()
+    #: Days of history kept. ``None`` means unlimited. The default is
+    #: conservative for the SD card of the deployment target.
+    retention_days: int | None = DEFAULT_RETENTION_DAYS
 
     def __post_init__(self) -> None:
+        if self.retention_days is not None and self.retention_days <= 0:
+            raise ValueError("retention_days must be positive or None for unlimited")
         ids = [heater.id for heater in self.heaters]
         if len(ids) != len(set(ids)):
             raise ValueError("heater ids must be unique")

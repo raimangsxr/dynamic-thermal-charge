@@ -62,6 +62,8 @@ class PlanStore:
             return None
         try:
             payload: Any = json.loads(self.path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("plan state must be a JSON object")
             if payload.get("version") != 1:
                 raise ValueError("unsupported plan state version")
             slots = tuple(
@@ -84,7 +86,14 @@ class PlanStore:
                     for key, value in payload["unmet_minutes"].items()
                 },
             )
-        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        except (
+            AttributeError,
+            KeyError,
+            OSError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ) as exc:
             logger.error("Ignoring invalid persisted charge plan %s: %s", self.path, exc)
             return None
         logger.info("Loaded persisted charge plan from %s", self.path)

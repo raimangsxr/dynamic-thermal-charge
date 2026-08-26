@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 import json
 import logging
@@ -28,6 +28,10 @@ class OutdoorForecast:
     maximum_temperature_c: float
     source: str
     location: str | None = None
+    #: True when this forecast came from the configured fallback rather than the
+    #: primary provider. The history records it as ``fallback`` so an audit can
+    #: answer "did the real provider work that night" (FR-017).
+    from_fallback: bool = False
 
 
 class WeatherProvider(Protocol):
@@ -115,7 +119,9 @@ class FallbackWeatherProvider:
             return self._primary.forecast_for(forecast_date)
         except WeatherProviderError as exc:
             logger.warning("Weather provider failed; using configured fallback: %s", exc)
-            return self._fallback.forecast_for(forecast_date)
+            return replace(
+                self._fallback.forecast_for(forecast_date), from_fallback=True
+            )
 
 
 def build_weather_provider(

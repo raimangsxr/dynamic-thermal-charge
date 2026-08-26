@@ -121,9 +121,9 @@ def test_sigterm_is_converted_to_controlled_shutdown() -> None:
 
 
 def test_output_self_test_activates_one_heater_at_a_time() -> None:
-    from dynamic_thermal_charge.config import load_config
+    from dynamic_thermal_charge.persistence.seed import example_installation
 
-    config = load_config("examples/raspberry-pi.yaml")
+    config = example_installation()
     driver = RecordingDriver()
     waits = []
 

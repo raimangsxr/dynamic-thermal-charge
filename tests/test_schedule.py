@@ -1,11 +1,12 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from dynamic_thermal_charge.config import load_config
+from dynamic_thermal_charge.persistence.seed import example_installation
 
 
 def configured_schedule():
-    config = load_config("examples/raspberry-pi.yaml")
+    """The schedule of the seeded installation, previously read from YAML."""
+    config = example_installation()
     assert config.schedule is not None
     return config.schedule
 
