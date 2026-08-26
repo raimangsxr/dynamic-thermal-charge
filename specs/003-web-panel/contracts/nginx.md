@@ -56,9 +56,12 @@ server {
         proxy_pass http://127.0.0.1:8420/health;
     }
 
-    # La descripción de la API exige credencial, igual que todo lo demás.
-    location = /docs { proxy_pass http://127.0.0.1:8420/docs; }
-    location = /openapi.json { proxy_pass http://127.0.0.1:8420/openapi.json; }
+    # La descripción de la API (/docs, /openapi.json) NO se expone por aquí.
+    #
+    # Exige credencial en la fase anterior, así que exponerla no sería un agujero,
+    # pero el panel no la usa y publicarla amplía la superficie de red sin ninguna
+    # necesidad. Quien la quiera consultar la tiene en el propio dispositivo, o a
+    # través de un túnel.
 }
 
 # ---------------------------------------------------------------------------
@@ -97,6 +100,7 @@ server {
 | `proxy_pass` a `127.0.0.1` | FR-039: la API nunca se expone en la red |
 | la cabecera de autorización se propaga | sin ella, todo devolvería 401 |
 | el bloque de cifrado presente y comentado | FR-042: la vía documentada, no activada |
+| `/docs` y `/openapi.json` **no** se exponen | el panel no los usa; publicarlos amplía la superficie sin necesidad |
 
 ## Lo que nginx NO hace
 

@@ -44,7 +44,7 @@ El orden es **US4 → US2 → US1 → US3 → US5 → US6**.
 
 ## Phase 1: Setup
 
-- [ ] T001 Generar el espacio de trabajo en `frontend/` con `ng new panel --standalone --zoneless --test-runner vitest --style css --routing --ssr false --ai-config none --skip-git`, ubicándolo de forma que `frontend/package.json` quede en la raíz del espacio de trabajo
+- [ ] T001 Generar el espacio de trabajo con `ng new frontend --standalone --zoneless --test-runner vitest --style css --routing --ssr false --ai-config none --skip-git --skip-install=false` desde la raíz del repositorio, de modo que quede `frontend/package.json` y **no** `frontend/panel/package.json`. Renombrar el proyecto interno a `panel` en `frontend/angular.json` si el generador lo nombra a partir del directorio
 - [ ] T002 Verificar que `frontend/node_modules/zone.js` **no** existe: `--zoneless` debe retirarlo de verdad, y es la mitad del ahorro de runtime (research D1)
 - [ ] T003 [P] Añadir `frontend/node_modules/` y `frontend/dist/` a `.gitignore`
 - [ ] T004 Declarar en `frontend/angular.json` el presupuesto de paquete inicial: **500 kB en bruto** y **150 kB transferidos**, de modo que la compilación **falle** al superarlo. Es lo que impide que una dependencia añadida «solo para probar» se cuele (research D4)
@@ -78,14 +78,15 @@ vista, y por tanto nada que mienta todavía.
 
 ### Sondeo con parada en segundo plano
 
-- [ ] T016 Implementar en `frontend/src/app/core/poll.ts` el sondeo periódico basado en señales, que **se detiene** cuando el documento no está visible y se reanuda **de inmediato** al volver al frente, no en el siguiente tick (FR-046)
-- [ ] T017 Escribir `frontend/src/app/core/poll.spec.ts` con reloj controlado: emite a la cadencia, se detiene al ocultarse, y refresca inmediatamente al volver a hacerse visible
+- [ ] T016 Implementar en `frontend/src/app/core/poll.ts` el sondeo periódico basado en señales, con la cadencia de `data-model.md` —5 s por defecto, ajustable entre 2 y 60—, que **se detiene** cuando el documento no está visible y se reanuda **de inmediato** al volver al frente, no en el siguiente tick (FR-046)
+- [ ] T017 Escribir `frontend/src/app/core/poll.spec.ts` con reloj controlado: emite a la cadencia por defecto, acota una cadencia fuera de rango a los límites, se detiene al ocultarse, y refresca inmediatamente al volver a hacerse visible
 
 ### Traducción de errores
 
-- [ ] T018 Implementar en `frontend/src/app/core/errors.ts` la traducción de cada código de error de la API a una explicación accionable, según la tabla de `data-model.md`
-- [ ] T019 Redactar con especial cuidado en `errors.ts` los dos casos de esquema: el panel **no puede** arreglarlo, así que el mensaje MUST decir qué ejecutar **en el dispositivo** y que el panel no puede hacerlo, para que nadie busque un botón que no existe (FR-032)
-- [ ] T020 Escribir `frontend/src/app/core/errors.spec.ts` comprobando que **todos** los códigos del contrato de la fase 2 tienen traducción, y que ninguna traducción contiene jerga técnica ni trazas
+- [ ] T018 Escribir `frontend/src/app/core/no-local-clock.spec.ts`: guardia que recorra las fuentes de `frontend/src/app/` y falle si alguna usa `Date.now()` o `new Date()` para calcular antigüedades, salvo en `age.ts`, que las recibe ya calculadas de la API. Sin esta guardia, un componente futuro reintroduciría el reloj local y nada fallaría (FR-016)
+- [ ] T019 Implementar en `frontend/src/app/core/errors.ts` la traducción de cada código de error de la API a una explicación accionable, según la tabla de `data-model.md`
+- [ ] T020 Redactar con especial cuidado en `errors.ts` los dos casos de esquema: el panel **no puede** arreglarlo, así que el mensaje MUST decir qué ejecutar **en el dispositivo** y que el panel no puede hacerlo, para que nadie busque un botón que no existe (FR-032)
+- [ ] T021 Escribir `frontend/src/app/core/errors.spec.ts` comprobando que **todos** los códigos del contrato de la fase 2 tienen traducción, y que ninguna traducción contiene jerga técnica ni trazas
 
 ---
 
@@ -99,15 +100,16 @@ recargando y cerrando sesión, comprobando qué se muestra y qué se almacena.
 **Por qué va primera**: sin credencial no funciona ninguna otra vista, y añadir el interceptor
 después obliga a rehacer cada llamada y cada test.
 
-- [ ] T021 [US4] Implementar `frontend/src/app/core/auth.ts` con la sesión sobre `sessionStorage`: sobrevive a recargar y desaparece al cerrar la pestaña (FR-002)
-- [ ] T022 [US4] Implementar `frontend/src/app/core/auth.interceptor.ts` que añada la credencial a cada llamada a la API en la cabecera, **nunca** en la dirección ni en parámetros de consulta (FR-003)
-- [ ] T023 [US4] Hacer en `frontend/src/app/core/auth.interceptor.ts` que el interceptor cierre la sesión y vuelva a la pantalla de acceso ante un rechazo de credencial, con la explicación de que hay que introducirla de nuevo, sin error técnico (FR-006)
-- [ ] T024 [US4] Implementar la pantalla de acceso en `frontend/src/app/core/login/` y el guardián de rutas que impida mostrar cualquier dato de la instalación sin credencial (FR-001)
-- [ ] T025 [US4] Implementar en `frontend/src/app/core/auth.ts` y en la barra de la aplicación el cierre de sesión explícito que borre la credencial del navegador (FR-005)
-- [ ] T026 [US4] Escribir `frontend/src/app/core/auth.spec.ts`: la credencial sobrevive a recargar, no persiste en `localStorage`, y se borra al cerrar sesión
-- [ ] T027 [US4] Escribir `frontend/src/app/core/auth.interceptor.spec.ts` con el arnés HTTP en memoria: la cabecera se añade, la dirección **no** contiene la credencial, y un 401 cierra la sesión
-- [ ] T028 [US4] Añadir a `auth.spec.ts` la comprobación de que una credencial incorrecta se reporta como no válida **sin** dar pistas sobre en qué se diferencia de la correcta (FR-004)
-- [ ] T029 [US4] Añadir a `frontend/src/app/core/auth.spec.ts` la comprobación de que la credencial no aparece en ningún almacenamiento persistente del navegador tras un ciclo completo de uso (FR-003, SC-007)
+- [ ] T022 [US4] Implementar `frontend/src/app/core/auth.ts` con la sesión sobre `sessionStorage`: sobrevive a recargar y desaparece al cerrar la pestaña (FR-002)
+- [ ] T023 [US4] Implementar `frontend/src/app/core/auth.interceptor.ts` que añada la credencial a cada llamada a la API en la cabecera, **nunca** en la dirección ni en parámetros de consulta (FR-003)
+- [ ] T024 [US4] Hacer en `frontend/src/app/core/auth.interceptor.ts` que el interceptor cierre la sesión y vuelva a la pantalla de acceso ante un rechazo de credencial, con la explicación de que hay que introducirla de nuevo, sin error técnico (FR-006)
+- [ ] T025 [US4] Implementar la pantalla de acceso en `frontend/src/app/core/login/` y el guardián de rutas que impida mostrar cualquier dato de la instalación sin credencial (FR-001)
+- [ ] T026 [US4] Implementar en `frontend/src/app/core/auth.ts` y en la barra de la aplicación el cierre de sesión explícito que borre la credencial del navegador (FR-005)
+- [ ] T027 [US4] Escribir `frontend/src/app/core/auth.spec.ts`: la credencial sobrevive a recargar, no persiste en `localStorage`, y se borra al cerrar sesión
+- [ ] T028 [US4] Escribir `frontend/src/app/core/auth.interceptor.spec.ts` con el arnés HTTP en memoria: la cabecera se añade, la dirección **no** contiene la credencial, y un 401 cierra la sesión
+- [ ] T029 [US4] Añadir a `auth.spec.ts` la comprobación de que una credencial incorrecta se reporta como no válida **sin** dar pistas sobre en qué se diferencia de la correcta (FR-004)
+- [ ] T030 [US4] Añadir a `frontend/src/app/core/auth.interceptor.spec.ts` el caso de credencial rotada en el servidor **durante el uso** (FR-006): una llamada cualquiera devuelve 401, y el panel vuelve a la pantalla de acceso con la explicación de que hay que introducirla de nuevo, **sin** mostrar un error técnico ni dejar la vista a medias
+- [ ] T031 [US4] Añadir a `frontend/src/app/core/auth.spec.ts` la comprobación de que la credencial no aparece en ningún almacenamiento persistente del navegador tras un ciclo completo de uso (FR-003, SC-007)
 
 **Checkpoint**: el panel está protegido antes de tener nada que proteger.
 
@@ -123,15 +125,15 @@ comprobar qué se muestra y qué no se afirma.
 **Por qué va antes de la vista de estado**: el tipo y su presentación deciden qué se puede pintar.
 Construir la vista primero significaría decidir después si lo que ya muestra es cierto.
 
-- [ ] T030 [US2] Implementar `frontend/src/app/shared/output-indicator/` con **tres** apariencias distinguibles: encendido confirmado, apagado confirmado y sin confirmar. La tercera MUST llevar el último valor conocido etiquetado como pasado, con su instante (FR-011)
-- [ ] T031 [US2] Hacer en `frontend/src/app/shared/output-indicator/` que las tres apariencias se distingan **sin depender del color**: forma o texto además del color. Un panel que informa sobre una instalación eléctrica no puede excluir a quien no distingue verde de gris (FR-036)
-- [ ] T032 [US2] Implementar en `frontend/src/app/status/controller-health/` la presentación de las cuatro situaciones del controlador, con la orientación de qué comprobar en cada caso anómalo, según la tabla de `contracts/panel.md` (FR-012)
-- [ ] T033 [US2] Implementar en `frontend/src/app/status/controller-health/` el aviso visible de estado no vigente, indicando **desde cuándo** no se ve al controlador (FR-009)
-- [ ] T034 [US2] Implementar en `frontend/src/app/status/controller-health/` la advertencia **prominente** de sospecha de más de un controlador, explicando el riesgo eléctrico. Prominente, no una nota discreta (FR-013)
-- [ ] T035 [US2] Escribir `frontend/src/app/shared/output-indicator/output-indicator.spec.ts`: las tres variantes producen salidas distinguibles, y la de sin confirmar incluye la etiqueta de pasado y el instante
-- [ ] T036 [US2] Añadir a `output-indicator.spec.ts` la comprobación de que la distinción **no** depende solo del color: la salida accesible difiere entre las tres variantes
-- [ ] T037 [US2] Escribir `frontend/src/app/status/controller-health/controller-health.spec.ts` con las cuatro situaciones, comprobando que `never_seen` y `stale` se distinguen y que cada anómala orienta
-- [ ] T038 [US2] Añadir a `frontend/src/app/status/controller-health/controller-health.spec.ts` la comprobación de que la advertencia de más de un controlador aparece solo cuando la API la señala, y con el texto del riesgo
+- [ ] T032 [US2] Implementar `frontend/src/app/shared/output-indicator/` con **tres** apariencias distinguibles: encendido confirmado, apagado confirmado y sin confirmar. La tercera MUST llevar el último valor conocido etiquetado como pasado, con su instante (FR-011)
+- [ ] T033 [US2] Hacer en `frontend/src/app/shared/output-indicator/` que las tres apariencias se distingan **sin depender del color**: forma o texto además del color. Un panel que informa sobre una instalación eléctrica no puede excluir a quien no distingue verde de gris (FR-036)
+- [ ] T034 [US2] Implementar en `frontend/src/app/status/controller-health/` la presentación de las cuatro situaciones del controlador, con la orientación de qué comprobar en cada caso anómalo, según la tabla de `contracts/panel.md` (FR-012)
+- [ ] T035 [US2] Implementar en `frontend/src/app/status/controller-health/` el aviso visible de estado no vigente, indicando **desde cuándo** no se ve al controlador (FR-009)
+- [ ] T036 [US2] Implementar en `frontend/src/app/status/controller-health/` la advertencia **prominente** de sospecha de más de un controlador, explicando el riesgo eléctrico. Prominente, no una nota discreta (FR-013)
+- [ ] T037 [US2] Escribir `frontend/src/app/shared/output-indicator/output-indicator.spec.ts`: las tres variantes producen salidas distinguibles, y la de sin confirmar incluye la etiqueta de pasado y el instante
+- [ ] T038 [US2] Añadir a `output-indicator.spec.ts` la comprobación de que la distinción **no** depende solo del color: la salida accesible difiere entre las tres variantes
+- [ ] T039 [US2] Escribir `frontend/src/app/status/controller-health/controller-health.spec.ts` con las cuatro situaciones, comprobando que `never_seen` y `stale` se distinguen y que cada anómala orienta
+- [ ] T040 [US2] Añadir a `frontend/src/app/status/controller-health/controller-health.spec.ts` la comprobación de que la advertencia de más de un controlador aparece solo cuando la API la señala, y con el texto del riesgo
 
 **Checkpoint**: existe el mecanismo que impide mentir, probado, antes de haber pintado nada.
 
@@ -144,17 +146,19 @@ Construir la vista primero significaría decidir después si lo que ya muestra e
 **Independent Test**: contra una API con estado conocido, cada dato mostrado coincide con lo que
 la API devuelve.
 
-- [ ] T039 [US1] Implementar `frontend/src/app/core/api.ts` como el único módulo que conoce las direcciones de la API, con los métodos de estado, configuración e histórico
-- [ ] T040 [US1] Implementar la vista de estado en `frontend/src/app/status/status.ts` y su plantilla: acumuladores, potencia, plan, previsión y reparto
-- [ ] T041 [US1] Hacer en `frontend/src/app/status/status.ts` y su plantilla que la potencia instantánea **no se muestre** cuando el estado no es vigente. Ni una cifra, ni un cero: un cero afirma que no se consume nada (FR-010)
-- [ ] T042 [US1] Mostrar en `frontend/src/app/status/` los minutos no atendidos de forma **destacada** cuando existan, no enterrados en una tabla (FR-015)
-- [ ] T043 [US1] Indicar en `frontend/src/app/status/` explícitamente la ausencia de plan en curso, en lugar de una vista vacía o valores a cero (FR-014)
-- [ ] T044 [US1] Conectar el sondeo de T016 a `frontend/src/app/status/status.ts`, sin perder la posición de lectura ni el foco al refrescar (FR-008)
-- [ ] T045 [US1] Hacer en `frontend/src/app/status/status.css` y `frontend/src/styles.css` la vista utilizable en pantalla de teléfono, sin desplazamiento horizontal de la página (FR-034)
-- [ ] T046 [US1] Escribir `frontend/src/app/status/status.spec.ts` con el arnés HTTP en memoria: el caso vigente muestra potencia, plan, previsión con su origen y reparto
-- [ ] T047 [US1] Añadir a `status.spec.ts` los dos casos no vigentes —silencioso y nunca visto— comprobando que **no** se muestra potencia y que **ninguna** salida aparece como cargando
-- [ ] T048 [US1] Añadir a `frontend/src/app/status/status.spec.ts` el caso degradado, comprobando que se avisa **sin** ocultar que el estado sí es actual
-- [ ] T049 [US1] Añadir a `frontend/src/app/status/status.spec.ts` los casos de instalación sin plan, sin acumuladores, y con previsión de reserva distinguida de la del proveedor real
+- [ ] T041 [US1] Implementar `frontend/src/app/core/api.ts` como el único módulo que conoce las direcciones de la API, con los métodos de estado, configuración e histórico
+- [ ] T042 [US1] Implementar la vista de estado en `frontend/src/app/status/status.ts` y su plantilla: acumuladores, potencia, plan, previsión y reparto
+- [ ] T043 [US1] Hacer en `frontend/src/app/status/status.ts` y su plantilla que la potencia instantánea **no se muestre** cuando el estado no es vigente. Ni una cifra, ni un cero: un cero afirma que no se consume nada (FR-010)
+- [ ] T044 [US1] Mostrar en `frontend/src/app/status/` los minutos no atendidos de forma **destacada** cuando existan, no enterrados en una tabla (FR-015)
+- [ ] T045 [US1] Indicar en `frontend/src/app/status/` explícitamente la ausencia de plan en curso, en lugar de una vista vacía o valores a cero (FR-014)
+- [ ] T046 [US1] Conectar el sondeo de T016 a `frontend/src/app/status/status.ts`, sin perder la posición de lectura ni el foco al refrescar (FR-008)
+- [ ] T047 [US1] Implementar en `frontend/src/app/status/status.ts` el comportamiento ante una API que no responde (FR-030): se indica, **se conserva lo último mostrado marcado como no actual**, y no se vacía la pantalla ni se queda cargando indefinidamente. Vaciar destruye información útil; dejarla igual miente
+- [ ] T048 [US1] Añadir a `frontend/src/app/status/status.spec.ts` el caso de API sin respuesta: los datos anteriores siguen visibles, marcados como no actuales, y aparece el aviso de que no se pudo contactar
+- [ ] T049 [US1] Hacer en `frontend/src/app/status/status.css` y `frontend/src/styles.css` la vista utilizable en pantalla de teléfono, sin desplazamiento horizontal de la página (FR-034)
+- [ ] T050 [US1] Escribir `frontend/src/app/status/status.spec.ts` con el arnés HTTP en memoria: el caso vigente muestra potencia, plan, previsión con su origen y reparto
+- [ ] T051 [US1] Añadir a `status.spec.ts` los dos casos no vigentes —silencioso y nunca visto— comprobando que **no** se muestra potencia y que **ninguna** salida aparece como cargando
+- [ ] T052 [US1] Añadir a `frontend/src/app/status/status.spec.ts` el caso degradado, comprobando que se avisa **sin** ocultar que el estado sí es actual
+- [ ] T053 [US1] Añadir a `frontend/src/app/status/status.spec.ts` los casos de instalación sin plan, sin acumuladores, y con previsión de reserva distinguida de la del proveedor real
 
 **Checkpoint**: el panel muestra el estado y es el MVP de la fase.
 
@@ -167,20 +171,20 @@ la API devuelve.
 **Independent Test**: aplicar cambios válidos e inválidos y comprobar qué queda, qué se rechaza y
 cómo se presenta cada rechazo.
 
-- [ ] T050 [US3] Implementar la vista de configuración en `frontend/src/app/config/config.ts`, con la revisión leída y los valores editables de instalación, proveedor meteorológico y acumuladores
-- [ ] T051 [US3] Enviar desde `frontend/src/app/config/config.ts` en cada escritura la revisión leída, y ante conflicto avisar de que la configuración cambió y ofrecer releer, **sin** sobrescribir ni reintentar solo (FR-019)
-- [ ] T052 [US3] Mostrar en `frontend/src/app/config/` cada rechazo de la API **junto al campo** que lo causó cuando la API identifique un campo, conservando visible el valor anterior (FR-018)
-- [ ] T053 [US3] Implementar `frontend/src/app/shared/confirm/` y exigir confirmación explícita, que diga qué se va a cambiar, **solo** para `max_total_power_kw`, `pin` y `active_high`. Los demás campos sin ceremonia: pedir confirmación para todo enseña a confirmar sin leer (FR-020)
-- [ ] T054 [US3] Implementar en `frontend/src/app/config/heaters/` el alta y la baja de acumuladores, exigiendo confirmación en la baja y avisando de que su histórico se conserva (FR-021)
-- [ ] T055 [US3] Advertir desde `frontend/src/app/config/config.ts` antes de descartar un formulario con cambios sin guardar (FR-022)
-- [ ] T056 [US3] Conservar en `frontend/src/app/config/config.ts` lo introducido en el formulario cuando una escritura falle por pérdida de conectividad (FR-033)
-- [ ] T057 [US3] Validar en `frontend/src/app/config/config.ts` en el cliente **solo** para dar respuesta inmediata, sin reimplementar ni relajar ninguna regla: la API sigue siendo la autoridad (FR-023)
-- [ ] T058 [US3] Escribir `frontend/src/app/config/config.spec.ts`: edición correcta de un campo de instalación y de un campo de acumulador, con la revisión enviada
-- [ ] T059 [US3] Añadir a `config.spec.ts` el caso de conflicto: se avisa, se ofrece releer, y **no** se reintenta automáticamente
-- [ ] T060 [US3] Añadir a `frontend/src/app/config/config.spec.ts` los casos de rechazo por campo, comprobando que el mensaje queda asociado al campo y que el valor anterior sigue visible
-- [ ] T061 [US3] Añadir a `frontend/src/app/config/config.spec.ts` el caso de valor con aspecto de credencial, comprobando que se muestra el motivo y la indicación de que los secretos van por variable de entorno
-- [ ] T062 [US3] Añadir a `frontend/src/app/config/config.spec.ts` la comprobación de que los tres campos eléctricos exigen confirmación y que el resto **no** la exige
-- [ ] T063 [US3] Añadir a `frontend/src/app/config/config.spec.ts` el caso de fallo de red a mitad de una edición, comprobando que se informa y que el formulario conserva lo introducido
+- [ ] T054 [US3] Implementar la vista de configuración en `frontend/src/app/config/config.ts`, con la revisión leída y los valores editables de instalación, proveedor meteorológico y acumuladores
+- [ ] T055 [US3] Enviar desde `frontend/src/app/config/config.ts` en cada escritura la revisión leída, y ante conflicto avisar de que la configuración cambió y ofrecer releer, **sin** sobrescribir ni reintentar solo (FR-019)
+- [ ] T056 [US3] Mostrar en `frontend/src/app/config/` cada rechazo de la API **junto al campo** que lo causó cuando la API identifique un campo, conservando visible el valor anterior (FR-018)
+- [ ] T057 [US3] Implementar `frontend/src/app/shared/confirm/` y exigir confirmación explícita, que diga qué se va a cambiar, **solo** para `max_total_power_kw`, `pin` y `active_high`. Los demás campos sin ceremonia: pedir confirmación para todo enseña a confirmar sin leer (FR-020)
+- [ ] T058 [US3] Implementar en `frontend/src/app/config/heaters/` el alta y la baja de acumuladores, exigiendo confirmación en la baja y avisando de que su histórico se conserva (FR-021)
+- [ ] T059 [US3] Advertir desde `frontend/src/app/config/config.ts` antes de descartar un formulario con cambios sin guardar (FR-022)
+- [ ] T060 [US3] Conservar en `frontend/src/app/config/config.ts` lo introducido en el formulario cuando una escritura falle por pérdida de conectividad (FR-033)
+- [ ] T061 [US3] Validar en `frontend/src/app/config/config.ts` en el cliente **solo** para dar respuesta inmediata, sin reimplementar ni relajar ninguna regla: la API sigue siendo la autoridad (FR-023)
+- [ ] T062 [US3] Escribir `frontend/src/app/config/config.spec.ts`: edición correcta de un campo de instalación y de un campo de acumulador, con la revisión enviada
+- [ ] T063 [US3] Añadir a `config.spec.ts` el caso de conflicto: se avisa, se ofrece releer, y **no** se reintenta automáticamente
+- [ ] T064 [US3] Añadir a `frontend/src/app/config/config.spec.ts` los casos de rechazo por campo, comprobando que el mensaje queda asociado al campo y que el valor anterior sigue visible
+- [ ] T065 [US3] Añadir a `frontend/src/app/config/config.spec.ts` el caso de valor con aspecto de credencial, comprobando que se muestra el motivo y la indicación de que los secretos van por variable de entorno
+- [ ] T066 [US3] Añadir a `frontend/src/app/config/config.spec.ts` la comprobación de que los tres campos eléctricos exigen confirmación y que el resto **no** la exige
+- [ ] T067 [US3] Añadir a `frontend/src/app/config/config.spec.ts` el caso de fallo de red a mitad de una edición, comprobando que se informa y que el formulario conserva lo introducido
 
 **Checkpoint**: la instalación se configura por completo desde el navegador.
 
@@ -192,15 +196,15 @@ cómo se presenta cada rechazo.
 
 **Independent Test**: con un histórico conocido, recorrer las tablas, filtrar y paginar.
 
-- [ ] T064 [US5] Implementar las vistas de histórico en `frontend/src/app/history/` para planes, previsiones y transiciones, en tablas con los más recientes primero (FR-024)
-- [ ] T065 [US5] Implementar en `frontend/src/app/history/` el filtro por rango de fechas y, en transiciones, por acumulador (FR-025)
-- [ ] T066 [US5] Implementar en `frontend/src/app/history/` la navegación entre páginas usando el cursor de la API, tratándolo como **opaco**: se reenvía tal cual, sin interpretarlo ni construirlo (FR-026)
-- [ ] T067 [US5] Presentar en `frontend/src/app/history/` un rango sin datos como vacío, **no** como error, y avisar de un rango invertido antes de consultar (FR-027)
-- [ ] T068 [US5] Indicar en `frontend/src/app/history/` los acumuladores que ya no están en la configuración, sin ocultarlos (FR-028)
-- [ ] T069 [US5] Distinguir en `frontend/src/app/history/` el origen de cada previsión, en particular si vino del valor de reserva (FR-029)
-- [ ] T070 [US5] Hacer en `frontend/src/app/history/history.css` que las tablas anchas se puedan recorrer sin romper la disposición de la página (FR-035)
-- [ ] T071 [US5] Escribir `frontend/src/app/history/history.spec.ts`: orden, paginación por cursor sin repetir ni omitir, filtros y rango vacío
-- [ ] T072 [US5] Añadir a `frontend/src/app/history/history.spec.ts` el caso de rango invertido y el de acumulador ausente de la configuración pero presente en el histórico
+- [ ] T068 [US5] Implementar las vistas de histórico en `frontend/src/app/history/` para planes, previsiones y transiciones, en tablas con los más recientes primero (FR-024)
+- [ ] T069 [US5] Implementar en `frontend/src/app/history/` el filtro por rango de fechas y, en transiciones, por acumulador (FR-025)
+- [ ] T070 [US5] Implementar en `frontend/src/app/history/` la navegación entre páginas usando el cursor de la API, tratándolo como **opaco**: se reenvía tal cual, sin interpretarlo ni construirlo (FR-026)
+- [ ] T071 [US5] Presentar en `frontend/src/app/history/` un rango sin datos como vacío, **no** como error, y avisar de un rango invertido antes de consultar (FR-027)
+- [ ] T072 [US5] Indicar en `frontend/src/app/history/` los acumuladores que ya no están en la configuración, sin ocultarlos (FR-028)
+- [ ] T073 [US5] Distinguir en `frontend/src/app/history/` el origen de cada previsión, en particular si vino del valor de reserva (FR-029)
+- [ ] T074 [US5] Hacer en `frontend/src/app/history/history.css` que las tablas anchas se puedan recorrer sin romper la disposición de la página (FR-035), con el contenedor de desplazamiento horizontal acotado a la tabla y no al documento. Se verifica por revisión visual: una comprobación automatizada de disposición exigiría un navegador real, que está fuera de alcance
+- [ ] T075 [US5] Escribir `frontend/src/app/history/history.spec.ts`: orden, paginación por cursor sin repetir ni omitir, filtros y rango vacío
+- [ ] T076 [US5] Añadir a `frontend/src/app/history/history.spec.ts` el caso de rango invertido y el de acumulador ausente de la configuración pero presente en el histórico
 
 ---
 
@@ -211,29 +215,29 @@ cómo se presenta cada rechazo.
 **Independent Test**: seguir el procedimiento documentado sobre una instalación limpia y comprobar
 que el panel carga y opera.
 
-- [ ] T073 [US6] Escribir `deploy/nginx/dynamic-thermal-charge.conf` según `contracts/nginx.md`: raíz del panel, intermediario hacia `127.0.0.1:8420`, y la comprobación de salud
-- [ ] T074 [US6] Añadir en la configuración `try_files $uri $uri/ /index.html`. Sin esto, recargar una dirección interna del panel devuelve 404 porque en el disco no existe ese fichero (FR-040)
-- [ ] T075 [US6] Añadir la caché diferenciada: recursos con huella en el nombre como inmutables y con caducidad larga, e `index.html` con `no-cache`. Cachear `index.html` es exactamente el fallo que hace que el operador actualice, recargue y siga viendo la interfaz antigua (FR-041)
-- [ ] T076 [US6] Declarar en `deploy/nginx/dynamic-thermal-charge.conf` explícitamente la propagación de la cabecera de autorización, para que un cambio futuro no la rompa en silencio y deje todo devolviendo 401
-- [ ] T077 [US6] Añadir a `deploy/nginx/dynamic-thermal-charge.conf` el bloque de cifrado en tránsito **comentado**, con la advertencia de qué se asume sin él. Es la vía que la fase anterior dejó como riesgo documentado (FR-042)
-- [ ] T078 [US6] Añadir la opción `--with-panel` a `scripts/install-service.sh`: deja la configuración del sitio disponible, avisa de que hay que copiar el `dist/` compilado fuera, y **no** arranca ni habilita nginx ni instala Node (FR-037, FR-043)
-- [ ] T079 [US6] Ampliar `tests/test_deployment.py` para verificar los invariantes del sitio de nginx: `try_files` presente, `index.html` sin cachear, `proxy_pass` a `127.0.0.1`, cabecera de autorización propagada, y bloque de cifrado presente y comentado
-- [ ] T080 [US6] Añadir a `tests/test_deployment.py` la comprobación de que el instalador **no** instala Node ni ninguna herramienta de construcción, y que no arranca ni habilita nada
-- [ ] T081 [US6] Añadir a `tests/test_deployment.py` la comprobación de que la configuración de nginx **no** sirve `/var/lib` ni ningún fichero de la base de datos
+- [ ] T077 [US6] Escribir `deploy/nginx/dynamic-thermal-charge.conf` según `contracts/nginx.md`: raíz del panel, intermediario hacia `127.0.0.1:8420`, y la comprobación de salud
+- [ ] T078 [US6] Añadir en la configuración `try_files $uri $uri/ /index.html`. Sin esto, recargar una dirección interna del panel devuelve 404 porque en el disco no existe ese fichero (FR-040)
+- [ ] T079 [US6] Añadir la caché diferenciada: recursos con huella en el nombre como inmutables y con caducidad larga, e `index.html` con `no-cache`. Cachear `index.html` es exactamente el fallo que hace que el operador actualice, recargue y siga viendo la interfaz antigua (FR-041)
+- [ ] T080 [US6] Declarar en `deploy/nginx/dynamic-thermal-charge.conf` explícitamente la propagación de la cabecera de autorización, para que un cambio futuro no la rompa en silencio y deje todo devolviendo 401
+- [ ] T081 [US6] Añadir a `deploy/nginx/dynamic-thermal-charge.conf` el bloque de cifrado en tránsito **comentado**, con la advertencia de qué se asume sin él. Es la vía que la fase anterior dejó como riesgo documentado (FR-042)
+- [ ] T082 [US6] Añadir la opción `--with-panel` a `scripts/install-service.sh`: deja la configuración del sitio disponible, avisa de que hay que copiar el `dist/` compilado fuera, y **no** arranca ni habilita nginx ni instala Node (FR-037, FR-043)
+- [ ] T083 [US6] Ampliar `tests/test_deployment.py` para verificar los invariantes del sitio de nginx: `try_files` presente, `index.html` sin cachear, `proxy_pass` a `127.0.0.1`, cabecera de autorización propagada, y bloque de cifrado presente y comentado
+- [ ] T084 [US6] Añadir a `tests/test_deployment.py` la guardia de despliegue: el instalador **no** menciona `npm`, `node`, `nodejs`, `yarn` ni `pnpm` como algo a instalar en el dispositivo; **no** arranca ni habilita nginx; y `.gitignore` excluye `frontend/node_modules` y `frontend/dist`, de modo que 253 MB de dependencias y el artefacto compilado no puedan entrar en el repositorio (FR-037, SC-010)
+- [ ] T085 [US6] Añadir a `tests/test_deployment.py` la comprobación de que la configuración de nginx **no** sirve `/var/lib` ni ningún fichero de la base de datos
 
 ---
 
 ## Phase 9: Documentación y cierre
 
-- [ ] T082 Añadir a `README.md` la sección del panel: requisitos de Node en la máquina de construcción, desarrollo local, compilación y despliegue por copia
-- [ ] T083 Añadir a `README.md` el aviso explícito de que **el panel se compila fuera del dispositivo** y de que en la Raspberry Pi no se instala Node: un `npm install` en un Cortex-A7 con 1 GB no termina
-- [ ] T084 Añadir a `README.md` cómo añadir cifrado en tránsito y qué riesgo se asume sin él: sirve en claro, la credencial viaja legible, y quien la tenga puede cambiar la potencia máxima y los pines (FR-042)
-- [ ] T085 Añadir a `README.md` la comprobación de que la API no está expuesta tras el despliegue, con los comandos concretos
-- [ ] T086 [P] Añadir a `README.md` la tabla de diagnóstico del panel de `quickstart.md`
-- [ ] T087 Comprobar que la suite de Python pasa **sin cambios de comportamiento** y que `src/dynamic_thermal_charge/` no ha sido modificado en esta fase (FR-047)
-- [ ] T088 Comprobar que `npm test` pasa sin red, sin la API real y sin navegador, y que `npm run build` respeta el presupuesto de paquete
-- [ ] T089 Anotar en `research.md` D4 el tamaño real del paquete del panel terminado, frente al presupuesto declarado
-- [ ] T090 **MANUAL, requiere hardware — diferida, fuera del criterio de fase completa.** Desplegar en la Raspberry Pi y comprobar sobre el dispositivo: que el panel carga desde otro equipo de la red, que recargar una ruta interna funciona, que tras actualizar se recoge la versión nueva sin borrar caché, y que la API sigue escuchando solo en `127.0.0.1`
+- [ ] T086 Añadir a `README.md` la sección del panel: requisitos de Node en la máquina de construcción, desarrollo local, compilación y despliegue por copia
+- [ ] T087 Añadir a `README.md` el aviso explícito de que **el panel se compila fuera del dispositivo** y de que en la Raspberry Pi no se instala Node: un `npm install` en un Cortex-A7 con 1 GB no termina
+- [ ] T088 Añadir a `README.md` cómo añadir cifrado en tránsito y qué riesgo se asume sin él: sirve en claro, la credencial viaja legible, y quien la tenga puede cambiar la potencia máxima y los pines (FR-042)
+- [ ] T089 Añadir a `README.md` la comprobación de que la API no está expuesta tras el despliegue, con los comandos concretos
+- [ ] T090 [P] Añadir a `README.md` la tabla de diagnóstico del panel de `quickstart.md`
+- [ ] T091 Comprobar con `git diff --stat 002-config-api -- src/ pyproject.toml` que **ni una línea** de `src/dynamic_thermal_charge/` ni de `pyproject.toml` ha cambiado en esta fase, y que la suite de Python pasa sin modificaciones (FR-047). Es la afirmación fuerte del plan: el panel es completamente externo
+- [ ] T092 Comprobar que `npm test` pasa sin red, sin la API real y sin navegador, y que `npm run build` respeta el presupuesto de paquete
+- [ ] T093 Anotar en `research.md` D4 el tamaño real del paquete del panel terminado, frente al presupuesto declarado
+- [ ] T094 **MANUAL, requiere hardware — diferida, fuera del criterio de fase completa.** Desplegar en la Raspberry Pi y comprobar sobre el dispositivo: que el panel carga desde otro equipo de la red, que recargar una ruta interna funciona, que tras actualizar se recoge la versión nueva sin borrar caché, y que la API sigue escuchando solo en `127.0.0.1`
 
 ---
 
@@ -261,33 +265,33 @@ Phase 9 Documentación y cierre
 
 Dependencias que conviene no perder de vista:
 
-- **T010 a T013 antes de T030.** El componente que pinta tres estados no puede escribirse antes de
+- **T010 a T013 antes de T032.** El componente que pinta tres estados no puede escribirse antes de
   que exista el tipo de tres estados, o se escribirá contra un booleano y habrá que rehacerlo.
-- **T030 y T031 antes de T040.** La vista de estado usa el indicador; si se escribe antes, usará
+- **T032 y T033 antes de T042.** La vista de estado usa el indicador; si se escribe antes, usará
   un booleano y la distinción se perderá exactamente donde importa.
-- **T021 a T023 antes de cualquier vista.** El interceptor se aplica a todas las llamadas; si las
+- **T022 a T024 antes de cualquier vista.** El interceptor se aplica a todas las llamadas; si las
   vistas llegan antes, existen sin protección y sus tests hay que rehacerlos.
 - **T004 desde el principio.** El presupuesto de paquete solo sirve si está declarado antes de
   empezar a añadir código; puesto al final, se ajustaría a lo que haya en lugar de acotarlo.
-- **T014 y T015 antes de T032.** La presentación de la salud del controlador muestra antigüedades,
+- **T014 y T015 antes de T034.** La presentación de la salud del controlador muestra antigüedades,
   y calcularlas contra el reloj local es el error que T015 impide.
-- **T016 antes de T044.** No se puede conectar a la vista un sondeo que no existe.
-- **T073 a T077 antes de T079.** Los invariantes se verifican sobre una configuración escrita.
+- **T016 antes de T046.** No se puede conectar a la vista un sondeo que no existe.
+- **T077 a T081 antes de T083.** Los invariantes se verifican sobre una configuración escrita.
 
 ## Parallel Execution Examples
 
 Dentro de la fase 1: T003, T005 y T006 en paralelo.
 
 Dentro de la fase 2: el bloque del tipo de tres valores (T010–T013) es paralelo al de antigüedades
-(T014–T015), al de sondeo (T016–T017) y al de errores (T018–T020): ficheros distintos, siempre que
+(T014–T015), al de sondeo (T016–T017) y al de errores (T019–T021): ficheros distintos, siempre que
 T008 y T009 estén hechos.
 
-Dentro de la fase 8: T078 (instalador) es paralelo a T073–T077 (configuración de nginx).
+Dentro de la fase 8: T082 (instalador) es paralelo a T077–T081 (configuración de nginx).
 
-Dentro de la fase 9: T086 en paralelo con el resto.
+Dentro de la fase 9: T090 en paralelo con el resto.
 
-No paralelizar dentro de un mismo fichero: T010 y T011 tocan `output-state.ts`; T073 a T077 tocan
-la configuración de nginx; T079 a T081 tocan `tests/test_deployment.py`; casi toda la fase 6 toca
+No paralelizar dentro de un mismo fichero: T010 y T011 tocan `output-state.ts`; T077 a T081 tocan
+la configuración de nginx; T083 a T085 tocan `tests/test_deployment.py`; casi toda la fase 6 toca
 `config.ts`.
 
 ## Implementation Strategy
@@ -298,7 +302,7 @@ el estado con honestidad sobre su vigencia. Es lo que se consulta a diario.
 **Primer punto de despliegue razonable**: añadir las fases 6 y 8. Sin la 6 el panel es un visor y
 seguiría haciendo falta la consola para operar; sin la 8 no llega al dispositivo.
 
-**Completar la fase**: fases 7 y 9. La 9 es obligatoria antes de desplegar: sin T083 y T084 el
+**Completar la fase**: fases 7 y 9. La 9 es obligatoria antes de desplegar: sin T087 y T088 el
 operador no sabe que no debe compilar en la Pi ni qué riesgo asume sin cifrado.
 
 **Fase posterior del proyecto** (fuera de este `tasks.md`): integración con Home Assistant.
@@ -308,21 +312,40 @@ operador no sabe que no debe compilar en la Pi ni qué riesgo asume sin cifrado.
 | Fase | Historia | Tareas | Prioridad |
 | --- | --- | ---: | --- |
 | 1 Setup | — | 7 (T001–T007) | — |
-| 2 Foundational | — | 13 (T008–T020) | bloqueante |
-| 3 | US4 acceso | 9 (T021–T029) | P1 |
-| 4 | US2 no mentir | 9 (T030–T038) | P1 |
-| 5 | US1 estado | 11 (T039–T049) | P1 |
-| 6 | US3 configuración | 14 (T050–T063) | P1 |
-| 7 | US5 histórico | 9 (T064–T072) | P2 |
-| 8 | US6 despliegue | 9 (T073–T081) | P1 |
-| 9 Documentación y cierre | — | 9 (T082–T090) | — |
-| **Total** | | **90** | |
+| 2 Foundational | — | 14 (T008–T021) | bloqueante |
+| 3 | US4 acceso | 10 (T022–T031) | P1 |
+| 4 | US2 no mentir | 9 (T032–T040) | P1 |
+| 5 | US1 estado | 13 (T041–T053) | P1 |
+| 6 | US3 configuración | 14 (T054–T067) | P1 |
+| 7 | US5 histórico | 9 (T068–T076) | P2 |
+| 8 | US6 despliegue | 9 (T077–T085) | P1 |
+| 9 Documentación y cierre | — | 9 (T086–T094) | — |
+| **Total** | | **94** | |
 
-De las 90, **89 son ejecutables en máquina de desarrollo**. T090 requiere la Raspberry Pi, está
+De las 94, **93 son ejecutables en máquina de desarrollo**. T094 requiere la Raspberry Pi, está
 marcada como manual y queda fuera del criterio de fase completa.
 
 Cobertura: los 47 requisitos funcionales y los 13 criterios de éxito de `spec.md` tienen al menos
-una tarea asociada.
+una tarea asociada, tras cerrar en la revisión de `/speckit-analyze` los huecos de FR-006, FR-016,
+FR-030, FR-037, FR-047 y SC-010.
 
-La honestidad del panel —lo que impide que mienta— está cubierta por T010–T013, T030–T031,
-T035–T036, T041, T047 y T015.
+## Revisión de `/speckit-analyze`
+
+Las cuatro tareas siguientes se añadieron al cerrar los hallazgos del análisis:
+
+| Tarea | Hallazgo | Qué cerraba |
+| --- | --- | --- |
+| T020 | F5 | Nada impedía que un componente futuro reintrodujese el reloj local para calcular antigüedades |
+| T031 | F2 (HIGH) | El caso de credencial rotada **durante** el uso no se probaba |
+| T045, T046 | F1 (HIGH) | FR-030 —conservar lo último mostrado con la API caída— no tenía ninguna tarea |
+
+Los demás se cerraron corrigiendo artefactos: **F3** (`/docs` y `/openapi.json` se retiran del
+sitio de nginx: el panel no los usa y publicarlos amplía la superficie sin necesidad), **F4** (la
+cadencia de sondeo queda fijada en 5 s por defecto, acotada entre 2 y 60, coincidiendo con el
+sondeo del controlador), **F6** (T084 pasa a guardia real: el instalador no menciona gestores de
+Node, y `.gitignore` excluye los 253 MB de dependencias y el artefacto compilado), **F7** (`ng new
+panel` habría producido `frontend/panel/`, no `frontend/`), **F8** (T091 comprueba con `git diff`
+que **ni una línea** de `src/` cambió, que es la afirmación fuerte del plan), **F9** y **F10**.
+
+La honestidad del panel —lo que impide que mienta— está cubierta por T010–T013, T032–T033,
+T037–T038, T043, T051 y T015.

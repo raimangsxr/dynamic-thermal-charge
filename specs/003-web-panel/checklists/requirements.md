@@ -70,3 +70,36 @@ Aportaciones de la redacción que no estaban en el enunciado y conviene revisar:
   consultando cada pocos segundos durante días es carga gratuita sobre una Raspberry Pi 2B.
 - **FR-041 y SC-011: caché.** Es el fallo clásico de desplegar una aplicación de una sola página:
   el operador actualiza y sigue viendo la versión vieja sin entender por qué.
+
+## Revisión de `/speckit-analyze` (2026-08-26)
+
+10 hallazgos, todos corregidos. **Cero CRITICAL** y ninguna violación de un MUST de la
+constitución. Los dos HIGH eran huecos de cobertura, no contradicciones:
+
+- **FR-030 no tenía ninguna tarea.** «Ante una API caída se conserva lo último mostrado, marcado
+  como no actual» es el requisito que evita que la pantalla se vacíe o se quede cargando, y no lo
+  implementaba nadie. Cerrado con dos tareas.
+- **FR-006 estaba cubierto a medias.** El interceptor trata el 401, pero nada probaba el caso real
+  de una credencial rotada en el servidor **durante** el uso, que es cuando el operador se
+  encuentra el problema.
+
+Y un hallazgo que habría costado tiempo al implementar: **`ng new panel` dentro de `frontend/`
+produce `frontend/panel/`**, no la estructura que declara `plan.md`. Corregido el comando.
+
+Correcciones que endurecen la fase:
+
+- **`/docs` y `/openapi.json` se retiran del sitio de nginx.** Exigen credencial, así que
+  exponerlos no era un agujero, pero el panel no los usa y publicarlos ampliaba la superficie de
+  red sin ninguna necesidad.
+- **Guardia contra el reloj local** (T020): sin ella, un componente futuro reintroduciría
+  `Date.now()` para calcular antigüedades y nada fallaría, justo en el indicador del que depende
+  que el operador confíe en lo que ve.
+- **Guardia de despliegue** (T084): el instalador no puede mencionar gestores de Node como algo a
+  instalar en el dispositivo, y `.gitignore` debe excluir los 253 MB de dependencias y el artefacto
+  compilado.
+- **La cadencia de sondeo queda fijada**: 5 s por defecto, coincidiendo con el `poll_seconds` del
+  controlador, acotada entre 2 y 60. No tiene sentido consultar más a menudo de lo que el
+  controlador reevalúa.
+
+Cobertura resultante: 47/47 requisitos funcionales y 13/13 criterios de éxito. `tasks.md` pasa de
+90 a 94 tareas.

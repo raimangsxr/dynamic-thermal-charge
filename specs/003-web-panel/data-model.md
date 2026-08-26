@@ -82,6 +82,22 @@ depende que el operador confíe en lo que ve.
 
 ---
 
+## Sondeo
+
+```text
+PollConfig
+  intervalSeconds    5      <- por defecto
+  minSeconds         2      <- suelo, para no castigar al dispositivo
+  maxSeconds         60
+```
+
+**Cinco segundos por defecto**, elegido para coincidir con el `poll_seconds` del controlador: no
+tiene sentido consultar más a menudo de lo que el controlador reevalúa. Ajustable entre 2 y 60 s.
+El suelo existe porque un panel abierto consultando cada 200 ms sería carga apreciable sobre un
+Cortex-A7 que además ejecuta el bucle de control.
+
+El sondeo se detiene con el documento oculto y refresca **de inmediato** al volver al frente.
+
 ## Formulario de configuración
 
 ```text
