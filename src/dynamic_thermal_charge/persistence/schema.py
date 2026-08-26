@@ -332,6 +332,42 @@ config_change = Table(
 )
 
 
+controller_heartbeat = Table(
+    "controller_heartbeat",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column(
+        "installation_id",
+        Integer,
+        ForeignKey("installation.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    ),
+    # Instant of the last heartbeat. This row is UPDATED, never appended to, so
+    # it does not grow and is deliberately excluded from the retention policy.
+    Column("updated_at", DateTime, nullable=False),
+    # When the publishing process started. Moving backwards is the cheap signal
+    # that a second controller is alive (FR-053).
+    Column("started_at", DateTime, nullable=False),
+    Column("degraded", Boolean, nullable=False),
+    Column(
+        "plan_id", Integer, ForeignKey("plan.id", ondelete="SET NULL"), nullable=True
+    ),
+    # The cadence the controller is ACTUALLY running with, which may differ from
+    # the stored configuration if it started before the last edit. The staleness
+    # tolerance derives from this, not from the configuration.
+    Column("poll_seconds", Float, nullable=False),
+    Column("driver_kind", String(16), nullable=False),
+    # Random per-process identifier, stable while the process lives. Two
+    # controllers share this single row, so without it they look like one.
+    Column("runner_id", String(64), nullable=False),
+    CheckConstraint("poll_seconds > 0", name="ck_heartbeat_poll"),
+    CheckConstraint(
+        "driver_kind IN ('simulated', 'gpio')", name="ck_heartbeat_driver"
+    ),
+)
+
+
 # Constraint name -> (field, human explanation). Used to turn an IntegrityError
 # into an actionable ConfigValidationError instead of a generic one: a constraint
 # violation is invalid *configuration*, never an unavailable database, and the
@@ -395,11 +431,22 @@ CONSTRAINT_FIELDS: dict[str, tuple[str, str]] = {
     ),
     "ck_change_action": ("action", "the change action is not recognised"),
     "ck_change_revision": ("revision_after", "revisions must advance by exactly one"),
+    "ck_heartbeat_poll": ("poll_seconds", "the polling cadence must be positive"),
+    "ck_heartbeat_driver": (
+        "driver_kind",
+        "the driver kind must be simulated or gpio",
+    ),
 }
 
 
 # Tables the retention policy may delete from, and the column it filters on.
-# config_change is deliberately absent: see data-model.md.
+#
+# Two tables are deliberately absent:
+#   * config_change     -- the only trace of who changed the configuration.
+#   * controller_heartbeat -- a single row that is updated in place, so it never
+#     grows. Pruning it would only ever delete the proof that the controller is
+#     alive, which is the opposite of what retention is for.
+# See data-model.md of both features.
 RETAINED_TABLES: tuple[tuple[Table, str], ...] = (
     (output_transition, "occurred_at"),
     (plan, "created_at"),
@@ -419,6 +466,7 @@ HISTORY_TABLES = (
 __all__ = [
     "CONFIG_TABLES",
     "CONSTRAINT_FIELDS",
+    "controller_heartbeat",
     "HISTORY_TABLES",
     "RETAINED_TABLES",
     "config_change",

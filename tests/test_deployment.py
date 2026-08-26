@@ -102,3 +102,89 @@ def test_the_readme_warns_that_configuration_is_not_migrated() -> None:
 def test_the_readme_links_the_constitution() -> None:
     readme = README.read_text(encoding="utf-8")
     assert ".specify/memory/constitution.md" in readme
+
+
+# --------------------------------------------------------------------------- #
+# FR-047, SC-011: the whole ARMv7 story rests on these never coming back.
+#
+# uvicorn[standard] pulls uvloop and httptools; greenlet arrives with
+# SQLAlchemy's asyncio API. None of the three publishes a linux_armv7l wheel, so
+# any of them would need a compiler on the Raspberry Pi and the deployment would
+# break -- silently, because the test suite on a development machine would not
+# notice. A comment in pyproject.toml documents the ban; this enforces it.
+# --------------------------------------------------------------------------- #
+
+PYPROJECT = ROOT / "pyproject.toml"
+
+FORBIDDEN_DEPENDENCIES = (
+    "uvicorn[standard]",
+    "uvloop",
+    "httptools",
+    "greenlet",
+    # Would compile from source on armv7: no wheel, and it needs libpq.
+    "psycopg2",
+    "psycopg2-binary",
+)
+
+
+def _declared_requirements() -> list[str]:
+    """Every requirement string, from the base list and from every extra.
+
+    Parsed, not grepped: the comment that explains the ban names the forbidden
+    packages, and a substring search over the file text matches its own prose.
+    """
+    import tomllib
+
+    data = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
+    project = data["project"]
+    requirements = list(project.get("dependencies", []))
+    for extra in project.get("optional-dependencies", {}).values():
+        requirements.extend(extra)
+    return requirements
+
+
+def test_forbidden_dependencies_never_return() -> None:
+    requirements = _declared_requirements()
+    offenders = [
+        requirement
+        for requirement in requirements
+        for name in FORBIDDEN_DEPENDENCIES
+        if name in requirement.replace(" ", "")
+    ]
+    assert not offenders, (
+        "these dependencies have no linux_armv7l wheel and would require a "
+        f"compiler on the deployment target: {offenders}. "
+        "See specs/002-config-api/research.md D1."
+    )
+
+
+def test_uvicorn_is_declared_without_any_extra() -> None:
+    """The specific mistake worth naming: uvicorn[standard]."""
+    uvicorn_requirements = [
+        requirement
+        for requirement in _declared_requirements()
+        if requirement.replace(" ", "").lower().startswith("uvicorn")
+    ]
+    assert uvicorn_requirements, "uvicorn is no longer declared at all"
+    for requirement in uvicorn_requirements:
+        assert "[" not in requirement, (
+            f"uvicorn must be declared bare, without extras; found {requirement!r}"
+        )
+
+
+def test_the_ban_on_uvicorn_standard_is_explained_where_someone_would_change_it() -> None:
+    """A bare ban invites a well-meaning 'fix'. The reason has to be next to it."""
+    declared = PYPROJECT.read_text(encoding="utf-8")
+    assert "armv7" in declared.lower()
+    assert "uvicorn" in declared
+
+
+def test_the_installed_environment_has_no_forbidden_dependency() -> None:
+    """Catches a transitive arrival that the declaration alone would not show."""
+    import importlib.util
+
+    for module in ("uvloop", "httptools", "greenlet"):
+        assert importlib.util.find_spec(module) is None, (
+            f"{module} got installed transitively; it would need a compiler on "
+            "the Raspberry Pi. Find out which dependency pulled it in."
+        )

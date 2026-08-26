@@ -73,6 +73,26 @@ class SecretRejectedError(ConfigValidationError):
     """A value that looks like a credential was offered as configuration."""
 
 
+class Liveness(Enum):
+    """How much the API may claim about the controller's state.
+
+    Not a health metric: it is the answer to "may I present this as current?".
+    """
+
+    #: Heartbeat is recent. The output state may be presented as current.
+    LIVE = "live"
+    #: Heartbeat is recent but the controller cannot reach something it needs.
+    LIVE_DEGRADED = "live_degraded"
+    #: Heartbeat is too old, or dated in the future. Nothing may be claimed.
+    STALE = "stale"
+    #: No heartbeat was ever published against this database.
+    NEVER_SEEN = "never_seen"
+
+    @property
+    def state_is_current(self) -> bool:
+        return self in (Liveness.LIVE, Liveness.LIVE_DEGRADED)
+
+
 class SchemaStatus(Enum):
     OK = "ok"
     MISSING = "missing"
@@ -108,6 +128,19 @@ class ConfigChange:
     action: str
     revision_before: int
     revision_after: int
+
+
+@dataclass(frozen=True)
+class Heartbeat:
+    """The controller's proof of life, as stored."""
+
+    updated_at: datetime
+    started_at: datetime
+    degraded: bool
+    poll_seconds: float
+    driver_kind: str
+    runner_id: str
+    plan_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -179,6 +212,26 @@ class HistoryRecorder(Protocol):
     def prune(self, now: datetime, retention_days: int | None) -> PruneReport: ...
 
 
+class HeartbeatPublisher(Protocol):
+    """The controller's proof of life.
+
+    ``publish`` may NEVER propagate an exception: a write failure is logged as an
+    error and the control loop carries on, exactly like ``HistoryRecorder``. The
+    visible consequence is that the API marks the state as not current, which is
+    precisely the honest answer -- at that moment it has proof of nothing.
+    """
+
+    def publish(
+        self,
+        now: datetime,
+        degraded: bool,
+        plan_ref: "PlanRef | None" = None,
+    ) -> None: ...
+
+    def read(self) -> Heartbeat | None:
+        """The last heartbeat, or None if there has never been one."""
+
+
 class SchemaGate(Protocol):
     def check(self) -> SchemaStatus:
         """Compare the stored schema revision with the one this service knows."""
@@ -186,6 +239,9 @@ class SchemaGate(Protocol):
 
 __all__ = [
     "ConfigChange",
+    "Heartbeat",
+    "HeartbeatPublisher",
+    "Liveness",
     "ConfigConflictError",
     "ConfigRepository",
     "ConfigStoreEmptyError",
