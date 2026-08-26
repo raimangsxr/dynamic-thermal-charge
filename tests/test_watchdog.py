@@ -2,7 +2,7 @@ from datetime import date, datetime
 import logging
 
 from dynamic_thermal_charge.cli import _run_watchdog
-from dynamic_thermal_charge.config import load_config
+from dynamic_thermal_charge.persistence.seed import example_installation
 from dynamic_thermal_charge.models import WeatherWatchdogConfig
 from dynamic_thermal_charge.watchdog import ForecastWatchdog
 from dynamic_thermal_charge.weather import OutdoorForecast
@@ -49,7 +49,7 @@ def test_retries_quickly_in_degraded_mode_and_refreshes_after_recovery(
 
 
 def test_watchdog_mode_builds_fallback_plan_before_waiting(capsys) -> None:
-    config = load_config("examples/raspberry-pi.yaml")
+    config = example_installation()
 
     def stop_after_first_cycle(_seconds):
         raise KeyboardInterrupt

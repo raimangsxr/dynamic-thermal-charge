@@ -1,3 +1,14 @@
+# NO LO LEE EL RUNTIME.
+#
+# Desde la feature 001-config-database la configuración vive en base de datos
+# (SQLite local o PostgreSQL remoto), indicada por DTC_DATABASE_URL. Este fichero
+# se conserva solo como documentación de los campos disponibles y como
+# referencia de la instalación que siembra `dtc db init`.
+#
+# Para ver o cambiar la configuración real:
+#   dtc config show
+#   dtc config set max_total_power_kw 5.2
+#
 # Ejemplo de despliegue para Raspberry Pi 2B.
 # IMPORTANTE: los GPIO solo deben gobernar entradas aisladas de relés/contactores
 # dimensionados por un electricista. Nunca conecte un acumulador directamente al GPIO.

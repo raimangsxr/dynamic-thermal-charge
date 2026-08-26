@@ -1,4 +1,6 @@
+# Enables the REAL GPIO driver. Install only after the LED self-test in the
+# README has passed on every channel.
 [Service]
 SupplementaryGroups=gpio
 ExecStart=
-ExecStart=/opt/dynamic-thermal-charge/venv/bin/dynamic-thermal-charge /etc/dynamic-thermal-charge/config.yaml --run-controller --driver gpio
+ExecStart=/opt/dynamic-thermal-charge/venv/bin/dynamic-thermal-charge run --controller --driver gpio

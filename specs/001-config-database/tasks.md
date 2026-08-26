@@ -40,11 +40,11 @@ es por tanto **US2 → US1 → US6 → US3**, y después las P2 **US4 → US5**.
 
 **Purpose**: preparar dependencias y estructura sin tocar comportamiento.
 
-- [ ] T001 Declarar en `pyproject.toml` los extras `db` (`SQLAlchemy>=2,<3`, `Alembic>=1.13`) y `postgres` (`pg8000>=1.31`), añadir `db` al extra `dev`, y declarar en `[project.scripts]` el alias `dtc` apuntando al mismo punto de entrada que `dynamic-thermal-charge`. NO retirar todavía `PyYAML` de `dependencies`: `config.py` aún lo importa y se retira en T050
-- [ ] T002 Crear el esqueleto del subpaquete en `src/dynamic_thermal_charge/persistence/__init__.py` y el directorio `src/dynamic_thermal_charge/persistence/migrations/versions/`
-- [ ] T003 [P] Registrar en `pyproject.toml` el marcador `postgres` de pytest y configurarlo para que se omita salvo que exista `DTC_TEST_POSTGRES_URL`, según `research.md` D12
-- [ ] T004 [P] Crear `tests/conftest.py` con las utilidades compartidas: factoría de URL SQLite sobre `tmp_path`, reloj controlado y `wait` controlado reutilizables. Ningún test puede dormir en tiempo real
-- [ ] T005 [P] Añadir `var/*.db`, `var/*.db-wal` y `var/*.db-shm` a `.gitignore`
+- [X] T001 Declarar en `pyproject.toml` los extras `db` (`SQLAlchemy>=2,<3`, `Alembic>=1.13`) y `postgres` (`pg8000>=1.31`), añadir `db` al extra `dev`, y declarar en `[project.scripts]` el alias `dtc` apuntando al mismo punto de entrada que `dynamic-thermal-charge`. NO retirar todavía `PyYAML` de `dependencies`: `config.py` aún lo importa y se retira en T050
+- [X] T002 Crear el esqueleto del subpaquete en `src/dynamic_thermal_charge/persistence/__init__.py` y el directorio `src/dynamic_thermal_charge/persistence/migrations/versions/`
+- [X] T003 [P] Registrar en `pyproject.toml` el marcador `postgres` de pytest y configurarlo para que se omita salvo que exista `DTC_TEST_POSTGRES_URL`, según `research.md` D12
+- [X] T004 [P] Crear `tests/conftest.py` con las utilidades compartidas: factoría de URL SQLite sobre `tmp_path`, reloj controlado y `wait` controlado reutilizables. Ningún test puede dormir en tiempo real
+- [X] T005 [P] Añadir `var/*.db`, `var/*.db-wal` y `var/*.db-shm` a `.gitignore`
 
 ---
 
@@ -55,56 +55,56 @@ fase. Al terminarla no hay todavía ningún cambio de comportamiento visible par
 
 ### Errores de dominio y URL
 
-- [ ] T006 Definir la jerarquía de errores de dominio (`ConfigStoreError`, `ConfigStoreUnavailableError`, `ConfigStoreEmptyError`, `SchemaVersionError`, `ConfigValidationError`, `ConfigConflictError`) en `src/dynamic_thermal_charge/persistence/__init__.py`, con campo y acumulador en `ConfigValidationError`, según `contracts/repository.md`
-- [ ] T007 Implementar el parseo de `DTC_DATABASE_URL` en `src/dynamic_thermal_charge/persistence/url.py`: motores admitidos `sqlite` y `postgresql+pg8000`, y una función `describe()` que devuelva motor, host y nombre de base de datos por separado
-- [ ] T008 Escribir `tests/test_persistence_url.py` cubriendo: variable ausente, variable vacía, motor no admitido (mensaje que enumere los admitidos), URL SQLite absoluta, URL PostgreSQL con credenciales, y URL malformada
-- [ ] T009 Añadir a `tests/test_persistence_url.py` la prueba de redacción de credenciales: `describe()` NUNCA devuelve la URL completa ni la contraseña, ni siquiera enmascarada, y el mensaje de arranque se construye campo a campo (`research.md` D11)
+- [X] T006 Definir la jerarquía de errores de dominio (`ConfigStoreError`, `ConfigStoreUnavailableError`, `ConfigStoreEmptyError`, `SchemaVersionError`, `ConfigValidationError`, `ConfigConflictError`) en `src/dynamic_thermal_charge/persistence/__init__.py`, con campo y acumulador en `ConfigValidationError`, según `contracts/repository.md`
+- [X] T007 Implementar el parseo de `DTC_DATABASE_URL` en `src/dynamic_thermal_charge/persistence/url.py`: motores admitidos `sqlite` y `postgresql+pg8000`, y una función `describe()` que devuelva motor, host y nombre de base de datos por separado
+- [X] T008 Escribir `tests/test_persistence_url.py` cubriendo: variable ausente, variable vacía, motor no admitido (mensaje que enumere los admitidos), URL SQLite absoluta, URL PostgreSQL con credenciales, y URL malformada
+- [X] T009 Añadir a `tests/test_persistence_url.py` la prueba de redacción de credenciales: `describe()` NUNCA devuelve la URL completa ni la contraseña, ni siquiera enmascarada, y el mensaje de arranque se construye campo a campo (`research.md` D11)
 
 ### Engine y PRAGMAs
 
-- [ ] T010 Implementar la creación del engine en `src/dynamic_thermal_charge/persistence/engine.py`, usando exclusivamente la API síncrona de SQLAlchemy. Prohibido cualquier uso de la API asíncrona: reintroduciría `greenlet`, que exige compilador en la Pi (`research.md` D3)
-- [ ] T011 Añadir en `engine.py` el listener del evento `connect` que fije en cada conexión SQLite `PRAGMA foreign_keys=ON`, `journal_mode=WAL`, `synchronous=FULL` y `busy_timeout=5000` (`research.md` D6)
-- [ ] T012 Escribir `tests/test_persistence_schema.py::test_sqlite_pragmas` que abra una base de datos SQLite real en `tmp_path` a través del engine y compruebe **cada** PRAGMA por separado. `foreign_keys` viene desactivado por defecto en SQLite: sin esta comprobación las claves ajenas del modelo serían decorativas
-- [ ] T013 Añadir en `engine.py` la traducción de excepciones en la frontera: ninguna excepción de SQLAlchemy, `pg8000` o `sqlite3` cruza hacia el dominio; se convierte en el error de dominio correspondiente
-- [ ] T014 Escribir en `tests/test_persistence_failures.py` la prueba de que la traducción de T013 no deja escapar ninguna excepción de librería, inyectando fallos de conexión y de ejecución
+- [X] T010 Implementar la creación del engine en `src/dynamic_thermal_charge/persistence/engine.py`, usando exclusivamente la API síncrona de SQLAlchemy. Prohibido cualquier uso de la API asíncrona: reintroduciría `greenlet`, que exige compilador en la Pi (`research.md` D3)
+- [X] T011 Añadir en `engine.py` el listener del evento `connect` que fije en cada conexión SQLite `PRAGMA foreign_keys=ON`, `journal_mode=WAL`, `synchronous=FULL` y `busy_timeout=5000` (`research.md` D6)
+- [X] T012 Escribir `tests/test_persistence_schema.py::test_sqlite_pragmas` que abra una base de datos SQLite real en `tmp_path` a través del engine y compruebe **cada** PRAGMA por separado. `foreign_keys` viene desactivado por defecto en SQLite: sin esta comprobación las claves ajenas del modelo serían decorativas
+- [X] T013 Añadir en `engine.py` la traducción de excepciones en la frontera: ninguna excepción de SQLAlchemy, `pg8000` o `sqlite3` cruza hacia el dominio; se convierte en el error de dominio correspondiente
+- [X] T014 Escribir en `tests/test_persistence_failures.py` la prueba de que la traducción de T013 no deja escapar ninguna excepción de librería, inyectando fallos de conexión y de ejecución
 
 ### Esquema
 
-- [ ] T015 Definir en `src/dynamic_thermal_charge/persistence/schema.py` el `MetaData` y las tablas de configuración `installation`, `weather_config`, `heater`, `output_config` y `thermal_profile`, con tipos, `NOT NULL`, claves ajenas con su `ON DELETE` y restricciones únicas según `data-model.md`
-- [ ] T016 Añadir en `schema.py` las tablas de histórico `forecast`, `plan`, `plan_slot`, `plan_allocation`, `output_transition` y `config_change`, con sus índices de retención. `plan_slot.heater_id`, `plan_allocation.heater_id` y `output_transition.heater_id` son **texto y no claves ajenas**, para que el histórico sobreviva al borrado de un acumulador
-- [ ] T017 Restringir los `CHECK` del esquema al subconjunto que se expresa idénticamente en SQLite y PostgreSQL; documentar en el propio módulo qué invariantes se delegan al dominio y por qué (`data-model.md`, sección de validación por capas)
-- [ ] T018 Añadir en `tests/test_persistence_schema.py` la comprobación de que las claves ajenas se aplican de verdad sobre SQLite: borrar una instalación arrastra sus acumuladores, e insertar un `output_config` huérfano falla
+- [X] T015 Definir en `src/dynamic_thermal_charge/persistence/schema.py` el `MetaData` y las tablas de configuración `installation`, `weather_config`, `heater`, `output_config` y `thermal_profile`, con tipos, `NOT NULL`, claves ajenas con su `ON DELETE` y restricciones únicas según `data-model.md`
+- [X] T016 Añadir en `schema.py` las tablas de histórico `forecast`, `plan`, `plan_slot`, `plan_allocation`, `output_transition` y `config_change`, con sus índices de retención. `plan_slot.heater_id`, `plan_allocation.heater_id` y `output_transition.heater_id` son **texto y no claves ajenas**, para que el histórico sobreviva al borrado de un acumulador
+- [X] T017 Restringir los `CHECK` del esquema al subconjunto que se expresa idénticamente en SQLite y PostgreSQL; documentar en el propio módulo qué invariantes se delegan al dominio y por qué (`data-model.md`, sección de validación por capas)
+- [X] T018 Añadir en `tests/test_persistence_schema.py` la comprobación de que las claves ajenas se aplican de verdad sobre SQLite: borrar una instalación arrastra sus acumuladores, e insertar un `output_config` huérfano falla
 
 ### Modelo de dominio y conversión
 
-- [ ] T019 [P] Añadir el campo de retención a `AppConfig` en `src/dynamic_thermal_charge/models.py`, con validación en `__post_init__` (positivo o `None` para ilimitada). Es el **único** cambio autorizado en este fichero
-- [ ] T020 [P] Crear `tests/test_models.py` con la prueba del nuevo campo de retención de `AppConfig`: valores válidos, `None` como ilimitada y valores rechazados. No va en `tests/test_thermal.py`, que cubre el modelo térmico y no los invariantes de configuración
-- [ ] T021 Implementar en `src/dynamic_thermal_charge/persistence/mapping.py` la conversión fila → dataclass para toda la configuración, construyendo los `dataclass(frozen=True)` existentes sin modificarlos, de modo que sus `__post_init__` sigan siendo la última línea de defensa
-- [ ] T022 Implementar en `mapping.py` la conversión inversa dataclass → parámetros de escritura
-- [ ] T023 Implementar en `mapping.py` los ayudantes de frontera temporal: todo instante se escribe en UTC y se lee como `datetime` consciente de zona; los horarios `start_time` y `end_time` se almacenan como texto `HH:MM` porque son reglas, no instantes (`research.md` D8)
-- [ ] T024 Escribir en `tests/test_persistence_schema.py` la prueba de ida y vuelta de instantes: un instante con zona sobrevive al viaje sin perder ni inventar zona, y un `datetime` ingenuo nunca sale de la capa de persistencia
+- [X] T019 [P] Añadir el campo de retención a `AppConfig` en `src/dynamic_thermal_charge/models.py`, con validación en `__post_init__` (positivo o `None` para ilimitada). Es el **único** cambio autorizado en este fichero
+- [X] T020 [P] Crear `tests/test_models.py` con la prueba del nuevo campo de retención de `AppConfig`: valores válidos, `None` como ilimitada y valores rechazados. No va en `tests/test_thermal.py`, que cubre el modelo térmico y no los invariantes de configuración
+- [X] T021 Implementar en `src/dynamic_thermal_charge/persistence/mapping.py` la conversión fila → dataclass para toda la configuración, construyendo los `dataclass(frozen=True)` existentes sin modificarlos, de modo que sus `__post_init__` sigan siendo la última línea de defensa
+- [X] T022 Implementar en `mapping.py` la conversión inversa dataclass → parámetros de escritura
+- [X] T023 Implementar en `mapping.py` los ayudantes de frontera temporal: todo instante se escribe en UTC y se lee como `datetime` consciente de zona; los horarios `start_time` y `end_time` se almacenan como texto `HH:MM` porque son reglas, no instantes (`research.md` D8)
+- [X] T024 Escribir en `tests/test_persistence_schema.py` la prueba de ida y vuelta de instantes: un instante con zona sobrevive al viaje sin perder ni inventar zona, y un `datetime` ingenuo nunca sale de la capa de persistencia
 
 ### Validación de configuración completa
 
-- [ ] T025 Extraer a `src/dynamic_thermal_charge/config.py` el validador de configuración completa, independiente del origen: alineación de horario con `slot_minutes`, unicidad de pines entre salidas `gpio`, y exigencia de proveedor meteorológico cuando existe algún perfil térmico. Debe lanzar `ConfigValidationError` con campo y acumulador
-- [ ] T026 Ampliar `tests/test_config.py` con la cobertura del validador de T025 —cada invariante de FR-009, con su campo y acumulador en el mensaje— **sin** retirar todavía los casos de carga YAML, que siguen siendo válidos hasta T049
+- [X] T025 Extraer a `src/dynamic_thermal_charge/config.py` el validador de configuración completa, independiente del origen: alineación de horario con `slot_minutes`, unicidad de pines entre salidas `gpio`, y exigencia de proveedor meteorológico cuando existe algún perfil térmico. Debe lanzar `ConfigValidationError` con campo y acumulador
+- [X] T026 Ampliar `tests/test_config.py` con la cobertura del validador de T025 —cada invariante de FR-009, con su campo y acumulador en el mensaje— **sin** retirar todavía los casos de carga YAML, que siguen siendo válidos hasta T049
 
 ### Migraciones y puerta de versión
 
-- [ ] T027 Crear el andamiaje de Alembic en `src/dynamic_thermal_charge/persistence/migrations/env.py` y `script.py.mako`, con `render_as_batch=True` para que las alteraciones de tabla funcionen en SQLite
-- [ ] T028 Crear la revisión inicial en `src/dynamic_thermal_charge/persistence/migrations/versions/` que construya todas las tablas de T015 y T016
-- [ ] T029 Implementar `src/dynamic_thermal_charge/persistence/gate.py`: lee `alembic_version` con Core y devuelve `ok`, `missing`, `behind` o `unknown` comparando con la constante de revisiones conocidas. **No importa Alembic** (`research.md` D4, D5)
-- [ ] T030 Escribir `tests/test_persistence_gate.py` con los cuatro estados, incluido el caso `unknown` que debe rechazar el arranque, y comprobando que el módulo no importa Alembic
+- [X] T027 Crear el andamiaje de Alembic en `src/dynamic_thermal_charge/persistence/migrations/env.py` y `script.py.mako`, con `render_as_batch=True` para que las alteraciones de tabla funcionen en SQLite
+- [X] T028 Crear la revisión inicial en `src/dynamic_thermal_charge/persistence/migrations/versions/` que construya todas las tablas de T015 y T016
+- [X] T029 Implementar `src/dynamic_thermal_charge/persistence/gate.py`: lee `alembic_version` con Core y devuelve `ok`, `missing`, `behind` o `unknown` comparando con la constante de revisiones conocidas. **No importa Alembic** (`research.md` D4, D5)
+- [X] T030 Escribir `tests/test_persistence_gate.py` con los cuatro estados, incluido el caso `unknown` que debe rechazar el arranque, y comprobando que el módulo no importa Alembic
 
 ### Semilla
 
-- [ ] T031 Implementar `src/dynamic_thermal_charge/persistence/seed.py` con la instalación de ejemplo completa y válida, equivalente a `examples/raspberry-pi.yaml`, y estrictamente idempotente: si ya existe configuración, no toca nada
-- [ ] T032 Escribir `tests/test_persistence_seed.py`: siembra sobre base de datos vacía, segunda siembra que no modifica nada, y siembra que no sobrescribe una configuración editada
+- [X] T031 Implementar `src/dynamic_thermal_charge/persistence/seed.py` con la instalación de ejemplo completa y válida, equivalente a `examples/raspberry-pi.yaml`, y estrictamente idempotente: si ya existe configuración, no toca nada
+- [X] T032 Escribir `tests/test_persistence_seed.py`: siembra sobre base de datos vacía, segunda siembra que no modifica nada, y siembra que no sobrescribe una configuración editada
 
 ### Guardias arquitectónicas
 
-- [ ] T033 Escribir `tests/test_persistence_failures.py::test_nucleo_no_importa_sqlalchemy` que verifique que ningún módulo fuera de `persistence/` importa `sqlalchemy`, recorriendo el árbol de `src/` de forma estática
-- [ ] T034 Añadir la prueba de que `import dynamic_thermal_charge` y la importación de `scheduler`, `thermal` y `models` **no** cargan `sqlalchemy` en `sys.modules`, garantizando la importación perezosa y el presupuesto de arranque de `research.md` D13
+- [X] T033 Escribir `tests/test_persistence_failures.py::test_nucleo_no_importa_sqlalchemy` que verifique que ningún módulo fuera de `persistence/` importa `sqlalchemy`, recorriendo el árbol de `src/` de forma estática
+- [X] T034 Añadir la prueba de que `import dynamic_thermal_charge` y la importación de `scheduler`, `thermal` y `models` **no** cargan `sqlalchemy` en `sys.modules`, garantizando la importación perezosa y el presupuesto de arranque de `research.md` D13
 
 **Checkpoint**: la frontera de persistencia existe y está probada. El comportamiento visible
 del programa sigue siendo el actual.
@@ -118,15 +118,15 @@ del programa sigue siendo el actual.
 **Independent Test**: sobre una base de datos vacía, `db init` seguido de `config show`
 muestra una instalación completa y válida.
 
-- [ ] T035 [US2] Implementar en `src/dynamic_thermal_charge/persistence/repository.py` la operación de inicialización: aplica migraciones pendientes, siembra si no hay configuración, y conserva intactos los datos existentes
-- [ ] T036 [US2] Implementar `dtc db init` en `src/dynamic_thermal_charge/cli.py`, informando de qué se ha creado, qué se ha migrado y qué se ha omitido, y devolviendo la revisión de esquema resultante
-- [ ] T037 [US2] Implementar `dtc db upgrade` en `cli.py`: solo migra, nunca siembra
-- [ ] T038 [US2] Implementar `ConfigRepository.current()` en `repository.py`, devolviendo configuración validada y revisión, o lanzando. Nunca devuelve configuración parcialmente válida
-- [ ] T039 [US2] Implementar `dtc config show [--heater <id>]` en `cli.py`, mostrando la configuración completa, la revisión de configuración y la revisión de esquema, sin credenciales ni cadena de conexión
-- [ ] T040 [US2] Escribir en `tests/test_cli_config_commands.py` los casos de `db init` (base vacía, repetición idempotente, base con configuración propia), `db upgrade` y `config show` (completo, filtrado por acumulador, acumulador inexistente enumerando los existentes)
-- [ ] T041 [US2] Añadir a `tests/test_cli_config_commands.py` la comprobación de que `config show` no emite jamás la cadena de conexión ni la clave de AEMET, y que de AEMET solo aparece el **nombre** de la variable de entorno
-- [ ] T042 [US2] Verificar con un test que `db init`, `db upgrade` y `config show` **no construyen ningún driver de salida**. Principio I: ninguna ruta administrativa puede conmutar hardware
-- [ ] T043 [US2] Cubrir los códigos de salida del contrato para estos comandos: `0`, `1` base de datos inalcanzable, `2` revisión de esquema desconocida, `3` sin configuración, `4` acumulador inexistente (`contracts/cli.md`)
+- [X] T035 [US2] Implementar en `src/dynamic_thermal_charge/persistence/repository.py` la operación de inicialización: aplica migraciones pendientes, siembra si no hay configuración, y conserva intactos los datos existentes
+- [X] T036 [US2] Implementar `dtc db init` en `src/dynamic_thermal_charge/cli.py`, informando de qué se ha creado, qué se ha migrado y qué se ha omitido, y devolviendo la revisión de esquema resultante
+- [X] T037 [US2] Implementar `dtc db upgrade` en `cli.py`: solo migra, nunca siembra
+- [X] T038 [US2] Implementar `ConfigRepository.current()` en `repository.py`, devolviendo configuración validada y revisión, o lanzando. Nunca devuelve configuración parcialmente válida
+- [X] T039 [US2] Implementar `dtc config show [--heater <id>]` en `cli.py`, mostrando la configuración completa, la revisión de configuración y la revisión de esquema, sin credenciales ni cadena de conexión
+- [X] T040 [US2] Escribir en `tests/test_cli_config_commands.py` los casos de `db init` (base vacía, repetición idempotente, base con configuración propia), `db upgrade` y `config show` (completo, filtrado por acumulador, acumulador inexistente enumerando los existentes)
+- [X] T041 [US2] Añadir a `tests/test_cli_config_commands.py` la comprobación de que `config show` no emite jamás la cadena de conexión ni la clave de AEMET, y que de AEMET solo aparece el **nombre** de la variable de entorno
+- [X] T042 [US2] Verificar con un test que `db init`, `db upgrade` y `config show` **no construyen ningún driver de salida**. Principio I: ninguna ruta administrativa puede conmutar hardware
+- [X] T043 [US2] Cubrir los códigos de salida del contrato para estos comandos: `0`, `1` base de datos inalcanzable, `2` revisión de esquema desconocida, `3` sin configuración, `4` acumulador inexistente (`contracts/cli.md`)
 
 **Checkpoint**: existe una base de datos utilizable e inspeccionable. El servicio sigue
 arrancando con YAML.
@@ -141,21 +141,21 @@ runtime.
 **Independent Test**: con una base de datos sembrada, el plan generado es idéntico al que
 producía la configuración equivalente en fichero.
 
-- [ ] T044 [US1] Definir el `Protocol` `ConfigRepository` en `src/dynamic_thermal_charge/persistence/__init__.py` según `contracts/repository.md`, e inyectarlo en lugar de la carga de fichero
-- [ ] T045 [US1] Reestructurar `src/dynamic_thermal_charge/cli.py` en subcomandos (`db`, `config`, `history`, `run`, `gpio-self-test`) según `contracts/cli.md`, retirando el argumento posicional de ruta de configuración
-- [ ] T046 [US1] Implementar `dtc run [--controller | --watch-weather] [--driver …] [--start …] [--log-level …]` leyendo la configuración de la base de datos, conservando **sin cambios** la semántica de planificación, watchdog, controlador y selección de driver
-- [ ] T047 [US1] Hacer que un argumento posicional con aspecto de ruta produzca un error que explique el cambio y remita a `dtc db init`, en lugar de un error genérico de argumentos
-- [ ] T048 [US1] Registrar al arrancar el origen efectivo de la configuración usando `describe()`: motor, modo local o remoto, host y nombre de base de datos. Nunca la URL
-- [ ] T049 [US1] Eliminar `load_config` y todo el código de carga y validación de fichero YAML de `src/dynamic_thermal_charge/config.py`, conservando únicamente el validador de configuración completa de T025, y retirar de `tests/test_config.py` los casos de carga de fichero que quedan huérfanos sin relajar la cobertura de invariantes de T026
-- [ ] T050 [US1] Retirar `PyYAML` de `dependencies` en `pyproject.toml`, ahora que ningún módulo del runtime lo importa
-- [ ] T051 [US1] Adaptar `src/dynamic_thermal_charge/service.py` para recibir la configuración del repositorio inyectado, sin cambiar la firma de `ChargeController` ni de los drivers
-- [ ] T052 [US1] Aplicar la puerta de versión de esquema de T029 en el arranque de `run`: `missing` sugiere `db init`, `behind` sugiere `db upgrade`, `unknown` rechaza el arranque
-- [ ] T053 [US1] Escribir en `tests/test_persistence_repository.py` la equivalencia de plan: la misma instalación cargada desde base de datos produce exactamente el mismo plan que producía la configuración en fichero, usando como referencia los casos de `tests/test_scheduler.py`
-- [ ] T054 [US1] Añadir a `tests/test_cli_config_commands.py` los casos de arranque: variable de entorno ausente, motor no admitido, esquema ausente, migración pendiente, esquema desconocido, base de datos sin configuración y configuración almacenada inválida. En **todos** ellos, ninguna salida se activa
-- [ ] T055 [US1] Añadir la cabecera a `examples/home.yaml` y `examples/raspberry-pi.yaml` indicando que el runtime ya no los lee y que se conservan como documentación y referencia de la semilla
-- [ ] T056 [US1] Actualizar `tests/test_service.py` y `tests/test_watchdog.py` al repositorio inyectado, sin relajar ninguna aserción existente
-- [ ] T057 [US1] Escribir la guardia simétrica a T033 en `tests/test_persistence_failures.py`: ningún módulo de `src/` importa `yaml`, ni lee una ruta de fichero de configuración, ni importa un servidor HTTP. Cubre SC-001 y FR-015, que hasta ahora solo estaban garantizados por la ausencia de código
-- [ ] T058 [US1] Añadir a `tests/test_state.py` la regresión de durabilidad del plan activo con el repositorio inyectado (FR-020, hasta ahora sin ninguna tarea): escritura atómica, recuperación tras reinicio simulado, y plan ilegible o de versión desconocida tratado como ausencia de plan
+- [X] T044 [US1] Definir el `Protocol` `ConfigRepository` en `src/dynamic_thermal_charge/persistence/__init__.py` según `contracts/repository.md`, e inyectarlo en lugar de la carga de fichero
+- [X] T045 [US1] Reestructurar `src/dynamic_thermal_charge/cli.py` en subcomandos (`db`, `config`, `history`, `run`, `gpio-self-test`) según `contracts/cli.md`, retirando el argumento posicional de ruta de configuración
+- [X] T046 [US1] Implementar `dtc run [--controller | --watch-weather] [--driver …] [--start …] [--log-level …]` leyendo la configuración de la base de datos, conservando **sin cambios** la semántica de planificación, watchdog, controlador y selección de driver
+- [X] T047 [US1] Hacer que un argumento posicional con aspecto de ruta produzca un error que explique el cambio y remita a `dtc db init`, en lugar de un error genérico de argumentos
+- [X] T048 [US1] Registrar al arrancar el origen efectivo de la configuración usando `describe()`: motor, modo local o remoto, host y nombre de base de datos. Nunca la URL
+- [X] T049 [US1] Eliminar `load_config` y todo el código de carga y validación de fichero YAML de `src/dynamic_thermal_charge/config.py`, conservando únicamente el validador de configuración completa de T025, y retirar de `tests/test_config.py` los casos de carga de fichero que quedan huérfanos sin relajar la cobertura de invariantes de T026
+- [X] T050 [US1] Retirar `PyYAML` de `dependencies` en `pyproject.toml`, ahora que ningún módulo del runtime lo importa
+- [X] T051 [US1] Adaptar `src/dynamic_thermal_charge/service.py` para recibir la configuración del repositorio inyectado, sin cambiar la firma de `ChargeController` ni de los drivers
+- [X] T052 [US1] Aplicar la puerta de versión de esquema de T029 en el arranque de `run`: `missing` sugiere `db init`, `behind` sugiere `db upgrade`, `unknown` rechaza el arranque
+- [X] T053 [US1] Escribir en `tests/test_persistence_repository.py` la equivalencia de plan: la misma instalación cargada desde base de datos produce exactamente el mismo plan que producía la configuración en fichero, usando como referencia los casos de `tests/test_scheduler.py`
+- [X] T054 [US1] Añadir a `tests/test_cli_config_commands.py` los casos de arranque: variable de entorno ausente, motor no admitido, esquema ausente, migración pendiente, esquema desconocido, base de datos sin configuración y configuración almacenada inválida. En **todos** ellos, ninguna salida se activa
+- [X] T055 [US1] Añadir la cabecera a `examples/home.yaml` y `examples/raspberry-pi.yaml` indicando que el runtime ya no los lee y que se conservan como documentación y referencia de la semilla
+- [X] T056 [US1] Actualizar `tests/test_service.py` y `tests/test_watchdog.py` al repositorio inyectado, sin relajar ninguna aserción existente
+- [X] T057 [US1] Escribir la guardia simétrica a T033 en `tests/test_persistence_failures.py`: ningún módulo de `src/` importa `yaml`, ni lee una ruta de fichero de configuración, ni importa un servidor HTTP. Cubre SC-001 y FR-015, que hasta ahora solo estaban garantizados por la ausencia de código
+- [X] T058 [US1] Añadir a `tests/test_state.py` la regresión de durabilidad del plan activo con el repositorio inyectado (FR-020, hasta ahora sin ninguna tarea): escritura atómica, recuperación tras reinicio simulado, y plan ilegible o de versión desconocida tratado como ausencia de plan
 
 **Checkpoint**: no queda configuración en fichero. `PyYAML` fuera del runtime.
 
@@ -169,14 +169,14 @@ indeterminadas.
 **Independent Test**: inyectando un repositorio que falla de forma controlada, se observa la
 continuidad del proceso y el estado de las salidas.
 
-- [ ] T059 [US6] Implementar en `src/dynamic_thermal_charge/service.py` el tratamiento de `ConfigStoreUnavailableError` como **única** excepción transitoria: conserva el plan en ejecución y reintenta con la cadencia configurada, sin terminar el proceso
-- [ ] T060 [US6] Registrar la entrada y la salida del estado degradado una sola vez por transición, nunca en cada iteración del bucle de control, en `src/dynamic_thermal_charge/service.py`
-- [ ] T061 [US6] Recalcular el plan con la configuración vigente al recuperarse el acceso, registrando la recuperación, en `src/dynamic_thermal_charge/service.py`
-- [ ] T062 [US6] Confirmar que las demás excepciones de dominio (`ConfigStoreEmptyError`, `SchemaVersionError`, `ConfigValidationError`) son terminales para la operación en curso y nunca activan una salida
-- [ ] T063 [US6] Crear los dobles de prueba de los tres `Protocol` en `tests/conftest.py`, configurables para fallar de forma determinista, sin importar SQLAlchemy
-- [ ] T064 [US6] Escribir en `tests/test_persistence_failures.py` los casos: caída en caliente con plan válido en curso, recuperación posterior, arranque sin plan válido con todas las salidas apagadas, y ausencia de registro repetido de la degradación. Reloj y `wait` inyectados
-- [ ] T065 [US6] Añadir a `tests/test_persistence_failures.py` el caso de base de datos que se llena durante una escritura: el plan activo y el estado de las salidas no se corrompen
-- [ ] T066 [US6] Escribir en `tests/test_state.py` el caso de dos escritores concurrentes de la copia local del plan activo: ningún lector observa un plan truncado ni mezclado, y la última escritura gana. Cubre el edge case corregido de `spec.md`
+- [X] T059 [US6] Implementar en `src/dynamic_thermal_charge/service.py` el tratamiento de `ConfigStoreUnavailableError` como **única** excepción transitoria: conserva el plan en ejecución y reintenta con la cadencia configurada, sin terminar el proceso
+- [X] T060 [US6] Registrar la entrada y la salida del estado degradado una sola vez por transición, nunca en cada iteración del bucle de control, en `src/dynamic_thermal_charge/service.py`
+- [X] T061 [US6] Recalcular el plan con la configuración vigente al recuperarse el acceso, registrando la recuperación, en `src/dynamic_thermal_charge/service.py`
+- [X] T062 [US6] Confirmar que las demás excepciones de dominio (`ConfigStoreEmptyError`, `SchemaVersionError`, `ConfigValidationError`) son terminales para la operación en curso y nunca activan una salida
+- [X] T063 [US6] Crear los dobles de prueba de los tres `Protocol` en `tests/conftest.py`, configurables para fallar de forma determinista, sin importar SQLAlchemy
+- [X] T064 [US6] Escribir en `tests/test_persistence_failures.py` los casos: caída en caliente con plan válido en curso, recuperación posterior, arranque sin plan válido con todas las salidas apagadas, y ausencia de registro repetido de la degradación. Reloj y `wait` inyectados
+- [X] T065 [US6] Añadir a `tests/test_persistence_failures.py` el caso de base de datos que se llena durante una escritura: el plan activo y el estado de las salidas no se corrompen
+- [X] T066 [US6] Escribir en `tests/test_state.py` el caso de dos escritores concurrentes de la copia local del plan activo: ningún lector observa un plan truncado ni mezclado, y la última escritura gana. Cubre el edge case corregido de `spec.md`
 
 **Checkpoint**: el modo de fallo que introduce PostgreSQL remoto está cubierto.
 
@@ -189,20 +189,20 @@ continuidad del proceso y el estado de las salidas.
 **Independent Test**: aplicar cambios válidos e inválidos y comprobar con `config show` qué
 quedó almacenado y qué se rechazó.
 
-- [ ] T067 [US3] Implementar `ConfigRepository.set_field()` en `repository.py` con bloqueo optimista por revisión: lee la revisión, valida la configuración completa resultante dentro de la transacción y escribe con `WHERE revision = <leída>` incrementándola (`research.md` D9)
-- [ ] T068 [US3] Implementar `add_heater()` y `remove_heater()` en `repository.py`. La baja arrastra salida y perfil térmico y **conserva el histórico**
-- [ ] T069 [US3] Registrar cada edición aplicada en `config_change` con revisión anterior y posterior, entidad, campo, valor anterior, valor nuevo, acción e instante
-- [ ] T070 [US3] Implementar el rechazo de valores con aspecto de credencial o de cadena de conexión en cualquier campo de configuración, en `src/dynamic_thermal_charge/persistence/repository.py`, indicando que los secretos se sirven por variable de entorno
-- [ ] T071 [US3] Implementar `dtc config set <campo> <valor> [--heater <id>]` en `cli.py`, informando del campo, su valor anterior y el nuevo
-- [ ] T072 [US3] Implementar `dtc config add-heater` en `cli.py` con las opciones de nombre, modelo, prioridad, carga objetivo, habilitación, tipo de salida, pin, nivel activo y campos del perfil térmico
-- [ ] T073 [US3] Implementar `dtc config remove-heater` en `cli.py`, exigiendo confirmación explícita salvo `--yes`
-- [ ] T074 [US3] Hacer en `src/dynamic_thermal_charge/cli.py` que un campo o un acumulador inexistente produzca un error que enumere los campos admitidos o los acumuladores existentes, sin modificar nada
-- [ ] T075 [US3] Escribir en `tests/test_persistence_repository.py` los casos de edición: campo de instalación, campo de acumulador que no toca a los demás, alta, baja con histórico conservado, y baja del último acumulador dejando una configuración válida con plan vacío
-- [ ] T076 [US3] Añadir a `tests/test_persistence_repository.py` los casos de rechazo: resolución de intervalo que desalinearía el horario ya configurado, pin ya usado por otro acumulador, identificador de acumulador duplicado, y valor que parece un secreto. En todos, el almacén queda **exactamente** como estaba
-- [ ] T077 [US3] Añadir a `tests/test_persistence_repository.py` la prueba de atomicidad: una interrupción a mitad de la edición deja la configuración anterior íntegra
-- [ ] T078 [US3] Añadir la prueba de conflicto concurrente: dos ediciones sobre la misma revisión, la segunda se rechaza con `ConfigConflictError` y no pierde silenciosamente la primera
-- [ ] T079 [US3] Añadir a `tests/test_persistence_repository.py` la prueba de que una edición no altera el plan en curso y toma efecto en el siguiente recálculo
-- [ ] T080 [US3] Cubrir en `tests/test_cli_config_commands.py` los códigos de salida `4`, `5`, `6`, `7` y `8` del contrato, y verificar que ningún comando de edición construye un driver de salida
+- [X] T067 [US3] Implementar `ConfigRepository.set_field()` en `repository.py` con bloqueo optimista por revisión: lee la revisión, valida la configuración completa resultante dentro de la transacción y escribe con `WHERE revision = <leída>` incrementándola (`research.md` D9)
+- [X] T068 [US3] Implementar `add_heater()` y `remove_heater()` en `repository.py`. La baja arrastra salida y perfil térmico y **conserva el histórico**
+- [X] T069 [US3] Registrar cada edición aplicada en `config_change` con revisión anterior y posterior, entidad, campo, valor anterior, valor nuevo, acción e instante
+- [X] T070 [US3] Implementar el rechazo de valores con aspecto de credencial o de cadena de conexión en cualquier campo de configuración, en `src/dynamic_thermal_charge/persistence/repository.py`, indicando que los secretos se sirven por variable de entorno
+- [X] T071 [US3] Implementar `dtc config set <campo> <valor> [--heater <id>]` en `cli.py`, informando del campo, su valor anterior y el nuevo
+- [X] T072 [US3] Implementar `dtc config add-heater` en `cli.py` con las opciones de nombre, modelo, prioridad, carga objetivo, habilitación, tipo de salida, pin, nivel activo y campos del perfil térmico
+- [X] T073 [US3] Implementar `dtc config remove-heater` en `cli.py`, exigiendo confirmación explícita salvo `--yes`
+- [X] T074 [US3] Hacer en `src/dynamic_thermal_charge/cli.py` que un campo o un acumulador inexistente produzca un error que enumere los campos admitidos o los acumuladores existentes, sin modificar nada
+- [X] T075 [US3] Escribir en `tests/test_persistence_repository.py` los casos de edición: campo de instalación, campo de acumulador que no toca a los demás, alta, baja con histórico conservado, y baja del último acumulador dejando una configuración válida con plan vacío
+- [X] T076 [US3] Añadir a `tests/test_persistence_repository.py` los casos de rechazo: resolución de intervalo que desalinearía el horario ya configurado, pin ya usado por otro acumulador, identificador de acumulador duplicado, y valor que parece un secreto. En todos, el almacén queda **exactamente** como estaba
+- [X] T077 [US3] Añadir a `tests/test_persistence_repository.py` la prueba de atomicidad: una interrupción a mitad de la edición deja la configuración anterior íntegra
+- [X] T078 [US3] Añadir la prueba de conflicto concurrente: dos ediciones sobre la misma revisión, la segunda se rechaza con `ConfigConflictError` y no pierde silenciosamente la primera
+- [X] T079 [US3] Añadir a `tests/test_persistence_repository.py` la prueba de que una edición no altera el plan en curso y toma efecto en el siguiente recálculo
+- [X] T080 [US3] Cubrir en `tests/test_cli_config_commands.py` los códigos de salida `4`, `5`, `6`, `7` y `8` del contrato, y verificar que ningún comando de edición construye un driver de salida
 
 **Checkpoint**: la instalación real se configura sin tocar la base de datos a mano.
 
@@ -215,16 +215,16 @@ quedó almacenado y qué se rechazó.
 **Independent Test**: ejecutar el controlador contra un plan conocido con reloj controlado y
 consultar el histórico resultante.
 
-- [ ] T081 [US4] Definir el `Protocol` `HistoryRecorder` en `persistence/__init__.py` según `contracts/repository.md`
-- [ ] T082 [US4] Implementar `record_forecast()` en `src/dynamic_thermal_charge/persistence/history.py`, guardando fecha, temperaturas, municipio cuando lo haya y el origen `aemet`, `simulated` o `fallback`
-- [ ] T083 [US4] Exponer en `src/dynamic_thermal_charge/weather.py` el origen efectivo de la previsión para que `record_forecast` distinga proveedor real de valor de reserva, sin añadir I/O al núcleo
-- [ ] T084 [US4] Implementar `record_plan()` en `history.py`, guardando el plan con su ventana, la revisión de configuración con la que se generó, la previsión asociada, sus intervalos y los minutos solicitados, asignados y no atendidos por acumulador
-- [ ] T085 [US4] Implementar `record_transition()` en `history.py`, insertando solo cuando el estado cambia y nunca para el estado inicial `OFF` del arranque
-- [ ] T086 [US4] Garantizar que **ningún** método de `HistoryRecorder` propaga excepciones: un fallo de escritura se registra como `ERROR` y devuelve un resultado nulo o vacío
-- [ ] T087 [US4] Inyectar `HistoryRecorder` en `service.py` y en `src/dynamic_thermal_charge/controller.py` sin cambiar su firma pública ni la de los drivers
-- [ ] T088 [US4] Escribir `tests/test_persistence_history.py`: plan registrado con su previsión y sus minutos no atendidos, previsión de reserva marcada como tal, transiciones registradas solo al cambiar, y estado inicial no registrado
-- [ ] T089 [US4] Añadir en `tests/test_persistence_failures.py` la prueba de que un fallo de escritura de histórico se registra como error y **no** interrumpe la planificación ni la conmutación de salidas
-- [ ] T090 [US4] Añadir a `tests/test_persistence_history.py` la prueba de reconstrucción completa: a partir solo del histórico se determina por qué cada acumulador cargó o no en una ventana concreta (SC-004)
+- [X] T081 [US4] Definir el `Protocol` `HistoryRecorder` en `persistence/__init__.py` según `contracts/repository.md`
+- [X] T082 [US4] Implementar `record_forecast()` en `src/dynamic_thermal_charge/persistence/history.py`, guardando fecha, temperaturas, municipio cuando lo haya y el origen `aemet`, `simulated` o `fallback`
+- [X] T083 [US4] Exponer en `src/dynamic_thermal_charge/weather.py` el origen efectivo de la previsión para que `record_forecast` distinga proveedor real de valor de reserva, sin añadir I/O al núcleo
+- [X] T084 [US4] Implementar `record_plan()` en `history.py`, guardando el plan con su ventana, la revisión de configuración con la que se generó, la previsión asociada, sus intervalos y los minutos solicitados, asignados y no atendidos por acumulador
+- [X] T085 [US4] Implementar `record_transition()` en `history.py`, insertando solo cuando el estado cambia y nunca para el estado inicial `OFF` del arranque
+- [X] T086 [US4] Garantizar que **ningún** método de `HistoryRecorder` propaga excepciones: un fallo de escritura se registra como `ERROR` y devuelve un resultado nulo o vacío
+- [X] T087 [US4] Inyectar `HistoryRecorder` en `service.py` y en `src/dynamic_thermal_charge/controller.py` sin cambiar su firma pública ni la de los drivers
+- [X] T088 [US4] Escribir `tests/test_persistence_history.py`: plan registrado con su previsión y sus minutos no atendidos, previsión de reserva marcada como tal, transiciones registradas solo al cambiar, y estado inicial no registrado
+- [X] T089 [US4] Añadir en `tests/test_persistence_failures.py` la prueba de que un fallo de escritura de histórico se registra como error y **no** interrumpe la planificación ni la conmutación de salidas
+- [X] T090 [US4] Añadir a `tests/test_persistence_history.py` la prueba de reconstrucción completa: a partir solo del histórico se determina por qué cada acumulador cargó o no en una ventana concreta (SC-004)
 
 **Checkpoint**: el histórico es auditable y no puede tumbar el control.
 
@@ -237,13 +237,13 @@ consultar el histórico resultante.
 **Independent Test**: con un histórico sembrado que abarca más que la retención y un reloj
 controlado, disparar la limpieza y comprobar qué sobrevive.
 
-- [ ] T091 [US5] Implementar `prune()` en `history.py` siguiendo la tabla «Alcance de la retención, por tabla» de `data-model.md`: elimina de `plan` (con `plan_slot` y `plan_allocation` en cascada), `forecast` y `output_transition`, **excluye `config_change`**, y devuelve el recuento por tabla
-- [ ] T092 [US5] Garantizar que `prune()` nunca elimina la configuración de la instalación ni ningún plan con `window_end > now`, según la regla de identificación del plan activo de `data-model.md`. Protege también los planes futuros ya calculados, no solo el más reciente
-- [ ] T093 [US5] Tratar la retención ilimitada como no eliminar nada, en `src/dynamic_thermal_charge/persistence/history.py`
-- [ ] T094 [US5] Invocar la limpieza en la inicialización y después de cada refresco de plan, sin temporizador dedicado (`research.md` D10), registrando cuántos registros se han eliminado
-- [ ] T095 [US5] Implementar `dtc history prune` en `cli.py`, informando del recuento eliminado
-- [ ] T096 [US5] Escribir `tests/test_persistence_retention.py`: eliminación por antigüedad con reloj controlado, conservación del plan activo y de la configuración, retención ilimitada, y reducción drástica de la retención que elimina un volumen grande sin bloquear la planificación
-- [ ] T097 [US5] Escribir en `tests/test_persistence_retention.py` la comprobación de volumen de SC-005, que hasta ahora no tenía ninguna tarea. Sembrar un año sintético de histórico para la instalación de referencia de cuatro acumuladores y comprobar que el tamaño del fichero SQLite resultante no supera el límite declarado en `research.md` D10
+- [X] T091 [US5] Implementar `prune()` en `history.py` siguiendo la tabla «Alcance de la retención, por tabla» de `data-model.md`: elimina de `plan` (con `plan_slot` y `plan_allocation` en cascada), `forecast` y `output_transition`, **excluye `config_change`**, y devuelve el recuento por tabla
+- [X] T092 [US5] Garantizar que `prune()` nunca elimina la configuración de la instalación ni ningún plan con `window_end > now`, según la regla de identificación del plan activo de `data-model.md`. Protege también los planes futuros ya calculados, no solo el más reciente
+- [X] T093 [US5] Tratar la retención ilimitada como no eliminar nada, en `src/dynamic_thermal_charge/persistence/history.py`
+- [X] T094 [US5] Invocar la limpieza en la inicialización y después de cada refresco de plan, sin temporizador dedicado (`research.md` D10), registrando cuántos registros se han eliminado
+- [X] T095 [US5] Implementar `dtc history prune` en `cli.py`, informando del recuento eliminado
+- [X] T096 [US5] Escribir `tests/test_persistence_retention.py`: eliminación por antigüedad con reloj controlado, conservación del plan activo y de la configuración, retención ilimitada, y reducción drástica de la retención que elimina un volumen grande sin bloquear la planificación
+- [X] T097 [US5] Escribir en `tests/test_persistence_retention.py` la comprobación de volumen de SC-005, que hasta ahora no tenía ninguna tarea. Sembrar un año sintético de histórico para la instalación de referencia de cuatro acumuladores y comprobar que el tamaño del fichero SQLite resultante no supera el límite declarado en `research.md` D10
 
 **Checkpoint**: el histórico está acotado. La feature es funcionalmente completa.
 
@@ -253,17 +253,17 @@ controlado, disparar la limpieza y comprobar qué sobrevive.
 
 **Purpose**: dejar utilizable la Raspberry Pi ya desplegada y la documentación coherente.
 
-- [ ] T098 [P] Añadir `DTC_DATABASE_URL` a `deploy/environment.example` con ejemplos de ambos motores y el recordatorio del modo `0600`
-- [ ] T099 Actualizar `deploy/systemd/dynamic-thermal-charge.service`: `ExecStart` sin ruta de configuración, `ExecStartPre` que valide configuración y esquema, y `ReadWritePaths` que cubra el directorio de la base de datos
-- [ ] T100 Actualizar `scripts/install-service.sh` conforme al FR-030 corregido: instalar el extra `db`, crear `/var/lib/dynamic-thermal-charge` con el propietario correcto, imprimir al terminar el único comando de inicialización que el operador debe ejecutar, y **no** ejecutar `db init` automáticamente si detecta un `config.yaml` previo, para no interponer datos de ejemplo entre el operador y la configuración real que va a reintroducir
-- [ ] T101 Ampliar `tests/test_deployment.py` para verificar la unidad y el instalador nuevos, incluida la ausencia de ruta de configuración en `ExecStart`
-- [ ] T102 Reescribir la sección de configuración de `README.md`: origen en base de datos, ambos motores, `DTC_DATABASE_URL`, y los comandos `db`, `config` y `history`
-- [ ] T103 Añadir a `README.md` el procedimiento de actualización desde una versión con YAML, con el aviso **explícito** de que la configuración debe reintroducirse a mano porque no existe importación automática, y el énfasis en verificar pines BCM, `active_high` y potencia máxima antes de conectar hardware (FR-031)
-- [ ] T104 [P] Enlazar la constitución desde `README.md`, resolviendo el punto que quedó pendiente en su Sync Impact Report. **No mapea a ningún requisito de esta feature**: es deuda de documentación heredada, y su omisión no afecta a la definición de fase completa
-- [ ] T105 Escribir `tests/test_postgres_compat.py` con el marcador `postgres`, omitida salvo que exista `DTC_TEST_POSTGRES_URL`: mismo esquema, misma semilla y mismo plan que en SQLite
-- [ ] T106 Escribir en `tests/test_persistence_schema.py` la comprobación de equivalencia entre dialectos que **corre siempre y sin servidor**: compilar el mismo conjunto de sentencias del esquema y de las consultas del repositorio contra los dialectos de SQLite y de PostgreSQL y verificar que ambas compilan y son equivalentes. Es la mitad de SC-002 que no dependía de un servidor y que faltaba
+- [X] T098 [P] Añadir `DTC_DATABASE_URL` a `deploy/environment.example` con ejemplos de ambos motores y el recordatorio del modo `0600`
+- [X] T099 Actualizar `deploy/systemd/dynamic-thermal-charge.service`: `ExecStart` sin ruta de configuración, `ExecStartPre` que valide configuración y esquema, y `ReadWritePaths` que cubra el directorio de la base de datos
+- [X] T100 Actualizar `scripts/install-service.sh` conforme al FR-030 corregido: instalar el extra `db`, crear `/var/lib/dynamic-thermal-charge` con el propietario correcto, imprimir al terminar el único comando de inicialización que el operador debe ejecutar, y **no** ejecutar `db init` automáticamente si detecta un `config.yaml` previo, para no interponer datos de ejemplo entre el operador y la configuración real que va a reintroducir
+- [X] T101 Ampliar `tests/test_deployment.py` para verificar la unidad y el instalador nuevos, incluida la ausencia de ruta de configuración en `ExecStart`
+- [X] T102 Reescribir la sección de configuración de `README.md`: origen en base de datos, ambos motores, `DTC_DATABASE_URL`, y los comandos `db`, `config` y `history`
+- [X] T103 Añadir a `README.md` el procedimiento de actualización desde una versión con YAML, con el aviso **explícito** de que la configuración debe reintroducirse a mano porque no existe importación automática, y el énfasis en verificar pines BCM, `active_high` y potencia máxima antes de conectar hardware (FR-031)
+- [X] T104 [P] Enlazar la constitución desde `README.md`, resolviendo el punto que quedó pendiente en su Sync Impact Report. **No mapea a ningún requisito de esta feature**: es deuda de documentación heredada, y su omisión no afecta a la definición de fase completa
+- [X] T105 Escribir `tests/test_postgres_compat.py` con el marcador `postgres`, omitida salvo que exista `DTC_TEST_POSTGRES_URL`: mismo esquema, misma semilla y mismo plan que en SQLite
+- [X] T106 Escribir en `tests/test_persistence_schema.py` la comprobación de equivalencia entre dialectos que **corre siempre y sin servidor**: compilar el mismo conjunto de sentencias del esquema y de las consultas del repositorio contra los dialectos de SQLite y de PostgreSQL y verificar que ambas compilan y son equivalentes. Es la mitad de SC-002 que no dependía de un servidor y que faltaba
 - [ ] T107 **MANUAL, requiere hardware — diferida, fuera del criterio de fase completa.** Medir en la Raspberry Pi el coste de arranque y la memoria residente frente al presupuesto declarado de <5 s y <80 MB, y anotar el resultado real en `research.md` D13. No es un test y no forma parte de la suite: el Principio V prohíbe tests que requieran Raspberry Pi. `/speckit-implement` debe dejarla sin marcar
-- [ ] T108 Ejecutar `pytest` completo y confirmar que pasa sin red, sin PostgreSQL y sin hardware
+- [X] T108 Ejecutar `pytest` completo y confirmar que pasa sin red, sin PostgreSQL y sin hardware
 
 ---
 

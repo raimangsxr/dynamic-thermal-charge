@@ -231,6 +231,22 @@ un temporizador propio.
 | `config_change` (auditoría de ediciones) | ~0 | decenas |
 | **Total** | **~75** | **~27 000** |
 
+**Medición real tras implementar** (SQLite 3.45.3, instalación sembrada de cuatro
+acumuladores, 365 noches sintéticas):
+
+| Tabla | Filas medidas |
+| --- | ---: |
+| `forecast` | 365 |
+| `plan` | 365 |
+| `plan_slot` | 23 360 |
+| `plan_allocation` | 1 460 |
+| `output_transition` | 2 920 |
+| **Total** | **28 470** |
+
+Tamaño en disco, incluidos los ficheros WAL: **3,70 MB**. La estimación previa de
+~27 000 filas era correcta. `tests/test_persistence_retention.py` fija el límite en 10 MB,
+con margen suficiente para que un cambio de esquema no lo rompa por sorpresa.
+
 Del orden de unos pocos megabytes al año: irrelevante para la tarjeta de la Pi. El riesgo
 real no es el volumen esperado sino el descontrolado (un bucle de refresco mal configurado),
 y para eso basta la retención por defecto. Añadir un temporizador dedicado sería complejidad
@@ -292,8 +308,21 @@ declarado y verificable en el despliegue:
 
 - Tiempo añadido al arranque: **< 5 s** en la Pi 2B (extrapolado de 157 ms medidos × 20,
   con margen).
-- Memoria residente del proceso de servicio: **< 80 MB** (medido: 36 MB con Core importado
-  sobre 9 MB de base; el resto es margen para el pool de conexiones y los datos).
+- Memoria residente del proceso de servicio: **< 80 MB**.
+
+**Medición real tras implementar**, en la máquina de desarrollo:
+
+| Medida | Valor |
+| --- | ---: |
+| `dtc --help` (en caliente) | 0,12 s |
+| `dtc config show` completo, incluida la conexión | 0,26 s |
+| RSS importando solo el núcleo (`scheduler`, `thermal`) | ~27,5 MB |
+| RSS con la pila de persistencia cargada | ~45 MB |
+
+Confirmado además que importar el núcleo **no** carga `sqlalchemy`: la importación perezosa
+funciona, y por eso `--help` y los errores de argumentos no pagan el coste. Extrapolado ×20,
+la Pi 2B debería quedar en torno a 5 s para `config show` y bien por debajo del presupuesto
+de 80 MB. Queda pendiente la medición en el hardware real (tarea T107, manual).
 
 Sobre 1 GB de RAM, ~4 % de memoria. El arranque es un coste que se paga una vez cada varios
 meses. Si la medición en la Pi excediera el presupuesto, la vía de escape es reducir el

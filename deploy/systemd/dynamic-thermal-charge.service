@@ -12,8 +12,10 @@ WorkingDirectory=/var/lib/dynamic-thermal-charge
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
 EnvironmentFile=/etc/dynamic-thermal-charge/environment
-ExecStartPre=/opt/dynamic-thermal-charge/venv/bin/dynamic-thermal-charge /etc/dynamic-thermal-charge/config.yaml --check-config
-ExecStart=/opt/dynamic-thermal-charge/venv/bin/dynamic-thermal-charge /etc/dynamic-thermal-charge/config.yaml --run-controller
+# Configuration comes from DTC_DATABASE_URL, set in the environment file above.
+# There is no configuration file argument any more.
+ExecStartPre=/opt/dynamic-thermal-charge/venv/bin/dynamic-thermal-charge run --check-config
+ExecStart=/opt/dynamic-thermal-charge/venv/bin/dynamic-thermal-charge run --controller
 Restart=on-failure
 RestartSec=30s
 TimeoutStopSec=30s
@@ -29,6 +31,7 @@ ProtectKernelModules=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
 LockPersonality=true
+# Holds the local SQLite database and its WAL sidecars, plus the active plan cache.
 ReadWritePaths=/var/lib/dynamic-thermal-charge
 
 [Install]

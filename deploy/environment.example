@@ -1,3 +1,18 @@
 # Copy to /etc/dynamic-thermal-charge/environment with mode 0600.
-# Never commit a real key.
+# Never commit real credentials. This file is the only place a secret lives:
+# neither the connection string nor the API key is ever written to the database,
+# to the repository, or to the logs.
+
+# Where the configuration lives. Required; the service will not start without it.
+#
+# Local database on the device itself (the default for a Raspberry Pi):
+DTC_DATABASE_URL=sqlite:////var/lib/dynamic-thermal-charge/dynamic-thermal-charge.db
+#
+# Remote PostgreSQL. Always external to the device: installing a database engine
+# on a Raspberry Pi 2B is ruled out by its resources. The driver is pg8000, the
+# only one installable on ARMv7 without a compiler; install it with the
+# "postgres" extra.
+#DTC_DATABASE_URL=postgresql+pg8000://dtc:PASSWORD@database.example.lan:5432/dtc
+
+# AEMET OpenData key. The configuration stores only the NAME of this variable.
 AEMET_API_KEY=

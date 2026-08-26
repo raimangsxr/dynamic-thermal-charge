@@ -1,157 +1,160 @@
-from pathlib import Path
+"""Configuration validation, whatever its origin: FR-007, FR-008, FR-009."""
+
+from __future__ import annotations
+
+# --------------------------------------------------------------------------- #
+# Origin-independent validation (FR-007, FR-008, FR-009)
+#
+# The YAML loader and its file-based cases are gone: configuration now comes from
+# the database and these are the invariants that survive, whatever the origin.
+# --------------------------------------------------------------------------- #
+
+from datetime import time as _time
 
 import pytest
 
-from dynamic_thermal_charge.config import load_config
+from dynamic_thermal_charge.config import validate_config, validate_heaters
+from dynamic_thermal_charge.models import (
+    AppConfig as _AppConfig,
+    Heater as _Heater,
+    OutputConfig as _OutputConfig,
+    ScheduleConfig as _ScheduleConfig,
+    SimulatedForecastConfig as _SimulatedForecastConfig,
+    SiteConfig as _SiteConfig,
+    ThermalProfile as _ThermalProfile,
+    WeatherConfig as _WeatherConfig,
+)
+from dynamic_thermal_charge.persistence import ConfigValidationError
 
 
-def test_loads_example_configuration() -> None:
-    config = load_config(Path(__file__).parents[1] / "examples" / "home.yaml")
-
-    assert config.site.max_total_power_w == 5500
-    assert config.site.slot_minutes == 30
-    assert config.logging.level == "INFO"
-    assert [heater.id for heater in config.heaters] == [
-        "salon",
-        "entrada",
-        "habitaciones",
-        "buhardilla",
-    ]
-    assert config.heaters[0].requested_charge_minutes == 360
-
-
-def test_rejects_duplicate_heater_ids(tmp_path: Path) -> None:
-    config_file = tmp_path / "duplicate.yaml"
-    config_file.write_text(
-        """
-site: {max_total_power_kw: 5, slot_minutes: 30, window_hours: 8}
-heaters:
-  - {id: same, power_kw: 1, full_charge_hours: 8}
-  - {id: same, power_kw: 1, full_charge_hours: 8}
-""",
-        encoding="utf-8",
+def _validator_heater(
+    heater_id="salon",
+    *,
+    kind="simulated",
+    pin=None,
+    thermal=None,
+):
+    return _Heater(
+        id=heater_id,
+        name=heater_id,
+        power_w=1500,
+        full_charge_minutes=480,
+        target_charge=1.0,
+        priority=0,
+        thermal=thermal,
+        output=_OutputConfig(kind=kind, pin=pin),
     )
 
-    with pytest.raises(ValueError, match="unique"):
-        load_config(config_file)
 
-
-def test_rejects_unknown_log_level(tmp_path: Path) -> None:
-    config_file = tmp_path / "logging.yaml"
-    config_file.write_text(
-        """
-logging: {level: VERBOSE}
-site: {max_total_power_kw: 5, slot_minutes: 30, window_hours: 8}
-heaters:
-  - {id: one, power_kw: 1, full_charge_hours: 8}
-""",
-        encoding="utf-8",
+def _validator_config(heaters=None, *, schedule=None, weather=None, slot_minutes=30):
+    return _AppConfig(
+        site=_SiteConfig(
+            max_total_power_w=6000,
+            slot_minutes=slot_minutes,
+            window_minutes=480,
+        ),
+        heaters=heaters or (_validator_heater(),),
+        schedule=schedule,
+        weather=weather,
     )
 
-    with pytest.raises(ValueError, match="unsupported log level"):
-        load_config(config_file)
+
+def test_validator_accepts_a_coherent_installation():
+    validate_config(_validator_config())
 
 
-def test_rejects_slots_that_do_not_align_with_the_clock(tmp_path: Path) -> None:
-    config_file = tmp_path / "slots.yaml"
-    config_file.write_text(
-        """
-site: {max_total_power_kw: 5, slot_minutes: 45, window_hours: 9}
-heaters:
-  - {id: one, power_kw: 1, full_charge_hours: 8}
-""",
-        encoding="utf-8",
+def test_duplicate_gpio_pin_names_both_heaters():
+    heaters = (
+        _validator_heater("salon", kind="gpio", pin=17),
+        _validator_heater("entrada", kind="gpio", pin=17),
+    )
+    with pytest.raises(ConfigValidationError) as error:
+        validate_heaters(heaters)
+    message = str(error.value)
+    assert "17" in message
+    assert "salon" in message and "entrada" in message
+    assert error.value.field == "pin"
+    assert error.value.heater_id == "entrada"
+
+
+def test_distinct_gpio_pins_are_accepted():
+    validate_heaters(
+        (
+            _validator_heater("salon", kind="gpio", pin=17),
+            _validator_heater("entrada", kind="gpio", pin=18),
+        )
     )
 
-    with pytest.raises(ValueError, match="divisor of 60"):
-        load_config(config_file)
+
+def test_several_simulated_outputs_without_a_pin_do_not_clash():
+    validate_heaters((_validator_heater("salon"), _validator_heater("entrada")))
 
 
-def test_loads_raspberry_pi_deployment_configuration() -> None:
-    config = load_config(
-        Path(__file__).parents[1] / "examples" / "raspberry-pi.yaml"
+def test_duplicate_heater_id_is_reported_with_the_offending_id():
+    with pytest.raises(ConfigValidationError) as error:
+        validate_heaters((_validator_heater("salon"), _validator_heater("salon")))
+    assert "salon" in str(error.value)
+    assert error.value.field == "heater_id"
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "slot_minutes", "offending"),
+    [
+        (_time(0, 17), _time(8, 0), 30, "start_time"),
+        (_time(0, 0), _time(8, 17), 30, "end_time"),
+        (_time(0, 20), _time(8, 0), 30, "start_time"),
+    ],
+)
+def test_schedule_must_align_with_slot_minutes(start, end, slot_minutes, offending):
+    schedule = _ScheduleConfig(
+        timezone="Europe/Madrid",
+        start_time=start,
+        end_time=end,
+        weekdays=(0, 1, 2, 3, 4, 5, 6),
     )
-
-    assert config.schedule is not None
-    assert config.schedule.timezone == "Europe/Madrid"
-    assert config.schedule.window_minutes == 480
-    assert config.site.window_minutes == 480
-    assert config.weather is not None
-    assert config.weather.provider == "aemet"
-    assert config.weather.aemet is not None
-    assert len(config.weather.aemet.municipality_code) == 5
-    assert config.weather.aemet.municipality_code.isdigit()
-    assert config.weather.fallback is not None
-    assert config.weather.fallback.average_temperature_c == 8.0
-    assert config.weather.watchdog.retry_minutes == 15
-    assert config.weather.watchdog.refresh_minutes == 180
-    assert config.runtime.poll_seconds == 5
-    assert config.runtime.state_file.endswith("var/active-plan.json")
-    assert [heater.output.pin for heater in config.heaters] == [17, 18, 22, 23]
-    assert all(heater.output.kind == "gpio" for heater in config.heaters)
-    assert all(not heater.output.active_high for heater in config.heaters)
-    assert all(heater.thermal is not None for heater in config.heaters)
+    with pytest.raises(ConfigValidationError) as error:
+        validate_config(_validator_config(schedule=schedule, slot_minutes=slot_minutes))
+    assert error.value.field == offending
+    assert str(slot_minutes) in str(error.value)
 
 
-def test_rejects_duplicate_gpio_pins(tmp_path: Path) -> None:
-    config_file = tmp_path / "gpio.yaml"
-    config_file.write_text(
-        """
-site: {max_total_power_kw: 5, slot_minutes: 30, window_hours: 8}
-heaters:
-  - id: one
-    power_kw: 1
-    full_charge_hours: 8
-    output: {type: gpio, pin: 17}
-  - id: two
-    power_kw: 1
-    full_charge_hours: 8
-    output: {type: gpio, pin: 17}
-""",
-        encoding="utf-8",
+def test_an_aligned_schedule_is_accepted():
+    schedule = _ScheduleConfig(
+        timezone="Europe/Madrid",
+        start_time=_time(0, 0),
+        end_time=_time(8, 0),
+        weekdays=(0, 1, 2, 3, 4, 5, 6),
     )
-
-    with pytest.raises(ValueError, match="GPIO BCM pins must be unique"):
-        load_config(config_file)
+    validate_config(_validator_config(schedule=schedule))
 
 
-def test_rejects_schedule_not_aligned_with_slots(tmp_path: Path) -> None:
-    config_file = tmp_path / "schedule.yaml"
-    config_file.write_text(
-        """
-schedule:
-  timezone: Europe/Madrid
-  start_time: "00:15"
-  end_time: "08:15"
-  weekdays: [monday]
-site: {max_total_power_kw: 5, slot_minutes: 30}
-heaters:
-  - {id: one, power_kw: 1, full_charge_hours: 8}
-""",
-        encoding="utf-8",
+def test_a_thermal_profile_requires_a_weather_provider():
+    thermal = _ThermalProfile(
+        target_temperature_c=21.0, design_outdoor_temperature_c=-2.0
     )
-
-    with pytest.raises(ValueError, match="start_time must align"):
-        load_config(config_file)
-
-
-def test_requires_weather_when_thermal_profiles_are_configured(
-    tmp_path: Path,
-) -> None:
-    config_file = tmp_path / "thermal.yaml"
-    config_file.write_text(
-        """
-site: {max_total_power_kw: 5, slot_minutes: 30, window_hours: 8}
-heaters:
-  - id: one
-    power_kw: 1
-    full_charge_hours: 8
-    thermal:
-      target_temperature_c: 21
-      design_outdoor_temperature_c: 0
-""",
-        encoding="utf-8",
+    # AppConfig itself refuses to be built without weather, so the cross-table
+    # rule is checked on a configuration whose weather was dropped afterwards.
+    config = _validator_config(
+        heaters=(_validator_heater(thermal=thermal),),
+        weather=_WeatherConfig(
+            provider="simulated",
+            simulated=_SimulatedForecastConfig(
+                average_temperature_c=8.0, minimum_temperature_c=3.0
+            ),
+        ),
     )
+    validate_config(config)
 
-    with pytest.raises(ValueError, match="require a weather provider"):
-        load_config(config_file)
+    stripped = object.__new__(_AppConfig)
+    object.__setattr__(stripped, "site", config.site)
+    object.__setattr__(stripped, "heaters", config.heaters)
+    object.__setattr__(stripped, "schedule", None)
+    object.__setattr__(stripped, "weather", None)
+    with pytest.raises(ConfigValidationError) as error:
+        validate_config(stripped)
+    assert error.value.field == "weather"
+
+
+def test_validation_error_prefixes_the_heater_when_it_knows_it():
+    error = ConfigValidationError("pin 17 is taken", field="pin", heater_id="entrada")
+    assert str(error) == "heater entrada: pin 17 is taken"
