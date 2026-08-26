@@ -7,3 +7,9 @@ dist/
 build/
 *.egg-info/
 /var/
+
+# Frontend: 253 MB de dependencias y el artefacto compilado. Ninguno de los dos
+# entra en el repositorio; el dist se compila fuera del dispositivo y se copia.
+frontend/node_modules/
+frontend/dist/
+frontend/.angular/
