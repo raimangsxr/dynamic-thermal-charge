@@ -24,8 +24,29 @@ retención.
 | `plan_id` | entero, FK → `plan.id` | sí | `ON DELETE SET NULL`. Plan que está ejecutando |
 | `poll_seconds` | real | no | > 0. Sondeo vigente, para que la API derive la tolerancia |
 | `driver_kind` | texto | no | `simulated` o `gpio`. Con qué driver arrancó |
+| `runner_id` | texto | no | identificador del proceso que publica. Cambia en cada arranque |
 
-Restricción única sobre `installation_id`: hay como máximo un controlador por instalación.
+Restricción única sobre `installation_id`: **una sola fila**, que todos los controladores que
+apunten a esta base de datos comparten.
+
+**Cómo se detecta un segundo controlador (FR-053).** La restricción única no impide que dos
+procesos escriban: hace que se pisen sobre la misma fila. Sin más información, dos controladores
+conmutando los mismos relés se verían exactamente igual que uno sano, y ese es el peor resultado
+posible para un panel.
+
+De ahí `runner_id`, un identificador aleatorio que el controlador genera **al arrancar** y
+mantiene mientras vive. La API lo observa entre consultas consecutivas:
+
+```text
+runner_id estable                            -> un solo controlador
+runner_id cambia y started_at avanza         -> reinicio, normal
+runner_id alterna entre dos valores, o
+  started_at retrocede                       -> MÁS DE UN CONTROLADOR: se señala
+```
+
+Un `started_at` que retrocede es la señal barata: un proceso arrancado antes no puede empezar a
+publicar después de otro más nuevo salvo que ambos estén vivos. La API expone el aviso; no
+intenta arbitrar ni parar a nadie, porque no tiene ni debe tener ese poder.
 
 **Por qué una tabla y no un fichero** (research D3): con PostgreSQL remoto, la API y el
 controlador pueden vivir en máquinas distintas, y un fichero de latido no cruza esa frontera.
@@ -41,6 +62,11 @@ con el que el controlador está funcionando de verdad.
 de «lleva tres meses en marcha» es información de diagnóstico que el operador necesita, y saber
 si arrancó en modo simulado o con GPIO real evita la confusión de ver un plan ejecutándose sin
 que ningún relé se mueva.
+
+**`plan_id` y la retención**: la retención puede borrar el plan al que apunta `plan_id`, que
+queda a `NULL` por su `ON DELETE SET NULL`. No tiene consecuencia práctica, porque el plan vivo
+está protegido de la retención por la regla de la fase anterior; se documenta para que no parezca
+un descuido.
 
 **Escrituras**: una por `poll_seconds`, 5 s por defecto, siempre sobre la misma fila. Del orden
 de 17 000 actualizaciones al día que no hacen crecer la base de datos. Un fallo al escribir el
@@ -127,8 +153,20 @@ superficie de red.
 
 ### Histórico
 
-- **Page**: los elementos, el rango temporal cubierto, el tamaño de página aplicado y si hay más
-  resultados.
+- **Page**: los elementos, el rango temporal cubierto, el tamaño de página aplicado, si hay más
+  resultados y el cursor de continuación.
+
+**Definición del cursor.** Es un valor **opaco** para el cliente, que codifica el par
+`(instante, id)` del último elemento devuelto. La consulta siguiente pide los elementos
+estrictamente anteriores a ese par, en el orden descendente ya establecido.
+
+Se elige el par y no un desplazamiento numérico porque el histórico recibe inserciones mientras
+se pagina: con un desplazamiento, un plan nuevo insertado entre dos páginas desplazaría todo y el
+cliente vería un elemento repetido o se saltaría otro. El `id` desempata dos registros con el
+mismo instante, que es un caso real cuando varias transiciones ocurren en el mismo segundo.
+
+Un cursor ilegible o manipulado se rechaza como petición inválida; no se ignora en silencio, que
+devolvería la primera página como si nada hubiera pasado.
 - **PlanHistoryItem**, **ForecastHistoryItem**, **TransitionHistoryItem**: proyecciones de solo
   lectura del histórico ya definido.
 

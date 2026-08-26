@@ -2,7 +2,10 @@
 
 **Feature**: `002-config-api`
 
-Todas las rutas viven bajo `/api/v1`. Todas exigen credencial. Ninguna acciona una salida.
+Todas las rutas viven bajo `/api/v1`. **Todas exigen credencial excepto una**, la comprobación
+de salud, que está acotada por FR-052 y no revela nada. La descripción autodescriptiva (`/docs`
+y `/openapi.json`) **sí exige credencial**: enumera la superficie de la API y nadie la necesita
+sin autenticar. Ninguna ruta acciona una salida.
 
 ## Autenticación
 
@@ -77,7 +80,8 @@ El estado del momento. La operación central, pensada para consultarse cada poco
     "started_at": "2026-01-15T22:00:00Z",
     "degraded": false,
     "driver_kind": "gpio",
-    "state_is_current": true
+    "state_is_current": true,
+    "multiple_controllers_suspected": false
   },
   "power": { "instant_w": 5200, "limit_w": 5200, "percent_of_limit": 100.0 },
   "heaters": [
@@ -116,6 +120,11 @@ vigencia es `stale` o `never_seen`. En ese caso:
 
 `plan` es `null` cuando ninguna ventana contiene el instante de la consulta: no se devuelve el
 último plan pasado como si estuviera vigente.
+
+`multiple_controllers_suspected` a `true` señala que más de un controlador parece estar operando
+contra esta base de datos (FR-053). Dos procesos conmutando los mismos relés es un riesgo
+eléctrico; la API lo señala pero **no** intenta arbitrar ni detener a ninguno, porque no tiene ni
+debe tener ese poder.
 
 ### `GET /api/v1/config` · `GET /api/v1/config/heaters/{id}`
 
@@ -156,7 +165,11 @@ Baja. Arrastra salida y perfil térmico; **conserva el histórico**.
 | `cursor` | — | — |
 
 Orden del más reciente al más antiguo. Respuesta con `items`, `limit_applied`, `has_more` y
-`next_cursor`. Un rango vacío devuelve una página vacía; `from > to` devuelve **400**. Un
+`next_cursor`.
+
+El `cursor` es **opaco**: codifica el par `(instante, id)` del último elemento devuelto, no un
+desplazamiento, para que una inserción entre dos páginas no provoque elementos repetidos ni
+saltados. Un cursor ilegible o manipulado devuelve **400**, nunca la primera página en silencio. Un rango vacío devuelve una página vacía; `from > to` devuelve **400**. Un
 `limit` mayor que el máximo se acota y `limit_applied` lo refleja.
 
 `GET /api/v1/history/transitions` admite además `heater_id`, y sigue devolviendo transiciones de
@@ -175,8 +188,8 @@ para que systemd y un proxy puedan comprobar el proceso sin repartir el token.
 
 ### `GET /docs` · `GET /openapi.json`
 
-Descripción autodescriptiva, derivada de lo realmente servido. No contiene secretos ni valores
-reales de configuración.
+Descripción autodescriptiva, derivada de lo realmente servido. **Exige credencial** como
+cualquier otra operación. No contiene secretos ni valores reales de configuración.
 
 ## Lo que la API NO hace
 
@@ -186,3 +199,4 @@ reales de configuración.
   estructura de la base de datos. Queda en la CLI.
 - **No** sirve ficheros estáticos de interfaz.
 - **No** expone `DTC_DATABASE_URL`, `DTC_API_TOKEN` ni el valor de `AEMET_API_KEY`.
+- **No** arbitra entre controladores: si detecta más de uno, lo señala y nada más.

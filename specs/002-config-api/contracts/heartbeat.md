@@ -11,7 +11,8 @@ saber si lo que lee es actual.
 HeartbeatPublisher (Protocol)
 
     publish(now, degraded, plan_ref, poll_seconds, driver_kind) -> None
-        Registra que el controlador está vivo en este instante.
+        Registra que el controlador está vivo en este instante, junto con su
+        runner_id y su started_at, fijados al construir el publicador.
         NUNCA propaga una excepción: un fallo se registra como error y el
         control continúa. Misma regla que HistoryRecorder.
 
@@ -57,3 +58,23 @@ tiene prueba de nada.
 
 Es la misma asimetría del `HistoryRecorder` de la fase anterior: sin configuración no se puede
 decidir qué relé cerrar; sin observabilidad, sí.
+
+## Detección de más de un controlador
+
+El latido lleva un `runner_id` aleatorio, generado **al arrancar** el controlador y estable
+mientras vive, y su `started_at`. Con una sola fila compartida, dos controladores se pisan y sin
+esta información se verían igual que uno sano.
+
+```text
+runner_id estable entre consultas          -> un solo controlador
+runner_id nuevo y started_at posterior     -> reinicio, normal
+started_at retrocede, o el runner_id
+  alterna entre dos valores                -> más de un controlador: se señala
+```
+
+`started_at` retrocediendo es la señal barata y suficiente: un proceso arrancado antes no puede
+publicar después de otro más nuevo, salvo que los dos estén vivos.
+
+La API **solo señala**. No intenta arbitrar, ni parar procesos, ni marcar el estado como no
+vigente por esta causa: la información sigue siendo tan válida como antes, pero quien la lee
+necesita saber que hay dos manos en los mismos relés.

@@ -269,11 +269,26 @@ API y se comprueba el recuento y qué sobrevive.
   respondiendo sin degradar el controlador, que es un proceso distinto.
 - La API arranca antes de que la base de datos esté inicializada: informa de que falta
   inicializarla en lugar de fallar de forma opaca.
+- **Dos controladores operan contra la misma base de datos**, por ejemplo tras un despliegue
+  duplicado o un contenedor olvidado: la situación se señala en lugar de presentar uno de ellos
+  como el único controlador. Dos procesos conmutando los mismos relés es un riesgo eléctrico, y
+  el peor resultado posible es que el panel muestre normalidad.
+- Un controlador se reinicia: su instante de arranque cambia hacia adelante y eso es normal. Un
+  instante de arranque que cambia **hacia atrás** no lo es, y se trata como indicio de un
+  segundo controlador.
+- La descripción autodescriptiva se solicita sin credencial: se rechaza como cualquier otra
+  operación. Enumerar la superficie de la API no es una necesidad de nadie sin autenticar.
 
 ## Requirements *(mandatory)*
 
 > **Nota de orden**: los bloques agrupan por tema, y la numeración es corrida dentro de cada
-> bloque en el orden en que aparecen.
+> bloque en el orden en que aparecen. FR-052 y FR-053 se añadieron al cerrar la revisión de
+> consistencia y se colocaron en su bloque temático, no al final; FR-048b se numeró así para no
+> desplazar los requisitos de despliegue ya referenciados en `plan.md` y `tasks.md`.
+>
+> **Nota de terminología**: esta especificación habla de «credencial» porque es agnóstica del
+> mecanismo. Los contratos y las tareas la llaman «token», que es la concreción elegida en
+> `plan.md`. Son la misma cosa.
 
 ### Functional Requirements
 
@@ -289,14 +304,18 @@ API y se comprueba el recuento y qué sobrevive.
   para accionarla. El control de salidas queda exclusivamente en el controlador fail-safe.
 - **FR-005**: En esta fase la API MUST NOT ofrecer ninguna operación de forzado manual, boost
   ni anulación del plan.
-- **FR-006**: La dirección y el puerto de escucha MUST ser configurables, con un valor por
-  defecto que no exponga el servicio más allá de lo necesario.
+- **FR-006**: La dirección y el puerto de escucha MUST ser configurables, y la dirección por
+  defecto MUST ser únicamente la interfaz local del propio dispositivo: exponer la API en la
+  red MUST requerir un acto explícito de quien la despliega.
 
 **Autenticación**
 
 - **FR-007**: Toda operación de la API MUST exigir una credencial compartida, obtenida de una
   variable de entorno nombrada, servida por el mismo mecanismo protegido que ya sirve los
-  demás secretos del despliegue.
+  demás secretos del despliegue. La **única** excepción admitida es la comprobación de salud
+  descrita en FR-052, que por definición no revela nada. La descripción autodescriptiva de
+  FR-042 **sí** exige credencial: enumera la superficie de la API y no hace falta sin
+  autenticar.
 - **FR-008**: La credencial MUST NOT almacenarse en la base de datos, en el repositorio ni en
   los logs, y MUST NOT aparecer en ninguna respuesta de la API.
 - **FR-009**: Una petición sin credencial o con credencial incorrecta MUST rechazarse sin
@@ -309,6 +328,11 @@ API y se comprueba el recuento y qué sobrevive.
   escuchando en ese caso.
 - **FR-012**: Los intentos rechazados MUST registrarse sin incluir el valor de la credencial
   ofrecida.
+- **FR-052**: La API MUST ofrecer una comprobación de salud **sin credencial**, para que el
+  gestor de servicios y un proxy puedan verificar el proceso sin repartir el secreto. Esa
+  comprobación MUST limitarse a indicar que el proceso responde, y MUST NOT revelar nada de la
+  instalación, ni si la base de datos está accesible, ni la versión del esquema, ni si existe
+  configuración. Es la única excepción a FR-007.
 
 **Estado actual y vigencia**
 
@@ -317,7 +341,11 @@ API y se comprueba el recuento y qué sobrevive.
   ventana e intervalos, previsión utilizada con su origen, y minutos solicitados, asignados y
   no atendidos por acumulador.
 - **FR-014**: El controlador MUST publicar periódicamente una señal de vida con su instante,
-  su estado de degradación y el plan que está ejecutando.
+  su instante de arranque, su estado de degradación, el plan que está ejecutando, **la cadencia
+  de sondeo con la que está funcionando realmente** y el tipo de salida con el que arrancó. La
+  cadencia es obligatoria porque la tolerancia de vigencia se deriva de ella: leerla de la
+  configuración daría un valor equivocado cuando el controlador arrancó con una configuración
+  anterior a la vigente.
 - **FR-015**: La API MUST marcar el estado de las salidas como **no vigente** cuando la última
   señal de vida sea más antigua que una tolerancia configurable, y MUST indicar desde cuándo no
   se ve al controlador.
@@ -332,6 +360,10 @@ API y se comprueba el recuento y qué sobrevive.
   producir un estado permanentemente vigente ni permanentemente caducado.
 - **FR-020**: Una instalación sin ningún plan MUST reportarse explícitamente como tal, sin
   ningún acumulador activo.
+- **FR-053**: La API MUST detectar y señalar la presencia de **más de un controlador** operando
+  contra la misma base de datos. Dos controladores conmutando los mismos relés es una situación
+  eléctricamente peligrosa, y el diseño MUST NOT ocultarla presentando uno de ellos como si
+  fuera el único.
 
 **Configuración: lectura y edición**
 
@@ -408,6 +440,10 @@ API y se comprueba el recuento y qué sobrevive.
 
 **Despliegue**
 
+- **FR-048b**: La actualización desde la fase anterior MUST conservar íntegras la configuración
+  y el histórico almacenados. Es la primera migración de esquema que se aplica sobre datos
+  reales de una instalación en funcionamiento, y una base de datos ya migrada MUST detectarse
+  como pendiente de actualizar, nunca como incomprensible.
 - **FR-049**: El procedimiento de instalación y la definición del servicio MUST proporcionar la
   credencial y la localización de la base de datos por el mismo mecanismo protegido que ya
   sirve los secretos existentes.
@@ -449,7 +485,10 @@ anterior y no se redefinen aquí.
 - **SC-002**: La API nunca presenta un estado de salidas obsoleto como si fuera actual: en toda
   situación en que el controlador no esté visible, el dato aparece marcado como no vigente.
 - **SC-003**: Detener, reiniciar o hacer fallar la API no produce ningún cambio observable en el
-  estado de las salidas ni en la ejecución del plan.
+  estado de las salidas ni en la ejecución del plan. Se verifica de dos formas: de manera
+  automatizada, comprobando que el bucle de control planifica y conmuta con normalidad sin
+  ninguna pieza de la API presente ni instalada; y de manera manual sobre el dispositivo, una
+  vez, deteniendo la API mientras un plan está en curso.
 - **SC-004**: Ninguna operación de la API puede activar una salida: verificable porque ninguna
   ruta de la API tiene acceso al medio de accionarlas.
 - **SC-005**: Ninguna operación se ejecuta sin la credencial correcta, y ninguna respuesta ni
@@ -465,8 +504,10 @@ anterior y no se redefinen aquí.
   cuelgue o un dato inventado.
 - **SC-010**: La descripción publicada por la API coincide con las operaciones realmente
   servidas, sin operaciones fantasma ni operaciones indocumentadas.
-- **SC-011**: La API se instala en el dispositivo de despliegue sin compilador y su consumo de
-  memoria en reposo deja margen suficiente para el controlador en la misma máquina.
+- **SC-011**: La API se instala en el dispositivo de despliegue **sin compilador ni herramientas
+  de construcción nativas**, arranca en menos de 10 segundos y su memoria residente en reposo se
+  mantiene por debajo de 120 MB, de modo que junto al controlador el conjunto quede por debajo de
+  la cuarta parte de la memoria disponible del dispositivo.
 - **SC-012**: La suite completa se ejecuta sin red, sin base de datos remota, sin hardware y sin
   abrir ningún puerto real.
 
