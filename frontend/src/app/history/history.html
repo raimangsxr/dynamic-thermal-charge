@@ -1,0 +1,112 @@
+<section class="history">
+  <h1>Histórico</h1>
+
+  <nav class="tabs">
+    <button type="button" [class.active]="tab() === 'plans'" (click)="select('plans')"
+            data-tab="plans">Planes</button>
+    <button type="button" [class.active]="tab() === 'forecasts'" (click)="select('forecasts')"
+            data-tab="forecasts">Previsiones</button>
+    <button type="button" [class.active]="tab() === 'transitions'" (click)="select('transitions')"
+            data-tab="transitions">Transiciones</button>
+  </nav>
+
+  <form class="filters" (submit)="$event.preventDefault(); load()">
+    <label for="from">Desde</label>
+    <input id="from" type="datetime-local" [ngModel]="from()" (ngModelChange)="from.set($event)" name="from" />
+    <label for="to">Hasta</label>
+    <input id="to" type="datetime-local" [ngModel]="to()" (ngModelChange)="to.set($event)" name="to" />
+    @if (tab() === 'transitions') {
+      <label for="heater">Acumulador</label>
+      <input id="heater" [ngModel]="heaterId()" (ngModelChange)="heaterId.set($event)" name="heater" />
+    }
+    <button type="submit" data-testid="apply">Aplicar</button>
+  </form>
+
+  @if (rangeError(); as message) {
+    <p class="error" role="alert" data-testid="range-error">{{ message }}</p>
+  }
+
+  @if (banner(); as message) {
+    <div class="banner alert" role="alert" data-testid="banner">
+      <strong>{{ message.title }}</strong>
+      <p>{{ message.action }}</p>
+    </div>
+  }
+
+  @if (empty()) {
+    <p class="empty" data-testid="empty">No hay registros en ese rango.</p>
+  }
+
+  <div class="table-scroll">
+    @switch (tab()) {
+      @case ('plans') {
+        <table data-table="plans">
+          <thead>
+            <tr><th>Creado</th><th>Ventana</th><th>Intervalo</th><th>Config. rev.</th></tr>
+          </thead>
+          <tbody>
+            @for (item of plans()?.items ?? []; track item.id) {
+              <tr>
+                <td>{{ instant(item.created_at) }}</td>
+                <td>{{ instant(item.window_start) }} — {{ instant(item.window_end) }}</td>
+                <td>{{ item.slot_minutes }} min</td>
+                <td>{{ item.installation_revision }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      }
+      @case ('forecasts') {
+        <table data-table="forecasts">
+          <thead>
+            <tr><th>Fecha</th><th>Origen</th><th>Media</th><th>Mín.</th><th>Máx.</th><th>Obtenida</th></tr>
+          </thead>
+          <tbody>
+            @for (item of forecasts()?.items ?? []; track item.id) {
+              <tr>
+                <td>{{ item.forecast_date }}</td>
+                <td [attr.data-source]="item.source">{{ sourceText(item.source) }}</td>
+                <td>{{ item.average_temperature_c }} °C</td>
+                <td>{{ item.minimum_temperature_c ?? '—' }}</td>
+                <td>{{ item.maximum_temperature_c ?? '—' }}</td>
+                <td>{{ instant(item.retrieved_at) }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      }
+      @case ('transitions') {
+        <table data-table="transitions">
+          <thead>
+            <tr><th>Instante</th><th>Acumulador</th><th>Estado</th></tr>
+          </thead>
+          <tbody>
+            @for (item of transitions()?.items ?? []; track item.id) {
+              <tr [attr.data-heater]="item.heater_id">
+                <td>{{ instant(item.occurred_at) }}</td>
+                <td>
+                  {{ item.heater_id }}
+                  @if (isGone(item.heater_id)) {
+                    <span class="gone" data-testid="gone">(ya no está en la configuración)</span>
+                  }
+                </td>
+                <td>{{ item.state ? 'encendido' : 'apagado' }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      }
+    }
+  </div>
+
+  @if (page(); as current) {
+    <p class="paging">
+      Mostrando {{ current.items.length }} de un máximo de {{ current.limit_applied }}
+      @if (current.has_more) {
+        <button type="button" (click)="next()" data-testid="next">Siguiente página</button>
+      } @else {
+        <span class="end">— no hay más resultados</span>
+      }
+    </p>
+  }
+</section>

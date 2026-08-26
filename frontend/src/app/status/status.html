@@ -1,0 +1,115 @@
+<section class="status">
+  <header>
+    <h1>Estado</h1>
+    @if (snapshot()) {
+      <p class="observed">Consultado {{ instant(snapshot()!.observed_at) }}</p>
+    }
+  </header>
+
+  @if (loading() && !snapshot()) {
+    <p class="loading">Consultando…</p>
+  }
+
+  <!-- FR-030: the API is unreachable. The last snapshot stays, clearly marked. -->
+  @if (failure()) {
+    <div class="banner alert" role="alert" data-testid="failure">
+      <strong>{{ failure()!.title }}</strong>
+      <p>{{ failure()!.action }}</p>
+      @if (showingStaleSnapshot()) {
+        <p class="warning">
+          <strong>Lo que se muestra debajo ya no es actual.</strong>
+          Es la última información que se pudo leer.
+        </p>
+      }
+    </div>
+  }
+
+  @if (snapshot(); as data) {
+    <dtc-controller-health [health]="data.controller" />
+
+    <!-- FR-010: no power figure without proof. Not even a zero. -->
+    <div class="power" data-testid="power">
+      @if (data.power) {
+        <h2>Potencia instantánea</h2>
+        <p class="figure">
+          {{ (data.power.instant_w / 1000).toFixed(1) }} kW
+          <span class="of">de {{ (data.power.limit_w / 1000).toFixed(1) }} kW</span>
+          <span class="percent">({{ data.power.percent_of_limit }} %)</span>
+        </p>
+      } @else {
+        <h2>Potencia instantánea</h2>
+        <p class="unavailable" data-testid="power-unavailable">
+          No se puede confirmar. No se muestra una cifra que nadie puede verificar.
+        </p>
+      }
+    </div>
+
+    <h2>Acumuladores</h2>
+    @if (heaters().length === 0) {
+      <p class="empty">La instalación no tiene ningún acumulador configurado.</p>
+    } @else {
+      <ul class="heaters">
+        @for (item of heaters(); track item.dto.id) {
+          <li [class.disabled]="!item.dto.enabled" [attr.data-heater]="item.dto.id">
+            <span class="name">{{ item.dto.name }}</span>
+            <span class="power">{{ (item.dto.power_w / 1000).toFixed(1) }} kW</span>
+            <dtc-output-indicator [state]="item.state" />
+            @if (!item.dto.enabled) {
+              <span class="tag">deshabilitado</span>
+            }
+          </li>
+        }
+      </ul>
+    }
+
+    <!-- FR-015: the deficit is prominent, not buried. -->
+    @if (unmet().length > 0) {
+      <div class="banner warn" data-testid="unmet">
+        <strong>Carga solicitada sin atender</strong>
+        <ul>
+          @for (allocation of unmet(); track allocation.heater_id) {
+            <li>
+              {{ allocation.heater_id }}:
+              faltan {{ hours(allocation.unmet_minutes) }} h
+              de {{ hours(allocation.requested_minutes) }} h solicitadas
+            </li>
+          }
+        </ul>
+        <p>El plan no cabe en la ventana o en el límite de potencia.</p>
+      </div>
+    }
+
+    <h2>Plan en curso</h2>
+    <!-- FR-014: no plan is said explicitly, not shown as zeros. -->
+    @if (data.plan; as plan) {
+      <p data-testid="plan">
+        {{ instant(plan.window_start) }} — {{ instant(plan.window_end) }},
+        intervalos de {{ plan.slot_minutes }} min
+        <span class="revision">(configuración rev. {{ plan.installation_revision }})</span>
+      </p>
+    } @else {
+      <p class="empty" data-testid="no-plan">
+        No hay ningún plan en curso ahora mismo.
+      </p>
+    }
+
+    <h2>Previsión utilizada</h2>
+    @if (data.forecast; as forecast) {
+      <p data-testid="forecast">
+        {{ forecast.date }}: media {{ forecast.average_temperature_c }} °C
+        <span class="source" [attr.data-source]="forecast.source">
+          @switch (forecast.source) {
+            @case ('aemet') { origen: proveedor real }
+            @case ('fallback') { origen: valor de reserva }
+            @default { origen: simulado }
+          }
+        </span>
+        @if (forecast.municipality) {
+          <span class="place">{{ forecast.municipality }}</span>
+        }
+      </p>
+    } @else {
+      <p class="empty">Sin previsión asociada.</p>
+    }
+  }
+</section>
