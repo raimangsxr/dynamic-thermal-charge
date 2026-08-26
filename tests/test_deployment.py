@@ -102,3 +102,195 @@ def test_the_readme_warns_that_configuration_is_not_migrated() -> None:
 def test_the_readme_links_the_constitution() -> None:
     readme = README.read_text(encoding="utf-8")
     assert ".specify/memory/constitution.md" in readme
+
+
+# --------------------------------------------------------------------------- #
+# FR-047, SC-011: the whole ARMv7 story rests on these never coming back.
+#
+# uvicorn[standard] pulls uvloop and httptools; greenlet arrives with
+# SQLAlchemy's asyncio API. None of the three publishes a linux_armv7l wheel, so
+# any of them would need a compiler on the Raspberry Pi and the deployment would
+# break -- silently, because the test suite on a development machine would not
+# notice. A comment in pyproject.toml documents the ban; this enforces it.
+# --------------------------------------------------------------------------- #
+
+PYPROJECT = ROOT / "pyproject.toml"
+
+FORBIDDEN_DEPENDENCIES = (
+    "uvicorn[standard]",
+    "uvloop",
+    "httptools",
+    "greenlet",
+    # Would compile from source on armv7: no wheel, and it needs libpq.
+    "psycopg2",
+    "psycopg2-binary",
+)
+
+
+def _declared_requirements() -> list[str]:
+    """Every requirement string, from the base list and from every extra.
+
+    Parsed, not grepped: the comment that explains the ban names the forbidden
+    packages, and a substring search over the file text matches its own prose.
+    """
+    import tomllib
+
+    data = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
+    project = data["project"]
+    requirements = list(project.get("dependencies", []))
+    for extra in project.get("optional-dependencies", {}).values():
+        requirements.extend(extra)
+    return requirements
+
+
+def test_forbidden_dependencies_never_return() -> None:
+    requirements = _declared_requirements()
+    offenders = [
+        requirement
+        for requirement in requirements
+        for name in FORBIDDEN_DEPENDENCIES
+        if name in requirement.replace(" ", "")
+    ]
+    assert not offenders, (
+        "these dependencies have no linux_armv7l wheel and would require a "
+        f"compiler on the deployment target: {offenders}. "
+        "See specs/002-config-api/research.md D1."
+    )
+
+
+def test_uvicorn_is_declared_without_any_extra() -> None:
+    """The specific mistake worth naming: uvicorn[standard]."""
+    uvicorn_requirements = [
+        requirement
+        for requirement in _declared_requirements()
+        if requirement.replace(" ", "").lower().startswith("uvicorn")
+    ]
+    assert uvicorn_requirements, "uvicorn is no longer declared at all"
+    for requirement in uvicorn_requirements:
+        assert "[" not in requirement, (
+            f"uvicorn must be declared bare, without extras; found {requirement!r}"
+        )
+
+
+def test_the_ban_on_uvicorn_standard_is_explained_where_someone_would_change_it() -> None:
+    """A bare ban invites a well-meaning 'fix'. The reason has to be next to it."""
+    declared = PYPROJECT.read_text(encoding="utf-8")
+    assert "armv7" in declared.lower()
+    assert "uvicorn" in declared
+
+
+def test_the_installed_environment_has_no_forbidden_dependency() -> None:
+    """Catches a transitive arrival that the declaration alone would not show."""
+    import importlib.util
+
+    for module in ("uvloop", "httptools", "greenlet"):
+        assert importlib.util.find_spec(module) is None, (
+            f"{module} got installed transitively; it would need a compiler on "
+            "the Raspberry Pi. Find out which dependency pulled it in."
+        )
+
+
+# --------------------------------------------------------------------------- #
+# The API service: FR-049, FR-050, FR-051
+# --------------------------------------------------------------------------- #
+
+API_UNIT = ROOT / "deploy" / "systemd" / "dynamic-thermal-charge-api.service"
+
+
+def test_the_api_unit_exists_and_serves_the_api() -> None:
+    unit = API_UNIT.read_text(encoding="utf-8")
+    assert "ExecStart=" in unit
+    assert unit.rstrip().count("ExecStart=") == 1
+    assert " api" in unit
+    assert "ProtectSystem=strict" in unit
+    assert "ReadWritePaths=/var/lib/dynamic-thermal-charge" in unit
+
+
+def test_the_api_unit_passes_no_configuration_file() -> None:
+    unit = API_UNIT.read_text(encoding="utf-8")
+    for line in unit.splitlines():
+        if line.startswith(("ExecStart=", "ExecStartPre=")):
+            assert ".yaml" not in line and ".yml" not in line
+
+
+def test_the_api_unit_is_independent_of_the_controller() -> None:
+    """The property the whole two-process design exists for."""
+    unit = API_UNIT.read_text(encoding="utf-8")
+    for coupling in (
+        "Requires=dynamic-thermal-charge.service",
+        "After=dynamic-thermal-charge.service",
+        "BindsTo=dynamic-thermal-charge.service",
+        "PartOf=dynamic-thermal-charge.service",
+    ):
+        assert coupling not in unit, (
+            f"the API unit is coupled to the controller via {coupling}; stopping "
+            "or restarting one must never touch the other"
+        )
+
+
+def test_the_api_unit_cannot_reach_the_hardware() -> None:
+    """No gpio group: this service must not be able to switch a relay."""
+    unit = API_UNIT.read_text(encoding="utf-8")
+    assert "SupplementaryGroups=gpio" not in unit
+    assert "--driver gpio" not in unit
+
+
+def test_the_api_unit_allows_for_a_slow_start_on_the_pi() -> None:
+    """Importing the web stack takes seconds on an ARMv7 core."""
+    unit = API_UNIT.read_text(encoding="utf-8")
+    assert "TimeoutStartSec=" in unit
+    # And no ExecStartPre, which would pay the interpreter start-up cost twice.
+    assert "ExecStartPre=" not in unit
+
+
+def test_the_installer_offers_the_api_without_forcing_it() -> None:
+    installer = INSTALLER.read_text(encoding="utf-8")
+    assert "--with-api" in installer
+    assert "[db,api]" in installer
+    assert "[db,gpio,api]" in installer
+    # Installed, never started or enabled. The unit name is composed from
+    # SERVICE_NAME, so the literal to look for is the variable.
+    assert "API_SERVICE_NAME" in installer
+    assert "API_UNIT_PATH" in installer
+
+
+def test_the_installer_tells_the_operator_to_generate_a_token() -> None:
+    installer = INSTALLER.read_text(encoding="utf-8")
+    assert "secrets.token_urlsafe" in installer
+    assert "DTC_API_TOKEN" in installer
+
+
+def test_the_environment_example_declares_the_api_variables() -> None:
+    environment = ENVIRONMENT.read_text(encoding="utf-8")
+    assert "DTC_API_TOKEN=" in environment
+    for optional in ("DTC_API_HOST", "DTC_API_PORT", "DTC_API_CORS_ORIGINS"):
+        assert optional in environment
+
+
+def test_the_example_token_is_empty_not_a_placeholder() -> None:
+    """An unedited example file must fail the start-up check, not slip through."""
+    for line in ENVIRONMENT.read_text(encoding="utf-8").splitlines():
+        if line.startswith("DTC_API_TOKEN="):
+            assert line.strip() == "DTC_API_TOKEN=", (
+                f"the example ships a token value: {line!r}. An operator who "
+                "forgets to edit it would end up listening with it"
+            )
+            break
+    else:
+        raise AssertionError("DTC_API_TOKEN is not declared in the example")
+
+
+def test_the_environment_example_warns_about_exposing_the_api() -> None:
+    """FR-051: the risk has to be stated where the change is made."""
+    environment = ENVIRONMENT.read_text(encoding="utf-8").lower()
+    assert "clear text" in environment
+    assert "0.0.0.0" in environment
+
+
+def test_the_readme_documents_the_api_and_its_risk() -> None:
+    readme = README.read_text(encoding="utf-8")
+    assert "DTC_API_TOKEN" in readme
+    assert "dtc api" in readme
+    lowered = readme.lower()
+    assert "en claro" in lowered or "clear text" in lowered
+    assert "token_urlsafe" in readme

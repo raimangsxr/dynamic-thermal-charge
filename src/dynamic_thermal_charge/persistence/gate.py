@@ -26,8 +26,17 @@ from .url import StoreLocation
 
 logger = logging.getLogger(__name__)
 
-# Oldest first. Must stay in step with persistence/migrations/versions/.
-KNOWN_REVISIONS: tuple[str, ...] = ("0001_initial_schema",)
+# Oldest first. Must stay in step with persistence/migrations/versions/; a test
+# fails if it drifts.
+#
+# Adding a revision here is not optional bookkeeping: without it, a database that
+# this very build just migrated would be read as UNKNOWN and the service would
+# refuse to start. That is the failure mode the previous phase armed on purpose,
+# and its first possible victim is this one.
+KNOWN_REVISIONS: tuple[str, ...] = (
+    "0001_initial_schema",
+    "0002_controller_heartbeat",
+)
 EXPECTED_REVISION = KNOWN_REVISIONS[-1]
 
 VERSION_TABLE = "alembic_version"

@@ -34,12 +34,29 @@ SQLITE_PRAGMAS: tuple[tuple[str, str], ...] = (
 )
 
 
-def build_engine(location: StoreLocation, echo: bool = False) -> Engine:
-    """Create the engine for a validated store location."""
+def build_engine(
+    location: StoreLocation,
+    echo: bool = False,
+    timeouts: tuple[float, float] | None = None,
+) -> Engine:
+    """Create the engine for a validated store location.
+
+    ``timeouts`` bounds how long a request may wait on the database
+    (connect, pool). Applied at the engine because a timer would not interrupt a
+    thread already blocked in the driver.
+    """
     if location.backend == SQLITE_BACKEND:
         _ensure_sqlite_directory(location)
+    options: dict[str, object] = {}
+    if timeouts is not None:
+        connect_timeout, pool_timeout = timeouts
+        options["pool_timeout"] = pool_timeout
+        if location.backend == SQLITE_BACKEND:
+            options["connect_args"] = {"timeout": connect_timeout}
+        else:
+            options["connect_args"] = {"timeout": int(connect_timeout)}
     try:
-        engine = create_engine(location.url, echo=echo, future=True)
+        engine = create_engine(location.url, echo=echo, future=True, **options)
     except ImportError as exc:
         # The driver lives in an optional extra, so a PostgreSQL URL on an install
         # that only has the base package must say what to install, not surface a

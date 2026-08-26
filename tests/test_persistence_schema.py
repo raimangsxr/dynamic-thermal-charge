@@ -166,6 +166,8 @@ def test_the_schema_declares_every_expected_table():
         "plan_allocation",
         "output_transition",
         "config_change",
+        # Added in 002-config-api: the controller's proof of life.
+        "controller_heartbeat",
     }
 
 
@@ -318,3 +320,83 @@ def test_no_column_uses_an_engine_specific_type():
                 # Compiling the type on both dialects is the check: a
                 # PostgreSQL-only type such as JSONB raises on SQLite.
                 column.type.compile(dialect=dialect)
+
+
+# --------------------------------------------------------------------------- #
+# The migrations must build exactly the schema that schema.py describes.
+#
+# This exists because of a real defect: 0001 originally called
+# metadata.create_all(), which is not pinned in time. It created whatever
+# schema.py described at the moment it ran, so as soon as 0002 added a table,
+# 0001 created it too and 0002 failed with "already exists". The DDL is now
+# explicit, which trades that failure for a different risk -- the hand-written
+# DDL drifting from schema.py. This closes that risk.
+# --------------------------------------------------------------------------- #
+
+def test_the_migrations_build_exactly_the_declared_schema(sqlite_url):
+    from sqlalchemy import inspect
+
+    from dynamic_thermal_charge.persistence.bootstrap import initialise, open_store
+    from dynamic_thermal_charge.persistence.url import DATABASE_URL_ENV
+
+    store = open_store({DATABASE_URL_ENV: sqlite_url})
+    initialise(store, allow_seed=False)
+    inspector = inspect(store.engine)
+
+    migrated = {
+        name for name in inspector.get_table_names() if name != "alembic_version"
+    }
+    declared = set(metadata.tables)
+    assert migrated == declared, (
+        "the migrations and schema.py disagree on which tables exist; "
+        f"only migrated: {sorted(migrated - declared)}; "
+        f"only declared: {sorted(declared - migrated)}"
+    )
+
+    for table_name in sorted(declared):
+        table = metadata.tables[table_name]
+        migrated_columns = {
+            column["name"]: column for column in inspector.get_columns(table_name)
+        }
+        declared_columns = {column.name: column for column in table.columns}
+        assert set(migrated_columns) == set(declared_columns), (
+            f"table {table_name}: columns disagree; "
+            f"only migrated: {sorted(set(migrated_columns) - set(declared_columns))}; "
+            f"only declared: {sorted(set(declared_columns) - set(migrated_columns))}"
+        )
+        for name, declared_column in declared_columns.items():
+            assert migrated_columns[name]["nullable"] == declared_column.nullable, (
+                f"{table_name}.{name}: nullability disagrees between the migration "
+                "and schema.py"
+            )
+
+
+def test_no_migration_imports_the_live_schema_module():
+    """A migration built from live metadata is not pinned in time."""
+    import ast
+    from pathlib import Path
+
+    versions = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "dynamic_thermal_charge"
+        / "persistence"
+        / "migrations"
+        / "versions"
+    )
+    offenders = {}
+    for path in versions.glob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        imported = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                imported.add(node.module)
+            elif isinstance(node, ast.Import):
+                imported.update(alias.name for alias in node.names)
+        leaked = {name for name in imported if name.endswith("persistence.schema")}
+        if leaked:
+            offenders[path.name] = sorted(leaked)
+    assert not offenders, (
+        "these migrations import the live schema module, so they are not pinned "
+        f"to their own revision: {offenders}"
+    )

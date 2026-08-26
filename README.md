@@ -350,6 +350,163 @@ el controlador apague las salidas en su bloque `finally`. La instalación no
 habilita ni arranca automáticamente el servicio y continúa usando salidas
 simuladas.
 
+## API HTTP
+
+Una API de lectura y configuración, servida como **servicio independiente** del
+controlador. Los dos procesos se comunican solo a través de la base de datos: parar,
+reiniciar o hacer fallar la API **no afecta a la calefacción**, y esa es la razón de que sean
+dos y no uno.
+
+La API **no acciona ninguna salida**. No hay forzado manual ni boost: solo el planificador
+decide qué carga. Ninguna de sus rutas tiene acceso al medio de conmutar un relé, y un test lo
+verifica.
+
+### Puesta en marcha
+
+```bash
+python -m pip install -e '.[dev,api]'
+
+export DTC_DATABASE_URL="sqlite:///$(pwd)/var/dtc.db"
+export DTC_API_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+
+dtc db upgrade      # si vienes de la fase anterior; db init si empiezas de cero
+dtc api             # escucha en 127.0.0.1:8420
+```
+
+```bash
+curl -s -H "Authorization: Bearer $DTC_API_TOKEN" localhost:8420/api/v1/status | jq
+open http://localhost:8420/docs      # también exige el token
+```
+
+### El token
+
+```bash
+python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
+```
+
+Va en `DTC_API_TOKEN`, en el fichero de entorno. Mínimo 32 caracteres: la API **se niega a
+arrancar** con un token vacío, corto o igual al de ejemplo, para que no pueda quedarse
+escuchando sin protección real. Rotarlo es editar el fichero y reiniciar la API.
+
+**Trátalo como la contraseña del cuadro eléctrico, porque funcionalmente lo es**: quien lo
+tenga puede cambiar la potencia máxima y la asignación de pines.
+
+### Leer el estado, y por qué puede decir «no lo sé»
+
+`GET /api/v1/status` devuelve la fotografía completa: acumuladores activos, potencia
+instantánea, plan en curso, previsión con su origen y minutos no atendidos.
+
+Lo primero que hay que leer de la respuesta es `controller.state_is_current`. Como la API y el
+controlador son procesos distintos, la API deduce el estado de las salidas del histórico de
+transiciones. Si el controlador está parado o colgado, ese histórico sigue ahí. Para no
+mentir, el controlador publica un **latido** y la API distingue cuatro situaciones:
+
+| `liveness` | Significa |
+| --- | --- |
+| `live` | el controlador responde y está sano |
+| `live_degraded` | responde, pero no alcanza la base de datos o el proveedor meteorológico |
+| `stale` | dejó de publicar: no se sabe qué está pasando |
+| `never_seen` | nunca arrancó contra esta base de datos |
+
+Con `state_is_current` a `false`:
+
+- `power` es **`null`**. No se publica una potencia que nadie puede confirmar.
+- `output_on` de cada acumulador es **`null`**, no `false`. Son cosas distintas: `false` dice
+  «está apagado», `null` dice «no tengo prueba de nada». El último valor registrado sigue
+  disponible en `last_known_output_on` con su `changed_at`.
+
+Eso **no es un fallo**: es la API negándose a afirmar algo que no puede saber. Un panel que
+diga que un acumulador de 2,8 kW está cargando cuando no lo está lleva a decisiones
+equivocadas sobre la instalación eléctrica.
+
+La respuesta avisa además con `multiple_controllers_suspected` si parece haber **más de un
+controlador** contra la misma base de datos. Dos procesos conmutando los mismos relés es un
+riesgo eléctrico; la API lo señala y no arbitra.
+
+### Editar la configuración
+
+Toda escritura exige la revisión que leíste. Es el bloqueo optimista que impide que dos
+clientes se pisen.
+
+```bash
+TOKEN="Authorization: Bearer $DTC_API_TOKEN"
+REV=$(curl -s -H "$TOKEN" localhost:8420/api/v1/config | jq .config_revision)
+
+curl -s -X PATCH -H "$TOKEN" -H 'Content-Type: application/json' \
+  -d "{\"revision\": $REV, \"field\": \"max_total_power_kw\", \"value\": \"5.2\"}" \
+  localhost:8420/api/v1/config | jq
+```
+
+Reenviar una revisión vieja devuelve **409**: no es un error a evitar, es la protección
+funcionando. Las mismas validaciones y los mismos rechazos que por consola.
+
+### Histórico
+
+```bash
+curl -s -H "$TOKEN" \
+  'localhost:8420/api/v1/history/plans?from=2026-01-01T00:00:00Z&limit=10' | jq
+```
+
+Siempre paginado: 50 por defecto, 500 como máximo. Ninguna consulta devuelve el histórico
+completo.
+
+### Despliegue en la Raspberry Pi
+
+```bash
+sudo ./scripts/install-service.sh --with-api      # añade --with-gpio si procede
+sudoedit /etc/dynamic-thermal-charge/environment  # define DTC_API_TOKEN
+
+sudo systemctl start dynamic-thermal-charge       # controlador
+sudo systemctl start dynamic-thermal-charge-api   # API
+```
+
+Son dos servicios sin ninguna dependencia entre ellos. Merece la pena comprobarlo una vez:
+
+```bash
+sudo systemctl stop dynamic-thermal-charge-api    # el controlador sigue a lo suyo
+```
+
+La unidad de la API **no** pertenece al grupo `gpio`: no puede alcanzar el hardware ni
+queriendo.
+
+### Exponer la API en la red — leer antes de hacerlo
+
+Por defecto escucha en `127.0.0.1`, accesible solo desde la propia Pi. Para llegar desde otro
+equipo:
+
+```bash
+# En /etc/dynamic-thermal-charge/environment
+DTC_API_HOST=0.0.0.0
+```
+
+**La API sirve en claro, sin cifrado.** Cualquiera con acceso a tu red puede leer el token al
+pasar, y con el token puede cambiar la potencia máxima y los pines. En una red doméstica de
+confianza es razonable. **Publicarla en internet no lo es** sin un proxy inverso con TLS
+delante, y eso queda fuera del alcance de esta fase.
+
+Para que un navegador la consuma desde otro origen hay que declararlo a propósito:
+
+```bash
+DTC_API_CORS_ORIGINS=http://panel.lan:4200
+```
+
+La lista está vacía por defecto. No se admite comodín.
+
+### Diagnóstico
+
+| Síntoma | Causa probable |
+| --- | --- |
+| la API no arranca y habla del token | `DTC_API_TOKEN` ausente, vacío, con menos de 32 caracteres o de ejemplo |
+| **401** en todo | falta la cabecera `Authorization`, o el token no coincide |
+| `liveness: never_seen` | el controlador nunca arrancó contra esta base de datos |
+| `liveness: stale` | el controlador está parado o colgado; revisa su unidad |
+| `state_is_current: false` y `power: null` | correcto por diseño: sin latido reciente no se afirma nada |
+| `multiple_controllers_suspected: true` | hay más de un controlador vivo. Revísalo: es un riesgo eléctrico |
+| **503** `schema_unusable` | ejecuta `dtc db upgrade`. La API nunca migra por sí misma |
+| **503** `store_unavailable` | la base de datos no responde |
+| **409** al escribir | otro cliente escribió primero; relee y reintenta |
+| el navegador bloquea las peticiones | falta declarar su origen en `DTC_API_CORS_ORIGINS` |
+
 ## GPIO real
 
 El driver real usa [GPIO Zero](https://gpiozero.readthedocs.io/en/stable/)

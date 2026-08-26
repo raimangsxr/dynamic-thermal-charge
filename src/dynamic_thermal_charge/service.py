@@ -28,6 +28,7 @@ from .controller import ChargeController
 from .persistence import (
     ConfigStoreError,
     ConfigStoreUnavailableError,
+    HeartbeatPublisher,
     HistoryRecorder,
     PlanRef,
 )
@@ -57,6 +58,7 @@ class ControllerService:
         wait: Callable[[float], None] = time.sleep,
         history: HistoryRecorder | None = None,
         retention_days: int | None = None,
+        heartbeat: HeartbeatPublisher | None = None,
     ) -> None:
         self._controller = controller
         self._store = store
@@ -67,6 +69,8 @@ class ControllerService:
         self._wait = wait
         self._history = history
         self._retention_days = retention_days
+        self._heartbeat = heartbeat
+        self._current_plan_ref: PlanRef | None = None
         self._degraded = False
         self._refresh_abandoned = False
         self._warned_planless = False
@@ -83,6 +87,10 @@ class ControllerService:
                 if now >= next_refresh and not self._refresh_abandoned:
                     plan, next_refresh = self._try_refresh(now, plan)
                 self._controller.apply(plan, now)
+                # Published every iteration, not only on refresh: refreshing can
+                # be hours apart, and a dead controller would look alive for all
+                # of it. Never raises, by contract.
+                self._publish_heartbeat(now)
                 cycles += 1
                 if max_cycles is None or cycles < max_cycles:
                     self._wait(self._poll_seconds)
@@ -123,6 +131,7 @@ class ControllerService:
             return plan, now + timedelta(seconds=self._error_retry_seconds)
 
         self._leave_degraded()
+        self._current_plan_ref = refreshed.plan_ref
         self._store.save(refreshed.plan)
         self._prune_history(now)
         return (
@@ -157,6 +166,15 @@ class ControllerService:
         if not self._warned_planless:
             self._warned_planless = True
             logger.critical("No valid plan is available; all outputs remain off")
+
+    def _publish_heartbeat(self, now: datetime) -> None:
+        if self._heartbeat is None:
+            return
+        self._heartbeat.publish(
+            now,
+            degraded=self._degraded or self._refresh_abandoned,
+            plan_ref=self._current_plan_ref,
+        )
 
     def _prune_history(self, now: datetime) -> None:
         if self._history is None:

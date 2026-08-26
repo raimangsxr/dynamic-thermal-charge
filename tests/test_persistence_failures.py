@@ -285,7 +285,13 @@ def test_no_runtime_module_imports_yaml():
 
 
 def test_no_runtime_module_imports_an_http_server():
-    """FR-015: this phase exposes no network interface."""
+    """The HTTP surface is confined to api/ and to the `api` subcommand.
+
+    Written in the previous phase, when there was no network interface at all.
+    Constitution 1.1.0 anticipates an HTTP API as an edge, so the ban is now
+    bounded rather than absolute: everything outside api/ must still be free of
+    it, and cli.py may reach for the server only to run that one subcommand.
+    """
     forbidden = {
         "http.server",
         "socketserver",
@@ -296,16 +302,27 @@ def test_no_runtime_module_imports_an_http_server():
         "aiohttp",
         "starlette",
     }
-    offenders = {
-        path.relative_to(SRC).as_posix(): sorted(
+    API = SRC / "api"
+    offenders = {}
+    for path in SRC.rglob("*.py"):
+        if API in path.parents or path == API:
+            continue  # the edge that is allowed to be an HTTP server
+        names = sorted(
             name
             for name in _module_imports(path)
             if name in forbidden or name.split(".")[0] in forbidden
         )
-        for path in SRC.rglob("*.py")
-    }
-    offenders = {path: names for path, names in offenders.items() if names}
-    assert not offenders, f"a network interface leaked into this phase: {offenders}"
+        if path.name == "cli.py":
+            # Only to launch the api subcommand, and only lazily inside it.
+            names = [name for name in names if name != "uvicorn"]
+            assert "import uvicorn" not in path.read_text(encoding="utf-8").split(
+                "def _run_api"
+            )[0], "cli.py imports the server at module level, not inside the subcommand"
+        if names:
+            offenders[path.relative_to(SRC).as_posix()] = names
+    assert not offenders, (
+        f"an HTTP server leaked outside api/: {offenders}"
+    )
 
 
 def test_no_runtime_module_declares_a_configuration_file_path():

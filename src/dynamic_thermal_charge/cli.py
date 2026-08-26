@@ -41,6 +41,10 @@ from .persistence import (
 # url.py is stdlib-only by design, so importing it here does not pull in the db
 # extra and keeps "the variable is missing" reportable without SQLAlchemy.
 from .persistence.url import DatabaseUrlError as _DatabaseUrlError
+
+# api/settings.py is stdlib-only by design, so importing it here does not pull in
+# the api extra and keeps "the token is missing" reportable without FastAPI.
+from .api.settings import ApiSettingsError as _ApiSettingsError
 from .scheduler import ChargeScheduler, ScheduleResult
 from .service import ControllerService, PlanRefresh
 from .state import PlanStore
@@ -170,6 +174,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="override the stored log level for this run",
     )
 
+    api = subcommands.add_parser(
+        "api", help="serve the HTTP API (a separate service from the controller)"
+    )
+    api.add_argument("--host", default=None, help="override DTC_API_HOST")
+    api.add_argument("--port", type=int, default=None, help="override DTC_API_PORT")
+    api.add_argument(
+        "--log-level",
+        type=str.upper,
+        choices=("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"),
+        default=None,
+    )
+
     self_test = subcommands.add_parser(
         "gpio-self-test", help="activate each GPIO output in turn"
     )
@@ -218,6 +234,9 @@ def main(argv: list[str] | None = None) -> int:
         return _fail(EXIT_STORE_UNAVAILABLE, exc)
     except ConfigStoreError as exc:
         return _fail(EXIT_STORE_UNAVAILABLE, exc)
+    except _ApiSettingsError as exc:
+        # Also a ValueError, so it must be caught before the generic handler.
+        return _fail(EXIT_INVALID_RESULT, exc)
     except _DatabaseUrlError as exc:
         # A subclass of ValueError, so it has to be caught before the generic
         # handler: an absent or unsupported store location is "unavailable"
@@ -273,6 +292,8 @@ def _dispatch(args: argparse.Namespace) -> int:
         return _run_history(args)
     if args.command == "run":
         return _run(args)
+    if args.command == "api":
+        return _run_api(args)
     if args.command == "gpio-self-test":
         return _run_self_test(args)
     raise ValueError(f"unsupported command: {args.command}")
@@ -662,11 +683,20 @@ def _run_controller(
     provider: WeatherProvider,
     driver_name: str = "simulated",
 ) -> int:
+    from .persistence.heartbeat import SqlHeartbeatPublisher
     from .persistence.history import SqlHistoryRecorder
 
     assert config.weather is not None
-    history = SqlHistoryRecorder(
-        store.engine, store.repository.installation_id(), store.location
+    installation_id = store.repository.installation_id()
+    history = SqlHistoryRecorder(store.engine, installation_id, store.location)
+    # The controller's proof of life, so a separate API can tell "now" from
+    # "the last thing anyone knew". Publishing it can never stop the loop.
+    heartbeat = SqlHeartbeatPublisher(
+        store.engine,
+        installation_id,
+        poll_seconds=config.runtime.poll_seconds,
+        driver_kind=driver_name,
+        location=store.location,
     )
     current_plan_ref: list[PlanRef | None] = [None]
     driver: OutputDriver | None = None
@@ -716,6 +746,7 @@ def _run_controller(
                 error_retry_seconds=config.weather.watchdog.retry_minutes * 60,
                 history=history,
                 retention_days=config.retention_days,
+                heartbeat=heartbeat,
             )
             return service.run()
         finally:
@@ -733,6 +764,39 @@ def _build_output_driver(config: AppConfig, driver_name: str) -> OutputDriver:
             {heater.id: heater.output for heater in config.heaters if heater.enabled}
         )
     raise ValueError(f"unsupported output driver: {driver_name}")
+
+
+# ------------------------------------------------------------------------ api
+
+def _run_api(args: argparse.Namespace) -> int:
+    """Serve the HTTP API.
+
+    Imported lazily so no other command pays for FastAPI, and so the package
+    stays usable without the optional `api` extra installed.
+
+    This command builds NO output driver: like the administrative commands, it
+    cannot switch hardware (constitution principle I).
+    """
+    try:
+        import uvicorn
+
+        from .api import create_app
+        from .api.settings import load_settings
+    except ImportError as exc:
+        raise ValueError(
+            f"the HTTP API extra is not installed: {exc}. Install it with "
+            "python -m pip install 'dynamic-thermal-charge[api]'"
+        ) from exc
+
+    settings = load_settings()
+    host = args.host or settings.host
+    port = args.port or settings.port
+    app = create_app(settings)
+    logger.info("Serving the HTTP API on %s:%d", host, port)
+    # Bare uvicorn on purpose: uvicorn[standard] would pull uvloop and
+    # httptools, neither of which has an armv7l wheel.
+    uvicorn.run(app, host=host, port=port, log_level=(args.log_level or "info").lower())
+    return EXIT_OK
 
 
 # -------------------------------------------------------------- gpio self test

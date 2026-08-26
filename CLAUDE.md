@@ -52,8 +52,9 @@ que no cambia comportamiento.
 Desactivar o eludir estos hooks requiere petición explícita del usuario.
 
 <!-- SPECKIT START -->
-Plan activo: `specs/001-config-database/plan.md` (feature `001-config-database`).
+Plan activo: `specs/002-config-api/plan.md` (feature `002-config-api`).
+Fase anterior ya implementada: `specs/001-config-database/`.
 Para contexto técnico, estructura del proyecto, decisiones de dependencias y comandos,
-leer ese plan y sus artefactos: `research.md`, `data-model.md`, `contracts/` y
+leer el plan activo y sus artefactos: `research.md`, `data-model.md`, `contracts/` y
 `quickstart.md`.
 <!-- SPECKIT END -->
