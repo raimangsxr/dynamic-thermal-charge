@@ -1,31 +1,50 @@
 <!--
 Sync Impact Report
 ==================
-Version change: TEMPLATE (sin ratificar) → 1.0.0
-Ratificación inicial: se sustituyen todos los placeholders de la plantilla por
-principios derivados del código existente (drivers, controller, service, state,
-watchdog, config, weather) y del flujo SDD acordado en CLAUDE.md.
+Version change: 1.0.0 → 1.1.0 (MINOR)
 
-Principios añadidos:
-  I.   Seguridad física primero (fail-safe)
-  II.  Núcleo puro, hardware y red en los bordes
-  III. Configuración validada y explícita
-  IV.  Continuidad y degradación observable
-  V.   Tests deterministas sin hardware
-  VI.  Simplicidad y stdlib primero
+Motivación: enmienda solicitada explícitamente por el usuario, originada por la feature
+`001-config-database`, que sustituye la configuración estática en YAML por persistencia en
+base de datos (SQLite local o PostgreSQL remoto) y añade histórico auditable. El Principio
+III estaba redactado en términos de YAML y habría bloqueado el Constitution Check de esa
+feature.
 
-Secciones añadidas: Restricciones de plataforma; Flujo de desarrollo (SDD);
-Governance.
-Secciones eliminadas: ninguna (plantilla vacía).
+Principios modificados (ninguno renombrado, ninguno eliminado):
+  III. Configuración validada y explícita — ampliado: la validación es ahora independiente
+       del origen de la configuración; se añaden reglas sobre procedencia de credenciales y
+       sobre esquema versionado del almacén de configuración.
+  IV.  Continuidad y degradación observable — ampliado: cubre la pérdida de acceso al
+       almacén de configuración en caliente y el fallo de escritura de auditoría.
+  VI.  Simplicidad y stdlib primero — ampliado: las dependencias de un borde concreto van
+       en extras opcionales; el núcleo debe importarse sin ellas.
+
+Principios sin cambios: I (Seguridad física primero), II (Núcleo puro), V (Tests
+deterministas sin hardware).
+
+Secciones modificadas:
+  Restricciones de plataforma — actualizada: origen de configuración en base de datos,
+  PostgreSQL siempre externo al dispositivo, prohibición de cadenas de construcción de Node
+  en la Pi, dependencias de persistencia declaradas con su justificación frente al
+  Principio VI, y la CLI deja de ser la única interfaz prevista.
+
+Secciones añadidas: ninguna. Secciones eliminadas: ninguna.
+
+Razón del bump MINOR: se amplía materialmente la guía de tres principios y de las
+restricciones de plataforma, sin eliminar ni redefinir ningún principio de forma
+incompatible. Ninguna regla vigente en 1.0.0 deja de cumplirse en 1.1.0.
 
 Plantillas y artefactos dependientes:
-  ✅ .specify/templates/plan-template.md — la sección "Constitution Check" es
-     genérica ("Gates determined based on constitution file"); no requiere cambios,
-     las puertas concretas se instancian por feature.
-  ✅ .specify/templates/spec-template.md — sin referencias a principios.
-  ✅ .specify/templates/tasks-template.md — sin referencias a principios.
-  ✅ CLAUDE.md / AGENTS.md — ya declaran el ciclo SDD como obligatorio.
-  ⚠ README.md — no menciona la constitución; pendiente decidir si se enlaza.
+  ✅ .specify/templates/plan-template.md — la sección "Constitution Check" sigue siendo
+     genérica ("Gates determined based on constitution file"); las puertas concretas se
+     instancian por feature. Sin cambios necesarios.
+  ✅ .specify/templates/spec-template.md — sin referencias a principios ni a YAML.
+  ✅ .specify/templates/tasks-template.md — sin referencias a principios ni a YAML.
+  ✅ CLAUDE.md / AGENTS.md — declaran el ciclo SDD como obligatorio; no referencian YAML
+     como origen de configuración. Sin cambios necesarios.
+  ⚠ README.md — documenta extensamente la configuración YAML y quedará desalineado hasta
+     que se implemente `001-config-database`. Su actualización es un requisito de esa
+     feature (FR-031), no de esta enmienda. Sigue pendiente además la decisión de v1.0.0
+     sobre enlazar la constitución desde el README.
 
 TODO diferidos: ninguno.
 -->
@@ -56,9 +75,10 @@ eléctrico y de facturación; un relé que queda abierto solo es confort perdido
 
 El modelo térmico y el planificador MUST ser funciones deterministas sin I/O.
 
-- Todo efecto externo —GPIO, HTTP, reloj, espera, disco— MUST estar detrás de una
-  frontera explícita (`Protocol` o `Callable` inyectable: `OutputDriver`,
-  `WeatherProvider`, `DeviceFactory`, `clock`, `wait`, `http_get`).
+- Todo efecto externo —GPIO, HTTP, base de datos, reloj, espera, disco— MUST estar detrás
+  de una frontera explícita (`Protocol` o `Callable` inyectable: `OutputDriver`,
+  `WeatherProvider`, `DeviceFactory`, repositorio de configuración, `clock`, `wait`,
+  `http_get`).
 - El paquete MUST importarse y ejecutarse completo en una máquina de desarrollo sin
   Raspberry Pi: las dependencias de hardware se cargan de forma perezosa dentro del
   driver que las necesita.
@@ -70,21 +90,31 @@ hardware se sustituye sin reescribir el núcleo.
 
 ### III. Configuración validada y explícita
 
-La configuración es contrato, no sugerencia.
+La configuración es contrato, no sugerencia. Esta exigencia es **independiente del
+origen**: base de datos local o remota, fichero, API HTTP o cualquier interfaz futura.
 
-- El YAML MUST validarse íntegramente al cargar, con `ValueError` y mensaje accionable
-  que identifique la clave ofensora.
+- La configuración MUST validarse íntegramente al cargar, con un error de dominio y un
+  mensaje accionable que identifique el campo ofensor y, cuando corresponda, la entidad a
+  la que pertenece.
+- El rechazo MUST ser completo: NUNCA se aplica una configuración parcialmente válida.
 - NO se permiten valores por defecto implícitos que alteren comportamiento físico
   (pines, potencia máxima, ventanas de carga): si son necesarios, se declaran y
   documentan.
-- Los secretos (p. ej. la API key de AEMET) MUST leerse de variables de entorno
-  nombradas en la configuración; nunca se escriben en el repositorio ni en logs.
-- El estado persistido MUST ser versionado y su carga tolerante: un fichero corrupto o
+- La localización del almacén de configuración y sus credenciales —cadena de conexión,
+  secretos como la API key de AEMET— MUST proceder de variables de entorno o del mecanismo
+  protegido del despliegue. NUNCA del propio almacén de configuración, del repositorio ni
+  de los logs.
+- El esquema del almacén de configuración MUST estar versionado. Las migraciones MUST
+  aplicarse en orden conservando los datos existentes. Un esquema de versión **posterior**
+  a la que el servicio comprende MUST rechazar el arranque, en lugar de operar sobre datos
+  que no entiende (ver Principio I).
+- El estado persistido MUST ser versionado y su carga tolerante: un registro corrupto o
   de versión desconocida se descarta con log de error y se trata como "sin plan"
   (ver Principio I).
 
 **Rationale:** un pin mal interpretado o una potencia por defecto silenciosa se paga en
-el cuadro eléctrico.
+el cuadro eléctrico, y da igual si el valor venía de un fichero, de una tabla o de un
+formulario web.
 
 ### IV. Continuidad y degradación observable
 
@@ -92,25 +122,34 @@ El servicio está pensado para correr sin supervisión durante meses.
 
 - Un fallo de refresco de plan MUST conservar el plan persistido y reintentar con la
   cadencia configurada; nunca terminar el proceso.
-- El plan activo MUST persistirse de forma atómica (escritura a temporal + `os.replace`
-  + `fsync`), de modo que un corte de corriente no deje estado a medias.
-- La degradación (proveedor secundario, reintento, ausencia de plan) MUST registrarse en
-  la transición —al entrar y al salir— no en cada iteración del bucle.
-- Toda transición de estado de una salida MUST quedar en el log con id, valor e instante.
+- La pérdida de acceso al almacén de configuración con el servicio ya en marcha MUST
+  conservar el plan en ejecución y reintentar con la cadencia configurada; MUST NOT
+  terminar el proceso ni dejar salidas en estado indeterminado.
+- El plan activo MUST persistirse de forma atómica y durable, de modo que un corte de
+  corriente no deje estado a medias.
+- La degradación (proveedor secundario, almacén inaccesible, reintento, ausencia de plan)
+  MUST registrarse en la transición —al entrar y al salir— y MUST NOT registrarse en cada
+  iteración del bucle de control.
+- Toda transición de estado de una salida MUST quedar registrada con id, valor e instante.
+- Un fallo al escribir un registro de auditoría o de histórico MUST registrarse como error
+  y MUST NOT interrumpir la planificación, la conmutación de salidas ni el proceso: la
+  observabilidad nunca puede ser causa de una parada.
 
 **Rationale:** sin observabilidad de las transiciones no hay forma de auditar por qué un
-acumulador cargó o no una noche concreta.
+acumulador cargó o no una noche concreta; y un fallo del registro de auditoría no puede
+convertirse en un fallo del control.
 
 ### V. Tests deterministas sin hardware
 
 - Toda feature o corrección MUST entrar con tests en `tests/`, en el módulo espejo del
   código tocado.
 - Los tests MUST ser deterministas: se inyectan dobles (device factory falsa, `http_get`
-  falso, reloj y `wait` controlados). PROHIBIDO un test que requiera Raspberry Pi, red
-  real, o que duerma en tiempo real.
+  falso, repositorio de configuración falso, reloj y `wait` controlados). PROHIBIDO un test
+  que requiera Raspberry Pi, red real, base de datos remota, o que duerma en tiempo real.
 - La suite completa (`pytest`) MUST pasar antes de considerar una tarea terminada.
 - Los caminos de fallo del Principio I (error de driver, plan ausente, id desconocido,
-  apagado parcialmente fallido) MUST tener cobertura explícita.
+  apagado parcialmente fallido, almacén de configuración inaccesible o inválido) MUST tener
+  cobertura explícita.
 
 **Rationale:** el comportamiento crítico es precisamente el de los caminos de error, y
 esos no se prueban a mano en una Pi.
@@ -119,25 +158,38 @@ esos no se prueban a mano en una Pi.
 
 - Las dependencias de runtime se mantienen al mínimo. Añadir una dependencia MUST
   justificarse en el `plan.md` de la feature.
-- Lo que solo hace falta en el despliegue real (`gpiozero`, `lgpio`) MUST vivir en un
-  extra opcional, no en el runtime base.
+- Lo que solo hace falta en el despliegue real o en un borde concreto —hardware
+  (`gpiozero`, `lgpio`), persistencia, API HTTP, interfaz web— MUST vivir en un extra
+  opcional siempre que sea posible, no en el runtime base.
+- El planificador y el modelo térmico MUST poder importarse y ejecutarse sin ninguna de
+  esas dependencias de borde instalada.
 - Se usan `dataclass(frozen=True)`, `Protocol` y type hints completos; se prefiere la
   estructura de datos inmutable al objeto mutable con estado escondido.
 - YAGNI: no se añaden capas de abstracción para necesidades hipotéticas.
 
 **Rationale:** el objetivo de despliegue es una Raspberry Pi 2B; cada dependencia es
-peso, superficie de fallo y una actualización que puede romper el arranque.
+peso, superficie de fallo y una actualización que puede romper el arranque. Confinarlas en
+extras mantiene el núcleo verificable en cualquier máquina.
 
 ## Restricciones de plataforma
 
-- Python 3.12 o superior. Runtime: PyYAML. Extra `gpio`: `gpiozero` + `lgpio`.
-- Objetivo de despliegue: Raspberry Pi 2B con systemd (`deploy/`). El consumo de CPU y
-  memoria del bucle de control debe ser despreciable frente a esa máquina.
-- Interfaz de usuario actual: CLI (`dynamic-thermal-charge`) más ficheros YAML. Se prevé
-  ampliarla (p. ej. interfaz web, API o persistencia adicional) y hacerlo NO requiere
-  enmendar esta constitución. Cualquier interfaz nueva MUST ser un borde según el
-  Principio II y MUST NOT activar una salida sin pasar por el controlador fail-safe del
-  Principio I.
+- Python 3.12 o superior. Objetivo de despliegue: Raspberry Pi 2B (ARMv7 de 32 bits,
+  ~1 GB de RAM) con systemd (`deploy/`). El consumo de CPU y memoria del bucle de control
+  debe ser despreciable frente a esa máquina.
+- **Origen de la configuración:** base de datos, con dos modos soportados y comportamiento
+  idéntico entre ambos: SQLite local en el propio dispositivo, o PostgreSQL remoto.
+  PostgreSQL es **siempre** externo al dispositivo de despliegue; instalar un motor de base
+  de datos en la Raspberry Pi 2B queda descartado por recursos.
+- **Dependencias declaradas de persistencia:** SQLAlchemy y Alembic. Se aceptan como
+  excepción justificada al Principio VI: dan un único código para ambos motores y
+  migraciones versionadas que conservan datos, frente a la alternativa de mantener y probar
+  a mano dos dialectos de SQL. Viven en un extra opcional según el Principio VI.
+- **Artefactos de frontend:** MUST compilarse fuera del dispositivo de despliegue y
+  desplegarse ya construidos. NUNCA se ejecuta una cadena de construcción de Node en la Pi.
+- **Interfaces de usuario:** la CLI (`dynamic-thermal-charge`) deja de ser la única. Se
+  prevén API HTTP, interfaz web e integración domótica. Cada una MUST ser un borde según el
+  Principio II, y ninguna MUST activar una salida sin pasar por el controlador fail-safe
+  del Principio I. Añadir una interfaz nueva NO requiere enmendar esta constitución.
 - Zona horaria y horario de tarifa son datos de configuración, nunca constantes en código.
 
 ## Flujo de desarrollo (SDD)
@@ -170,4 +222,4 @@ gana la constitución hasta que se enmiende explícitamente.
 - **Desviaciones:** se documentan en el `plan.md` de la feature con motivo y alcance. Una
   desviación recurrente es señal de que la constitución debe enmendarse.
 
-**Version**: 1.0.0 | **Ratified**: 2026-08-26 | **Last Amended**: 2026-08-26
+**Version**: 1.1.0 | **Ratified**: 2026-08-26 | **Last Amended**: 2026-08-26
