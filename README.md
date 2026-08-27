@@ -516,12 +516,12 @@ export DTC_DATABASE_URL="sqlite:///$(pwd)/var/dtc.db"
 export DTC_API_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
 
 dtc db upgrade      # si vienes de la fase anterior; db init si empiezas de cero
-dtc api             # escucha en 127.0.0.1:8420
+dtc api             # escucha en 127.0.0.1:8080
 ```
 
 ```bash
-curl -s -H "Authorization: Bearer $DTC_API_TOKEN" localhost:8420/api/v1/status | jq
-open http://localhost:8420/docs      # también exige el token
+curl -s -H "Authorization: Bearer $DTC_API_TOKEN" localhost:8080/api/v1/status | jq
+open http://localhost:8080/docs      # también exige el token
 ```
 
 ### El token
@@ -576,11 +576,11 @@ clientes se pisen.
 
 ```bash
 TOKEN="Authorization: Bearer $DTC_API_TOKEN"
-REV=$(curl -s -H "$TOKEN" localhost:8420/api/v1/config | jq .config_revision)
+REV=$(curl -s -H "$TOKEN" localhost:8080/api/v1/config | jq .config_revision)
 
 curl -s -X PATCH -H "$TOKEN" -H 'Content-Type: application/json' \
   -d "{\"revision\": $REV, \"field\": \"max_total_power_kw\", \"value\": \"5.2\"}" \
-  localhost:8420/api/v1/config | jq
+  localhost:8080/api/v1/config | jq
 ```
 
 Reenviar una revisión vieja devuelve **409**: no es un error a evitar, es la protección
@@ -590,7 +590,7 @@ funcionando. Las mismas validaciones y los mismos rechazos que por consola.
 
 ```bash
 curl -s -H "$TOKEN" \
-  'localhost:8420/api/v1/history/plans?from=2026-01-01T00:00:00Z&limit=10' | jq
+  'localhost:8080/api/v1/history/plans?from=2026-01-01T00:00:00Z&limit=10' | jq
 ```
 
 Siempre paginado: 50 por defecto, 500 como máximo. Ninguna consulta devuelve el histórico
@@ -756,8 +756,8 @@ exponerse**. nginx es el único componente accesible desde la red.
 Comprobarlo merece la pena una vez:
 
 ```bash
-ssh pi 'ss -tlnp | grep 8420'          # debe decir 127.0.0.1:8420, no 0.0.0.0
-curl -s http://<la-pi>:8420/health     # debe fallar: la API no escucha ahí fuera
+ssh pi 'ss -tlnp | grep 8080'          # debe decir 127.0.0.1:8080, no 0.0.0.0
+curl -s http://<la-pi>:8080/health     # debe fallar: la API no escucha ahí fuera
 curl -s http://<la-pi>/health          # debe responder: nginx sí
 ```
 

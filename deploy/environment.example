@@ -38,7 +38,7 @@ DTC_API_TOKEN=
 # anyone on that network can read the token in transit. Reasonable on a trusted
 # home network; NOT reasonable on the internet without a reverse proxy with TLS.
 #DTC_API_HOST=0.0.0.0
-#DTC_API_PORT=8420
+#DTC_API_PORT=8080
 
 # How old the controller's heartbeat may be before the API stops presenting the
 # output state as current. Derived from the controller's own polling cadence when

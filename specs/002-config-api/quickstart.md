@@ -11,15 +11,15 @@ export DTC_DATABASE_URL="sqlite:///$(pwd)/var/dtc.db"
 export DTC_API_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
 
 dtc db init          # o db upgrade si ya venías de la fase 1
-dtc api              # escucha en 127.0.0.1:8420
+dtc api              # escucha en 127.0.0.1:8080
 ```
 
 En otra terminal:
 
 ```bash
-curl -s -H "Authorization: Bearer $DTC_API_TOKEN" localhost:8420/api/v1/status | jq
-curl -s -H "Authorization: Bearer $DTC_API_TOKEN" localhost:8420/api/v1/config | jq
-open http://localhost:8420/docs
+curl -s -H "Authorization: Bearer $DTC_API_TOKEN" localhost:8080/api/v1/status | jq
+curl -s -H "Authorization: Bearer $DTC_API_TOKEN" localhost:8080/api/v1/config | jq
+open http://localhost:8080/docs
 ```
 
 El controlador es un proceso aparte. Para ver un estado vigente, arráncalo también:
@@ -48,17 +48,17 @@ La revisión es obligatoria en toda escritura: es lo que impide que dos clientes
 TOKEN="Authorization: Bearer $DTC_API_TOKEN"
 
 # Leer la revisión vigente
-REV=$(curl -s -H "$TOKEN" localhost:8420/api/v1/config | jq .config_revision)
+REV=$(curl -s -H "$TOKEN" localhost:8080/api/v1/config | jq .config_revision)
 
 # Cambiar un campo de la instalación
 curl -s -X PATCH -H "$TOKEN" -H 'Content-Type: application/json' \
   -d "{\"revision\": $REV, \"field\": \"max_total_power_kw\", \"value\": \"6.0\"}" \
-  localhost:8420/api/v1/config | jq
+  localhost:8080/api/v1/config | jq
 
 # Cambiar un campo de un acumulador
 curl -s -X PATCH -H "$TOKEN" -H 'Content-Type: application/json' \
   -d "{\"revision\": $REV, \"field\": \"target_charge\", \"value\": \"0.8\"}" \
-  localhost:8420/api/v1/config/heaters/salon | jq
+  localhost:8080/api/v1/config/heaters/salon | jq
 ```
 
 Reenviar una revisión vieja devuelve **409** con el mensaje de que hay que releer. No es un
@@ -68,9 +68,9 @@ error a evitar: es la protección funcionando.
 
 ```bash
 curl -s -H "$TOKEN" \
-  'localhost:8420/api/v1/history/plans?from=2026-01-01T00:00:00Z&limit=10' | jq
+  'localhost:8080/api/v1/history/plans?from=2026-01-01T00:00:00Z&limit=10' | jq
 curl -s -H "$TOKEN" \
-  'localhost:8420/api/v1/history/transitions?heater_id=salon&limit=100' | jq
+  'localhost:8080/api/v1/history/transitions?heater_id=salon&limit=100' | jq
 ```
 
 Paginado siempre, 50 por defecto y 500 como máximo. Nunca devuelve el histórico completo.

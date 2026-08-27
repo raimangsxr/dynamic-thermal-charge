@@ -225,7 +225,7 @@ def test_the_api_subcommand_builds_no_output_driver(monkeypatch, sqlite_url, cap
     monkeypatch.setattr(uvicorn, "run", lambda app, **kw: served.update(kw))
     assert cli.main(["api"]) == cli.EXIT_OK
     assert served["host"] == "127.0.0.1"
-    assert served["port"] == 8420
+    assert served["port"] == 8080
 
 
 def test_the_api_subcommand_refuses_an_unusable_token(monkeypatch, sqlite_url, capsys):

@@ -20,7 +20,7 @@ comprobador de tipos obligue a decidir qué se pinta cuando no hay prueba.
 
 Enfoque técnico: **Angular 22 con componentes autónomos, señales y sin `zone.js`**, probado con
 **Vitest**, sin librería de componentes. La credencial vive en `sessionStorage` y la añade un
-interceptor. nginx sirve el `dist/` y hace de proxy a `127.0.0.1:8420`, con lo que el navegador ve
+interceptor. nginx sirve el `dist/` y hace de proxy a `127.0.0.1:8080`, con lo que el navegador ve
 un solo origen y **la API nunca se expone en la red**.
 
 Nada de `src/dynamic_thermal_charge/` cambia. FR-045 de la fase anterior —la API no sirve ficheros

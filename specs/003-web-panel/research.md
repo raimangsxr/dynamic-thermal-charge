@@ -144,7 +144,7 @@ apunta a los recursos viejos.
 ## D6 — nginx: un solo origen, y la API que no se expone
 
 **Decisión**: nginx en el dispositivo sirve el `dist/` y hace de intermediario hacia la API en
-`127.0.0.1:8420`. Un fichero de configuración de sitio versionado en el repositorio, con un bloque
+`127.0.0.1:8080`. Un fichero de configuración de sitio versionado en el repositorio, con un bloque
 de cifrado comentado.
 
 **Rationale**: es la consecuencia más valiosa de la decisión del usuario. Con nginx delante:

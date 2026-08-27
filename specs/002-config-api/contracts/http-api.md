@@ -30,7 +30,7 @@ El token se lee de `DTC_API_TOKEN`, servido por `/etc/dynamic-thermal-charge/env
 | `DTC_DATABASE_URL` | sí | — | Sin cambios respecto a la fase 1 |
 | `DTC_API_TOKEN` | sí | — | Credencial compartida, ≥ 32 caracteres |
 | `DTC_API_HOST` | no | `127.0.0.1` | Dirección de escucha. Por defecto **solo local** |
-| `DTC_API_PORT` | no | `8420` | Puerto |
+| `DTC_API_PORT` | no | `8080` | Puerto |
 | `DTC_API_STALE_SECONDS` | no | derivada | Sobrescribe la tolerancia de vigencia |
 | `DTC_API_CORS_ORIGINS` | no | vacío | Orígenes admitidos, separados por comas. Vacío = ninguno |
 

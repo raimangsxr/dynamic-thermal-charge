@@ -185,4 +185,4 @@ def test_the_bundle_budget_is_declared_so_the_build_fails_when_exceeded() -> Non
 def test_the_development_proxy_points_at_the_local_api() -> None:
     """So no cross-origin configuration is needed in development either."""
     proxy = json.loads((FRONTEND / "proxy.conf.json").read_text(encoding="utf-8"))
-    assert proxy["/api"]["target"] == "http://127.0.0.1:8420"
+    assert proxy["/api"]["target"] == "http://127.0.0.1:8080"
