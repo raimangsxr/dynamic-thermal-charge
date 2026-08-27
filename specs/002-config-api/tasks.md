@@ -88,7 +88,7 @@ empezar sin esta fase, y al terminarla no hay todavía ninguna ruta servida.
 
 ### Ajustes de entorno
 
-- [X] T021 Implementar `src/dynamic_thermal_charge/api/settings.py` leyendo del entorno `DTC_API_TOKEN`, `DTC_API_HOST` (por defecto `127.0.0.1`), `DTC_API_PORT` (por defecto `8420`), `DTC_API_STALE_SECONDS` y `DTC_API_CORS_ORIGINS` (por defecto vacío), según `contracts/http-api.md`
+- [X] T021 Implementar `src/dynamic_thermal_charge/api/settings.py` leyendo del entorno `DTC_API_TOKEN`, `DTC_API_HOST` (por defecto `127.0.0.1`), `DTC_API_PORT` (por defecto `8080`), `DTC_API_STALE_SECONDS` y `DTC_API_CORS_ORIGINS` (por defecto vacío), según `contracts/http-api.md`
 - [X] T022 Hacer que `settings.py` **no** lea nada de la base de datos y documentar por qué: son los datos necesarios antes de poder leerla, y el token está excluido del almacén por el Principio III (research D11)
 - [X] T023 Escribir `tests/test_api_security.py::test_settings_defaults_are_restrictive`: la dirección por defecto es solo local y la lista de orígenes admitidos está vacía
 

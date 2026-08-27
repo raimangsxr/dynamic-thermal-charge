@@ -25,7 +25,7 @@ CORS_ORIGINS_ENV = "DTC_API_CORS_ORIGINS"
 
 #: Local interface only. Exposing the API on the network must be a deliberate act.
 DEFAULT_HOST = "127.0.0.1"
-DEFAULT_PORT = 8420
+DEFAULT_PORT = 8080
 MINIMUM_TOKEN_LENGTH = 32
 
 #: Values that mean "nobody edited the environment file". Accepting any of them

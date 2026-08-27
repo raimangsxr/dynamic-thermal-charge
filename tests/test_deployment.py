@@ -385,7 +385,7 @@ def test_fingerprinted_assets_are_cached_as_immutable() -> None:
 def test_the_api_is_proxied_to_the_local_interface_only() -> None:
     """FR-039: nginx is the only component exposed on the network."""
     site = _nginx()
-    assert "proxy_pass http://127.0.0.1:8420;" in site
+    assert "proxy_pass http://127.0.0.1:8080;" in site
     assert "proxy_pass http://0.0.0.0" not in site
     for line in site.splitlines():
         if "proxy_pass" in line and not line.strip().startswith("#"):

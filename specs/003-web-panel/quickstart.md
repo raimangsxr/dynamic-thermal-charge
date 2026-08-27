@@ -94,8 +94,8 @@ nginx es el único componente expuesto en la red.
 Merece la pena verificarlo una vez:
 
 ```bash
-ssh pi 'ss -tlnp | grep 8420'     # debe mostrar 127.0.0.1:8420, no 0.0.0.0:8420
-curl -s http://<la-pi>:8420/health   # debe fallar: la API no escucha ahí fuera
+ssh pi 'ss -tlnp | grep 8080'     # debe mostrar 127.0.0.1:8080, no 0.0.0.0:8080
+curl -s http://<la-pi>:8080/health   # debe fallar: la API no escucha ahí fuera
 curl -s http://<la-pi>/health        # debe responder: nginx sí
 ```
 

@@ -41,7 +41,7 @@ server {
 
     # 3. La API, en la interfaz local del propio dispositivo (FR-039).
     location /api/ {
-        proxy_pass http://127.0.0.1:8420;
+        proxy_pass http://127.0.0.1:8080;
         proxy_http_version 1.1;
         # La cabecera de autorización debe llegar íntegra. nginx no la elimina,
         # pero declararlo evita que un cambio futuro la rompa en silencio.
@@ -53,7 +53,7 @@ server {
 
     # La comprobación de salud de la API, para un monitor externo.
     location = /health {
-        proxy_pass http://127.0.0.1:8420/health;
+        proxy_pass http://127.0.0.1:8080/health;
     }
 
     # La descripción de la API (/docs, /openapi.json) NO se expone por aquí.
