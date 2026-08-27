@@ -8,15 +8,23 @@ componente que decide cuánta energía se pide.
 ## Frontera
 
 ```text
+select_indoor_temperatures(
+    heaters,
+    readings: Mapping[str, IndoorReading],
+    at: datetime,
+    policy: IndoorTemperaturePolicy,
+) -> IndoorSelection
+
 ThermalDemandEngine.calculate(
     heaters,
     forecast,
-    indoor: Mapping[str, IndoorReading] | None = None,   <- NUEVO, opcional
+    indoor_celsius: Mapping[str, float] | None = None,   <- NUEVO, opcional
 ) -> dict[str, int]
 ```
 
-Sigue siendo una **función determinista sin I/O**. Las medidas llegan como parámetro; el modelo no
-lee nada, no consulta nada y no conoce MQTT. Quien las recoge es el publicador (Principio II).
+Ambas son **funciones deterministas sin I/O**. Las lecturas, el instante de evaluación y la política
+llegan como parámetros; ninguna lee reloj, base de datos ni MQTT. El publicador persiste la última
+lectura y el controlador la carga al iniciar el recálculo (Principio II).
 
 ## El cálculo
 
@@ -46,6 +54,8 @@ en otro caso                                    -> SÍ
 ```
 
 «NO» significa **el comportamiento anterior a esta fase**, no un valor por defecto inventado.
+`IndoorSelection` conserva además el motivo por acumulador para que el borde de composición del
+controlador registre las transiciones sin introducir estado mutable en estas funciones.
 
 ## Tres garantías no negociables
 
@@ -63,9 +73,10 @@ comentado en el código para que nadie «arregle» el negativo.
 
 **3. Ningún fallo de temperatura interior impide generar el plan.**
 
-Una medida ausente, vieja o absurda produce reserva y un registro, nunca una excepción. El
-planificador tiene que seguir produciendo un plan, y ninguna salida puede quedar en estado
-indeterminado (FR-027, Principio I).
+Una medida ausente, vieja o absurda produce reserva y un registro, nunca una excepción. Una entrada
+inválida ya ha eliminado la lectura persistida anterior, por lo que la siguiente selección la ve
+como ausente. El planificador tiene que seguir produciendo un plan, y ninguna salida puede quedar
+en estado indeterminado (FR-027, FR-047, Principio I).
 
 ## Registro
 

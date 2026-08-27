@@ -29,10 +29,13 @@ def _patch(client, field, value, revision=None, heater=None):
 def test_the_whole_configuration_is_readable(client):
     body = _config(client)
     assert body["config_revision"] == 1
-    assert body["schema_revision"] == "0002_controller_heartbeat"
+    assert body["schema_revision"] == "0003_indoor_temperature"
     assert body["max_total_power_kw"] == 5.2
     assert body["slot_minutes"] == 30
     assert body["retention_days"] == 365
+    assert body["indoor_max_age_minutes"] == 30
+    assert body["indoor_min_plausible_c"] == -20
+    assert body["indoor_max_plausible_c"] == 50
     assert [h["id"] for h in body["heaters"]] == [
         "salon",
         "entrada",
@@ -148,6 +151,22 @@ def test_a_heater_field_changes_only_that_heater(client):
             assert after[heater_id] == heater, "an unrelated heater changed"
 
 
+def test_indoor_policy_and_topic_round_trip_with_empty_topic_as_null(client):
+    for field, value, expected in (
+        ("indoor_max_age_minutes", "45", 45),
+        ("indoor_min_plausible_c", "-15", -15.0),
+        ("indoor_max_plausible_c", "45", 45.0),
+    ):
+        assert _patch(client, field, value).status_code == 200
+        assert _config(client)[field] == expected
+    assert _patch(client, "indoor_topic", "ha/salon/temp", heater="salon").status_code == 200
+    assert _config(client)["heaters"][0]["indoor_topic"] == "ha/salon/temp"
+    cleared = _patch(client, "indoor_topic", "", heater="salon")
+    assert cleared.status_code == 200
+    assert cleared.json()["new_value"] is None
+    assert _config(client)["heaters"][0]["indoor_topic"] is None
+
+
 def test_a_thermal_field_changes(client):
     assert _patch(client, "target_temperature_c", "22.5", heater="salon").status_code == 200
     heaters = {h["id"]: h for h in _config(client)["heaters"]}
@@ -260,6 +279,9 @@ def test_removing_an_unknown_heater_is_not_found(client):
         ("log_level", "CHATTY", None, 422),
         ("weekdays", "1,0", None, 422),
         ("retention_days", "0", None, 422),
+        ("indoor_max_age_minutes", "0", None, 422),
+        ("indoor_min_plausible_c", "60", None, 422),
+        ("indoor_max_plausible_c", "-30", None, 422),
         ("pin", "17", "entrada", 422),
         ("target_charge", "1.5", "entrada", 422),
         ("design_outdoor_temperature_c", "30", "salon", 422),

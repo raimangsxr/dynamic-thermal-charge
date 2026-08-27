@@ -1,9 +1,10 @@
-from datetime import date
+from dataclasses import replace
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
-from dynamic_thermal_charge.models import Heater, OutputConfig, ThermalProfile
-from dynamic_thermal_charge.thermal import ThermalDemandEngine
+from dynamic_thermal_charge.models import Heater, IndoorReading, OutputConfig, ThermalProfile
+from dynamic_thermal_charge.thermal import ThermalDemandEngine, select_indoor_temperatures
 from dynamic_thermal_charge.weather import OutdoorForecast
 
 
@@ -85,3 +86,47 @@ def test_falls_back_to_static_target_without_thermal_profile() -> None:
     result = ThermalDemandEngine().calculate((heater,), forecast(10))
 
     assert result == {"static": 120}
+
+
+def test_selects_only_configured_fresh_plausible_readings_at_explicit_time():
+    at = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
+    heaters = (
+        replace(thermal_heater(), id="fresh", indoor_topic="ha/fresh"),
+        replace(thermal_heater(), id="edge", indoor_topic="ha/edge"),
+        replace(thermal_heater(), id="old", indoor_topic="ha/old"),
+        replace(thermal_heater(), id="absurd", indoor_topic="ha/absurd"),
+        replace(thermal_heater(), id="missing", indoor_topic="ha/missing"),
+    )
+    readings = {
+        "fresh": IndoorReading("fresh", 19, at - timedelta(minutes=1)),
+        "edge": IndoorReading("edge", 20, at - timedelta(minutes=30)),
+        "old": IndoorReading("old", 18, at - timedelta(minutes=30, seconds=1)),
+        "absurd": IndoorReading("absurd", 85, at),
+    }
+    selection = select_indoor_temperatures(
+        heaters, readings, at=at, max_age_minutes=30,
+        min_plausible_c=-20, max_plausible_c=50,
+    )
+    assert selection.temperatures == {"fresh": 19, "edge": 20}
+    assert selection.fallback_reasons == {
+        "old": "stale", "absurd": "implausible", "missing": "missing"
+    }
+
+
+@pytest.mark.parametrize(
+    ("indoor", "expected"),
+    [(10, 251), (21, 48), (25, 48)],
+)
+def test_indoor_temperature_drives_demand_but_never_below_min_charge(indoor, expected):
+    result = ThermalDemandEngine().calculate(
+        (thermal_heater(),), forecast(-5), indoor_temperatures={"room": indoor}
+    )
+    assert result == {"room": expected}
+
+
+def test_absent_indoor_map_is_exactly_the_previous_algorithm():
+    heaters = (thermal_heater(),)
+    engine = ThermalDemandEngine()
+    assert engine.calculate(heaters, forecast(10.5)) == engine.calculate(
+        heaters, forecast(10.5), indoor_temperatures={}
+    )

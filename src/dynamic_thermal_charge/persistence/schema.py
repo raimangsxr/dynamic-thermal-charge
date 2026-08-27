@@ -72,6 +72,9 @@ installation = Table(
     Column("poll_seconds", Float, nullable=False, server_default="5"),
     # NULL means unlimited retention.
     Column("retention_days", Integer, nullable=True),
+    Column("indoor_max_age_minutes", Integer, nullable=False, server_default="30"),
+    Column("indoor_min_plausible_c", Float, nullable=False, server_default="-20"),
+    Column("indoor_max_plausible_c", Float, nullable=False, server_default="50"),
     Column("created_at", DateTime, nullable=False),
     Column("updated_at", DateTime, nullable=False),
     CheckConstraint("revision >= 1", name="ck_installation_revision"),
@@ -84,6 +87,13 @@ installation = Table(
     CheckConstraint(
         "retention_days IS NULL OR retention_days > 0",
         name="ck_installation_retention",
+    ),
+    CheckConstraint(
+        "indoor_max_age_minutes > 0", name="ck_installation_indoor_max_age"
+    ),
+    CheckConstraint(
+        "indoor_min_plausible_c < indoor_max_plausible_c",
+        name="ck_installation_indoor_range",
     ),
 )
 
@@ -139,6 +149,7 @@ heater = Table(
     Column("target_charge", Float, nullable=False, server_default="1.0"),
     Column("priority", Integer, nullable=False, server_default="0"),
     Column("enabled", Boolean, nullable=False, server_default="1"),
+    Column("indoor_topic", String(512), nullable=True),
     Column("position", Integer, nullable=False),
     UniqueConstraint("installation_id", "heater_id", name="uq_heater_domain_id"),
     UniqueConstraint("installation_id", "position", name="uq_heater_position"),
@@ -197,6 +208,20 @@ thermal_profile = Table(
         "min_charge >= 0 AND min_charge <= max_charge AND max_charge <= 1",
         name="ck_thermal_charge_bounds",
     ),
+)
+
+
+indoor_reading = Table(
+    "indoor_reading",
+    metadata,
+    Column(
+        "heater_pk",
+        Integer,
+        ForeignKey("heater.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column("celsius", Float, nullable=False),
+    Column("received_at", DateTime, nullable=False),
 )
 
 
@@ -387,6 +412,14 @@ CONSTRAINT_FIELDS: dict[str, tuple[str, str]] = {
     "ck_installation_retention": (
         "retention_days",
         "retention_days must be positive, or unset for unlimited retention",
+    ),
+    "ck_installation_indoor_max_age": (
+        "indoor_max_age_minutes",
+        "indoor_max_age_minutes must be positive",
+    ),
+    "ck_installation_indoor_range": (
+        "indoor_min_plausible_c",
+        "indoor_min_plausible_c must be lower than indoor_max_plausible_c",
     ),
     "ck_weather_provider": ("provider", "the provider must be simulated or aemet"),
     "ck_weather_retry": ("retry_minutes", "retry_minutes must be positive"),

@@ -8,6 +8,13 @@
 
 **Input**: User description: "Integración con Home Assistant por MQTT Discovery, con posibilidad de conectarse a HA por WireGuard. Home Assistant puede leer todo y cambiar dos cosas: habilitar un acumulador y su carga objetivo. Se consume de Home Assistant la temperatura interior real de cada estancia como entrada al modelo térmico, con reserva obligatoria. El publicador es un servicio propio."
 
+## Clarifications
+
+### Session 2026-08-27
+
+- Q: ¿Cómo llegan al controlador las temperaturas recibidas por el publicador, si son procesos independientes? → A: El publicador guarda la última medida en la base de datos y el controlador la lee al recalcular el plan.
+- Q: ¿Qué hace el publicador tras un rechazo de credenciales del broker? → A: Registra el rechazo una vez y reintenta cada 5 minutos.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Ver la instalación en Home Assistant sin configurar nada (Priority: P1)
@@ -210,6 +217,8 @@ los demás.
 
 - El broker acepta la conexión pero rechaza la publicación por permisos: se registra de forma
   accionable y no se interpreta como éxito.
+- Llega una orden retenida desde el broker: se rechaza y se registra sin modificar configuración;
+  después se republica el estado realmente almacenado.
 - Home Assistant no está en marcha aunque el broker sí: el servicio publica igualmente y Home
   Assistant recoge el estado al arrancar.
 - Llegan órdenes para un acumulador que ya no existe en la configuración: se rechazan con registro
@@ -250,12 +259,15 @@ los demás.
 - **FR-006**: El estado MUST publicarse de forma que Home Assistant lo recupere tras reiniciarse,
   sin reiniciar el servicio.
 - **FR-007**: Los nombres e identificadores de las entidades MUST ser estables entre reinicios,
-  para no romper automatizaciones ya escritas.
+  para no romper automatizaciones ya escritas. Los identificadores MUST usar el segmento fijo
+  `installation` y el id de dominio del acumulador, y MUST NOT depender del nombre editable de la
+  instalación, del prefijo de asuntos, de una clave interna ni del orden.
 
 **Honestidad de lo publicado**
 
-- **FR-008**: Cuando la API indique que el estado de las salidas no es vigente, las entidades
-  correspondientes MUST publicarse como **no disponibles**, y MUST NOT publicarse como apagadas.
+- **FR-008**: Cuando la proyección de estado compartida indique que el estado de las salidas no es
+  vigente, las entidades correspondientes MUST publicarse como **no disponibles**, y MUST NOT
+  publicarse como apagadas.
 - **FR-009**: Con el estado no vigente, la potencia instantánea MUST quedar no disponible y
   MUST NOT publicarse como cero.
 - **FR-010**: El servicio MUST declarar al broker una última voluntad, de modo que si el proceso
@@ -286,11 +298,15 @@ los demás.
   MUST resolverse mediante la revisión y reintentarse con la vigente.
 - **FR-020**: Un intento de orden sobre un campo no admitido o sobre un acumulador inexistente
   MUST registrarse y MUST NOT crear ni modificar nada.
+- **FR-048**: Toda orden recibida con el indicador MQTT de mensaje retenido MUST rechazarse y
+  registrarse sin cambiar configuración; el servicio MUST republicar con retención el estado
+  realmente almacenado.
 
 **Temperatura interior y lazo cerrado**
 
 - **FR-021**: Cada acumulador MUST poder declarar, de forma opcional, un origen de temperatura
-  interior de su estancia.
+  interior de su estancia. Establecer ese campo a una cadena vacía mediante CLI, API o panel MUST
+  eliminar el origen y devolver el acumulador al comportamiento anterior.
 - **FR-022**: Cuando exista una medida de temperatura interior reciente y plausible, el modelo
   térmico MUST usarla en lugar de asumir que la estancia está a su temperatura objetivo.
 - **FR-023**: Un acumulador sin temperatura interior declarada MUST comportarse **exactamente**
@@ -308,6 +324,15 @@ los demás.
   I/O: la temperatura interior MUST llegarles como dato, nunca leída por ellos.
 - **FR-029**: Una estancia que ya alcanzó o superó su temperatura objetivo MUST resultar en la
   carga mínima configurada para ese acumulador.
+- **FR-045**: El publicador MUST guardar en la base de datos la medida vigente más reciente de cada
+  acumulador y el instante en que este dispositivo la recibió; el controlador MUST leer esas
+  medidas al recalcular el plan y pasarlas como datos al modelo térmico.
+- **FR-046**: Una medida persistida MUST reemplazarse atómicamente por la siguiente del mismo
+  acumulador y MUST eliminarse al eliminar ese acumulador; el publicador y el controlador MUST
+  seguir siendo procesos independientes y el controlador MUST NOT conectarse al broker.
+- **FR-047**: Una entrada vacía, no numérica o fuera del rango plausible MUST invalidar
+  atómicamente cualquier medida anterior almacenada para ese acumulador, de modo que el siguiente
+  recálculo use la reserva en lugar de seguir usando un valor anterior aparentemente válido.
 
 **Conexión y resistencia**
 
@@ -319,11 +344,16 @@ los demás.
 - **FR-032**: Una conexión perdida MUST provocar reconexión con espera creciente, y al reconectar
   MUST republicarse el descubrimiento **antes** del estado.
 - **FR-033**: Un rechazo de credenciales MUST registrarse de forma accionable y MUST NOT
-  reintentarse en un bucle apretado.
+  reintentarse en un bucle apretado: MUST registrarse una vez al entrar en ese estado y
+  reintentarse cada **5 minutos** hasta que las credenciales sean aceptadas; la recuperación MUST
+  registrarse una vez.
 - **FR-034**: El servicio MUST ofrecer la opción de cifrar la conexión al broker, y la
   documentación MUST explicar cuándo hace falta y cuándo un túnel ya lo cubre.
 - **FR-035**: Ningún fallo de conexión, por prolongado que sea, MUST afectar al controlador, a la
   API ni al panel web.
+- **FR-049**: Las publicaciones de descubrimiento, disponibilidad y estado MUST usar MQTT v5 con
+  QoS 1 y MUST comprobar la confirmación del broker. Un PUBACK de rechazo por permisos MUST
+  registrarse de forma accionable y MUST NOT interpretarse como publicación correcta.
 
 **Despliegue y aislamiento**
 
@@ -362,9 +392,10 @@ los demás.
   lo que convierte una muerte silenciosa en entidades no disponibles.
 - **Orden**: una petición de Home Assistant para cambiar uno de los dos campos admitidos. Se
   aplica como cambio de configuración validado, nunca como accionamiento.
-- **Medida de temperatura interior**: un valor con el instante en que el dispositivo lo recibió.
-  Tiene tolerancia de antigüedad y rango de plausibilidad; fuera de cualquiera de los dos, se
-  trata como ausente.
+- **Medida de temperatura interior**: el último valor válido de un acumulador, guardado en la base
+  de datos junto con el instante en que el dispositivo lo recibió. El publicador lo reemplaza al
+  recibir una medida nueva y el controlador lo lee al recalcular el plan. Tiene tolerancia de
+  antigüedad y rango de plausibilidad; fuera de cualquiera de los dos, se trata como ausente.
 - **Estado de reserva térmica**: si el modelo está usando medidas reales o ha vuelto al
   comportamiento anterior. Su transición es lo que se registra, no cada cálculo.
 
@@ -393,10 +424,11 @@ redefinen aquí.
   anterior a esta fase, sin dejar de generar plan.
 - **SC-009**: Un túnel que se cae y vuelve no requiere intervención: el servicio se reconecta y
   Home Assistant recupera las entidades.
-- **SC-010**: Detener el publicador durante horas no produce ningún cambio observable en el estado
-  de las salidas ni en la ejecución del plan.
-- **SC-011**: La instalación en el dispositivo no requiere compilador, y el conjunto de los cuatro
-  servicios sigue dejando margen de memoria en el dispositivo.
+- **SC-010**: Detener el publicador durante al menos **2 horas** no produce ningún cambio
+  observable en el estado de las salidas ni en la ejecución del plan.
+- **SC-011**: La instalación en el dispositivo no requiere compilador; el publicador arranca en
+  menos de **5 s**, consume menos de **70 MB RSS**, y el conjunto de los cuatro servicios consume
+  menos de **250 MB RSS** en la Raspberry Pi 2B.
 - **SC-012**: La suite completa se ejecuta sin red, sin broker, sin Home Assistant y sin hardware.
 - **SC-013**: Las suites existentes siguen pasando íntegras.
 
@@ -412,8 +444,12 @@ redefinen aquí.
 - Las medidas de temperatura interior llegan al dispositivo por el mismo canal de mensajería, sin
   necesidad de credenciales de Home Assistant. Quien despliega configura en Home Assistant la
   publicación de esos valores.
+- La base de datos compartida es el canal entre el publicador que recibe las temperaturas y el
+  controlador que recalcula el plan; no se añade MQTT ni otro canal de red al controlador.
 - Una sola instalación y un solo Home Assistant. No se contempla publicar varias instalaciones al
   mismo broker con distinción entre ellas más allá de un prefijo configurable.
+- La instalación publicada usa el identificador lógico fijo `installation`; su nombre visible
+  puede cambiar sin alterar ids de dispositivo, `unique_id` ni automatizaciones.
 - Sin forzado manual de salidas desde Home Assistant, coherente con las fases anteriores: la API
   no lo ofrece y esta fase no lo añade.
 - El modelo térmico sigue siendo lineal. Usar la temperatura interior real cambia su entrada, no

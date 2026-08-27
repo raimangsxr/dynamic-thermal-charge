@@ -2,7 +2,8 @@
 
 **Feature**: `004-home-assistant` | **Fecha**: 2026-08-27
 
-Esta fase añade **columnas** a dos tablas existentes y una migración, `0003`. No añade tablas.
+Esta fase añade **columnas** a dos tablas existentes, una tabla de últimas lecturas y una
+migración, `0003`.
 
 Es también la primera fase desde la 1 que **toca el núcleo**: el modelo térmico gana un parámetro.
 
@@ -14,7 +15,7 @@ Es también la primera fase desde la 1 que **toca el núcleo**: el modelo térmi
 
 | Columna | Tipo | Nulo | Reglas |
 | --- | --- | :---: | --- |
-| `indoor_topic` | texto | sí | Origen de la temperatura interior de la estancia. **Nulo por defecto** |
+| `indoor_topic` | texto | sí | Origen de la temperatura interior de la estancia. **Nulo por defecto**; una cadena vacía en las interfaces se normaliza a nulo |
 
 **Nulo por defecto es el requisito, no una comodidad.** FR-023 exige que un acumulador sin
 temperatura declarada se comporte *exactamente* como antes de esta fase, y la forma de garantizarlo
@@ -41,11 +42,32 @@ o en la otra.
 
 ---
 
+## Tabla nueva: `indoor_reading`
+
+Una fila como máximo por acumulador. Es el canal entre el publicador que recibe MQTT y el
+controlador que calcula el plan.
+
+| Columna | Tipo | Nulo | Reglas |
+| --- | --- | :---: | --- |
+| `heater_pk` | entero | no | PK y FK a la clave interna entera `heater.id`, con borrado en cascada |
+| `celsius` | real | no | Ya validado dentro del rango plausible vigente al recibirse |
+| `received_at` | instante UTC | no | Reloj del dispositivo publicador, nunca del mensaje |
+
+El publicador resuelve el id de dominio a `heater.id` y hace un *upsert* atómico por `heater_pk`.
+La clave interna no sale del repositorio: `IndoorReading.heaterId` sigue usando el id de dominio.
+Una entrada vacía, no numérica o
+implausible elimina atómicamente la fila anterior: conservarla haría que el controlador siguiera
+usando una medida que ya ha sido invalidada. El controlador hace una lectura coherente de todas
+las filas solo al empezar cada recálculo y no escribe en esta tabla.
+
+La fila no es histórico. Cada lectura válida reemplaza a la anterior y al borrar un acumulador la
+FK elimina su medida. No se guarda el payload original ni ninguna fecha enviada por Home Assistant.
+
 ## Migración `0003_indoor_temperature`
 
-Añade las cuatro columnas. No toca datos existentes. Los valores por defecto son los de arriba, de
-modo que una instalación migrada **calcula exactamente lo mismo que antes** hasta que alguien
-declare un `indoor_topic`.
+Añade las cuatro columnas y crea `indoor_reading` vacía. No toca datos existentes. Los valores por
+defecto son los de arriba, de modo que una instalación migrada **calcula exactamente lo mismo que
+antes** hasta que alguien declare un `indoor_topic`.
 
 Consecuencia para la puerta de versión: `KNOWN_REVISIONS` pasa a tener tres entradas, y una base de
 datos de la fase 2 o 3 se detecta como **pendiente de migrar**, no como desconocida.
@@ -54,7 +76,8 @@ datos de la fase 2 o 3 se detecta como **pendiente de migrar**, no como desconoc
 
 ## Medida de temperatura interior
 
-No se persiste. Vive en memoria en el proceso publicador, que es quien la recibe.
+Se conserva únicamente la última medida utilizable por acumulador en `indoor_reading`. El
+publicador la escribe y el controlador la lee al recalcular el plan.
 
 ```text
 IndoorReading
@@ -81,7 +104,12 @@ en otro caso                             -> se usa
 
 ---
 
-## El cambio en el modelo térmico
+## Selección pura y cambio en el modelo térmico
+
+Antes del cálculo, una función pura recibe `readings`, el instante `at` del recálculo y la política
+de tolerancia y plausibilidad de la instalación. Devuelve el mapa de temperaturas utilizables y el
+motivo de reserva por acumulador. No lee reloj ni base de datos. El borde de composición del
+controlador usa ese resultado para registrar las transiciones de reserva una sola vez.
 
 ```text
 ANTES (y sigue siendo el caso sin medida):
@@ -103,15 +131,16 @@ límites lo recortan al `min_charge` configurado, que es lo que FR-029 pide: la 
 cero. El mínimo existe por acumulador y tiene una razón física, conservar algo de reserva térmica.
 Merece un comentario en el código para que nadie «arregle» el negativo.
 
-El modelo sigue siendo una **función determinista sin I/O** (FR-028): las medidas llegan como
-parámetro, nunca leídas por él.
+El modelo sigue siendo una **función determinista sin I/O** (FR-028): las temperaturas ya
+seleccionadas llegan como parámetro, nunca leídas por él.
 
 ---
 
 ## Estado de reserva térmica
 
-No se persiste. Es la memoria de si el modelo está usando medidas reales o ha vuelto al
-comportamiento anterior, y existe solo para registrar la **transición** y no cada cálculo (FR-025).
+No se persiste. Vive en el proceso controlador y recuerda si cada acumulador usa una medida real o
+ha vuelto al comportamiento anterior; existe solo para registrar la **transición** y no cada
+cálculo (FR-025).
 
 Es la misma disciplina que el estado degradado del watchdog meteorológico y el de la base de datos:
 lo que se registra es entrar y salir, no cada iteración.
@@ -131,8 +160,6 @@ No se persisten. Son la proyección de lo que ya existe.
 | habilitado | conmutador **escribible** | no |
 | carga objetivo | numérica **escribible** | no |
 | minutos solicitados / asignados / **no atendidos** | numéricas | no |
-| temperatura interior en uso | numérica | no |
-| usando reserva térmica | binario | no |
 
 ### Por instalación
 
@@ -153,9 +180,10 @@ entidades siguen disponibles; solo lo que depende de ver al controlador deja de 
 
 ### Identificadores
 
-Estables entre reinicios y derivados de la instalación y del identificador de dominio del
-acumulador, nunca de una clave interna ni de un orden (FR-007). Si cambiaran, las automatizaciones
-ya escritas dejarían de funcionar sin ningún aviso.
+La instalación única usa el identificador lógico fijo `installation`. Los ids de dispositivo y
+`unique_id` se derivan de ese segmento y del identificador de dominio del acumulador; nunca del
+nombre editable de la instalación, del prefijo MQTT, de una clave interna ni de un orden (FR-007).
+Así renombrar la instalación o cambiar el despliegue no rompe automatizaciones.
 
 ---
 

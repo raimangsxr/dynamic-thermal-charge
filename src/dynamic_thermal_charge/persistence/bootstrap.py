@@ -16,7 +16,7 @@ from ..models import AppConfig
 from . import SchemaStatus
 from .engine import build_engine, store_errors
 from .gate import EXPECTED_REVISION, SchemaVersionGate
-from .repository import SqlConfigRepository
+from .repository import SqlConfigRepository, SqlIndoorReadingRepository
 from .seed import SEED_INSTALLATION_NAME, example_installation
 from .url import StoreLocation, resolve_location
 
@@ -29,6 +29,7 @@ class Store:
     location: StoreLocation
     engine: Engine
     repository: SqlConfigRepository
+    indoor_readings: SqlIndoorReadingRepository
     gate: SchemaVersionGate
 
 
@@ -73,6 +74,7 @@ def open_store(
         location=location,
         engine=engine,
         repository=SqlConfigRepository(engine, location, clock=clock),  # type: ignore[arg-type]
+        indoor_readings=SqlIndoorReadingRepository(engine, location),
         gate=SchemaVersionGate(engine, location),
     )
 

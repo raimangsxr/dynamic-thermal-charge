@@ -154,6 +154,7 @@ class HeaterResponse(BaseModel):
     target_charge: float
     priority: int
     enabled: bool
+    indoor_topic: str | None = None
     output: OutputView
     thermal: ThermalProfileView | None = None
 
@@ -185,6 +186,9 @@ class ConfigResponse(BaseModel):
     max_total_power_kw: float
     slot_minutes: int
     window_minutes: int
+    indoor_max_age_minutes: int
+    indoor_min_plausible_c: float
+    indoor_max_plausible_c: float
     log_level: str
     state_file: str
     poll_seconds: float
@@ -215,6 +219,7 @@ class AddHeaterRequest(BaseModel):
     target_charge: float = 1.0
     priority: int = 0
     enabled: bool = True
+    indoor_topic: str | None = None
     output: str = "simulated"
     pin: int | None = None
     active_high: bool = True

@@ -3,7 +3,8 @@
 **Feature**: `004-home-assistant`
 
 Prefijo configurable; los ejemplos usan `dtc` para los asuntos propios y `homeassistant` para el
-descubrimiento, que es el que Home Assistant observa por defecto.
+descubrimiento, que es el que Home Assistant observa por defecto. La conexión usa **MQTT v5** y
+las publicaciones de descubrimiento, disponibilidad y estado usan **QoS 1** para recibir PUBACK.
 
 ## Variables de entorno
 
@@ -22,38 +23,50 @@ descubrimiento, que es el que Home Assistant observa por defecto.
 El publicador **falla el arranque** si falta `DTC_MQTT_HOST`, y **no** si el broker está
 inalcanzable: eso es un reintento, no un error de configuración.
 
+Si el broker rechaza las credenciales, el publicador registra la entrada en ese estado una sola
+vez y reintenta cada **300 segundos**. Cuando vuelve a conectar, registra la recuperación una sola
+vez y sigue el orden de republicación indicado abajo.
+
 ## Asuntos
 
 ```text
-dtc/<instalación>/availability                 último nivel 1: online / offline
-dtc/<instalación>/state_available              nivel 2: online / offline
-dtc/<instalación>/state                        JSON con el estado de la instalación
-dtc/<instalación>/heater/<id>/state            JSON con el estado del acumulador
+dtc/installation/availability                 último nivel 1: online / offline
+dtc/installation/state_available              nivel 2: online / offline
+dtc/installation/state                        JSON con el estado de la instalación
+dtc/installation/heater/<id>/state            JSON con el estado del acumulador
 
-dtc/<instalación>/heater/<id>/set/enabled      MANDO: ON / OFF
-dtc/<instalación>/heater/<id>/set/target_charge MANDO: 0..1
+dtc/installation/heater/<id>/set/enabled      MANDO: ON / OFF
+dtc/installation/heater/<id>/set/target_charge MANDO: 0..1
 
 <lo que se configure por acumulador>           ENTRADA: temperatura interior
 ```
 
 Retención:
 
-| Asunto | Retenido | Por qué |
-| --- | :---: | --- |
-| descubrimiento | **sí** | Home Assistant recupera las entidades al reiniciarse |
-| `availability`, `state_available` | **sí** | el estado de disponibilidad debe sobrevivir a un reinicio de HA |
-| `state`, `heater/*/state` | **sí** | HA muestra el último valor conocido en cuanto se suscribe |
-| `set/*` | **NO** | una orden retenida se reentregaría al reconectar, reaplicando una orden vieja |
+| Asunto | QoS | Retenido | Por qué |
+| --- | :---: | :---: | --- |
+| descubrimiento | 1 | **sí** | Home Assistant recupera las entidades al reiniciarse |
+| `availability`, `state_available` | 1 | **sí** | el estado de disponibilidad debe sobrevivir a un reinicio de HA |
+| `state`, `heater/*/state` | 1 | **sí** | HA muestra el último valor conocido en cuanto se suscribe |
+| `set/*` | 1 | **NO** | una orden retenida se reentregaría al reconectar, reaplicando una orden vieja |
 
-Esa última fila es la que importa. Con retención en los asuntos de mando, un túnel que vuelve tras
-tres días deshabilitaría un acumulador porque alguien lo pidió entonces.
+Esa última fila es la que importa. Como el publicador no controla a quien envía la orden, **rechaza
+cualquier mensaje `set/*` recibido con el indicador `retain`**, lo registra y republica retenido el
+estado realmente almacenado. Así un túnel que vuelve tras tres días no reaplica una orden vieja.
+
+## Confirmación de publicación
+
+Cada publicación QoS 1 se considera correcta solo cuando llega un PUBACK MQTT v5 aceptado. Un
+PUBACK con razón de rechazo —en particular falta de permisos— se traduce a error de dominio, se
+registra con asunto y motivo pero sin payload ni credenciales, y no se contabiliza como éxito. Los
+tests inyectan confirmaciones aceptadas y rechazadas sin broker.
 
 ## Última voluntad
 
 Se declara **antes de conectar**, con retención:
 
 ```text
-topic:   dtc/<instalación>/availability
+topic:   dtc/installation/availability
 payload: offline
 retain:  true
 qos:     1
@@ -73,13 +86,13 @@ Cada entidad declara su disponibilidad así:
 // Entidad que depende de ver al controlador (estado de salida, potencia):
 "availability_mode": "all",
 "availability": [
-  { "topic": "dtc/casa/availability",      "payload_available": "online", "payload_not_available": "offline" },
-  { "topic": "dtc/casa/state_available",   "payload_available": "online", "payload_not_available": "offline" }
+  { "topic": "dtc/installation/availability",      "payload_available": "online", "payload_not_available": "offline" },
+  { "topic": "dtc/installation/state_available",   "payload_available": "online", "payload_not_available": "offline" }
 ]
 
 // Entidad que solo necesita al publicador (configuración, límite, salud):
 "availability": [
-  { "topic": "dtc/casa/availability",      "payload_available": "online", "payload_not_available": "offline" }
+  { "topic": "dtc/installation/availability",      "payload_available": "online", "payload_not_available": "offline" }
 ]
 ```
 
@@ -93,17 +106,17 @@ Un dispositivo por instalación y uno por acumulador, agrupados con el mismo ide
 dispositivo para que Home Assistant los presente juntos.
 
 ```jsonc
-// dtc/casa/heater/salon/state es el objeto del que salen los valores
+// dtc/installation/heater/salon/state es el objeto del que salen los valores
 {
   "name": "Salida",
-  "unique_id": "dtc_casa_salon_output",     // estable entre reinicios
+  "unique_id": "dynamic_thermal_charge_installation_salon_output", // namespace fijo del producto
   "device": {
-    "identifiers": ["dtc_casa_salon"],
+    "identifiers": ["dynamic_thermal_charge_installation_salon"],
     "name": "Salón",
     "manufacturer": "Dynamic Thermal Charge",
-    "via_device": "dtc_casa"
+    "via_device": "dynamic_thermal_charge_installation"
   },
-  "state_topic": "dtc/casa/heater/salon/state",
+  "state_topic": "dtc/installation/heater/salon/state",
   "value_template": "{{ value_json.output_on }}",
   "payload_on": true,
   "payload_off": false,
@@ -112,9 +125,9 @@ dispositivo para que Home Assistant los presente juntos.
 }
 ```
 
-`unique_id` se deriva de la instalación y del **identificador de dominio** del acumulador, nunca de
-una clave interna ni de un orden. Si cambiara, las automatizaciones ya escritas dejarían de
-funcionar sin ningún aviso.
+`unique_id` usa el segmento fijo `installation` y el **identificador de dominio** del acumulador,
+nunca el nombre visible, el prefijo MQTT, una clave interna ni un orden. Si cambiaran los dos
+primeros datos editables, las automatizaciones siguen intactas.
 
 Al eliminarse un acumulador se publica un mensaje **vacío y retenido** en su asunto de
 descubrimiento: así Home Assistant borra la entidad en lugar de conservar una huérfana.
@@ -145,7 +158,9 @@ bloqueo optimista que la CLI, la API y el panel—, con **un** reintento ante co
 Reintentar indefinidamente convertiría una orden en un bucle contra el panel web.
 
 Tras aplicar o rechazar, se **republica el estado del acumulador**, de modo que la entidad refleje
-el valor realmente almacenado y no el ordenado.
+el valor realmente almacenado y no el ordenado. Esa republicación es QoS 1 y retenida, igual que
+toda publicación de estado. Una orden entrante retenida siempre se rechaza antes del parseo de su
+payload.
 
 ## Temperatura interior
 
@@ -153,14 +168,18 @@ El publicador se suscribe al asunto que cada acumulador declare en su configurac
 Home Assistant basta el reenvío de estados o una automatización de dos líneas por sensor.
 
 Del mensaje se toma **solo el número**. Si trae una fecha, se ignora: la antigüedad se mide con el
-instante en que este dispositivo recibió el mensaje.
+instante en que este dispositivo recibió el mensaje. Una medida válida reemplaza atómicamente en
+la base de datos la anterior del mismo acumulador; el controlador la leerá al recalcular el plan.
 
 ```text
-valor no numérico o vacío          -> se descarta con registro
-fuera del rango plausible          -> se descarta con registro de error
+valor no numérico o vacío          -> se registra e invalida la medida almacenada
+fuera del rango plausible          -> se registra como error e invalida la medida almacenada
 más antiguo que la tolerancia      -> se trata como ausente
 en otro caso                       -> se usa en el modelo térmico
 ```
+
+Invalidar significa eliminar atómicamente la fila de última lectura. Así una entrada rota no deja
+activa hasta su caducidad una medida anterior que ya no representa el estado del sensor.
 
 ## Lo que el publicador NO hace
 
@@ -170,3 +189,5 @@ en otro caso                       -> se usa en el modelo térmico
 - **No** migra el esquema ni inicializa la base de datos.
 - **No** guarda credenciales de Home Assistant: no las necesita.
 - **No** publica datos cuando la base de datos no responde: marca las entidades no disponibles.
+- **No** entrega MQTT al controlador: la base de datos compartida es la única frontera entre ambos
+  procesos para las temperaturas interiores.

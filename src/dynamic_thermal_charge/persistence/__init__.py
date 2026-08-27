@@ -17,7 +17,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Protocol
 
-from ..models import AppConfig, Heater
+from ..models import AppConfig, Heater, IndoorReading
 
 
 class ConfigStoreError(Exception):
@@ -193,6 +193,16 @@ class ConfigRepository(Protocol):
         """Remove a heater and its output and thermal profile, keeping history."""
 
 
+class IndoorReadingRepository(Protocol):
+    """Latest accepted indoor measurement for each configured heater."""
+
+    def upsert(self, reading: IndoorReading) -> None: ...
+
+    def invalidate(self, heater_id: str) -> None: ...
+
+    def read_all(self) -> dict[str, IndoorReading]: ...
+
+
 class HistoryRecorder(Protocol):
     """Append-only audit trail.
 
@@ -261,6 +271,7 @@ __all__ = [
     "ConfigValidationError",
     "ForecastRef",
     "HistoryRecorder",
+    "IndoorReadingRepository",
     "PlanRef",
     "PruneReport",
     "SchemaGate",

@@ -77,8 +77,7 @@ Un dispositivo por instalación y uno por acumulador, sin escribir una línea de
 Home Assistant.
 
 **Por acumulador**: salida activa, potencia nominal, habilitado *(conmutable)*, carga objetivo
-*(ajustable)*, minutos solicitados, asignados y no atendidos, temperatura interior en uso, y si está
-usando la reserva térmica.
+*(ajustable)* y minutos solicitados, asignados y no atendidos.
 
 **Por instalación**: potencia instantánea y su porcentaje del límite, límite configurado, ventana del
 plan, temperatura media prevista, origen de la previsión, salud del controlador, y un aviso de
@@ -150,6 +149,12 @@ dtc config set indoor_topic ha/sensor/temperatura_salon/state --heater salon
 
 También desde el panel web o desde la API, como cualquier otro campo.
 
+Para dejar de usar el sensor y volver exactamente al comportamiento anterior:
+
+```bash
+dtc config set indoor_topic '' --heater salon
+```
+
 **Paso 3** — ajustar la tolerancia si tus sensores publican despacio:
 
 ```bash
@@ -171,7 +176,9 @@ Con `indoor_topic` declarado, el modelo vuelve al comportamiento anterior si:
 - el valor está fuera del rango plausible, que es lo que publica un sensor con un cable roto.
 
 Cada entrada y salida de la reserva se registra **una vez**, no en cada cálculo. Un valor
-implausible se registra como error, porque indica un sensor averiado y no una ausencia normal.
+implausible se registra como error, invalida la medida anterior almacenada y hace que el siguiente
+recálculo use la reserva. La base de datos compartida entrega las medidas al controlador; el
+controlador nunca se conecta al broker.
 
 ## Desplegar en la Raspberry Pi
 
@@ -202,7 +209,13 @@ El publicador **no** pertenece al grupo `gpio`: no puede alcanzar el hardware ni
 | solo salida y potencia «no disponibles» | correcto por diseño: el controlador no está visible; revisa su unidad |
 | entidades duplicadas o huérfanas tras renombrar | el identificador cambió; los nuestros son estables, así que sospecha de un cambio de prefijo |
 | una orden no tiene efecto y la entidad vuelve atrás | fue rechazada; el motivo está en los registros del publicador |
+| una orden reaparece al reconectar | las órdenes retenidas se rechazan; elimina el mensaje retenido del broker o corrige la automatización emisora |
+| conexión correcta pero no se actualiza estado | revisa el PUBACK en los registros: el broker puede estar rechazando publicaciones por ACL |
 | el aviso de más de un controlador | revísalo: dos procesos sobre los mismos relés es un riesgo eléctrico |
-| «usando reserva térmica» siempre activo | no llega la medida, llega vieja, o es implausible; los registros dicen cuál |
-| reintentos de conexión sin fin | credenciales incorrectas se registran de forma distinta a un broker inalcanzable; mira cuál es |
+| la demanda no refleja la temperatura interior | no llega la medida, llega vieja, o es implausible; los registros del controlador dicen si entró en reserva y por qué |
+| reintentos de conexión sin fin | credenciales incorrectas se registran una vez y se reintentan cada 5 minutos; un broker inalcanzable usa espera creciente de 1 a 120 s |
 | tras actualizar, HA no ve las entidades | `dtc db upgrade` pendiente: el publicador no publica sobre un esquema que no comprende |
+
+Los ids de Home Assistant usan `installation` y el id de dominio del acumulador. Renombrar la
+instalación o cambiar `DTC_MQTT_PREFIX` no cambia `unique_id`, aunque cambiar el prefijo sí exige
+que el broker y Home Assistant observen los asuntos nuevos.

@@ -44,6 +44,7 @@ def _heater_view(heater: Heater) -> HeaterResponse:
         target_charge=heater.target_charge,
         priority=heater.priority,
         enabled=heater.enabled,
+        indoor_topic=heater.indoor_topic,
         output=OutputView(
             kind=heater.output.kind,
             pin=heater.output.pin,
@@ -110,6 +111,9 @@ def _config_view(config, revision: int) -> ConfigResponse:
         max_total_power_kw=config.site.max_total_power_w / 1000,
         slot_minutes=config.site.slot_minutes,
         window_minutes=config.site.window_minutes,
+        indoor_max_age_minutes=config.site.indoor_max_age_minutes,
+        indoor_min_plausible_c=config.site.indoor_min_plausible_c,
+        indoor_max_plausible_c=config.site.indoor_max_plausible_c,
         log_level=config.logging.level,
         state_file=config.runtime.state_file,
         poll_seconds=config.runtime.poll_seconds,
@@ -286,6 +290,7 @@ def post_heater(
         target_charge=payload.target_charge,
         priority=payload.priority,
         enabled=payload.enabled,
+        indoor_topic=payload.indoor_topic,
         thermal=thermal,
         output=OutputConfig(
             kind=payload.output, pin=payload.pin, active_high=payload.active_high

@@ -155,6 +155,18 @@ def test_set_reports_both_values_and_the_revision(initialised):
     assert "revision 1 -> 2" in out
 
 
+def test_empty_indoor_topic_clears_the_optional_field(initialised):
+    code, _, _ = initialised(
+        "config", "set", "indoor_topic", "ha/salon", "--heater", "salon"
+    )
+    assert code == cli.EXIT_OK
+    code, out, _ = initialised(
+        "config", "set", "indoor_topic", "", "--heater", "salon"
+    )
+    assert code == cli.EXIT_OK
+    assert "ha/salon -> —" in out
+
+
 def test_set_on_a_heater_field_needs_the_heater(initialised):
     code, _, err = initialised("config", "set", "target_charge", "0.5")
     assert code == cli.EXIT_UNKNOWN_NAME

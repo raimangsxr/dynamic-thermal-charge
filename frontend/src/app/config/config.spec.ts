@@ -15,10 +15,13 @@ import { ELECTRICAL_FIELDS, needsConfirmation } from './electrical-fields';
 function configDto(overrides: Partial<ConfigDto> = {}): ConfigDto {
   return {
     config_revision: 3,
-    schema_revision: '0002_controller_heartbeat',
+    schema_revision: '0003_indoor_temperature',
     max_total_power_kw: 5.2,
     slot_minutes: 30,
     window_minutes: 480,
+    indoor_max_age_minutes: 30,
+    indoor_min_plausible_c: -20,
+    indoor_max_plausible_c: 50,
     log_level: 'INFO',
     state_file: '/var/lib/dtc/active-plan.json',
     poll_seconds: 5,
@@ -51,6 +54,7 @@ function configDto(overrides: Partial<ConfigDto> = {}): ConfigDto {
         target_charge: 1,
         priority: 90,
         enabled: true,
+        indoor_topic: null,
         output: { kind: 'gpio', pin: 17, active_high: false },
         thermal: {
           target_temperature_c: 21,
@@ -121,7 +125,7 @@ describe('Config', () => {
   it('shows the configuration with its revisions', () => {
     const element = load();
     expect(element.textContent).toContain('rev. 3');
-    expect(element.textContent).toContain('0002_controller_heartbeat');
+    expect(element.textContent).toContain('0003_indoor_temperature');
     expect(element.querySelector('[data-heater="salon"]')).not.toBeNull();
   });
 
@@ -162,6 +166,47 @@ describe('Config', () => {
     expect(request.request.body).toMatchObject({ revision: 3, value: '0.8' });
     request.flush(change({ entity: 'heater', entity_key: 'salon' }));
     backend.expectOne('/api/v1/config').flush(configDto());
+  });
+
+  it('renders all indoor policy fields and the per-heater topic', () => {
+    const element = load(
+      configDto({
+        heaters: [
+          { ...configDto().heaters[0], indoor_topic: 'ha/salon/temp' },
+        ],
+      }),
+    );
+    for (const field of [
+      'indoor_max_age_minutes',
+      'indoor_min_plausible_c',
+      'indoor_max_plausible_c',
+    ]) {
+      expect(element.querySelector(`[data-field="${field}"]`)).not.toBeNull();
+    }
+    const topic = element.querySelector<HTMLInputElement>('#salon-indoor_topic');
+    expect(topic).not.toBeNull();
+    expect(
+      fixture.componentInstance.heaterText(
+        fixture.componentInstance.config()!.heaters[0],
+        'indoor_topic',
+      ),
+    ).toBe('ha/salon/temp');
+  });
+
+  it('sends an empty indoor topic and keeps it on rejection', () => {
+    load(configDto({ heaters: [{ ...configDto().heaters[0], indoor_topic: 'ha/old' }] }));
+    fixture.componentInstance.edit('indoor_topic', 'salon', '');
+    fixture.componentInstance.submit('indoor_topic', 'salon');
+    const request = backend.expectOne('/api/v1/config/heaters/salon');
+    expect(request.request.body).toMatchObject({
+      revision: 3,
+      field: 'indoor_topic',
+      value: '',
+    });
+    const { body, options } = apiError('validation_failed', 'invalid topic', 422);
+    request.flush(body, options);
+    expect(fixture.componentInstance.pending()['salon.indoor_topic']).toBe('');
+    expect(el().querySelector('[data-error="salon.indoor_topic"]')).not.toBeNull();
   });
 
   /* ------------------------------------------------- electrical confirmation */

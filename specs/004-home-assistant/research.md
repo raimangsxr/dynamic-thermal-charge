@@ -101,15 +101,17 @@ bucle propio sería reimplementar peor lo que ya funciona.
 La excepción importante es FR-033: un broker que **rechaza las credenciales** no es un broker
 inalcanzable. Reintentar cada segundo con una contraseña incorrecta llena registros y algunos
 brokers bloquean el cliente. Ese caso se detecta por el código de retorno de la conexión, se
-registra de forma accionable, y se espera mucho más —del orden de minutos— o se detiene según lo
-que el plan decida.
+registra una vez al entrar en ese estado y se reintenta cada **300 segundos**. La recuperación se
+registra una vez. La espera y el reloj son inyectables para probarlo sin dormir.
 
 ---
 
 ## D5 — La temperatura interior llega por el mismo canal, sin credenciales de Home Assistant
 
 **Decisión**: el publicador **se suscribe** a un asunto por acumulador, configurado en la base de
-datos. Quien despliega hace que Home Assistant publique ahí el valor de su sensor.
+datos. Valida cada entrada y reemplaza atómicamente en la base de datos la última lectura de ese
+acumulador con el instante local de recepción. Quien despliega hace que Home Assistant publique
+ahí el valor de su sensor.
 
 **Rationale**: la alternativa era consultar la API REST de Home Assistant, y eso exigiría un token
 de larga duración de Home Assistant guardado en el dispositivo. Sería un **segundo** secreto, un
@@ -118,6 +120,12 @@ de larga duración de Home Assistant guardado en el dispositivo. Sería un **seg
 Suscribirse mantiene un solo transporte y ninguna credencial nueva de Home Assistant. Del lado de
 Home Assistant es poco trabajo: la integración de reenvío de estados publica todas las entidades a
 MQTT, o basta una automatización de dos líneas por sensor.
+
+La base de datos es también el canal entre los dos procesos: el controlador lee las últimas
+lecturas al recalcular el plan. Esto evita introducir MQTT en el proceso que conmuta relés o crear
+un protocolo IPC nuevo. Una entrada vacía, no numérica o implausible elimina atómicamente la
+lectura anterior; conservarla haría que el controlador siguiera usando un dato aparentemente
+válido hasta que envejeciera, en contra de FR-024 y FR-047.
 
 **Consecuencia importante**: el mensaje puede traer una fecha, y **no se usa**. La antigüedad se
 mide con el instante en que el dispositivo recibió el mensaje (FR-026). Es la tercera vez que esta
@@ -129,13 +137,17 @@ reserva existe para evitar.
 
 ## D6 — El modelo térmico gana un parámetro, no una lectura
 
-**Decisión**: `ThermalDemandEngine.calculate` acepta un mapa opcional de temperaturas interiores
-por acumulador. Sigue siendo una función determinista sin I/O.
+**Decisión**: el controlador lee un mapa opcional de `IndoorReading` al empezar cada recálculo. Una
+selección pura recibe ese mapa, el instante `at` del ciclo y los límites configurados, y devuelve
+las temperaturas utilizables y los motivos de reserva. `ThermalDemandEngine.calculate` acepta el
+mapa ya seleccionado de grados por acumulador. Ambos pasos siguen siendo deterministas y sin I/O.
 
 **Rationale**: el Principio II exige que el modelo térmico no lea nada. Pasarle las medidas como
 dato lo mantiene puro y probable como función, con la tabla completa de casos —medida válida,
 ausente, vieja, absurda— sin ningún doble de red.
 
+La separación evita que el modelo térmico conozca SQLAlchemy o mantenga estado oculto. El borde de
+composición del controlador registra una sola vez las transiciones entre medida real y reserva.
 El cálculo cambia así:
 
 ```text
@@ -185,7 +197,7 @@ para un canal que atraviesa un túnel.
 ## D8 — Retención para que Home Assistant sobreviva a su propio reinicio
 
 **Decisión**: los mensajes de descubrimiento y de estado se publican **con retención**. Los de
-mando, sin ella.
+mando, sin ella; además, el publicador rechaza cualquier orden entrante marcada como retenida.
 
 **Rationale**: FR-006. Con retención, un Home Assistant que se reinicia recibe el último valor de
 cada asunto en cuanto se suscribe, sin que el publicador tenga que enterarse ni republicar.
@@ -193,6 +205,10 @@ cada asunto en cuanto se suscribe, sin que el publicador tenga que enterarse ni 
 Los mensajes de mando **no** se retienen, y esto es importante: una orden retenida se reentregaría
 al publicador cada vez que se reconectase, reaplicando una orden vieja. Sería el equivalente a que
 el túnel, al volver, deshabilitase un acumulador porque alguien lo pidió hace tres días.
+
+El publicador no controla la configuración de quien envía, así que confiar solo en documentación no
+basta. `MQTTMessage.retain` permite rechazar el mensaje antes de parsearlo; después se republica el
+estado real retenido para corregir la entidad.
 
 Al retirar un acumulador se publica un mensaje **vacío y retenido** en su asunto de descubrimiento:
 así Home Assistant borra la entidad en lugar de quedarse con una huérfana (FR-005).
@@ -209,6 +225,7 @@ así Home Assistant borra la entidad en lugar de quedarse con una huérfana (FR-
 | Prefijo de asuntos, cadencia de publicación | **entorno** | pertenecen al despliegue, no a la instalación |
 | Asunto de temperatura interior de cada acumulador | **base de datos** | es configuración por acumulador, y debe poder editarse por CLI, API y panel como cualquier otra |
 | Tolerancia de antigüedad y rango plausible | **base de datos** | son parámetros de la instalación, no del transporte |
+| Última lectura e instante local de recepción | **base de datos** | es el canal atómico ya compartido entre publicador y controlador; una fila por acumulador |
 
 **Rationale**: la línea es la misma de todo el proyecto: lo que se necesita para llegar al almacén
 va en el entorno; lo que describe la instalación va en el almacén. Y el asunto de temperatura por
@@ -216,8 +233,8 @@ acumulador va en la base de datos precisamente para que el panel web pueda edita
 fase tenga que añadir interfaz.
 
 **Consecuencia**: una migración de esquema, la `0003`. Añade columnas a `heater` y a
-`installation`, sin tocar datos existentes, y con valores nulos por defecto para que FR-023 se
-cumpla sin más: quien no configure nada no cambia de comportamiento.
+`installation` y crea `indoor_reading`, sin tocar datos existentes. `indoor_topic` nulo por
+defecto garantiza FR-023: quien no configure nada no cambia de comportamiento.
 
 ---
 
@@ -243,6 +260,8 @@ Lo que hay que cubrir con más cuidado, por consecuencia si falla:
 5. **Los cuatro caminos de reserva térmica**: sin medida, medida vieja, medida absurda, y
    recuperación.
 6. **Que un acumulador sin medida calcule exactamente lo mismo que antes de esta fase.**
+7. **El puente entre procesos**: reemplazo atómico, lectura por el controlador al recalcular e
+   invalidación de la lectura anterior ante una entrada vacía, no numérica o implausible.
 
 ---
 
@@ -270,3 +289,38 @@ redundante; si se alcanza por una red no confiable, es imprescindible. La decisi
 despliegue, así que el proyecto ofrece la opción y explica el criterio en lugar de imponer uno.
 
 Verificado que `paho` expone `tls_set`, así que la opción no cuesta código propio.
+
+---
+
+## D13 — MQTT v5, QoS 1 y confirmación de permisos
+
+**Decisión**: usar MQTT v5 y QoS 1 para descubrimiento, disponibilidad y estado. Una publicación
+solo cuenta como correcta tras un PUBACK aceptado; un `ReasonCode.is_failure` se traduce a error de
+dominio y se registra con asunto y motivo, nunca con payload o credenciales.
+
+**Rationale**: el edge case exige distinguir «el broker recibió» de «el broker rechazó por ACL».
+MQTT 3.1.1 con QoS 0 no ofrece esa prueba. Paho 2.x con callbacks v2 expone el código de razón de
+MQTT v5 en `on_publish`, y Mosquitto/Home Assistant soporta MQTT v5. El cliente en memoria puede
+inyectar PUBACK aceptado o rechazado sin broker.
+
+Verificado en la documentación oficial de
+[Paho Python](https://eclipse.dev/paho/files/paho.mqtt.python/html/client.html): con QoS 1,
+`on_publish` se ejecuta al recibir PUBACK y la API de callbacks v2 entrega el `reason_code` de
+MQTT v5. Home Assistant documenta que el complemento oficial de Mosquitto y la mayoría de brokers
+compatibles soportan la versión 5 en su [integración MQTT](https://www.home-assistant.io/integrations/mqtt).
+
+**Alternativa descartada**: considerar éxito el retorno local de `publish`. Solo confirma que el
+cliente aceptó encolar el mensaje, no que el broker autorizó publicarlo.
+
+---
+
+## D14 — Identidad estable sin columna nueva
+
+**Decisión**: la instalación única usa el segmento lógico fijo `installation`. Los ids de
+dispositivo y `unique_id` se forman con ese segmento y el id de dominio del acumulador; excluyen el
+nombre visible, el prefijo MQTT, la PK y la posición.
+
+**Rationale**: la instalación no tiene otro identificador de dominio inmutable. Añadir una columna
+solo para una instalación sería complejidad accidental; usar el nombre rompería automatizaciones
+al renombrarlo. El prefijo sigue afectando a los asuntos de transporte, pero no a la identidad que
+Home Assistant conserva.

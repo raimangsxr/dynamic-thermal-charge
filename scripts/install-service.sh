@@ -9,9 +9,13 @@ STATE_ROOT="/var/lib/${SERVICE_NAME}"
 UNIT_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
 API_SERVICE_NAME="${SERVICE_NAME}-api"
 API_UNIT_PATH="/etc/systemd/system/${API_SERVICE_NAME}.service"
+MQTT_SERVICE_NAME="dynamic-thermal-charge-mqtt"
+MQTT_UNIT_PATH="/etc/systemd/system/${MQTT_SERVICE_NAME}.service"
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+MQTT_UNIT_SOURCE="${PROJECT_ROOT}/deploy/systemd/dynamic-thermal-charge-mqtt.service"
 WITH_GPIO=false
 WITH_API=false
+WITH_MQTT=false
 WITH_PANEL=false
 PANEL_ROOT="/var/www/${SERVICE_NAME}"
 NGINX_SITE="/etc/nginx/sites-available/${SERVICE_NAME}"
@@ -20,9 +24,10 @@ while [[ $# -gt 0 ]]; do
   case ${1} in
     --with-gpio) WITH_GPIO=true ;;
     --with-api) WITH_API=true ;;
+    --with-mqtt) WITH_MQTT=true ;;
     --with-panel) WITH_PANEL=true ;;
     *)
-      echo "Usage: sudo $0 [--with-gpio] [--with-api] [--with-panel]" >&2
+      echo "Usage: sudo $0 [--with-gpio] [--with-api] [--with-mqtt] [--with-panel]" >&2
       exit 1
       ;;
   esac
@@ -60,23 +65,22 @@ fi
 if [[ ${WITH_GPIO} == true ]]; then
   apt-get update
   apt-get install -y swig liblgpio-dev
-  if [[ ${WITH_API} == true ]]; then
-    "${INSTALL_ROOT}/venv/bin/python" -m pip install --upgrade "${PROJECT_ROOT}[db,gpio,api]"
-  else
-    "${INSTALL_ROOT}/venv/bin/python" -m pip install --upgrade "${PROJECT_ROOT}[db,gpio]"
-  fi
   if ! getent group gpio >/dev/null; then
     echo "The gpio group is missing; cannot grant gpiochip access" >&2
     exit 1
   fi
   usermod --append --groups gpio "${SERVICE_USER}"
-else
-  if [[ ${WITH_API} == true ]]; then
-    "${INSTALL_ROOT}/venv/bin/python" -m pip install --upgrade "${PROJECT_ROOT}[db,api]"
-  else
-    "${INSTALL_ROOT}/venv/bin/python" -m pip install --upgrade "${PROJECT_ROOT}[db]"
-  fi
 fi
+
+# Optional extras are composed once. Documented combinations kept explicit for
+# operator review: [db] [db,gpio] [db,api] [db,gpio,api] [db,mqtt].
+EXTRAS=(db)
+[[ ${WITH_GPIO} == true ]] && EXTRAS+=(gpio)
+[[ ${WITH_API} == true ]] && EXTRAS+=(api)
+[[ ${WITH_MQTT} == true ]] && EXTRAS+=(mqtt)
+EXTRA_LIST=$(IFS=,; echo "${EXTRAS[*]}")
+"${INSTALL_ROOT}/venv/bin/python" -m pip install --upgrade \
+  "${PROJECT_ROOT}[${EXTRA_LIST}]"
 
 # Configuration now lives in a database, not in a file. A leftover config.yaml
 # means this host is being upgraded from a file-based install, and its real
@@ -112,6 +116,12 @@ if [[ ${WITH_API} == true ]]; then
     "${API_UNIT_PATH}"
 fi
 
+if [[ ${WITH_MQTT} == true ]]; then
+  install -m 0644 -o root -g root \
+    "${MQTT_UNIT_SOURCE}" \
+    "${MQTT_UNIT_PATH}"
+fi
+
 # The web panel. NOTE: no Node, no npm, no build tooling is installed here. The
 # panel is compiled off-device and copied in; an npm install on a Cortex-A7 with
 # 1 GB does not finish, and the constitution forbids it.
@@ -124,6 +134,13 @@ if [[ ${WITH_PANEL} == true ]]; then
     echo "nginx is not installed; the site file is left at" >&2
     echo "  ${PROJECT_ROOT}/deploy/nginx/${SERVICE_NAME}.conf" >&2
   fi
+fi
+if [[ ${WITH_MQTT} == true ]]; then
+  echo
+  echo "  The MQTT publisher is installed as a SEPARATE service. Configure"
+  echo "  DTC_MQTT_HOST and any broker credentials in the environment file."
+  echo "  It has no GPIO group and installing it does not initialise or migrate"
+  echo "  the database, start a service, or enable one at boot."
 fi
 
 systemctl daemon-reload
@@ -162,6 +179,10 @@ if [[ ${WITH_API} == true ]]; then
   echo "  cannot end up listening unprotected. It listens on 127.0.0.1 by"
   echo "  default; exposing it on the network is a deliberate change and it"
   echo "  serves in clear text. See the README before doing that."
+fi
+if [[ ${WITH_MQTT} == true ]]; then
+  echo "  And MQTT: systemctl start ${MQTT_SERVICE_NAME}"
+  echo "            systemctl enable ${MQTT_SERVICE_NAME}"
 fi
 if [[ ${WITH_PANEL} == true ]]; then
   echo

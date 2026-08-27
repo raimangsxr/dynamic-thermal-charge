@@ -51,6 +51,7 @@ class Heater:
     thermal: ThermalProfile | None = None
     model: str | None = None
     enabled: bool = True
+    indoor_topic: str | None = None
 
     def __post_init__(self) -> None:
         if not self.id:
@@ -61,6 +62,9 @@ class Heater:
             raise ValueError(f"heater {self.id}: full charge time must be positive")
         if not 0 <= self.target_charge <= 1:
             raise ValueError(f"heater {self.id}: target_charge must be between 0 and 1")
+        if self.indoor_topic is not None:
+            topic = self.indoor_topic.strip()
+            object.__setattr__(self, "indoor_topic", topic or None)
 
     @property
     def requested_charge_minutes(self) -> int:
@@ -72,6 +76,9 @@ class SiteConfig:
     max_total_power_w: int
     slot_minutes: int
     window_minutes: int
+    indoor_max_age_minutes: int = 30
+    indoor_min_plausible_c: float = -20.0
+    indoor_max_plausible_c: float = 50.0
 
     def __post_init__(self) -> None:
         if self.max_total_power_w <= 0:
@@ -84,6 +91,25 @@ class SiteConfig:
             raise ValueError("window_hours must be positive")
         if self.window_minutes % self.slot_minutes:
             raise ValueError("the charge window must contain a whole number of slots")
+        if self.indoor_max_age_minutes <= 0:
+            raise ValueError("indoor_max_age_minutes must be positive")
+        if self.indoor_min_plausible_c >= self.indoor_max_plausible_c:
+            raise ValueError(
+                "indoor plausible range must satisfy minimum < maximum"
+            )
+
+
+@dataclass(frozen=True)
+class IndoorReading:
+    heater_id: str
+    celsius: float
+    received_at: datetime
+
+    def __post_init__(self) -> None:
+        if not self.heater_id:
+            raise ValueError("indoor reading heater id cannot be empty")
+        if self.received_at.tzinfo is None:
+            raise ValueError("indoor reading received_at requires a timezone")
 
 
 @dataclass(frozen=True)

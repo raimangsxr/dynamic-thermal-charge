@@ -30,6 +30,9 @@ postgres = ["pg8000>=1.31"]
 # precisely what makes FastAPI viable on the target.
 # See specs/002-config-api/research.md, D1. A guard test enforces this.
 api = ["fastapi>=0.115,<1", "uvicorn>=0.30,<1"]
+# MQTT edge. Pure Python and deliberately optional: the scheduler and thermal
+# model must remain importable without it (constitution principle VI).
+mqtt = ["paho-mqtt>=2.1,<3"]
 dev = [
     "pytest>=8,<10",
     "SQLAlchemy>=2,<3",
@@ -38,6 +41,7 @@ dev = [
     "uvicorn>=0.30,<1",
     # Starlette deprecates httpx in its test client and asks for httpx2.
     "httpx2>=2.12",
+    "paho-mqtt>=2.1,<3",
 ]
 gpio = ["gpiozero>=2.0.1,<3", "lgpio>=0.2.2.0"]
 

@@ -54,10 +54,13 @@ function transitionsPage(
 
 const CONFIG: ConfigDto = {
   config_revision: 3,
-  schema_revision: '0002_controller_heartbeat',
+  schema_revision: '0003_indoor_temperature',
   max_total_power_kw: 5.2,
   slot_minutes: 30,
   window_minutes: 480,
+  indoor_max_age_minutes: 30,
+  indoor_min_plausible_c: -20,
+  indoor_max_plausible_c: 50,
   log_level: 'INFO',
   state_file: '/tmp/plan.json',
   poll_seconds: 5,
@@ -74,6 +77,7 @@ const CONFIG: ConfigDto = {
       target_charge: 1,
       priority: 90,
       enabled: true,
+      indoor_topic: null,
       output: { kind: 'gpio', pin: 17, active_high: false },
       thermal: null,
     },

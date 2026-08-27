@@ -19,6 +19,7 @@ from ..models import (
     AemetConfig,
     AppConfig,
     Heater,
+    IndoorReading,
     LoggingConfig,
     OutputConfig,
     RuntimeConfig,
@@ -132,6 +133,9 @@ def site_from_row(row: Mapping[str, Any]) -> SiteConfig:
             max_total_power_w=int(row["max_total_power_w"]),
             slot_minutes=int(row["slot_minutes"]),
             window_minutes=int(row["window_minutes"]),
+            indoor_max_age_minutes=int(row.get("indoor_max_age_minutes", 30)),
+            indoor_min_plausible_c=float(row.get("indoor_min_plausible_c", -20)),
+            indoor_max_plausible_c=float(row.get("indoor_max_plausible_c", 50)),
         )
 
 
@@ -241,6 +245,11 @@ def heater_from_rows(
             enabled=bool(heater_row["enabled"]),
             thermal=thermal,
             output=output,
+            indoor_topic=(
+                None
+                if heater_row.get("indoor_topic") is None
+                else str(heater_row["indoor_topic"])
+            ),
         )
 
 
@@ -308,6 +317,9 @@ def installation_params(config: AppConfig, name: str, now: datetime) -> dict[str
         "state_file": config.runtime.state_file,
         "poll_seconds": config.runtime.poll_seconds,
         "retention_days": config.retention_days,
+        "indoor_max_age_minutes": config.site.indoor_max_age_minutes,
+        "indoor_min_plausible_c": config.site.indoor_min_plausible_c,
+        "indoor_max_plausible_c": config.site.indoor_max_plausible_c,
         "created_at": to_utc(now),
         "updated_at": to_utc(now),
     }
@@ -352,6 +364,7 @@ def heater_params(heater: Heater, installation_id: int, position: int) -> dict[s
         "target_charge": heater.target_charge,
         "priority": heater.priority,
         "enabled": heater.enabled,
+        "indoor_topic": heater.indoor_topic,
         "position": position,
     }
 

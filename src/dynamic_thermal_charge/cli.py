@@ -28,6 +28,7 @@ from .drivers import OutputDriver, RecordingOutputDriver, SimulatedOutputDriver
 from .gpio_driver import GpioDriverError, GpioOutputDriver
 from .logging_config import configure_logging
 from .models import AppConfig, Heater, OutputConfig, ThermalProfile
+from .mqtt import MqttError
 from .persistence import (
     ConfigConflictError,
     ConfigStoreEmptyError,
@@ -48,7 +49,7 @@ from .api.settings import ApiSettingsError as _ApiSettingsError
 from .scheduler import ChargeScheduler, ScheduleResult
 from .service import ControllerService, PlanRefresh
 from .state import PlanStore
-from .thermal import ThermalDemandEngine
+from .thermal import ThermalDemandEngine, select_indoor_temperatures
 from .watchdog import ForecastWatchdog
 from .weather import (
     OutdoorForecast,
@@ -186,6 +187,10 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
     )
 
+    subcommands.add_parser(
+        "mqtt", help="publish Home Assistant discovery and state over MQTT"
+    )
+
     self_test = subcommands.add_parser(
         "gpio-self-test", help="activate each GPIO output in turn"
     )
@@ -236,6 +241,8 @@ def main(argv: list[str] | None = None) -> int:
         return _fail(EXIT_STORE_UNAVAILABLE, exc)
     except _ApiSettingsError as exc:
         # Also a ValueError, so it must be caught before the generic handler.
+        return _fail(EXIT_INVALID_RESULT, exc)
+    except MqttError as exc:
         return _fail(EXIT_INVALID_RESULT, exc)
     except _DatabaseUrlError as exc:
         # A subclass of ValueError, so it has to be caught before the generic
@@ -294,6 +301,8 @@ def _dispatch(args: argparse.Namespace) -> int:
         return _run(args)
     if args.command == "api":
         return _run_api(args)
+    if args.command == "mqtt":
+        return _run_mqtt()
     if args.command == "gpio-self-test":
         return _run_self_test(args)
     raise ValueError(f"unsupported command: {args.command}")
@@ -474,7 +483,7 @@ def _config_set(store, args: argparse.Namespace) -> int:
     target = field if key is None else f"{key}.{field}"
     print(
         f"{target}: {change.old_value if change.old_value is not None else '—'} "
-        f"-> {change.new_value}"
+        f"-> {change.new_value if change.new_value is not None else '—'}"
     )
     print(f"configuration revision {change.revision_before} -> {change.revision_after}")
     return EXIT_OK
@@ -628,6 +637,7 @@ def _build_plan(
     config: AppConfig,
     start: datetime,
     forecast: OutdoorForecast | None,
+    indoor_temperatures: dict[str, float] | None = None,
 ) -> ScheduleResult:
     requested_charge_minutes = None
     if forecast is not None:
@@ -642,7 +652,7 @@ def _build_plan(
             forecast.maximum_temperature_c,
         )
         requested_charge_minutes = ThermalDemandEngine().calculate(
-            config.heaters, forecast
+            config.heaters, forecast, indoor_temperatures=indoor_temperatures
         )
     return ChargeScheduler().build(
         config.site,
@@ -699,6 +709,7 @@ def _run_controller(
         location=store.location,
     )
     current_plan_ref: list[PlanRef | None] = [None]
+    indoor_fallback = _IndoorFallbackTracker()
     driver: OutputDriver | None = None
     with _controlled_termination():
         try:
@@ -727,7 +738,15 @@ def _run_controller(
                     else now
                 )
                 cycle = watchdog.poll(start.date())
-                plan = _build_plan(live_config, start, cycle.forecast)
+                indoor_temperatures = indoor_fallback.select(
+                    live_config, store.indoor_readings, now
+                )
+                plan = _build_plan(
+                    live_config,
+                    start,
+                    cycle.forecast,
+                    indoor_temperatures=indoor_temperatures,
+                )
                 forecast_ref = history.record_forecast(cycle.forecast)
                 current_plan_ref[0] = history.record_plan(
                     plan, forecast_ref, live_revision
@@ -752,6 +771,50 @@ def _run_controller(
         finally:
             if driver is not None:
                 driver.close()
+
+
+class _IndoorFallbackTracker:
+    """Read once per plan and log only fallback state transitions."""
+
+    def __init__(self) -> None:
+        self._fallback: set[str] = set()
+        self._store_unavailable = False
+
+    def select(self, config: AppConfig, repository, at: datetime) -> dict[str, float]:
+        try:
+            readings = repository.read_all()
+        except ConfigStoreError as exc:
+            readings = {}
+            if not self._store_unavailable:
+                logger.error(
+                    "Indoor reading store unavailable; using thermal fallback: %s",
+                    exc,
+                )
+            self._store_unavailable = True
+        else:
+            if self._store_unavailable:
+                logger.info("Indoor reading store recovered")
+            self._store_unavailable = False
+
+        selection = select_indoor_temperatures(
+            config.heaters,
+            readings,
+            at=at,
+            max_age_minutes=config.site.indoor_max_age_minutes,
+            min_plausible_c=config.site.indoor_min_plausible_c,
+            max_plausible_c=config.site.indoor_max_plausible_c,
+        )
+        current = set(selection.fallback_reasons)
+        for heater_id in sorted(current - self._fallback):
+            logger.warning(
+                "Heater %s is using thermal fallback: %s",
+                heater_id,
+                selection.fallback_reasons[heater_id],
+            )
+        for heater_id in sorted(self._fallback - current):
+            logger.info("Heater %s recovered indoor temperature", heater_id)
+        self._fallback = current
+        return selection.temperatures
 
 
 def _build_output_driver(config: AppConfig, driver_name: str) -> OutputDriver:
@@ -796,6 +859,74 @@ def _run_api(args: argparse.Namespace) -> int:
     # Bare uvicorn on purpose: uvicorn[standard] would pull uvloop and
     # httptools, neither of which has an armv7l wheel.
     uvicorn.run(app, host=host, port=port, log_level=(args.log_level or "info").lower())
+    return EXIT_OK
+
+
+# ----------------------------------------------------------------------- mqtt
+
+def _run_mqtt() -> int:
+    """Compose the independent publisher lazily; never imports a driver."""
+    from datetime import timezone
+
+    from .mqtt.client import PahoMqttClient
+    from .mqtt.commands import CommandProcessor
+    from .mqtt.indoor import IndoorMessageProcessor
+    from .mqtt.publisher import MqttPublisher, StoreSnapshotReader
+    from .mqtt.service import MqttService
+    from .mqtt.settings import load_settings
+    from .mqtt.topics import TopicLayout
+    from .persistence.heartbeat import read_heartbeat
+    from .persistence.history import SqlStatusReader
+
+    settings = load_settings()
+    store = _configured_store()
+    installation_id = store.repository.installation_id()
+    topics = TopicLayout(settings.prefix, settings.discovery_prefix)
+    status_reader = SqlStatusReader(store.engine, installation_id, store.location)
+    snapshots = StoreSnapshotReader(
+        config_repository=store.repository,
+        schema_gate=store.gate,
+        heartbeat_reader=lambda: read_heartbeat(
+            store.engine, installation_id, store.location
+        ),
+        status_reader=status_reader,
+        clock=lambda: datetime.now(timezone.utc),
+    )
+    transport = PahoMqttClient(settings)
+    publisher = MqttPublisher(
+        transport,
+        topics,
+        snapshots,
+        discovery=lambda: snapshots.discovery(
+            topics, store.repository.installation_name()
+        ),
+        subscriptions=lambda: snapshots.subscriptions(topics),
+    )
+    commands = CommandProcessor(
+        store.repository, topics, republish=publisher.republish_heater
+    )
+    indoor = IndoorMessageProcessor(
+        store.repository,
+        store.indoor_readings,
+        clock=lambda: datetime.now(timezone.utc),
+    )
+    service = MqttService(
+        transport,
+        topics,
+        host=settings.host,
+        port=settings.port,
+        publisher=publisher,
+        publish_seconds=settings.publish_seconds,
+        command_handler=commands.handle,
+        indoor_handler=indoor.handle,
+    )
+    try:
+        service.start()
+        service.run()
+    except KeyboardInterrupt:
+        logger.info("MQTT publisher stopped")
+    finally:
+        service.stop()
     return EXIT_OK
 
 
