@@ -92,6 +92,18 @@ const TABLE: Record<ApiErrorCode, Omit<Explained, 'action'> & { action: string }
     onDevice: true,
     fieldScoped: false,
   },
+  relay_test_active: {
+    title: 'La configuración está protegida por una prueba de relés',
+    action: 'Abre la prueba de relés para terminarla antes de cambiar el cableado.',
+    onDevice: false,
+    fieldScoped: false,
+  },
+  relay_test_fault_latched: {
+    title: 'La recuperación de seguridad sigue pendiente',
+    action: 'Espera a que el controlador confirme el apagado completo.',
+    onDevice: true,
+    fieldScoped: false,
+  },
   internal_error: {
     title: 'La petición no se pudo completar',
     action: 'Consulta los registros del servicio en el dispositivo.',

@@ -171,6 +171,27 @@ class PruneReport:
     def total(self) -> int:
         return sum(self.deleted.values())
 
+@dataclass(frozen=True)
+class RelayTestSweepResult:
+    heater_id: str
+    confirmed: bool
+    error_code: str | None = None
+
+class RelayTestError(ConfigStoreError):
+    """A rejected relay-test transition (never a GPIO exception)."""
+
+    def __init__(self, code: str, message: str, heater_id: str | None = None) -> None:
+        self.code, self.heater_id = code, heater_id
+        super().__init__(message)
+
+class RelayTestRepository(Protocol):
+    def current(self, credential_digest: str | None = None) -> dict | None: ...
+    def get(self, session_id: str, credential_digest: str | None = None) -> dict | None: ...
+    def claim(self, credential_digest: str, now: datetime, lease_seconds: int) -> dict: ...
+    def renew(self, session_id: str, credential_digest: str, now: datetime, lease_seconds: int) -> dict: ...
+    def command(self, session_id: str, heater_id: str, state: bool, credential_digest: str, now: datetime) -> dict: ...
+    def request_end(self, session_id: str, credential_digest: str, now: datetime) -> dict: ...
+
 
 class ConfigRepository(Protocol):
     def current(self) -> tuple[AppConfig, int]:
@@ -279,4 +300,5 @@ __all__ = [
     "SchemaVersionError",
     "SecretRejectedError",
     "StoreDescription",
+    "RelayTestError", "RelayTestRepository", "RelayTestSweepResult",
 ]

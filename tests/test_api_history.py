@@ -13,7 +13,7 @@ SEED_END = datetime(2026, 1, 16, 12, 0, tzinfo=timezone.utc)
 
 
 def _seed(store, nights: int, end: datetime = SEED_END):
-    from test_persistence_retention import _seed_history
+    from tests.test_persistence_retention import _seed_history
 
     _seed_history(store, nights=nights, end=end)
 

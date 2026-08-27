@@ -12,6 +12,7 @@
 
 import { HttpErrorResponse } from '@angular/common/http';
 import { Component, computed, inject, signal } from '@angular/core';
+import { RouterLink } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 
 import { Api } from '../core/api';
@@ -27,7 +28,7 @@ interface PendingEdit {
 
 @Component({
   selector: 'dtc-config',
-  imports: [FormsModule],
+  imports: [FormsModule, RouterLink],
   templateUrl: './config.html',
   styleUrl: './config.css',
 })
@@ -48,6 +49,7 @@ export class Config {
   readonly pending = signal<Record<string, string>>({});
   readonly confirming = signal<PendingEdit | null>(null);
   readonly saved = signal<string>('');
+  readonly relayConflict = signal(false);
 
   readonly dirty = computed(() => Object.keys(this.pending()).length > 0);
 
@@ -64,6 +66,7 @@ export class Config {
         // the operator asked for the current truth.
         this.fieldErrors.set({});
         this.pending.set({});
+        this.relayConflict.set(false);
       },
       error: (error: unknown) => this.banner.set(this.describe(error)),
     });
@@ -195,6 +198,11 @@ export class Config {
       return;
     }
     const explained = explain(body);
+    this.relayConflict.set(
+      body.code === 'relay_test_active' ||
+      body.code === 'relay_test_fault_latched' ||
+      (body.code === 'config_conflict' && body.message.includes('relay test')),
+    );
     if (explained.fieldScoped && this.rendered.has(target)) {
       this.fieldErrors.update((errors) => ({
         ...errors,

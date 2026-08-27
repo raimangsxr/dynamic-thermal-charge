@@ -29,6 +29,14 @@ class PartiallyFailingDriver(RecordingDriver):
             raise RuntimeError("relay a unavailable")
 
 
+class LatchRecorder:
+    def __init__(self) -> None:
+        self.armed: list[tuple[str | None, str]] = []
+
+    def arm_latch(self, session_id, _at, reason) -> None:
+        self.armed.append((session_id, reason))
+
+
 def plan(start: datetime) -> ScheduleResult:
     middle = start + timedelta(minutes=30)
     end = middle + timedelta(minutes=30)
@@ -89,6 +97,19 @@ def test_shutdown_continues_after_one_output_fails(caplog) -> None:
     ]
     assert driver.closed is True
     assert "Failed to force output a OFF" in caplog.text
+
+
+def test_partial_shutdown_persists_a_fault_latch_after_sweeping_every_output() -> None:
+    driver = PartiallyFailingDriver()
+    relay_tests = LatchRecorder()
+    controller = ChargeController(("a", "b"), driver, relay_tests=relay_tests)
+
+    controller.shutdown(datetime(2026, 1, 1))
+
+    assert [(heater_id, enabled) for heater_id, enabled, _ in driver.calls] == [
+        ("a", False), ("b", False),
+    ]
+    assert relay_tests.armed == [(None, "off_sweep_failed")]
 
 
 def test_ignores_unknown_heaters_from_persisted_plan(caplog) -> None:

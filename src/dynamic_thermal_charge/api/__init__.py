@@ -93,6 +93,7 @@ def create_app(
     from .routes import health as health_routes
     from .routes import history as history_routes
     from .routes import status as status_routes
+    from .routes import relay_test as relay_test_routes
 
     # No credential: deliberately mute (FR-052).
     app.include_router(health_routes.router, tags=["health"])
@@ -101,6 +102,7 @@ def create_app(
     app.include_router(
         status_routes.router, prefix=API_PREFIX, tags=["status"], dependencies=protected
     )
+    app.include_router(relay_test_routes.router, prefix=API_PREFIX, tags=["relay-test"], dependencies=protected)
     app.include_router(
         config_routes.router, prefix=API_PREFIX, tags=["config"], dependencies=protected
     )

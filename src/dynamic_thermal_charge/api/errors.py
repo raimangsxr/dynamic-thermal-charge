@@ -41,6 +41,7 @@ CODE_NO_CONFIGURATION = "no_configuration"
 CODE_SCHEMA_UNUSABLE = "schema_unusable"
 CODE_STORE_UNAVAILABLE = "store_unavailable"
 CODE_INTERNAL = "internal_error"
+CODE_RELAY_TEST_NOT_OWNER = "relay_test_not_owner"
 
 
 class ApiError(HTTPException):
@@ -179,6 +180,7 @@ __all__ = [
     "CODE_STORE_UNAVAILABLE",
     "CODE_UNAUTHORIZED",
     "CODE_VALIDATION",
+    "CODE_RELAY_TEST_NOT_OWNER",
     "bad_request",
     "not_found",
     "register_error_handlers",

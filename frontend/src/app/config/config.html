@@ -12,6 +12,9 @@
       }
     </div>
   }
+  @if (relayConflict()) {
+    <p class="banner alert" role="alert">La configuración está bloqueada por una prueba o recuperación de seguridad. <a routerLink="/prueba-reles">Abrir prueba de relés</a></p>
+  }
 
   @if (saved(); as text) {
     <p class="saved" role="status" data-testid="saved">Guardado — {{ text }}</p>

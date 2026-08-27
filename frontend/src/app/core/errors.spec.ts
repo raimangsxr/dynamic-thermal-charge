@@ -18,6 +18,8 @@ const CONTRACT_CODES: ApiErrorCode[] = [
   'no_configuration',
   'schema_unusable',
   'store_unavailable',
+  'relay_test_active',
+  'relay_test_fault_latched',
   'internal_error',
 ];
 

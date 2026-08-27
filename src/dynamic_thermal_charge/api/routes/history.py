@@ -22,6 +22,7 @@ from ..schemas import (
     ForecastPage,
     PlanPage,
     PruneResponse,
+    RelayTestHistoryPage,
     TransitionPage,
 )
 
@@ -139,6 +140,40 @@ def get_transitions(
         heater_id=heater_id,
     )
     return TransitionPage(
+        items=page.items,
+        limit_applied=page.limit_applied,
+        has_more=page.has_more,
+        next_cursor=page.next_cursor,
+    )
+
+
+@router.get(
+    "/history/relay-tests",
+    response_model=RelayTestHistoryPage,
+    responses={**READ_RESPONSES, 400: ERROR_RESPONSES[404]},
+    summary="Relay-test audit events",
+    description=PAGE_DESCRIPTION + " Filters accept session_id and heater_id.",
+)
+def get_relay_tests(
+    since: datetime | None = Query(default=None, alias="from"),
+    until: datetime | None = Query(default=None, alias="to"),
+    limit: int | None = Query(default=None, ge=1),
+    cursor: str | None = None,
+    session_id: str | None = None,
+    heater_id: str | None = None,
+    store: Store = Depends(usable_store),
+) -> RelayTestHistoryPage:
+    _check_range(since, until)
+    page = _page(
+        _reader(store).relay_tests,
+        since=since,
+        until=until,
+        limit=limit,
+        cursor=cursor,
+        session_id=session_id,
+        heater_id=heater_id,
+    )
+    return RelayTestHistoryPage(
         items=page.items,
         limit_applied=page.limit_applied,
         has_more=page.has_more,
