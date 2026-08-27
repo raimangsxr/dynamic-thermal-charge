@@ -111,6 +111,7 @@ export interface HeaterDto {
   target_charge: number;
   priority: number;
   enabled: boolean;
+  indoor_topic: string | null;
   output: OutputDto;
   thermal: ThermalDto | null;
 }
@@ -142,6 +143,9 @@ export interface ConfigDto {
   max_total_power_kw: number;
   slot_minutes: number;
   window_minutes: number;
+  indoor_max_age_minutes: number;
+  indoor_min_plausible_c: number;
+  indoor_max_plausible_c: number;
   log_level: string;
   state_file: string;
   poll_seconds: number;
@@ -168,6 +172,7 @@ export interface AddHeaterRequest {
   target_charge?: number;
   priority?: number;
   enabled?: boolean;
+  indoor_topic?: string | null;
   output?: 'simulated' | 'gpio';
   pin?: number | null;
   active_high?: boolean;

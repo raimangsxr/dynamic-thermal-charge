@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 KNOWN_REVISIONS: tuple[str, ...] = (
     "0001_initial_schema",
     "0002_controller_heartbeat",
+    "0003_indoor_temperature",
 )
 EXPECTED_REVISION = KNOWN_REVISIONS[-1]
 

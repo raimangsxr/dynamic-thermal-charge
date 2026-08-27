@@ -1,0 +1,38 @@
+[Unit]
+Description=Dynamic Thermal Charge Home Assistant MQTT publisher
+Documentation=https://github.com/raimangsxr/dynamic-thermal-charge
+# Independent from the controller, API and panel. They may be stopped or
+# restarted in any order; the database is the only shared boundary.
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=dynamic-thermal-charge
+Group=dynamic-thermal-charge
+WorkingDirectory=/var/lib/dynamic-thermal-charge
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+EnvironmentFile=/etc/dynamic-thermal-charge/environment
+ExecStart=/opt/dynamic-thermal-charge/venv/bin/dynamic-thermal-charge mqtt
+TimeoutStartSec=120s
+Restart=on-failure
+RestartSec=15s
+TimeoutStopSec=20s
+KillSignal=SIGTERM
+UMask=0077
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+# Deliberately no gpio supplementary group and no device access.
+ReadWritePaths=/var/lib/dynamic-thermal-charge
+
+[Install]
+WantedBy=multi-user.target

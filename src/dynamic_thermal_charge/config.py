@@ -46,6 +46,19 @@ def validate_heaters(heaters: tuple[Heater, ...]) -> None:
 
 def validate_config(config: AppConfig) -> None:
     """Check the invariants that span the whole installation."""
+    if config.site.indoor_max_age_minutes <= 0:
+        raise ConfigValidationError(
+            "indoor_max_age_minutes must be positive",
+            field="indoor_max_age_minutes",
+        )
+    if (
+        config.site.indoor_min_plausible_c
+        >= config.site.indoor_max_plausible_c
+    ):
+        raise ConfigValidationError(
+            "indoor_min_plausible_c must be lower than indoor_max_plausible_c",
+            field="indoor_min_plausible_c",
+        )
     validate_heaters(config.heaters)
 
     if config.schedule is not None:

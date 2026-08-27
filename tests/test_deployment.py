@@ -195,6 +195,7 @@ def test_the_installed_environment_has_no_forbidden_dependency() -> None:
 # --------------------------------------------------------------------------- #
 
 API_UNIT = ROOT / "deploy" / "systemd" / "dynamic-thermal-charge-api.service"
+MQTT_UNIT = ROOT / "deploy" / "systemd" / "dynamic-thermal-charge-mqtt.service"
 
 
 def test_the_api_unit_exists_and_serves_the_api() -> None:
@@ -278,6 +279,55 @@ def test_the_example_token_is_empty_not_a_placeholder() -> None:
             break
     else:
         raise AssertionError("DTC_API_TOKEN is not declared in the example")
+
+
+def test_mqtt_unit_is_independent_restricted_and_has_no_gpio_access():
+    unit = MQTT_UNIT.read_text(encoding="utf-8")
+    assert "User=dynamic-thermal-charge" in unit
+    assert "ExecStart=" in unit and " mqtt" in unit
+    assert "ProtectSystem=strict" in unit
+    assert "SupplementaryGroups=gpio" not in unit
+    assert "--driver gpio" not in unit
+    for other in (
+        "dynamic-thermal-charge.service",
+        "dynamic-thermal-charge-api.service",
+        "nginx.service",
+    ):
+        assert f"Requires={other}" not in unit
+        assert f"BindsTo={other}" not in unit
+        assert f"PartOf={other}" not in unit
+
+
+def test_installer_offers_mqtt_without_starting_migrating_or_compiling():
+    installer = INSTALLER.read_text(encoding="utf-8")
+    assert "--with-mqtt" in installer
+    assert "[db,mqtt]" in installer
+    assert "MQTT_SERVICE_NAME" in installer
+    assert "MQTT_UNIT_PATH" in installer
+    # It installs a unit and a pure-Python extra. Runtime actions remain printed
+    # instructions, never commands executed by the installer.
+    assert "dynamic-thermal-charge-mqtt.service" in installer
+    assert "swig" not in "\n".join(
+        line for line in installer.splitlines() if "WITH_MQTT" in line
+    )
+
+
+def test_environment_example_documents_mqtt_and_tls_without_a_secret():
+    environment = ENVIRONMENT.read_text(encoding="utf-8")
+    for variable in (
+        "DTC_MQTT_HOST",
+        "DTC_MQTT_PORT",
+        "DTC_MQTT_USERNAME",
+        "DTC_MQTT_PASSWORD",
+        "DTC_MQTT_TLS",
+        "DTC_MQTT_PREFIX",
+        "DTC_MQTT_DISCOVERY_PREFIX",
+        "DTC_MQTT_PUBLISH_SECONDS",
+    ):
+        assert variable in environment
+    for line in environment.splitlines():
+        if line.startswith("DTC_MQTT_PASSWORD="):
+            assert line == "DTC_MQTT_PASSWORD="
 
 
 def test_the_environment_example_warns_about_exposing_the_api() -> None:

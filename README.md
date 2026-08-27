@@ -350,6 +350,120 @@ el controlador apague las salidas en su bloque `finally`. La instalación no
 habilita ni arranca automáticamente el servicio y continúa usando salidas
 simuladas.
 
+## Home Assistant mediante MQTT
+
+El publicador es un cuarto servicio independiente: no pertenece al grupo
+`gpio`, no importa drivers y no puede conmutar salidas. Home Assistant descubre
+automáticamente un dispositivo de instalación y uno por acumulador:
+
+- por instalación: potencia instantánea y porcentaje del límite, límite,
+  ventana, previsión y origen, salud del controlador y sospecha de procesos
+  duplicados;
+- por acumulador: salida, potencia nominal, habilitación, carga objetivo y
+  minutos solicitados, asignados y no atendidos.
+
+Los identificadores usan el segmento fijo `installation` y el id de dominio del
+acumulador. Renombrar la instalación o cambiar `DTC_MQTT_PREFIX` no cambia los
+`unique_id` ni rompe automatizaciones.
+
+### Configurar y arrancar
+
+```bash
+python -m pip install -e '.[dev,mqtt]'
+export DTC_DATABASE_URL="sqlite:///$(pwd)/var/dtc.db"
+export DTC_MQTT_HOST=127.0.0.1
+dtc db upgrade
+dtc mqtt
+```
+
+Para la Raspberry Pi:
+
+```bash
+sudo ./scripts/install-service.sh --with-mqtt
+sudoedit /etc/dynamic-thermal-charge/environment
+sudo systemctl start dynamic-thermal-charge-mqtt
+```
+
+El instalador no migra, arranca ni habilita servicios. Las variables disponibles
+son `DTC_MQTT_HOST`, `DTC_MQTT_PORT` (1883), `DTC_MQTT_USERNAME`,
+`DTC_MQTT_PASSWORD`, `DTC_MQTT_TLS` (false), `DTC_MQTT_PREFIX` (`dtc`),
+`DTC_MQTT_DISCOVERY_PREFIX` (`homeassistant`) y
+`DTC_MQTT_PUBLISH_SECONDS` (15). La contraseña solo vive en el fichero de
+entorno de modo `0600`; nunca se guarda en la base de datos ni se registra.
+
+Un broker remoto puede alcanzarse por WireGuard u otro túnel usando su dirección
+dentro del túnel. Si el transporte no está ya cifrado, activa TLS y normalmente
+el puerto 8883:
+
+```bash
+DTC_MQTT_HOST=10.6.0.1
+DTC_MQTT_PORT=8883
+DTC_MQTT_TLS=true
+```
+
+La conexión usa MQTT v5. Descubrimiento, disponibilidad y estado se publican
+retenidos con QoS 1 y solo cuentan como correctos tras un PUBACK aceptado. Las
+ACL mínimas del usuario del broker son:
+
+- publicar en `homeassistant/#` y `dtc/installation/#`;
+- suscribirse a `dtc/installation/heater/+/set/+` y a los asuntos interiores
+  configurados;
+- sin permiso para publicar órdenes si esa cuenta solo la usa el servicio.
+
+Un PUBACK rechazado —por ejemplo por una ACL— se registra con asunto y motivo,
+nunca con payload o credenciales. Credenciales rechazadas se reintentan cada
+cinco minutos; un broker o túnel inalcanzable usa espera creciente de 1 a 120 s.
+Al reconectar se publica disponibilidad, luego todo el descubrimiento y por
+último el estado y las suscripciones.
+
+### Disponibilidad y órdenes
+
+La última voluntad marca todo como no disponible si muere el publicador o cae
+el túnel. Si solo falta el latido del controlador, salida y potencia quedan no
+disponibles, mientras configuración y salud siguen visibles. Nunca se convierte
+«no sé» en salida apagada ni potencia cero.
+
+Home Assistant puede modificar únicamente `enabled` y `target_charge`. Son
+cambios de configuración; el planificador decide las salidas. Potencia máxima,
+pin, nivel activo y cualquier campo futuro quedan fuera por lista blanca. Las
+órdenes deben publicarse con QoS 1 y **sin retención**. Toda orden recibida con
+`retain=true` se rechaza antes de leer su carga y se republica el valor realmente
+almacenado.
+
+### Temperatura interior y reserva
+
+```bash
+dtc config set indoor_topic ha/sensor/temperatura_salon/state --heater salon
+dtc config set indoor_max_age_minutes 30
+dtc config set indoor_min_plausible_c -20
+dtc config set indoor_max_plausible_c 50
+```
+
+El instante utilizado es el de recepción local. Una carga vacía, no numérica o
+implausible invalida inmediatamente la medida anterior; una medida demasiado
+antigua se trata como ausente. En esos casos el controlador vuelve al cálculo
+anterior basado en previsión y registra solo la entrada y salida de la reserva.
+Una estancia en objetivo o por encima conserva `min_charge`, no cae a cero.
+Eliminar el origen restaura exactamente el comportamiento anterior:
+
+```bash
+dtc config set indoor_topic '' --heater salon
+```
+
+Diagnóstico rápido:
+
+| Síntoma | Revisión |
+| --- | --- |
+| no aparece ninguna entidad | integración MQTT y `DTC_MQTT_DISCOVERY_PREFIX` |
+| todo no disponible | unidad MQTT, broker/túnel o base de datos |
+| solo salida/potencia no disponibles | latido del controlador; es la respuesta honesta |
+| una orden vuelve atrás | fue inválida, no permitida o retenida; mira el journal |
+| conexión sin actualizaciones | PUBACK/ACL del asunto indicado en el journal |
+| demanda sin temperatura real | asunto, antigüedad, rango plausible y registro de reserva |
+
+La guía operativa completa está en
+[`specs/004-home-assistant/quickstart.md`](specs/004-home-assistant/quickstart.md).
+
 ## API HTTP
 
 Una API de lectura y configuración, servida como **servicio independiente** del

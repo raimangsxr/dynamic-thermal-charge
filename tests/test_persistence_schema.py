@@ -17,6 +17,7 @@ from dynamic_thermal_charge.persistence.engine import (
 from dynamic_thermal_charge.persistence.mapping import from_utc, to_utc
 from dynamic_thermal_charge.persistence.schema import (
     heater as heater_table,
+    indoor_reading,
     installation as installation_table,
     output_config as output_table,
     plan,
@@ -168,7 +169,41 @@ def test_the_schema_declares_every_expected_table():
         "config_change",
         # Added in 002-config-api: the controller's proof of life.
         "controller_heartbeat",
+        "indoor_reading",
     }
+
+
+def test_indoor_reading_uses_the_integer_heater_primary_key():
+    assert indoor_reading.c.heater_pk.primary_key
+    assert indoor_reading.c.heater_pk.type.python_type is int
+    target = next(iter(indoor_reading.c.heater_pk.foreign_keys)).target_fullname
+    assert target == "heater.id"
+    foreign_key = next(iter(indoor_reading.c.heater_pk.foreign_keys))
+    assert foreign_key.ondelete == "CASCADE"
+
+
+def test_indoor_configuration_columns_have_compatible_defaults():
+    assert heater_table.c.indoor_topic.nullable
+    assert installation_table.c.indoor_max_age_minutes.server_default.arg == "30"
+    assert installation_table.c.indoor_min_plausible_c.server_default.arg == "-20"
+    assert installation_table.c.indoor_max_plausible_c.server_default.arg == "50"
+
+
+def test_migrating_from_0002_preserves_existing_configuration(store):
+    from alembic import command
+
+    from dynamic_thermal_charge.persistence.bootstrap import initialise
+    from dynamic_thermal_charge.persistence.migrations import _config
+
+    initialise(store)
+    config_before, revision_before = store.repository.current()
+
+    command.downgrade(_config(store.engine), "0002_controller_heartbeat")
+    command.upgrade(_config(store.engine), "head")
+
+    config_after, revision_after = store.repository.current()
+    assert config_after == config_before
+    assert revision_after == revision_before
 
 
 # --------------------------------------------------------------------------- #

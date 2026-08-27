@@ -63,6 +63,25 @@ def test_validator_accepts_a_coherent_installation():
     validate_config(_validator_config())
 
 
+def test_indoor_age_validation_names_the_offending_field():
+    config = _validator_config()
+    object.__setattr__(config.site, "indoor_max_age_minutes", 0)
+    with pytest.raises(ConfigValidationError) as error:
+        validate_config(config)
+    assert error.value.field == "indoor_max_age_minutes"
+    assert "positive" in str(error.value)
+
+
+def test_indoor_range_validation_names_both_bounds():
+    config = _validator_config()
+    object.__setattr__(config.site, "indoor_min_plausible_c", 30.0)
+    object.__setattr__(config.site, "indoor_max_plausible_c", 20.0)
+    with pytest.raises(ConfigValidationError) as error:
+        validate_config(config)
+    assert error.value.field == "indoor_min_plausible_c"
+    assert "indoor_max_plausible_c" in str(error.value)
+
+
 def test_duplicate_gpio_pin_names_both_heaters():
     heaters = (
         _validator_heater("salon", kind="gpio", pin=17),

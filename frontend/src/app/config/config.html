@@ -37,7 +37,7 @@
 
     <h2>Instalación</h2>
     <div class="fields">
-      @for (field of ['max_total_power_kw', 'slot_minutes', 'retention_days', 'poll_seconds', 'log_level']; track field) {
+      @for (field of ['max_total_power_kw', 'slot_minutes', 'retention_days', 'poll_seconds', 'log_level', 'indoor_max_age_minutes', 'indoor_min_plausible_c', 'indoor_max_plausible_c']; track field) {
         <div class="field" [attr.data-field]="field">
           <label [for]="field">{{ field }}{{ register(field, null) }}</label>
           <input
@@ -60,7 +60,7 @@
     @for (heater of data.heaters; track heater.id) {
       <fieldset [attr.data-heater]="heater.id">
         <legend>{{ heater.name }} ({{ heater.id }})</legend>
-        @for (field of ['target_charge', 'priority', 'pin', 'active_high']; track field) {
+        @for (field of ['target_charge', 'priority', 'pin', 'active_high', 'indoor_topic']; track field) {
           <div class="field" [attr.data-field]="heater.id + '.' + field">
             <label [for]="heater.id + '-' + field">{{ field }}{{ register(field, heater.id) }}</label>
             <input

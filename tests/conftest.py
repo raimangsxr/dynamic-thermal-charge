@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from dynamic_thermal_charge.models import AppConfig
+from dynamic_thermal_charge.mqtt import ConnectionHandler, IncomingMessage, MessageHandler
 from dynamic_thermal_charge.persistence import (
     ConfigChange,
     ConfigStoreEmptyError,
@@ -203,6 +204,67 @@ def clock() -> ControlledClock:
 @pytest.fixture
 def wait(clock) -> ControlledWait:
     return ControlledWait(clock)
+
+
+@dataclass
+class FakeMqttClient:
+    """Ordered, socket-free MQTT transport used by every messaging test."""
+
+    events: list[tuple] = field(default_factory=list)
+    publications: list[tuple[str, str, int, bool]] = field(default_factory=list)
+    subscriptions: list[str] = field(default_factory=list)
+    connection_handler: ConnectionHandler | None = None
+    message_handler: MessageHandler | None = None
+
+    def set_connection_handler(self, handler: ConnectionHandler) -> None:
+        self.connection_handler = handler
+
+    def set_message_handler(self, handler: MessageHandler) -> None:
+        self.message_handler = handler
+
+    def will_set(self, topic, payload, *, qos, retain) -> None:
+        self.events.append(("will", topic, payload, qos, retain))
+
+    def connect_async(self, host, port) -> None:
+        self.events.append(("connect", host, port))
+
+    def loop_start(self) -> None:
+        self.events.append(("loop_start",))
+
+    def loop_stop(self) -> None:
+        self.events.append(("loop_stop",))
+
+    def disconnect(self) -> None:
+        self.events.append(("disconnect",))
+
+    def publish(self, topic, payload, *, qos, retain) -> None:
+        record = (topic, payload, qos, retain)
+        self.publications.append(record)
+        self.events.append(("publish", *record))
+
+    def subscribe(self, topic, *, qos=1) -> None:
+        if topic not in self.subscriptions:
+            self.subscriptions.append(topic)
+        self.events.append(("subscribe", topic, qos))
+
+    def unsubscribe(self, topic) -> None:
+        if topic in self.subscriptions:
+            self.subscriptions.remove(topic)
+        self.events.append(("unsubscribe", topic))
+
+    def connect_result(self, accepted=True, reason=None) -> None:
+        assert self.connection_handler is not None
+        self.connection_handler(accepted, reason)
+
+    def inject(self, topic: str, payload: str | bytes, *, retain=False) -> None:
+        assert self.message_handler is not None
+        raw = payload.encode() if isinstance(payload, str) else payload
+        self.message_handler(IncomingMessage(topic, raw, retain))
+
+
+@pytest.fixture
+def mqtt_client() -> FakeMqttClient:
+    return FakeMqttClient()
 
 
 # --------------------------------------------------------------------------- #

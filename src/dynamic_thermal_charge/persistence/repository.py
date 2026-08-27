@@ -16,11 +16,11 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping
 
-from sqlalchemy import delete, insert, select, update
+from sqlalchemy import delete, insert, inspect, select, update
 from sqlalchemy.engine import Connection, Engine
 
 from ..config import validate_config
-from ..models import AppConfig, Heater, OutputConfig, ThermalProfile
+from ..models import AppConfig, Heater, IndoorReading, OutputConfig, ThermalProfile
 from . import (
     ConfigChange,
     ConfigConflictError,
@@ -39,12 +39,14 @@ from .mapping import (
     parse_time,
     parse_weekdays,
     thermal_params,
+    from_utc,
     to_utc,
     weather_params,
 )
 from .schema import (
     config_change,
     heater as heater_table,
+    indoor_reading as indoor_reading_table,
     installation as installation_table,
     output_config as output_table,
     thermal_profile as thermal_table,
@@ -117,6 +119,11 @@ def _parse_optional_int(raw: str, field: str) -> int | None:
     return _parse_int(raw, field)
 
 
+def _parse_optional_str(raw: str, _field: str) -> str | None:
+    normalized = raw.strip()
+    return normalized or None
+
+
 def _power_kw_to_w(raw: str, field: str) -> int:
     return round(_parse_float(raw, field) * 1000)
 
@@ -141,6 +148,9 @@ INSTALLATION_FIELDS: dict[str, tuple[str, Callable[[str, str], Any]]] = {
     "state_file": ("state_file", lambda raw, field: raw),
     "poll_seconds": ("poll_seconds", _parse_float),
     "retention_days": ("retention_days", _parse_optional_int),
+    "indoor_max_age_minutes": ("indoor_max_age_minutes", _parse_int),
+    "indoor_min_plausible_c": ("indoor_min_plausible_c", _parse_float),
+    "indoor_max_plausible_c": ("indoor_max_plausible_c", _parse_float),
 }
 
 HEATER_FIELDS: dict[str, tuple[str, str, Callable[[str, str], Any]]] = {
@@ -153,6 +163,7 @@ HEATER_FIELDS: dict[str, tuple[str, str, Callable[[str, str], Any]]] = {
     "target_charge": ("heater", "target_charge", _parse_float),
     "priority": ("heater", "priority", _parse_int),
     "enabled": ("heater", "enabled", _parse_bool),
+    "indoor_topic": ("heater", "indoor_topic", _parse_optional_str),
     "output_type": ("output", "kind", lambda raw, field: raw),
     "pin": ("output", "pin", _parse_optional_int),
     "active_high": ("output", "active_high", _parse_bool),
@@ -201,7 +212,9 @@ class SqlConfigRepository:
 
     def _read(self, connection: Connection) -> tuple[AppConfig, int]:
         installation_row = connection.execute(
-            select(installation_table).order_by(installation_table.c.id).limit(1)
+            self._select_present(connection, installation_table)
+            .order_by(installation_table.c.id)
+            .limit(1)
         ).mappings().first()
         if installation_row is None:
             raise ConfigStoreEmptyError(
@@ -215,7 +228,7 @@ class SqlConfigRepository:
             )
         ).mappings().first()
         heater_rows = connection.execute(
-            select(heater_table)
+            self._select_present(connection, heater_table)
             .where(heater_table.c.installation_id == installation_id)
             .order_by(heater_table.c.position)
         ).mappings().all()
@@ -247,6 +260,18 @@ class SqlConfigRepository:
             raise ConfigStoreEmptyError("the configuration database holds no installation")
         return int(row[0])
 
+    def installation_name(self) -> str:
+        with store_errors(self._location):
+            with self._engine.connect() as connection:
+                name = connection.execute(
+                    select(installation_table.c.name)
+                    .order_by(installation_table.c.id)
+                    .limit(1)
+                ).scalar()
+        if name is None:
+            raise ConfigStoreEmptyError("the configuration database holds no installation")
+        return str(name)
+
     # --------------------------------------------------------------- create
 
     def is_empty(self) -> bool:
@@ -269,7 +294,11 @@ class SqlConfigRepository:
                 return False
             installation_id = connection.execute(
                 insert(installation_table).values(
-                    **installation_params(config, name, now)
+                    **self._compatible_params(
+                        connection,
+                        installation_table.name,
+                        installation_params(config, name, now),
+                    )
                 )
             ).inserted_primary_key[0]
             if config.weather is not None:
@@ -294,7 +323,11 @@ class SqlConfigRepository:
     ) -> None:
         heater_key = connection.execute(
             insert(heater_table).values(
-                **heater_params(heater, installation_id, position)
+                **self._compatible_params(
+                    connection,
+                    heater_table.name,
+                    heater_params(heater, installation_id, position),
+                )
             )
         ).inserted_primary_key[0]
         connection.execute(
@@ -306,6 +339,24 @@ class SqlConfigRepository:
                     **thermal_params(heater.thermal, heater_key)
                 )
             )
+
+    @staticmethod
+    def _compatible_params(
+        connection: Connection, table_name: str, params: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Allow migration tests to seed an older pinned schema safely."""
+        present = {
+            column["name"] for column in inspect(connection).get_columns(table_name)
+        }
+        return {name: value for name, value in params.items() if name in present}
+
+    @staticmethod
+    def _select_present(connection: Connection, table):  # noqa: ANN001
+        """Select a pinned older schema without asking it for future columns."""
+        present = {
+            column["name"] for column in inspect(connection).get_columns(table.name)
+        }
+        return select(*(column for column in table.c if column.name in present))
 
     # ----------------------------------------------------------------- edit
 
@@ -534,6 +585,7 @@ class SqlConfigRepository:
         )
         return old, parsed
 
+
     def _update_weather(
         self, connection: Connection, installation_id: int, field: str, value: str
     ) -> tuple[Any, Any]:
@@ -613,9 +665,94 @@ class SqlConfigRepository:
         return row[0], parsed
 
 
+class SqlIndoorReadingRepository:
+    """Persist only the latest accepted indoor reading for each heater."""
+
+    def __init__(
+        self,
+        engine: Engine,
+        location: StoreLocation | None = None,
+    ) -> None:
+        self._engine = engine
+        self._location = location
+
+    def upsert(self, reading: IndoorReading) -> None:
+        with transaction(self._engine, self._location) as connection:
+            heater_pk = self._heater_pk(connection, reading.heater_id)
+            # Delete + insert is portable across SQLite and PostgreSQL and remains
+            # one atomic replacement because both statements share a transaction.
+            connection.execute(
+                delete(indoor_reading_table).where(
+                    indoor_reading_table.c.heater_pk == heater_pk
+                )
+            )
+            connection.execute(
+                insert(indoor_reading_table).values(
+                    heater_pk=heater_pk,
+                    celsius=reading.celsius,
+                    received_at=to_utc(reading.received_at),
+                )
+            )
+
+    def invalidate(self, heater_id: str) -> None:
+        with transaction(self._engine, self._location) as connection:
+            heater_pk = self._heater_pk(connection, heater_id)
+            connection.execute(
+                delete(indoor_reading_table).where(
+                    indoor_reading_table.c.heater_pk == heater_pk
+                )
+            )
+
+    def read_all(self) -> dict[str, IndoorReading]:
+        with store_errors(self._location):
+            with self._engine.connect() as connection:
+                rows = connection.execute(
+                    select(
+                        heater_table.c.heater_id,
+                        indoor_reading_table.c.celsius,
+                        indoor_reading_table.c.received_at,
+                    ).select_from(
+                        indoor_reading_table.join(
+                            heater_table,
+                            indoor_reading_table.c.heater_pk == heater_table.c.id,
+                        )
+                    )
+                ).all()
+        readings: dict[str, IndoorReading] = {}
+        for heater_id, celsius, received_at in rows:
+            aware_received_at = from_utc(received_at)
+            if aware_received_at is None:  # guarded by the NOT NULL schema
+                raise ConfigValidationError(
+                    "an indoor reading has no received_at timestamp",
+                    field="received_at",
+                    heater_id=str(heater_id),
+                )
+            reading = IndoorReading(
+                heater_id=str(heater_id),
+                celsius=float(celsius),
+                received_at=aware_received_at,
+            )
+            readings[reading.heater_id] = reading
+        return readings
+
+    @staticmethod
+    def _heater_pk(connection: Connection, heater_id: str) -> int:
+        heater_pk = connection.execute(
+            select(heater_table.c.id).where(heater_table.c.heater_id == heater_id)
+        ).scalar()
+        if heater_pk is None:
+            raise ConfigValidationError(
+                f"heater {heater_id!r} does not exist",
+                field="heater_id",
+                heater_id=heater_id,
+            )
+        return int(heater_pk)
+
+
 __all__ = [
     "HEATER_FIELDS",
     "INSTALLATION_FIELDS",
     "WEATHER_FIELDS",
     "SqlConfigRepository",
+    "SqlIndoorReadingRepository",
 ]
