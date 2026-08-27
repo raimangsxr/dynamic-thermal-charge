@@ -721,6 +721,8 @@ def _run_controller(
             controller = ChargeController(
                 tuple(heater.id for heater in config.heaters if heater.enabled),
                 driver,
+                relay_tests=store.relay_tests,
+                runner_id=heartbeat.runner_id,
             )
             watchdog = ForecastWatchdog(
                 provider,

@@ -169,7 +169,11 @@ def test_the_schema_declares_every_expected_table():
         "config_change",
         # Added in 002-config-api: the controller's proof of life.
         "controller_heartbeat",
-        "indoor_reading",
+            "indoor_reading",
+            "relay_test_control",
+            "relay_test_session",
+            "relay_test_output",
+            "relay_test_event",
     }
 
 

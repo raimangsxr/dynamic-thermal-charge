@@ -49,6 +49,12 @@ DTC_API_TOKEN=
 # cross-origin client only works when you name it here on purpose.
 #DTC_API_CORS_ORIGINS=http://panel.lan:4200
 
+# Relay test sessions are short-lived capabilities. GET polling is 1 second;
+# only the visible owning tab renews its lease every 5 seconds.
+#DTC_RELAY_TEST_LEASE_SECONDS=30
+#DTC_RELAY_TEST_STATE_POLL_SECONDS=1
+#DTC_RELAY_TEST_LEASE_RENEW_SECONDS=5
+
 # --------------------------------------------------------------------------- #
 # Home Assistant MQTT (the independent MQTT publisher service)
 # --------------------------------------------------------------------------- #

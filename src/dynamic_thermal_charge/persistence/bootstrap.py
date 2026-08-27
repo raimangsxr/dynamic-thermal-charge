@@ -17,6 +17,7 @@ from . import SchemaStatus
 from .engine import build_engine, store_errors
 from .gate import EXPECTED_REVISION, SchemaVersionGate
 from .repository import SqlConfigRepository, SqlIndoorReadingRepository
+from .relay_test import SqlRelayTestRepository
 from .seed import SEED_INSTALLATION_NAME, example_installation
 from .url import StoreLocation, resolve_location
 
@@ -31,6 +32,7 @@ class Store:
     repository: SqlConfigRepository
     indoor_readings: SqlIndoorReadingRepository
     gate: SchemaVersionGate
+    relay_tests: SqlRelayTestRepository
 
 
 @dataclass(frozen=True)
@@ -76,6 +78,7 @@ def open_store(
         repository=SqlConfigRepository(engine, location, clock=clock),  # type: ignore[arg-type]
         indoor_readings=SqlIndoorReadingRepository(engine, location),
         gate=SchemaVersionGate(engine, location),
+        relay_tests=SqlRelayTestRepository(engine, location, clock=clock),
     )
 
 

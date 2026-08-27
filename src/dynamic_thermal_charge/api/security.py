@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import secrets
+import hashlib
 
 from fastapi import Header, HTTPException, Request, status
 
@@ -42,6 +43,16 @@ def extract_token(authorization: str | None) -> str | None:
     if scheme.lower() != SCHEME.lower():
         return None
     return value.strip() or None
+
+def new_relay_test_credential() -> str:
+    """A capability delivered exactly once; 32 random bytes = 256 bits."""
+    return secrets.token_urlsafe(32)
+
+def relay_test_credential_digest(credential: str) -> str:
+    return hashlib.sha256(credential.encode("utf-8")).hexdigest()
+
+def relay_test_credentials_match(offered: str | None, digest: str) -> bool:
+    return offered is not None and secrets.compare_digest(relay_test_credential_digest(offered), digest)
 
 
 def authorize(request: Request, authorization: str | None) -> None:
@@ -78,4 +89,5 @@ __all__ = [
     "extract_token",
     "require_token",
     "tokens_match",
+    "new_relay_test_credential", "relay_test_credential_digest", "relay_test_credentials_match",
 ]

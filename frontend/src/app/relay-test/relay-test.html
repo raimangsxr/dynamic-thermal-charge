@@ -1,0 +1,7 @@
+<main><h1>Prueba manual de relés</h1><p>Las órdenes conmutan cargas reales. El estado solo se muestra tras confirmación.</p>
+@if (error()) { <p role="alert">{{ error() }}</p> }
+@if (!view()?.session) { <button type="button" (click)="start()">Entrar en modo test</button> }
+@if (view()?.safety?.fault_latched) { <p role="alert">Recuperación de seguridad: automático bloqueado. No limpie este bloqueo desde el panel.</p> }
+@if (view()?.audit?.degraded) { <p role="status">La auditoría está degradada; la protección física continúa activa.</p> }
+@if (view()?.session; as session) { <p><strong>MODO TEST</strong> · {{ session.status }} @if (session.status === 'active') { · automático suspendido }</p><button type="button" (click)="end()" [disabled]="!session.owner || session.status !== 'active'">Finalizar y apagar todo</button><section aria-label="Acumuladores configurados">@for (heater of view()!.heaters; track heater.id) { <article><h2>{{ heater.name }}</h2><p>{{ resultText(heater.result, heater.confirmed_state) }}</p><button type="button" [disabled]="!session.owner || session.status !== 'active' || !view()!.controller.state_is_current || view()!.safety.fault_latched" (click)="toggle(heater.id, !heater.desired_state)">{{ heater.desired_state ? 'Apagar ' + heater.name : 'Encender ' + heater.name }}</button></article> } @empty { <p>No hay acumuladores configurados para probar.</p> }</section> }
+</main>

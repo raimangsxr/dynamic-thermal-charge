@@ -51,6 +51,7 @@ from .schema import (
     output_config as output_table,
     thermal_profile as thermal_table,
     weather_config as weather_table,
+    relay_test_control,
 )
 from .url import StoreLocation
 
@@ -373,6 +374,7 @@ class SqlConfigRepository:
             _, current_revision = self._read(connection)
             self._require_revision(current_revision, revision)
             installation_id = self._locked_installation_id(connection)
+            self._require_relay_test_free(connection, installation_id)
 
             if entity == "installation":
                 old, new = self._update_installation(
@@ -434,6 +436,7 @@ class SqlConfigRepository:
                     heater_id=heater.id,
                 )
             installation_id = self._locked_installation_id(connection)
+            self._require_relay_test_free(connection, installation_id)
             position = connection.execute(
                 select(heater_table.c.position)
                 .where(heater_table.c.installation_id == installation_id)
@@ -466,6 +469,7 @@ class SqlConfigRepository:
             _, current_revision = self._read(connection)
             self._require_revision(current_revision, revision)
             installation_id = self._locked_installation_id(connection)
+            self._require_relay_test_free(connection, installation_id)
             heater_key = connection.execute(
                 select(heater_table.c.id).where(
                     (heater_table.c.installation_id == installation_id)
@@ -513,6 +517,23 @@ class SqlConfigRepository:
         if row is None:
             raise ConfigStoreEmptyError("the configuration database holds no installation")
         return int(row[0])
+
+    @staticmethod
+    def _require_relay_test_free(connection: Connection, installation_id: int) -> None:
+        """Configuration and manual GPIO mapping are one atomic safety boundary."""
+        # A binary at 0004 can still be used by migration tooling to prepare a
+        # database stopped at an older revision.  There is no relay-test state
+        # to guard before 0004 exists.
+        if not inspect(connection).has_table("relay_test_control"):
+            return
+        row = connection.execute(
+            select(relay_test_control.c.session_id, relay_test_control.c.fault_latched)
+            .where(relay_test_control.c.installation_id == installation_id)
+        ).first()
+        if row is not None and (row.session_id is not None or row.fault_latched):
+            raise ConfigConflictError(
+                "configuration cannot change while relay test control is active or safety recovery is required"
+            )
 
     def _commit_revision(
         self,

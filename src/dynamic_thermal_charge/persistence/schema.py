@@ -392,6 +392,61 @@ controller_heartbeat = Table(
     ),
 )
 
+# Relay test mode.  These tables intentionally use strings for the public
+# heater/session identifiers: relay-test evidence must remain readable after a
+# heater is removed from configuration.
+relay_test_control = Table(
+    "relay_test_control", metadata,
+    Column("installation_id", Integer, ForeignKey("installation.id", ondelete="CASCADE"), primary_key=True),
+    Column("session_id", String(36), nullable=True),
+    Column("fault_latched", Boolean, nullable=False, server_default="0"),
+    Column("fault_generation", Integer, nullable=False, server_default="0"),
+    Column("fault_session_id", String(36), nullable=True),
+    Column("fault_reason", String(64), nullable=True),
+    Column("fault_latched_at", DateTime, nullable=True),
+    Column("fault_recovery_attempted_at", DateTime, nullable=True),
+    Column("fault_recovered_at", DateTime, nullable=True),
+    Column("audit_degraded", Boolean, nullable=False, server_default="0"),
+    Column("audit_degraded_since", DateTime, nullable=True),
+    Column("updated_at", DateTime, nullable=False),
+    CheckConstraint("fault_generation >= 0", name="ck_relay_test_fault_generation"),
+)
+relay_test_session = Table(
+    "relay_test_session", metadata,
+    Column("id", String(36), primary_key=True),
+    Column("installation_id", Integer, ForeignKey("installation.id", ondelete="CASCADE"), nullable=False),
+    Column("owner_credential_digest", String(64), nullable=False),
+    Column("status", String(16), nullable=False),
+    Column("installation_revision", Integer, nullable=False),
+    Column("requested_at", DateTime, nullable=False), Column("activated_at", DateTime),
+    Column("lease_expires_at", DateTime, nullable=False), Column("last_owner_seen_at", DateTime, nullable=False),
+    Column("controller_runner_id", String(64)), Column("ending_requested_at", DateTime),
+    Column("ended_at", DateTime), Column("end_reason", String(64)), Column("failure_detail", String(512)),
+    CheckConstraint("status IN ('starting','active','ending','ended','failed')", name="ck_relay_test_session_status"),
+    Index("ix_relay_test_session_installation_requested", "installation_id", "requested_at"),
+)
+relay_test_output = Table(
+    "relay_test_output", metadata,
+    Column("session_id", String(36), ForeignKey("relay_test_session.id", ondelete="CASCADE"), primary_key=True),
+    Column("heater_id", String(64), primary_key=True), Column("heater_name", String(120), nullable=False),
+    Column("position", Integer, nullable=False), Column("power_w", Integer, nullable=False),
+    Column("desired_state", Boolean, nullable=False, server_default="0"), Column("command_seq", Integer, nullable=False, server_default="0"),
+    Column("requested_at", DateTime), Column("confirmed_state", Boolean), Column("confirmed_seq", Integer),
+    Column("confirmed_at", DateTime), Column("result", String(16), nullable=False, server_default="idle"),
+    Column("result_code", String(64)), Column("result_detail", String(512)),
+    CheckConstraint("power_w > 0", name="ck_relay_test_output_power"),
+    CheckConstraint("result IN ('idle','pending','confirmed','rejected','unknown')", name="ck_relay_test_output_result"),
+    Index("ix_relay_test_output_session_position", "session_id", "position"),
+)
+relay_test_event = Table(
+    "relay_test_event", metadata,
+    Column("id", Integer, primary_key=True), Column("installation_id", Integer, ForeignKey("installation.id", ondelete="CASCADE"), nullable=False),
+    Column("session_id", String(36), nullable=False), Column("kind", String(32), nullable=False), Column("heater_id", String(64)),
+    Column("requested_state", Boolean), Column("result", String(16), nullable=False), Column("code", String(64)),
+    Column("occurred_at", DateTime, nullable=False), Column("detail", String(512)),
+    Index("ix_relay_test_event_installation_occurred", "installation_id", "occurred_at", "id"),
+)
+
 
 # Constraint name -> (field, human explanation). Used to turn an IntegrityError
 # into an actionable ConfigValidationError instead of a generic one: a constraint
@@ -469,6 +524,10 @@ CONSTRAINT_FIELDS: dict[str, tuple[str, str]] = {
         "driver_kind",
         "the driver kind must be simulated or gpio",
     ),
+    "ck_relay_test_fault_generation": ("fault_generation", "the fault generation cannot be negative"),
+    "ck_relay_test_session_status": ("status", "the relay-test status is not recognised"),
+    "ck_relay_test_output_power": ("power_w", "the relay-test output power must be positive"),
+    "ck_relay_test_output_result": ("result", "the relay-test output result is not recognised"),
 }
 
 
@@ -484,6 +543,7 @@ RETAINED_TABLES: tuple[tuple[Table, str], ...] = (
     (output_transition, "occurred_at"),
     (plan, "created_at"),
     (forecast, "retrieved_at"),
+    (relay_test_event, "occurred_at"),
 )
 
 CONFIG_TABLES = (installation, weather_config, heater, output_config, thermal_profile)
@@ -514,4 +574,5 @@ __all__ = [
     "plan_slot",
     "thermal_profile",
     "weather_config",
+    "relay_test_control", "relay_test_session", "relay_test_output", "relay_test_event",
 ]

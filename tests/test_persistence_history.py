@@ -269,7 +269,7 @@ def reader(initialised_store):
 
 
 def _seed_nights(store, nights: int, end: datetime, heaters=("salon", "entrada")):
-    from test_persistence_retention import _seed_history
+    from tests.test_persistence_retention import _seed_history
 
     _seed_history(store, nights=nights, end=end, heaters=heaters)
 

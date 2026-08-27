@@ -240,6 +240,76 @@ class ChangeResponse(BaseModel):
     revision_before: int
     revision_after: int
 
+# --------------------------------------------------------------------------- #
+# Relay test (nullable physical confirmation is deliberate).
+class RelayTestStartResponse(BaseModel):
+    session_id: str
+    client_credential: str
+    status: str
+    lease_expires_at: datetime
+    state_poll_seconds: int = 1
+    lease_renew_seconds: int = 5
+
+class RelayTestCommandRequest(BaseModel):
+    state: bool
+
+class RelayTestCommandResponse(BaseModel):
+    heater_id: str
+    desired_state: bool
+    result: str
+    command_seq: int
+
+
+class RelayTestSessionView(BaseModel):
+    id: str
+    status: str
+    owner: bool = False
+    requested_at: datetime
+    activated_at: datetime | None = None
+    ended_at: datetime | None = None
+    lease_expires_at: datetime | None = None
+    end_reason: str | None = None
+
+
+class RelayTestControllerView(BaseModel):
+    state_is_current: bool
+    last_seen_at: datetime | None = None
+
+
+class RelayTestSafetyView(BaseModel):
+    automatic_control_blocked: bool
+    fault_latched: bool
+    fault_session_id: str | None = None
+    fault_reason: str | None = None
+    fault_latched_at: datetime | None = None
+    fault_recovery_attempted_at: datetime | None = None
+    fault_recovered_at: datetime | None = None
+
+
+class RelayTestAuditView(BaseModel):
+    degraded: bool
+    degraded_since: datetime | None = None
+
+
+class RelayTestHeaterView(BaseModel):
+    id: str
+    name: str
+    position: int
+    power_w: int
+    desired_state: bool
+    confirmed_state: bool | None = None
+    result: str
+    result_code: str | None = None
+    confirmed_at: datetime | None = None
+
+
+class RelayTestView(BaseModel):
+    session: RelayTestSessionView | None = None
+    controller: RelayTestControllerView
+    safety: RelayTestSafetyView
+    audit: RelayTestAuditView
+    heaters: list[RelayTestHeaterView] = Field(default_factory=list)
+
 
 # --------------------------------------------------------------------------- #
 # History
@@ -295,6 +365,24 @@ class TransitionPage(BaseModel):
     next_cursor: str | None = None
 
 
+class RelayTestHistoryItem(BaseModel):
+    id: int
+    session_id: str
+    kind: str
+    heater_id: str | None = None
+    requested_state: bool | None = None
+    result: str
+    code: str | None = None
+    occurred_at: datetime
+
+
+class RelayTestHistoryPage(BaseModel):
+    items: list[RelayTestHistoryItem]
+    limit_applied: int
+    has_more: bool
+    next_cursor: str | None = None
+
+
 class PruneResponse(BaseModel):
     deleted: dict[str, int]
     total: int
@@ -343,6 +431,7 @@ __all__ = [
     "PlanSummary",
     "PowerSnapshot",
     "PruneResponse",
+    "RelayTestHistoryPage",
     "SetFieldRequest",
     "StatusResponse",
     "TransitionPage",

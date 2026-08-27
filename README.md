@@ -44,6 +44,38 @@ PYTHONPATH=src python -m dynamic_thermal_charge config show
 
 ## Configuración
 
+## Prueba manual de relés
+
+El panel autenticado incluye **Prueba de relés** para diagnosticar acumuladores
+configurados. Es una sesión temporal y exclusiva: la API solo guarda intención;
+el controlador es el único proceso que conmuta GPIO y la interfaz no presenta un
+estado como físico hasta que el driver lo confirma.
+
+Al iniciar se entrega una credencial de cliente de un solo uso visual, guardada
+únicamente en `sessionStorage`. Además del token normal de API, esa credencial es
+necesaria para ordenar, renovar o finalizar la sesión. No debe copiarse a URLs,
+logs ni almacenamiento persistente. Una pestaña sin ella es solo observadora.
+
+Finalizar, caducar el lease, reiniciar el controlador o perder coordinación
+provoca un barrido OFF de todas las salidas. Si una no confirma OFF se mantiene
+un *fault latch* persistente: bloquea automático, nuevas pruebas y cambios de
+configuración. No existe un botón HTTP para limpiarlo; solo el controlador lo
+retira tras un barrido OFF completo y el automático vuelve en un ciclo posterior.
+La pantalla muestra tanto esta recuperación como una auditoría degradada. La
+auditoría es best-effort y nunca bloquea una conmutación de seguridad.
+
+La consulta por identificador de sesión conserva el desenlace terminal mientras
+la política de retención lo permita. Antes de un downgrade de la migración 0004
+debe no haber sesión ni latch activos y verificarse OFF de las cargas.
+
+Para validar el modo sin hardware use las tres suites del proyecto:
+
+```bash
+pytest
+npm --prefix frontend run test
+npm --prefix frontend run build
+```
+
 La configuración vive en base de datos. **No hay fichero de configuración**: el
 runtime no lee ningún YAML. `examples/home.yaml` y `examples/raspberry-pi.yaml`
 se conservan solo como documentación de los campos disponibles y como referencia

@@ -16,7 +16,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping, Sequence
 
-from sqlalchemy import delete, func, insert, select
+from sqlalchemy import and_, delete, func, insert, or_, select
 from sqlalchemy.engine import Engine
 
 from . import ForecastRef, HistoryPage, PlanRef, PruneReport
@@ -28,6 +28,10 @@ from .schema import (
     plan as plan_table,
     plan_allocation,
     plan_slot,
+    relay_test_control,
+    relay_test_event,
+    relay_test_output,
+    relay_test_session,
 )
 from .url import StoreLocation
 
@@ -203,6 +207,30 @@ class SqlHistoryRecorder:
                     count = connection.execute(delete(table).where(condition)).rowcount
                     if count:
                         deleted[table.name] = int(count)
+                # Relay-test terminal state is retained with the audit trail.
+                # Never remove a live singleton nor the terminal evidence that
+                # explains an active latch.
+                protected = select(relay_test_control.c.session_id).where(
+                    relay_test_control.c.installation_id == self._installation_id,
+                    relay_test_control.c.session_id.is_not(None),
+                ).union(select(relay_test_control.c.fault_session_id).where(
+                    relay_test_control.c.installation_id == self._installation_id,
+                    relay_test_control.c.fault_latched.is_(True),
+                    relay_test_control.c.fault_session_id.is_not(None),
+                ))
+                terminal = and_(
+                    relay_test_session.c.installation_id == self._installation_id,
+                    relay_test_session.c.ended_at.is_not(None),
+                    relay_test_session.c.ended_at < cutoff,
+                    ~relay_test_session.c.id.in_(protected),
+                )
+                terminal_ids = select(relay_test_session.c.id).where(terminal)
+                count = connection.execute(delete(relay_test_event).where(and_(relay_test_event.c.installation_id == self._installation_id, or_(relay_test_event.c.occurred_at < cutoff, relay_test_event.c.session_id.in_(terminal_ids))))).rowcount
+                if count:
+                    deleted[relay_test_event.name] = int(count)
+                count = connection.execute(delete(relay_test_session).where(terminal)).rowcount
+                if count:
+                    deleted[relay_test_session.name] = int(count)
             report = PruneReport(deleted=deleted)
             if report.total:
                 logger.info(
@@ -357,6 +385,17 @@ class SqlHistoryReader:
             cursor,
             extra=extra,
         )
+
+    def relay_tests(
+        self, since=None, until=None, limit=None, cursor=None, session_id=None, heater_id=None
+    ) -> HistoryPage:
+        extra = None
+        if session_id is not None:
+            extra = relay_test_event.c.session_id == session_id
+        if heater_id is not None:
+            condition = relay_test_event.c.heater_id == heater_id
+            extra = condition if extra is None else extra & condition
+        return self._page(relay_test_event, relay_test_event.c.occurred_at, since, until, limit, cursor, extra=extra)
 
     def _page(
         self, table, timestamp, since, until, limit, cursor, extra=None
