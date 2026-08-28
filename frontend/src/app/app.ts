@@ -10,14 +10,18 @@ import { RelayTestSession } from './core/relay-test-session';
   imports: [RouterOutlet, RouterLink, RouterLinkActive],
   template: `
     @if (auth.authenticated()) {
-      <nav>
+      <nav aria-label="Navegación principal">
+        <a class="brand" routerLink="/estado">Dynamic Thermal Charge</a>
+        <div class="links">
         <a routerLink="/estado" routerLinkActive="active">Estado</a>
         <a routerLink="/configuracion" routerLinkActive="active">Configuración</a>
         <a routerLink="/historico" routerLinkActive="active">Histórico</a>
+        <a routerLink="/diagnostico" routerLinkActive="active">Diagnóstico</a>
         <a routerLink="/prueba-reles" routerLinkActive="active">Prueba de relés</a>
         @if (relay.view()?.session || relay.view()?.safety?.fault_latched || relay.id()) {
           <a class="relay-alert" routerLink="/prueba-reles">Prueba/recovery activa</a>
         }
+        </div>
         <button type="button" (click)="signOut()">Cerrar sesión</button>
       </nav>
     }
@@ -25,12 +29,16 @@ import { RelayTestSession } from './core/relay-test-session';
   `,
   styles: `
     nav {
-      display: flex; flex-wrap: wrap; gap: 0.25rem 1rem; align-items: center;
-      padding: 0.75rem 1rem; border-bottom: 1px solid #ddd;
+      display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: center;
+      padding: 0.75rem max(1rem, calc((100vw - 76rem) / 2)); border-bottom: 1px solid var(--border);
+      background: var(--surface); position: sticky; top: 0; z-index: 10;
     }
-    a { text-decoration: none; padding: 0.25rem 0; color: #05408a; }
+    .brand { font-weight: 750; color: var(--ink); white-space: nowrap; }
+    .links { display: flex; flex-wrap: wrap; gap: .25rem .8rem; }
+    a { text-decoration: none; padding: 0.3rem 0; color: var(--primary); }
     a.active { font-weight: 700; border-bottom: 2px solid currentColor; }
-    button { margin-left: auto; font: inherit; cursor: pointer; padding: 0.3rem 0.6rem; }
+    button { margin-left: auto; font: inherit; cursor: pointer; padding: 0.45rem 0.7rem; }
+    @media (max-width: 42rem) { .brand { width: 100%; } button { margin-left: 0; } }
   `,
 })
 export class App {

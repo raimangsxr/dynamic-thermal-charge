@@ -392,6 +392,21 @@ controller_heartbeat = Table(
     ),
 )
 
+# A bounded projection of controller logs for the authenticated operator panel.
+# This is deliberately not a system journal or a generic file reader.
+controller_log_event = Table(
+    "controller_log_event",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("installation_id", Integer, ForeignKey("installation.id", ondelete="CASCADE"), nullable=False),
+    Column("occurred_at", DateTime, nullable=False),
+    Column("level", String(16), nullable=False),
+    Column("logger", String(160), nullable=False),
+    Column("message", String(2048), nullable=False),
+    Index("ix_controller_log_event_installation_id", "installation_id", "id"),
+    Index("ix_controller_log_event_installation_time", "installation_id", "occurred_at"),
+)
+
 # Relay test mode.  These tables intentionally use strings for the public
 # heater/session identifiers: relay-test evidence must remain readable after a
 # heater is removed from configuration.
@@ -544,6 +559,7 @@ RETAINED_TABLES: tuple[tuple[Table, str], ...] = (
     (plan, "created_at"),
     (forecast, "retrieved_at"),
     (relay_test_event, "occurred_at"),
+    (controller_log_event, "occurred_at"),
 )
 
 CONFIG_TABLES = (installation, weather_config, heater, output_config, thermal_profile)
@@ -560,6 +576,7 @@ __all__ = [
     "CONFIG_TABLES",
     "CONSTRAINT_FIELDS",
     "controller_heartbeat",
+    "controller_log_event",
     "HISTORY_TABLES",
     "RETAINED_TABLES",
     "config_change",

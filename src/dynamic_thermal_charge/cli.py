@@ -695,10 +695,13 @@ def _run_controller(
 ) -> int:
     from .persistence.heartbeat import SqlHeartbeatPublisher
     from .persistence.history import SqlHistoryRecorder
+    from .persistence.controller_log import ControllerLogHandler
 
     assert config.weather is not None
     installation_id = store.repository.installation_id()
     history = SqlHistoryRecorder(store.engine, installation_id, store.location)
+    web_log_handler = ControllerLogHandler(store.engine, installation_id, store.location)
+    logging.getLogger().addHandler(web_log_handler)
     # The controller's proof of life, so a separate API can tell "now" from
     # "the last thing anyone knew". Publishing it can never stop the loop.
     heartbeat = SqlHeartbeatPublisher(
@@ -771,6 +774,8 @@ def _run_controller(
             )
             return service.run()
         finally:
+            logging.getLogger().removeHandler(web_log_handler)
+            web_log_handler.close()
             if driver is not None:
                 driver.close()
 

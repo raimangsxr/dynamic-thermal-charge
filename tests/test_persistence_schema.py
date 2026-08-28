@@ -174,6 +174,7 @@ def test_the_schema_declares_every_expected_table():
             "relay_test_session",
             "relay_test_output",
             "relay_test_event",
+            "controller_log_event",
     }
 
 

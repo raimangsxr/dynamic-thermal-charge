@@ -89,6 +89,7 @@ def create_app(
         )
 
     from .routes import config as config_routes
+    from .routes import controller_log as controller_log_routes
     from .routes import docs as docs_routes
     from .routes import health as health_routes
     from .routes import history as history_routes
@@ -102,6 +103,7 @@ def create_app(
     app.include_router(
         status_routes.router, prefix=API_PREFIX, tags=["status"], dependencies=protected
     )
+    app.include_router(controller_log_routes.router, prefix=API_PREFIX, tags=["controller-log"], dependencies=protected)
     app.include_router(relay_test_routes.router, prefix=API_PREFIX, tags=["relay-test"], dependencies=protected)
     app.include_router(
         config_routes.router, prefix=API_PREFIX, tags=["config"], dependencies=protected

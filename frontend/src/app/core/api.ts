@@ -24,6 +24,7 @@ import type {
   PruneDto,
   SetFieldRequest,
   StatusDto,
+  ControllerLogPageDto, ControllerLogLevel,
   TransitionHistoryDto,
   RelayTestStartDto, RelayTestViewDto,
 } from './api.types';
@@ -45,6 +46,16 @@ export class Api {
 
   status(): Observable<StatusDto> {
     return this.http.get<StatusDto>(`${BASE}/status`);
+  }
+
+  controllerLog(query: { limit?: number; beforeId?: number; afterId?: number; level?: ControllerLogLevel; q?: string } = {}): Observable<ControllerLogPageDto> {
+    const params: Record<string, string | number> = {};
+    if (query.limit !== undefined) params['limit'] = query.limit;
+    if (query.beforeId !== undefined) params['before_id'] = query.beforeId;
+    if (query.afterId !== undefined) params['after_id'] = query.afterId;
+    if (query.level) params['level'] = query.level;
+    if (query.q) params['q'] = query.q;
+    return this.http.get<ControllerLogPageDto>(`${BASE}/controller-log`, { params });
   }
 
   config(): Observable<ConfigDto> {

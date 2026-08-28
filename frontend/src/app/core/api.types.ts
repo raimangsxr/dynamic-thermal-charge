@@ -84,6 +84,10 @@ export interface StatusDto {
   allocations: AllocationDto[];
 }
 
+export type ControllerLogLevel = 'DEBUG' | 'INFO' | 'WARNING' | 'ERROR' | 'CRITICAL';
+export interface ControllerLogEventDto { id: number; occurred_at: string; level: ControllerLogLevel; logger: string; message: string; }
+export interface ControllerLogPageDto { items: ControllerLogEventDto[]; limit_applied: number; has_more: boolean; next_before_id: number | null; }
+
 /* --------------------------------------------------------------------------
  * Configuration
  * -------------------------------------------------------------------------- */

@@ -40,6 +40,10 @@ DTC_API_TOKEN=
 #DTC_API_HOST=0.0.0.0
 #DTC_API_PORT=8080
 
+# Number of recent controller events exposed by the authenticated Diagnóstico
+# panel. The default is 1000; values are constrained between 10 and 100000.
+#DTC_CONTROLLER_LOG_MAX_EVENTS=1000
+
 # How old the controller's heartbeat may be before the API stops presenting the
 # output state as current. Derived from the controller's own polling cadence when
 # unset; only override it if you know why.
