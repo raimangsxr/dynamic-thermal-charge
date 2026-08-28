@@ -1,0 +1,115 @@
+name: Publish frontend release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: frontend-release-publication
+  cancel-in-progress: false
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    outputs:
+      application_ref: ${{ steps.metadata.outputs.application_ref }}
+      frontend_version: ${{ steps.metadata.outputs.frontend_version }}
+      frontend_url: ${{ steps.metadata.outputs.frontend_url }}
+      frontend_sha256: ${{ steps.metadata.outputs.frontend_sha256 }}
+    steps:
+      - name: Check out the release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci --prefix frontend
+
+      - name: Build frontend
+        run: npm run build --prefix frontend
+
+      - name: Package frontend
+        run: |
+          tar -C frontend/dist/panel/browser -czf frontend.tar.gz .
+          tar -tzf frontend.tar.gz | grep -Eq '^\./index\.html$'
+          if tar -tzf frontend.tar.gz | grep -Eq '^\./(browser|panel|dist)/'; then
+            echo 'The archive contains an unexpected parent directory.' >&2
+            exit 1
+          fi
+
+      - name: Resolve release metadata
+        id: metadata
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          application_ref="$(git rev-list -n 1 "$RELEASE_TAG")"
+          frontend_sha256="$(sha256sum frontend.tar.gz | awk '{print $1}')"
+          encoded_tag="$(jq -rn --arg tag "$RELEASE_TAG" '$tag | @uri')"
+          frontend_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$encoded_tag/frontend.tar.gz"
+
+          echo "application_ref=$application_ref" >> "$GITHUB_OUTPUT"
+          echo "frontend_version=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "frontend_url=$frontend_url" >> "$GITHUB_OUTPUT"
+          echo "frontend_sha256=$frontend_sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Upload frontend asset to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$RELEASE_TAG" frontend.tar.gz --clobber
+
+  update-deployment-inventory:
+    needs: build-and-publish
+    runs-on: ubuntu-latest
+    steps:
+      # DEPLOY_REPOSITORY_TOKEN needs contents:write access to this repository.
+      - name: Check out deployment repository
+        uses: actions/checkout@v4
+        with:
+          repository: raimangsxr/dynamic-thermal-charge-deploy
+          ref: main
+          token: ${{ secrets.DEPLOY_REPOSITORY_TOKEN }}
+          path: deployment
+
+      - name: Update frontend metadata
+        uses: mikefarah/yq@v4.45.4
+        env:
+          APPLICATION_REF: ${{ needs.build-and-publish.outputs.application_ref }}
+          APPLICATION_FRONTEND_VERSION: ${{ needs.build-and-publish.outputs.frontend_version }}
+          APPLICATION_FRONTEND_URL: ${{ needs.build-and-publish.outputs.frontend_url }}
+          APPLICATION_FRONTEND_SHA256: ${{ needs.build-and-publish.outputs.frontend_sha256 }}
+        with:
+          cmd: >-
+            yq -i '
+            .application.ref = strenv(APPLICATION_REF) |
+            .application.frontend.version = strenv(APPLICATION_FRONTEND_VERSION) |
+            .application.frontend.url = strenv(APPLICATION_FRONTEND_URL) |
+            .application.frontend.sha256 = strenv(APPLICATION_FRONTEND_SHA256)
+            ' deployment/group_vars/all.yml
+
+      - name: Commit deployment metadata
+        env:
+          APPLICATION_FRONTEND_VERSION: ${{ needs.build-and-publish.outputs.frontend_version }}
+        working-directory: deployment
+        run: |
+          if git diff --quiet -- group_vars/all.yml; then
+            echo 'Deployment metadata is already up to date.'
+            exit 0
+          fi
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add group_vars/all.yml
+          git commit -m "chore(deploy): update frontend $APPLICATION_FRONTEND_VERSION"
+          git push
