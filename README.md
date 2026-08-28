@@ -1,5 +1,15 @@
 # Dynamic Thermal Charge
 
+## Diagnóstico desde el panel
+
+El panel incluye la sección **Diagnóstico**, que muestra una ventana acotada de
+eventos recientes del controller. Los registros se guardan en la base de datos
+como una proyección de solo lectura para la API; no se concede a la API acceso
+a journald ni a archivos del host. La retención está limitada a los últimos
+1.000 eventos por instalación y nunca bloquea el ciclo de control si falla. Se
+puede ajustar mediante `DTC_CONTROLLER_LOG_MAX_EVENTS` (mínimo 10, máximo
+100.000); un valor inválido vuelve de forma segura a 1.000.
+
 Planificador configurable de carga para acumuladores eléctricos, pensado para
 funcionar en una Raspberry Pi 2B sin acoplar la lógica de negocio al hardware.
 

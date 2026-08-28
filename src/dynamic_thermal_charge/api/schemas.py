@@ -127,6 +127,21 @@ class StatusResponse(BaseModel):
     allocations: list[AllocationSummary] = Field(default_factory=list)
 
 
+class ControllerLogEvent(BaseModel):
+    id: int
+    occurred_at: datetime
+    level: str
+    logger: str
+    message: str
+
+
+class ControllerLogPage(BaseModel):
+    items: list[ControllerLogEvent]
+    limit_applied: int
+    has_more: bool
+    next_before_id: int | None = None
+
+
 # --------------------------------------------------------------------------- #
 # Configuration
 # --------------------------------------------------------------------------- #

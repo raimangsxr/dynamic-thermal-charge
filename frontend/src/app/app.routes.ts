@@ -23,6 +23,11 @@ export const routes: Routes = [
     canActivate: [requireCredential],
     loadComponent: () => import('./history/history').then((m) => m.History),
   },
+  {
+    path: 'diagnostico',
+    canActivate: [requireCredential],
+    loadComponent: () => import('./diagnostics/diagnostics').then((m) => m.Diagnostics),
+  },
   { path: 'prueba-reles', canActivate: [requireCredential], loadComponent: () => import('./relay-test/relay-test').then((m) => m.RelayTest) },
   { path: '**', redirectTo: 'estado' },
 ];
