@@ -34,6 +34,8 @@ jobs:
   publish:
     needs: validate
     runs-on: ubuntu-latest
+    env:
+      RELEASE_VERSION: ${{ github.event.release.tag_name }}
     permissions:
       contents: write
     steps:
@@ -47,8 +49,6 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Validate release tag
-        env:
-          RELEASE_VERSION: ${{ github.event.release.tag_name }}
         run: |
           case "$RELEASE_VERSION" in
             ''|*[!A-Za-z0-9_.-]*)
@@ -66,17 +66,15 @@ jobs:
           context: .
           file: backend/Dockerfile
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/dynamic-thermal-charge-backend:${{ github.event.release.tag_name }}
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/dynamic-thermal-charge-backend:${{ env.RELEASE_VERSION }}
       - name: Build and push frontend image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: frontend/Dockerfile
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/dynamic-thermal-charge-frontend:${{ github.event.release.tag_name }}
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/dynamic-thermal-charge-frontend:${{ env.RELEASE_VERSION }}
       - name: Update GitOps release pointer
-        env:
-          RELEASE_VERSION: ${{ github.event.release.tag_name }}
         run: |
           git fetch --quiet origin main
           git switch --create release-publish origin/main
