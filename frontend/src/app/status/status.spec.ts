@@ -268,7 +268,7 @@ describe('Status', () => {
       heater_id: null,
     });
     const text = testId(element, 'failure')?.textContent ?? '';
-    expect(text).toContain('dtc db upgrade');
+    expect(text).toContain('migre la base de datos');
     expect(text).toContain('dispositivo');
     expect(text.toLowerCase()).toContain('no puede');
   });

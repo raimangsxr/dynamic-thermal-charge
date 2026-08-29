@@ -10,5 +10,5 @@ export const requireCredential: CanActivateFn = () => {
   if (auth.authenticated()) {
     return true;
   }
-  return inject(Router).createUrlTree(['/acceso']);
+  return inject(Router).createUrlTree(['/login']);
 };

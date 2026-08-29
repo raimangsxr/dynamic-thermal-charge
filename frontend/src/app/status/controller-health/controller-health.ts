@@ -30,8 +30,8 @@ interface Presentation {
         <strong>⚠ Parece haber más de un controlador en marcha</strong>
         <p>
           Dos procesos conmutando los mismos relés es un riesgo eléctrico.
-          Comprueba el despliegue: debería haber exactamente un servicio
-          <code>dynamic-thermal-charge</code> apuntando a esta base de datos.
+          Comprueba el despliegue: debería haber exactamente un servicio del
+          controlador apuntando a esta base de datos.
         </p>
       </div>
     }
@@ -95,7 +95,7 @@ export class ControllerHealth {
           detail:
             `El controlador no da señales desde ${seen} (${age}). Puede estar ` +
             'parado o colgado.',
-          check: 'que el servicio dynamic-thermal-charge esté en marcha',
+          check: 'que el servicio del controlador esté en marcha',
           severity: 'alert',
         };
       case 'never_seen':

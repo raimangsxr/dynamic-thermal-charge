@@ -70,6 +70,6 @@ export class App {
   signOut(): void {
     this.auth.signOut();
     this.relay.clear();
-    void this.router.navigateByUrl('/acceso');
+    void this.router.navigateByUrl('/login');
   }
 }

@@ -62,14 +62,14 @@ def usable_store(store: Store = Depends(get_store)) -> Store:
         raise ApiError(
             503,
             CODE_SCHEMA_UNUSABLE,
-            "the configuration database is not initialised. Run 'dynamic-thermal-charge db init' on "
-            "the host; the API never creates or migrates the schema",
+            "the configuration database is not initialised. Ask the administrator to initialise it "
+            "on the host; the API never creates or migrates the schema",
         )
     if status is SchemaStatus.BEHIND:
         raise ApiError(
             503,
             CODE_SCHEMA_UNUSABLE,
-            "the configuration database needs migrating. Run 'dynamic-thermal-charge db upgrade' on "
+            "the configuration database needs migrating. Ask the administrator to migrate it on "
             "the host; the API never migrates the schema itself",
         )
     raise ApiError(

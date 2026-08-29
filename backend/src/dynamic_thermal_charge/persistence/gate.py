@@ -79,14 +79,14 @@ class SchemaVersionGate:
             return
         if status is SchemaStatus.MISSING:
             raise SchemaVersionError(
-                "the configuration database is not initialised; run "
-                "'dynamic-thermal-charge db init' to create the schema"
+                "the configuration database is not initialised; ask the administrator to "
+                "initialise it before starting the service"
             )
         if status is SchemaStatus.BEHIND:
             raise SchemaVersionError(
                 f"the configuration database is at schema revision "
                 f"{self.stored_revision()} and this service expects "
-                f"{EXPECTED_REVISION}; run 'dynamic-thermal-charge db upgrade' to migrate"
+                f"{EXPECTED_REVISION}; ask the administrator to migrate it before starting the service"
             )
         raise SchemaVersionError(
             f"the configuration database is at schema revision "

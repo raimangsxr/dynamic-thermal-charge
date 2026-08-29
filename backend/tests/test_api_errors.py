@@ -87,7 +87,7 @@ def test_a_missing_schema_serves_nothing(client, initialised_store, method, path
     response = getattr(client, method)(path, headers=AUTH)
     assert response.status_code == 503
     assert response.json()["code"] == "schema_unusable"
-    assert "db init" in response.json()["message"]
+    assert "ask the administrator" in response.json()["message"].lower()
 
 
 @pytest.mark.parametrize(("method", "path"), ALL_PATHS, ids=lambda v: str(v))
@@ -98,7 +98,7 @@ def test_a_schema_pending_migration_serves_nothing(client, initialised_store, me
     response = getattr(client, method)(path, headers=AUTH)
     assert response.status_code == 503
     assert response.json()["code"] == "schema_unusable"
-    assert "db upgrade" in response.json()["message"]
+    assert "ask the administrator" in response.json()["message"].lower()
 
 
 def test_an_unknown_schema_serves_nothing(client, initialised_store):
@@ -166,7 +166,7 @@ def test_no_configuration_at_all_is_distinguishable(store_env, api_settings, api
     response = TestClient(app).get("/api/v1/config", headers=AUTH)
     assert response.status_code == 503
     assert response.json()["code"] == "no_configuration"
-    assert "db init" in response.json()["message"]
+    assert "ask the administrator" in response.json()["message"].lower()
 
 
 # --------------------------------------------------------------------------- #

@@ -54,9 +54,9 @@ class ActiveSchemaGate:
         if status is SchemaStatus.OK:
             return
         if status is SchemaStatus.MISSING:
-            raise SchemaVersionError("an active schema is missing; run 'dynamic-thermal-charge db init'")
+            raise SchemaVersionError("an active schema is missing; ask the administrator to initialise it")
         if status is SchemaStatus.BEHIND:
-            raise SchemaVersionError("an active schema needs migration; run 'dynamic-thermal-charge db upgrade'")
+            raise SchemaVersionError("an active schema needs migration; ask the administrator to migrate it")
         raise SchemaVersionError(
             "an active schema revision is newer or invalid; update the service"
         )

@@ -16,7 +16,7 @@ def _force_revision(store, revision: int) -> None:
 def test_a_missing_active_schema_reports_missing(store):
     configuration_schema_version.drop(store.engine)
     assert store.gate.check() is SchemaStatus.MISSING
-    with pytest.raises(SchemaVersionError, match="db init"):
+    with pytest.raises(SchemaVersionError, match="ask the administrator"):
         store.gate.require_ready()
 
 
@@ -28,7 +28,7 @@ def test_the_expected_revision_reports_ok(initialised_store):
 def test_an_older_revision_reports_behind(initialised_store):
     _force_revision(initialised_store, 0)
     assert initialised_store.gate.check() is SchemaStatus.BEHIND
-    with pytest.raises(SchemaVersionError, match="db upgrade"):
+    with pytest.raises(SchemaVersionError, match="ask the administrator"):
         initialised_store.gate.require_ready()
 
 

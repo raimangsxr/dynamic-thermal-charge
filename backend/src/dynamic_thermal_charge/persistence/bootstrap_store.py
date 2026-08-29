@@ -126,7 +126,7 @@ class BootstrapRepository:
             locator_row = connection.execute(select(active_locator)).mappings().one_or_none()
         if state_row is None or locator_row is None:
             raise BootstrapCorruptError(
-                "bootstrap locator is missing; run 'dynamic-thermal-charge db init' to initialize it"
+                "bootstrap locator is missing; ask the administrator to initialize it"
             )
         return _map_locator(locator_row), int(state_row.locator_revision)
 

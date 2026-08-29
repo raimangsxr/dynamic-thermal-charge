@@ -303,8 +303,8 @@ def _reject_configuration_path(arguments: list[str]) -> None:
         if argument.endswith((".yaml", ".yml")) or "/" in argument:
             raise SystemExit(
                 f"error: {argument!r} looks like a configuration file path, but "
-                "configuration now lives in the bootstrap-selected database. Run "
-                "'dynamic-thermal-charge db init' once; then use the system configuration panel. "
+                "configuration now lives in the bootstrap-selected database. Initialise the "
+                "deployment once; then use the system configuration panel. "
                 "See the README for the upgrade procedure."
             )
         return
