@@ -1,6 +1,7 @@
 """Deployment artefacts: FR-029, FR-030, FR-031."""
 
 from pathlib import Path
+import platform
 import subprocess
 
 
@@ -183,7 +184,16 @@ def test_the_installed_environment_has_no_forbidden_dependency() -> None:
     """Catches a transitive arrival that the declaration alone would not show."""
     import importlib.util
 
-    for module in ("uvloop", "httptools", "greenlet"):
+    # SQLAlchemy publishes a platform-marked greenlet requirement for hosts
+    # where greenlet has a wheel (including x86_64 CI runners). The installed
+    # environment can therefore only be checked meaningfully on the ARMv7
+    # deployment target; declaration-level guards above apply on every host.
+    if platform.machine().lower() not in {"armv7l", "armv7"}:
+        return
+
+    forbidden_modules = ("uvloop", "httptools", "greenlet")
+
+    for module in forbidden_modules:
         assert importlib.util.find_spec(module) is None, (
             f"{module} got installed transitively; it would need a compiler on "
             "the Raspberry Pi. Find out which dependency pulled it in."
