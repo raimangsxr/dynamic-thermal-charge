@@ -10,13 +10,13 @@ Todos los comandos admiten indistintamente `dynamic-thermal-charge` o su alias c
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e '.[dev,db]'
+python -m pip install -e 'backend[dev,db]'
 
 export DTC_DATABASE_URL="sqlite:///$(pwd)/var/dtc.db"
 dynamic-thermal-charge db init        # crea esquema y siembra la instalación de ejemplo
 dynamic-thermal-charge config show    # revisa qué se ha sembrado
 dynamic-thermal-charge run            # planifica
-pytest
+pytest backend/tests
 ```
 
 `db init` es idempotente: se puede repetir sin miedo. No sobrescribe una configuración

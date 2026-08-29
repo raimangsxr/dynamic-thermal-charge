@@ -92,6 +92,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="migrate only; never write the example installation",
     )
+    initialise.add_argument(
+        "--quiet",
+        action="store_true",
+        help="initialise silently; intended for container startup",
+    )
     database_actions.add_parser(
         "upgrade", help="apply pending migrations; never seeds"
     )
@@ -293,7 +298,7 @@ def _reject_configuration_path(arguments: list[str]) -> None:
             raise SystemExit(
                 f"error: {argument!r} looks like a configuration file path, but "
                 "configuration now lives in the bootstrap-selected database. Run "
-                "'dtc db init' once; then use the system configuration panel. "
+                "'dynamic-thermal-charge db init' once; then use the system configuration panel. "
                 "See the README for the upgrade procedure."
             )
         return
@@ -379,6 +384,8 @@ def _run_db(args: argparse.Namespace) -> int:
         _store, report, onboarding_token = initialise_at(
             StorePaths.production(), allow_seed=not args.no_seed
         )
+        if args.quiet:
+            return EXIT_OK
         for line in report.describe():
             print(line)
         if onboarding_token is not None:

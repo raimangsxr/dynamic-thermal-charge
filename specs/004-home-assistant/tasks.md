@@ -190,7 +190,7 @@ que el paquete MQTT no puede construir un camino hacia el hardware.
 
 - [X] T056 [US6] Crear `deploy/systemd/dynamic-thermal-charge-mqtt.service` con endurecimiento coherente con las unidades existentes y sin acceso a GPIO
 - [X] T057 [US6] Añadir las variables MQTT, comentarios de secretos y ejemplo TLS a `deploy/environment.example`
-- [X] T058 [US6] Añadir `--with-mqtt` y la instalación del extra puro Python a `scripts/install-service.sh`, sin cambiar el comportamiento de las opciones existentes
+- [X] T058 [US6] Añadir `--with-mqtt` y la instalación del extra puro Python a `deploy/install-service.sh`, sin cambiar el comportamiento de las opciones existentes
 - [X] T059 [US6] Verificar aislamiento de ciclos de vida y manejo de parada limpia en `tests/test_mqtt_publisher.py` y `src/dynamic_thermal_charge/mqtt/service.py`
 
 **Checkpoint**: el publicador se instala y se detiene de forma independiente y no puede alcanzar el hardware.

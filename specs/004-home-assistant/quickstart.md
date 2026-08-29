@@ -12,7 +12,7 @@
 ## Desarrollo local
 
 ```bash
-python -m pip install -e '.[dev,mqtt]'
+python -m pip install -e 'backend[dev,mqtt]'
 
 # Un broker de juguete, si no tienes otro a mano
 docker run --rm -p 1883:1883 eclipse-mosquitto:2 \

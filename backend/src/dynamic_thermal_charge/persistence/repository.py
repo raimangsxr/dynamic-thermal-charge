@@ -222,7 +222,7 @@ class SqlConfigRepository:
         if installation_row is None:
             raise ConfigStoreEmptyError(
                 "the configuration database holds no installation; run "
-                "'dtc db init' to seed the example installation"
+                "'dynamic-thermal-charge db init' to seed the example installation"
             )
         installation_id = installation_row["id"]
         weather_row = connection.execute(

@@ -201,7 +201,7 @@ frontend/                                   # NUEVO — espacio de trabajo de An
             └── confirm/                     # confirmación para campos eléctricos
 
 deploy/nginx/dynamic-thermal-charge.conf     # NUEVO — el sitio de contracts/nginx.md
-scripts/install-service.sh                   # + opción --with-panel
+deploy/install-service.sh                    # + opción --with-panel
 README.md                                    # + sección del panel
 tests/test_deployment.py                     # + verificación del sitio de nginx
 

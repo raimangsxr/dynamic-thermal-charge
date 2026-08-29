@@ -4,7 +4,7 @@
     @if (required() === false) {
       <p>La instalación ya está configurada. Accede con tu token administrativo.</p>
     } @else {
-      <p>Introduce la credencial de un solo uso mostrada por <code>dtc db init</code> y crea el token administrativo.</p>
+      <p>Introduce la credencial de un solo uso mostrada por el arranque del servicio y crea el token administrativo.</p>
       @if (error()) { <p class="error" role="alert">{{ error() }}</p> }
       <form (ngSubmit)="complete()">
         <label for="onboarding-credential">Credencial de inicialización</label>

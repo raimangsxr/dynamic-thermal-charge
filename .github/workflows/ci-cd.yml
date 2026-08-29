@@ -20,7 +20,7 @@ jobs:
       - uses: actions/setup-node@v6
         with: { node-version: '24', cache: npm, cache-dependency-path: frontend/package-lock.json }
       - name: Install backend test dependencies
-        run: pip install -e '.[dev]'
+        run: pip install -e 'backend[dev]'
       - name: Run backend checks
         run: make check
       - name: Install frontend dependencies
@@ -33,7 +33,7 @@ jobs:
       - name: Build backend image without publishing
         uses: docker/build-push-action@v7
         with:
-          context: .
+          context: backend
           file: backend/Dockerfile
           push: false
           tags: dynamic-thermal-charge-backend:ci-${{ github.sha }}

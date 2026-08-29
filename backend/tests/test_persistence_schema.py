@@ -415,7 +415,7 @@ def test_no_migration_imports_the_live_schema_module():
     from pathlib import Path
 
     versions = (
-        Path(__file__).resolve().parents[1]
+        Path(__file__).resolve().parents[2]
         / "src"
         / "dynamic_thermal_charge"
         / "persistence"

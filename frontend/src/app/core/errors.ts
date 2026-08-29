@@ -71,7 +71,7 @@ const TABLE: Record<ApiErrorCode, Omit<Explained, 'action'> & { action: string }
     title: 'La base de datos no tiene ninguna instalación',
     // The panel cannot seed it: doing so from an HTTP request would let a client
     // create configuration out of nothing.
-    action: 'Ejecuta «dtc db init» en el dispositivo. El panel no puede hacerlo.',
+    action: 'Ejecuta «dynamic-thermal-charge db init» en el dispositivo. El panel no puede hacerlo.',
     onDevice: true,
     fieldScoped: false,
   },
@@ -79,7 +79,7 @@ const TABLE: Record<ApiErrorCode, Omit<Explained, 'action'> & { action: string }
     title: 'La base de datos necesita atención',
     // Migrating from a browser would let a client alter the database structure.
     action:
-      'Ejecuta «dtc db upgrade» en el dispositivo, o actualiza el servicio si ' +
+      'Ejecuta «dynamic-thermal-charge db upgrade» en el dispositivo, o actualiza el servicio si ' +
       'el esquema es más nuevo que él. El panel no puede migrar la base de datos.',
     onDevice: true,
     fieldScoped: false,
