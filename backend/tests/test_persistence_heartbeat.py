@@ -201,7 +201,7 @@ def test_migrating_from_phase_one_preserves_data(sqlite_url):
     store.repository.set_field(revision, "installation", None, "poll_seconds", "7")
     edited, edited_revision = store.repository.current()
 
-    # Now upgrade, as `dtc db upgrade` would.
+    # Now upgrade through the maintenance path.
     initialise(store, allow_seed=False)
 
     assert store.gate.check() is SchemaStatus.OK
@@ -223,5 +223,5 @@ def test_a_phase_one_database_is_behind_not_unknown(sqlite_url):
 
     command.upgrade(_config(store.engine), "0001_initial_schema")
     assert store.gate.check() is SchemaStatus.BEHIND
-    with pytest.raises(SchemaVersionError, match="db upgrade"):
+    with pytest.raises(SchemaVersionError, match="ask the administrator"):
         store.gate.require_ready()

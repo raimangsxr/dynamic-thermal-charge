@@ -35,7 +35,7 @@ def initialised(run):
 
 
 # --------------------------------------------------------------------------- #
-# db init / db upgrade (FR-011, FR-012, FR-013)
+# database initialisation and migration (FR-011, FR-012, FR-013)
 # --------------------------------------------------------------------------- #
 
 def test_init_creates_and_seeds_an_empty_database(run):

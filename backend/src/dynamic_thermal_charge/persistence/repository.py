@@ -221,8 +221,8 @@ class SqlConfigRepository:
         ).mappings().first()
         if installation_row is None:
             raise ConfigStoreEmptyError(
-                "the configuration database holds no installation; run "
-                "'dynamic-thermal-charge db init' to seed the example installation"
+                "the configuration database holds no installation; ask the administrator to "
+                "initialise it before using the service"
             )
         installation_id = installation_row["id"]
         weather_row = connection.execute(

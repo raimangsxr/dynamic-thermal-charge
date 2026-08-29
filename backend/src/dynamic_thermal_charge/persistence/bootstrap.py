@@ -63,7 +63,7 @@ class InitReport:
         if self.seeded:
             lines.append(
                 f"Seeded the example installation with {self.heaters} heaters. "
-                "Review it with 'dynamic-thermal-charge config show' before starting the service."
+                "Review the persisted configuration before starting the service."
             )
         else:
             lines.append("Configuration already present; seeding skipped.")
