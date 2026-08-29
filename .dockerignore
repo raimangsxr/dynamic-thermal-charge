@@ -3,6 +3,7 @@
 .pytest_cache
 frontend/node_modules
 frontend/dist
-tests
 var
-deploy/systemd
+backend/tests
+backend/.pytest_cache
+backend/src/*.egg-info

@@ -125,7 +125,7 @@ class LoggingConfig:
 
 @dataclass(frozen=True)
 class RuntimeConfig:
-    state_file: str = "var/active-plan.json"
+    state_file: str = "/var/lib/dynamic-thermal-charge/active-plan.json"
     poll_seconds: float = 5.0
 
     def __post_init__(self) -> None:

@@ -45,10 +45,6 @@ dev = [
 ]
 gpio = ["gpiozero>=2.0.1,<3", "lgpio>=0.2.2.0"]
 
-[project.scripts]
-dynamic-thermal-charge = "dynamic_thermal_charge.cli:main"
-dtc = "dynamic_thermal_charge.cli:main"
-
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"

@@ -5,7 +5,7 @@
 ## Desarrollo local
 
 ```bash
-python -m pip install -e '.[dev,api]'
+python -m pip install -e 'backend[dev,api]'
 
 export DTC_DATABASE_URL="sqlite:///$(pwd)/var/dtc.db"
 export DTC_API_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"

@@ -1,8 +1,7 @@
 """The example installation used to seed an empty database.
 
-Mirrors ``examples/raspberry-pi.yaml``, which the runtime no longer reads but
-which stays in the repository as documentation. Seeding is strictly idempotent:
-if any configuration already exists, nothing is touched (FR-012).
+The seeded installation is strictly idempotent: if any configuration already
+exists, nothing is touched (FR-012).
 
 Every value that has physical consequences -- pins, active level, maximum power,
 charge window -- is declared explicitly here rather than defaulted, so

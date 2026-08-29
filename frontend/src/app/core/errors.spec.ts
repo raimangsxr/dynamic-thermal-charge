@@ -74,11 +74,11 @@ describe('the schema and configuration cases (FR-032)', () => {
   );
 
   it('names the exact command for a pending migration', () => {
-    expect(explain(error('schema_unusable')).action).toContain('dtc db upgrade');
+    expect(explain(error('schema_unusable')).action).toContain('dynamic-thermal-charge db upgrade');
   });
 
   it('names the exact command for a missing installation', () => {
-    expect(explain(error('no_configuration')).action).toContain('dtc db init');
+    expect(explain(error('no_configuration')).action).toContain('dynamic-thermal-charge db init');
   });
 });
 

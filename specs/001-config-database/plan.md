@@ -229,7 +229,7 @@ deploy/
 ├── environment.example        # añade DTC_DATABASE_URL
 └── systemd/…                  # la unidad deja de pasar ruta de config
 
-scripts/install-service.sh     # instala extra db, crea la BD local, ejecuta db init
+deploy/install-service.sh      # instala extra db, crea la BD local, ejecuta db init
 examples/*.yaml                # se conservan SOLO como documentación y referencia de semilla
 README.md                      # reescribe configuración; aviso de reintroducción manual (FR-031)
 ```
@@ -248,7 +248,7 @@ Parte del alcance, no un apéndice:
 | --- | --- |
 | `deploy/environment.example` | añade `DTC_DATABASE_URL` con ejemplos de ambos motores y el aviso de modo `0600` |
 | `deploy/systemd/dynamic-thermal-charge.service` | `ExecStart` sin ruta de configuración; `ExecStartPre` valida configuración y esquema; `ReadWritePaths` cubre el directorio de la base de datos |
-| `scripts/install-service.sh` | instala el extra `db`; crea `/var/lib/dynamic-thermal-charge` con el propietario correcto; **no** ejecuta `db init` automáticamente si detecta un `config.yaml` previo, para no sembrar sobre una instalación que el operador va a reintroducir |
+| `deploy/install-service.sh` | instala el extra `db`; crea `/var/lib/dynamic-thermal-charge` con el propietario correcto; **no** ejecuta `db init` automáticamente si detecta un `config.yaml` previo, para no sembrar sobre una instalación que el operador va a reintroducir |
 | `README.md` | sustituye toda la sección de configuración YAML; añade el procedimiento de actualización con el aviso explícito de FR-031, con énfasis en verificar pines y `active_high` antes de conectar hardware |
 | `examples/home.yaml`, `examples/raspberry-pi.yaml` | se conservan como documentación y referencia de la semilla. Se añade una cabecera indicando que el runtime **ya no los lee** |
 | `tests/test_deployment.py` | se amplía para verificar la unidad y el instalador nuevos |

@@ -291,7 +291,7 @@ se comprueba el recuento y qué sobrevive.
 - [X] T109 Verificar con un test en `tests/test_api_guards.py` que el subcomando `api` **no** construye ningún driver de salida, igual que los subcomandos administrativos de la fase anterior
 - [X] T110 [P] Añadir a `deploy/environment.example` la variable `DTC_API_TOKEN` con la instrucción de generarlo, y las de host, puerto, tolerancia y orígenes comentadas
 - [X] T111 Crear `deploy/systemd/dynamic-thermal-charge-api.service`: mismo usuario y mismo fichero de entorno que el controlador, `TimeoutStartSec` holgado por el coste de arranque medido, sin `ExecStartPre` que duplique el arranque del intérprete, `ProtectSystem=strict` y `ReadWritePaths` sobre el directorio de la base de datos
-- [X] T112 Añadir la opción `--with-api` a `scripts/install-service.sh`: instala el extra `api`, instala la segunda unidad, **no** la arranca ni la habilita, y avisa de que hay que generar el token
+- [X] T112 Añadir la opción `--with-api` a `deploy/install-service.sh`: instala el extra `api`, instala la segunda unidad, **no** la arranca ni la habilita, y avisa de que hay que generar el token
 - [X] T113 Ampliar `tests/test_deployment.py` para verificar la segunda unidad: que no pasa fichero de configuración, que el instalador no la arranca ni la habilita, y que el fichero de entorno de ejemplo no contiene un token real
 - [X] T114 Añadir a `README.md` la sección de la API: generar el token, arrancar los dos servicios, y la tabla de diagnóstico
 - [X] T115 Añadir a `README.md` la advertencia explícita de exponer la API en la red: sirve en claro, el token viaja legible, quien lo tenga puede cambiar la potencia máxima y los pines, y publicarla en internet requiere un proxy inverso con cifrado que queda fuera de alcance

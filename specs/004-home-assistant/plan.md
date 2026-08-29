@@ -172,7 +172,7 @@ tests/
 
 deploy/systemd/dynamic-thermal-charge-mqtt.service
 deploy/environment.example
-scripts/install-service.sh
+deploy/install-service.sh
 README.md
 
 frontend/src/app/core/api.types.ts

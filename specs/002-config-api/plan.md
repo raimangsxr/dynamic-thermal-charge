@@ -215,7 +215,7 @@ tests/
 └── test_deployment.py            # + la segunda unidad systemd
 
 deploy/systemd/dynamic-thermal-charge-api.service   # NUEVO
-scripts/install-service.sh                          # + opción --with-api
+deploy/install-service.sh                           # + opción --with-api
 README.md                                           # + sección de la API
 ```
 
@@ -235,7 +235,7 @@ de una petición HTTP.
 | --- | --- |
 | `deploy/systemd/dynamic-thermal-charge-api.service` | **Nuevo**. Mismo usuario y mismo fichero de entorno; `TimeoutStartSec` holgado por el coste de arranque medido; sin `ExecStartPre` que duplique el arranque del intérprete; `ProtectSystem=strict` y `ReadWritePaths` sobre el directorio de la base de datos |
 | `deploy/environment.example` | Añade `DTC_API_TOKEN` con instrucción de generarlo, y las variables de host, puerto, tolerancia y orígenes comentadas |
-| `scripts/install-service.sh` | Opción `--with-api`: instala el extra `api`, instala la segunda unidad, **no** la arranca ni la habilita, y avisa de que hay que generar el token |
+| `deploy/install-service.sh` | Opción `--with-api`: instala el extra `api`, instala la segunda unidad, **no** la arranca ni la habilita, y avisa de que hay que generar el token |
 | `README.md` | Sección de la API: token, arranque, exposición en red con su advertencia explícita, y tabla de diagnóstico |
 | `tests/test_deployment.py` | Verifica la segunda unidad, que no pasa fichero de configuración, y que el instalador no arranca nada |
 
