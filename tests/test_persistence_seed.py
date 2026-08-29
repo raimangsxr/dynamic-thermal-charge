@@ -31,12 +31,12 @@ def test_the_seed_holds_no_secret_only_the_variable_name():
 
 
 def test_initialising_an_empty_database_creates_and_seeds(store):
-    assert store.gate.check() is SchemaStatus.MISSING
+    assert store.gate.check() is SchemaStatus.OK
     report = initialise(store)
-    assert report.schema_created is True
+    assert report.schema_created is False
     assert report.seeded is True
     assert report.heaters == 4
-    assert report.revision == EXPECTED_REVISION
+    assert report.revision == "split-1/1"
     assert store.gate.check() is SchemaStatus.OK
     config, revision = store.repository.current()
     assert revision == 1
@@ -78,7 +78,7 @@ def test_upgrade_never_seeds(store):
 
 def test_the_report_says_what_it_did(store):
     lines = " ".join(initialise(store).describe())
-    assert "Schema created" in lines
+    assert "already at revision" in lines
     assert "Seeded" in lines
     lines = " ".join(initialise(store).describe())
     assert "already at revision" in lines

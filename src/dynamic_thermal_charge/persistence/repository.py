@@ -199,10 +199,12 @@ class SqlConfigRepository:
         engine: Engine,
         location: StoreLocation | None = None,
         clock: Callable[[], datetime] | None = None,
+        relay_test_engine: Engine | None = None,
     ) -> None:
         self._engine = engine
         self._location = location
         self._clock = clock or (lambda: datetime.now(timezone.utc))
+        self._relay_test_engine = relay_test_engine or engine
 
     # ----------------------------------------------------------------- read
 
@@ -518,18 +520,28 @@ class SqlConfigRepository:
             raise ConfigStoreEmptyError("the configuration database holds no installation")
         return int(row[0])
 
-    @staticmethod
-    def _require_relay_test_free(connection: Connection, installation_id: int) -> None:
+    def _require_relay_test_free(
+        self, connection: Connection, installation_id: int
+    ) -> None:
         """Configuration and manual GPIO mapping are one atomic safety boundary."""
         # A binary at 0004 can still be used by migration tooling to prepare a
         # database stopped at an older revision.  There is no relay-test state
         # to guard before 0004 exists.
-        if not inspect(connection).has_table("relay_test_control"):
+        bind = (
+            connection
+            if self._relay_test_engine is self._engine
+            else self._relay_test_engine
+        )
+        if not inspect(bind).has_table("relay_test_control"):
             return
-        row = connection.execute(
-            select(relay_test_control.c.session_id, relay_test_control.c.fault_latched)
-            .where(relay_test_control.c.installation_id == installation_id)
-        ).first()
+        statement = select(
+            relay_test_control.c.session_id, relay_test_control.c.fault_latched
+        ).where(relay_test_control.c.installation_id == installation_id)
+        if bind is connection:
+            row = connection.execute(statement).first()
+        else:
+            with self._relay_test_engine.connect() as relay_connection:
+                row = relay_connection.execute(statement).first()
         if row is not None and (row.session_id is not None or row.fault_latched):
             raise ConfigConflictError(
                 "configuration cannot change while relay test control is active or safety recovery is required"
@@ -693,13 +705,15 @@ class SqlIndoorReadingRepository:
         self,
         engine: Engine,
         location: StoreLocation | None = None,
+        configuration_engine: Engine | None = None,
     ) -> None:
         self._engine = engine
         self._location = location
+        self._configuration_engine = configuration_engine or engine
 
     def upsert(self, reading: IndoorReading) -> None:
+        heater_pk = self._heater_pk(reading.heater_id)
         with transaction(self._engine, self._location) as connection:
-            heater_pk = self._heater_pk(connection, reading.heater_id)
             # Delete + insert is portable across SQLite and PostgreSQL and remains
             # one atomic replacement because both statements share a transaction.
             connection.execute(
@@ -716,8 +730,8 @@ class SqlIndoorReadingRepository:
             )
 
     def invalidate(self, heater_id: str) -> None:
+        heater_pk = self._heater_pk(heater_id)
         with transaction(self._engine, self._location) as connection:
-            heater_pk = self._heater_pk(connection, heater_id)
             connection.execute(
                 delete(indoor_reading_table).where(
                     indoor_reading_table.c.heater_pk == heater_pk
@@ -729,18 +743,23 @@ class SqlIndoorReadingRepository:
             with self._engine.connect() as connection:
                 rows = connection.execute(
                     select(
-                        heater_table.c.heater_id,
+                        indoor_reading_table.c.heater_pk,
                         indoor_reading_table.c.celsius,
                         indoor_reading_table.c.received_at,
-                    ).select_from(
-                        indoor_reading_table.join(
-                            heater_table,
-                            indoor_reading_table.c.heater_pk == heater_table.c.id,
-                        )
                     )
                 ).all()
+            with self._configuration_engine.connect() as configuration_connection:
+                heater_ids = {
+                    int(row.id): str(row.heater_id)
+                    for row in configuration_connection.execute(
+                        select(heater_table.c.id, heater_table.c.heater_id)
+                    )
+                }
         readings: dict[str, IndoorReading] = {}
-        for heater_id, celsius, received_at in rows:
+        for heater_pk, celsius, received_at in rows:
+            heater_id = heater_ids.get(int(heater_pk))
+            if heater_id is None:
+                continue
             aware_received_at = from_utc(received_at)
             if aware_received_at is None:  # guarded by the NOT NULL schema
                 raise ConfigValidationError(
@@ -756,11 +775,11 @@ class SqlIndoorReadingRepository:
             readings[reading.heater_id] = reading
         return readings
 
-    @staticmethod
-    def _heater_pk(connection: Connection, heater_id: str) -> int:
-        heater_pk = connection.execute(
-            select(heater_table.c.id).where(heater_table.c.heater_id == heater_id)
-        ).scalar()
+    def _heater_pk(self, heater_id: str) -> int:
+        with self._configuration_engine.connect() as connection:
+            heater_pk = connection.execute(
+                select(heater_table.c.id).where(heater_table.c.heater_id == heater_id)
+            ).scalar()
         if heater_pk is None:
             raise ConfigValidationError(
                 f"heater {heater_id!r} does not exist",

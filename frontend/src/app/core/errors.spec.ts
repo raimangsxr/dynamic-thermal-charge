@@ -20,6 +20,9 @@ const CONTRACT_CODES: ApiErrorCode[] = [
   'store_unavailable',
   'relay_test_active',
   'relay_test_fault_latched',
+  'degraded_mode',
+  'operation_in_progress',
+  'connection_test_failed',
   'internal_error',
 ];
 

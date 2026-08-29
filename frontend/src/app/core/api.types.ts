@@ -250,6 +250,37 @@ export interface RelayTestHeaterDto { id: string; name: string; position: number
 export interface RelayTestViewDto { session: { id: string; status: 'starting' | 'active' | 'ending' | 'ended' | 'failed'; owner: boolean; requested_at: string; activated_at: string | null; ended_at: string | null; lease_expires_at: string | null; end_reason: string | null } | null; controller: { state_is_current: boolean; last_seen_at: string | null }; safety: { automatic_control_blocked: boolean; fault_latched: boolean; fault_session_id: string | null; fault_reason: string | null; fault_latched_at: string | null; fault_recovery_attempted_at: string | null; fault_recovered_at: string | null }; audit: { degraded: boolean; degraded_since: string | null }; heaters: RelayTestHeaterDto[]; }
 export interface RelayTestStartDto { session_id: string; client_credential: string; status: string; lease_expires_at: string; state_poll_seconds: number; lease_renew_seconds: number; }
 
+export type SystemSection = 'database' | 'api' | 'mqtt' | 'weather' | 'output' | 'logging' | 'operations';
+export type ActivationPolicy = 'hot' | 'next_cycle' | 'restart';
+export interface SecretStatusDto { configured: boolean; rotated_at: string | null; }
+export interface SystemConfigurationDto {
+  revision: number;
+  format_version: number;
+  sections: Record<SystemSection, Record<string, unknown>>;
+  secrets: Record<string, SecretStatusDto>;
+  activation: Record<string, ActivationPolicy>;
+  pending_restart?: string[];
+}
+export interface TopologyDto {
+  mode: 'bootstrap' | 'normal' | 'fallback' | 'migrating' | 'incompatible';
+  canonical_driver: 'sqlite' | 'postgresql' | null;
+  connected: boolean;
+  locator_revision?: number | null;
+  configuration_revision: number | null;
+  fallback_captured_at: string | null;
+  last_reconciled_at: string | null;
+  pending_events: number;
+  administrative_writes_allowed: boolean;
+}
+export interface OnboardingStatusDto { required: boolean; state: string; }
+export interface SecretEditDto { action: 'keep' | 'replace' | 'clear'; value?: string; }
+export interface DatabaseCandidateDto {
+  driver: 'sqlite' | 'postgresql'; host?: string; port?: number; database?: string;
+  username?: string; password?: string; tls?: boolean; trusted_no_tls?: boolean;
+}
+export interface MigrationDto { operation_id: string; phase: string; status: string; detail: string | null; }
+export interface ConnectionTestDto { ok: boolean; driver: string; provider?: string; host?: string; port?: number; tls?: boolean | null; }
+
 /* --------------------------------------------------------------------------
  * Errors. A closed union, not a free string: an unhandled code must be a
  * compile error, not a silent fallthrough to a generic message.
@@ -268,6 +299,9 @@ export type ApiErrorCode =
   | 'store_unavailable'
   | 'relay_test_active'
   | 'relay_test_fault_latched'
+  | 'degraded_mode'
+  | 'operation_in_progress'
+  | 'connection_test_failed'
   | 'internal_error';
 
 export interface ApiErrorDto {

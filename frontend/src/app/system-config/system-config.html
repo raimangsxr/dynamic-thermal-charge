@@ -1,0 +1,55 @@
+<main>
+  @if (topology(); as state) {
+    @if (state.mode !== 'normal') {
+      <div class="mode-banner" role="alert">Modo {{ state.mode }} · snapshot {{ state.fallback_captured_at ?? 'no disponible' }} · {{ state.pending_events }} eventos pendientes. Los cambios están deshabilitados.</div>
+    }
+  }
+  <section>
+    <h1>Configuración del sistema</h1>
+    <p>Backend, integraciones, seguridad y comportamiento de los procesos. La configuración de acumuladores permanece en su sección propia.</p>
+    <nav class="sections" aria-label="Secciones de configuración del sistema">
+      @for (section of sections; track section) { <button type="button" [class.active]="selected() === section" (click)="choose(section)">{{ section }}</button> }
+    </nav>
+    @if (error()) { <p class="error" role="alert">{{ error() }}</p> }
+    @if (message()) { <p class="success" role="status">{{ message() }}</p> }
+    @if (configuration(); as data) {
+      <form (ngSubmit)="requestSave()">
+        <p>Revisión global {{ data.revision }}</p>
+        <div class="fields">
+          @for (field of fields(); track field.name) {
+            <label [for]="field.name">{{ field.name }} <small>{{ data.activation[selected() + '.' + field.name] }}</small></label>
+            @if (field.type === 'boolean') {
+              <select [id]="field.name" [name]="field.name" [ngModel]="value(field.name)" (ngModelChange)="edit(field.name, $event)" [disabled]="!writable()"><option [ngValue]="true">Sí</option><option [ngValue]="false">No</option></select>
+            } @else {
+              <input [id]="field.name" [name]="field.name" [type]="field.type" [ngModel]="value(field.name)" (ngModelChange)="edit(field.name, $event)" [disabled]="!writable()" />
+            }
+          }
+        </div>
+        @if (secrets().length) {
+          <h2>Secretos</h2><p>Los valores guardados nunca vuelven al navegador.</p>
+          @for (secret of secrets(); track secret) {
+            <div class="secret">
+              <label [for]="secret + '-action'">{{ secret }} · {{ data.secrets[secret]?.configured ? 'configurado' : 'sin configurar' }}</label>
+              <select [id]="secret + '-action'" [name]="secret + '-action'" [ngModel]="secretAction(secret)" (ngModelChange)="setSecretAction(secret, $event)" [disabled]="!writable()"><option value="keep">Conservar</option><option value="replace">Reemplazar</option><option value="clear">Eliminar</option></select>
+              @if (secretAction(secret) === 'replace') { <input type="password" autocomplete="new-password" [name]="secret + '-value'" [ngModel]="secretValues()[secret] ?? ''" (ngModelChange)="setSecretValue(secret, $event)" aria-label="Valor nuevo" /> }
+            </div>
+          }
+        }
+        <button class="save" type="submit" [disabled]="!writable()">Guardar sección</button>
+        @if (selected() === 'database') {
+          <div class="database-actions">
+            <button type="button" (click)="testDatabase()" [disabled]="!writable()">Probar conexión</button>
+            @if (value('driver') === 'postgresql') { <button type="button" (click)="migrateDatabase()" [disabled]="!writable()">Confirmar migración a PostgreSQL</button> }
+          </div>
+        }
+        @if (operation()) { <p role="status">{{ operation() }}</p> }
+      </form>
+    }
+  </section>
+  @if (confirming()) {
+    <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title">
+      <h2 id="confirm-title">Confirma el cambio sensible</h2><p>Puede cambiar autenticación, backend u outputs reales. Comprueba los datos antes de continuar.</p>
+      <button type="button" (click)="save()">Sí, guardar</button><button type="button" (click)="confirming.set(false)">Cancelar</button>
+    </div>
+  }
+</main>

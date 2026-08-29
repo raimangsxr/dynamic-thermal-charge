@@ -22,6 +22,10 @@ def get_controller_log(
     normalized = level.upper() if level else None
     if normalized is not None and normalized not in LOG_LEVELS:
         raise bad_request("level is not recognised", field="level")
-    page = SqlControllerLogReader(store.engine, store.repository.installation_id(), store.location).events(
+    page = SqlControllerLogReader(
+        store.application_engine or store.engine,
+        store.repository.installation_id(),
+        store.location,
+    ).events(
         limit=limit, before_id=before_id, after_id=after_id, level=normalized, query=q)
     return ControllerLogPage(**page)

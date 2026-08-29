@@ -91,7 +91,7 @@ def test_uses_fallback_when_aemet_key_is_missing(caplog) -> None:
             minimum_temperature_c=3,
         ),
     )
-    provider = build_weather_provider(config, environ={})
+    provider = build_weather_provider(config, api_key=None)
 
     with caplog.at_level(logging.WARNING):
         result = provider.forecast_for(date(2026, 1, 15))
@@ -108,7 +108,7 @@ def test_fails_without_key_or_fallback() -> None:
         provider="aemet",
         aemet=AemetConfig(municipality_code="28079"),
     )
-    provider = build_weather_provider(config, environ={})
+    provider = build_weather_provider(config, api_key=None)
 
     with pytest.raises(WeatherProviderError, match="AEMET_API_KEY"):
         provider.forecast_for(date(2026, 1, 15))

@@ -1,0 +1,20 @@
+<main>
+  <section aria-labelledby="onboarding-title">
+    <h1 id="onboarding-title">Configurar el sistema por primera vez</h1>
+    @if (required() === false) {
+      <p>La instalación ya está configurada. Accede con tu token administrativo.</p>
+    } @else {
+      <p>Introduce la credencial de un solo uso mostrada por <code>dtc db init</code> y crea el token administrativo.</p>
+      @if (error()) { <p class="error" role="alert">{{ error() }}</p> }
+      <form (ngSubmit)="complete()">
+        <label for="onboarding-credential">Credencial de inicialización</label>
+        <input id="onboarding-credential" name="credential" type="password" autocomplete="one-time-code" [(ngModel)]="credential" required />
+        <label for="administrator-token">Token administrativo nuevo</label>
+        <input id="administrator-token" name="administratorToken" type="password" autocomplete="new-password" minlength="32" [(ngModel)]="administratorToken" required />
+        <label for="administrator-confirmation">Repite el token administrativo</label>
+        <input id="administrator-confirmation" name="confirmation" type="password" autocomplete="new-password" [(ngModel)]="confirmation" required />
+        <button type="submit" [disabled]="busy()">{{ busy() ? 'Configurando…' : 'Completar configuración' }}</button>
+      </form>
+    }
+  </section>
+</main>

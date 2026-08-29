@@ -194,31 +194,40 @@ def _pg8000_installed() -> bool:
     return importlib.util.find_spec("pg8000") is not None
 
 
-def test_a_missing_driver_says_which_extra_to_install():
+def test_a_missing_driver_says_which_extra_to_install(tmp_path):
     """The driver lives in an optional extra; a bare ImportError is not actionable."""
     if _pg8000_installed():
         pytest.skip("pg8000 is installed; the missing-driver path cannot be exercised")
-    from dynamic_thermal_charge.persistence.bootstrap import open_store
-    from dynamic_thermal_charge.persistence.url import DATABASE_URL_ENV
+    from dynamic_thermal_charge.persistence.canonical_engines import build_canonical_engines
+    from dynamic_thermal_charge.persistence.locator import DatabaseDriver, DatabaseLocator
+    from dynamic_thermal_charge.persistence.paths import StorePaths
 
     with pytest.raises(ConfigStoreUnavailableError) as error:
-        open_store({DATABASE_URL_ENV: POSTGRES_URL})
+        build_canonical_engines(
+            DatabaseLocator(DatabaseDriver.POSTGRESQL, host="host.invalid.example", port=5432,
+                            database="dtc", username="dtc", password="secret"),
+            StorePaths.in_directory(tmp_path),
+        )
     message = str(error.value)
     assert "not installed" in message
     assert "postgres" in message
     assert "secret" not in message, "the connection string leaked into the error"
 
 
-def test_an_unreachable_database_is_reported_as_unavailable():
+def test_an_unreachable_database_is_reported_as_unavailable(tmp_path):
     """A remote host that does not resolve must not look like a bug."""
     if not _pg8000_installed():
         pytest.skip("pg8000 is not installed; the unreachable-host path needs it")
-    from dynamic_thermal_charge.persistence.bootstrap import open_store
-    from dynamic_thermal_charge.persistence.url import DATABASE_URL_ENV
+    from dynamic_thermal_charge.persistence.canonical_engines import build_canonical_engines
+    from dynamic_thermal_charge.persistence.locator import DatabaseDriver, DatabaseLocator
+    from dynamic_thermal_charge.persistence.paths import StorePaths
 
-    store = open_store({DATABASE_URL_ENV: POSTGRES_URL})
     with pytest.raises(ConfigStoreError):
-        store.repository.current()
+        build_canonical_engines(
+            DatabaseLocator(DatabaseDriver.POSTGRESQL, host="host.invalid.example", port=5432,
+                            database="dtc", username="dtc", password="secret"),
+            StorePaths.in_directory(tmp_path),
+        )
 
 
 def test_a_constraint_violation_is_invalid_config_not_an_outage():

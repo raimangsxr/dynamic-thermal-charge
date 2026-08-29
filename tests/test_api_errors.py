@@ -80,17 +80,11 @@ def test_no_state_is_invented_when_the_database_is_gone(api_app):
 # --------------------------------------------------------------------------- #
 
 @pytest.mark.parametrize(("method", "path"), ALL_PATHS, ids=lambda v: str(v))
-def test_a_missing_schema_serves_nothing(store_env, api_settings, api_clock, method, path):
+def test_a_missing_schema_serves_nothing(client, initialised_store, method, path):
     """Not initialised: no read either, and it says what to run."""
-    from dynamic_thermal_charge.api import create_app
-    from dynamic_thermal_charge.persistence.bootstrap import open_store
-
-    app = create_app(
-        settings=api_settings,
-        store_factory=lambda: open_store(store_env),
-        clock=api_clock,
-    )
-    response = getattr(TestClient(app), method)(path, headers=AUTH)
+    from dynamic_thermal_charge.persistence.schema import configuration_schema_version
+    configuration_schema_version.drop(initialised_store.engine)
+    response = getattr(client, method)(path, headers=AUTH)
     assert response.status_code == 503
     assert response.json()["code"] == "schema_unusable"
     assert "db init" in response.json()["message"]
@@ -98,11 +92,9 @@ def test_a_missing_schema_serves_nothing(store_env, api_settings, api_clock, met
 
 @pytest.mark.parametrize(("method", "path"), ALL_PATHS, ids=lambda v: str(v))
 def test_a_schema_pending_migration_serves_nothing(client, initialised_store, method, path):
-    from alembic import command
-
-    from dynamic_thermal_charge.persistence.migrations import _config
-
-    command.downgrade(_config(initialised_store.engine), "0001_initial_schema")
+    from dynamic_thermal_charge.persistence.schema import configuration_schema_version
+    with initialised_store.engine.begin() as connection:
+        connection.execute(configuration_schema_version.update().values(revision=0))
     response = getattr(client, method)(path, headers=AUTH)
     assert response.status_code == 503
     assert response.json()["code"] == "schema_unusable"
@@ -110,13 +102,9 @@ def test_a_schema_pending_migration_serves_nothing(client, initialised_store, me
 
 
 def test_an_unknown_schema_serves_nothing(client, initialised_store):
-    from dynamic_thermal_charge.persistence.gate import VERSION_TABLE
-
+    from dynamic_thermal_charge.persistence.schema import configuration_schema_version
     with initialised_store.engine.begin() as connection:
-        connection.execute(text(f"DELETE FROM {VERSION_TABLE}"))
-        connection.execute(
-            text(f"INSERT INTO {VERSION_TABLE} (version_num) VALUES ('9999_future')")
-        )
+        connection.execute(configuration_schema_version.update().values(revision=9999))
     response = client.get("/api/v1/status", headers=AUTH)
     assert response.status_code == 503
     body = response.json()
@@ -129,11 +117,9 @@ def test_an_unknown_schema_serves_nothing(client, initialised_store):
 def test_no_write_is_offered_over_an_unusable_schema(
     client, initialised_store, method, path, payload
 ):
-    from alembic import command
-
-    from dynamic_thermal_charge.persistence.migrations import _config
-
-    command.downgrade(_config(initialised_store.engine), "0001_initial_schema")
+    from dynamic_thermal_charge.persistence.schema import configuration_schema_version
+    with initialised_store.engine.begin() as connection:
+        connection.execute(configuration_schema_version.update().values(revision=0))
     response = getattr(client, method)(path, headers=AUTH, json=payload)
     assert response.status_code == 503
     assert response.json()["code"] == "schema_unusable"
@@ -141,12 +127,10 @@ def test_no_write_is_offered_over_an_unusable_schema(
 
 def test_the_api_never_migrates_the_schema(client, initialised_store):
     """Migrating from an HTTP request would let a client alter the structure."""
-    from alembic import command
-
     from dynamic_thermal_charge.persistence import SchemaStatus
-    from dynamic_thermal_charge.persistence.migrations import _config
-
-    command.downgrade(_config(initialised_store.engine), "0001_initial_schema")
+    from dynamic_thermal_charge.persistence.schema import configuration_schema_version
+    with initialised_store.engine.begin() as connection:
+        connection.execute(configuration_schema_version.update().values(revision=0))
     for method, path in ALL_PATHS:
         getattr(client, method)(path, headers=AUTH)
     assert initialised_store.gate.check() is SchemaStatus.BEHIND, (
@@ -171,10 +155,9 @@ def test_invalid_stored_configuration_is_reported_with_the_field(client, initial
 
 def test_no_configuration_at_all_is_distinguishable(store_env, api_settings, api_clock):
     from dynamic_thermal_charge.api import create_app
-    from dynamic_thermal_charge.persistence.bootstrap import initialise, open_store
+    from dynamic_thermal_charge.persistence.bootstrap import initialise_at, open_store
 
-    store = open_store(store_env)
-    initialise(store, allow_seed=False)
+    store = initialise_at(store_env, allow_seed=False)[0]
     app = create_app(
         settings=api_settings,
         store_factory=lambda: open_store(store_env),
@@ -255,11 +238,14 @@ def test_the_engine_bounds_how_long_a_request_waits():
     assert engine.pool._timeout == POOL_TIMEOUT_SECONDS
 
 
-def test_the_default_store_factory_applies_the_timeouts(monkeypatch, sqlite_url):
+def test_the_default_store_factory_applies_the_timeouts(monkeypatch, tmp_path):
     from dynamic_thermal_charge.api import _default_store_factory
     from dynamic_thermal_charge.api.dependencies import POOL_TIMEOUT_SECONDS
-    from dynamic_thermal_charge.persistence.url import DATABASE_URL_ENV
+    from dynamic_thermal_charge.persistence.bootstrap import initialise_at
+    from dynamic_thermal_charge.persistence.paths import StorePaths
 
-    monkeypatch.setenv(DATABASE_URL_ENV, sqlite_url)
+    paths = StorePaths.in_directory(tmp_path / "default-store")
+    initialise_at(paths, allow_seed=False)
+    monkeypatch.setattr(StorePaths, "production", classmethod(lambda cls: paths))
     store = _default_store_factory()
     assert store.engine.pool._timeout == POOL_TIMEOUT_SECONDS

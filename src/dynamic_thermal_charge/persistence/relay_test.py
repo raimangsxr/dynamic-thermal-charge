@@ -21,14 +21,35 @@ from .url import StoreLocation
 
 
 class SqlRelayTestRepository:
-    def __init__(self, engine: Engine, location: StoreLocation | None = None, clock=None) -> None:
+    def __init__(
+        self,
+        engine: Engine,
+        location: StoreLocation | None = None,
+        clock=None,
+        configuration_engine: Engine | None = None,
+    ) -> None:
         self._engine, self._location, self._clock = engine, location, clock
+        self._configuration_engine = configuration_engine or engine
+        self._configuration = SqlConfigRepository(
+            self._configuration_engine,
+            location,
+            clock=clock,
+            relay_test_engine=engine,
+        )
 
     def _at(self, value: datetime) -> datetime:
         return to_utc(value)
 
-    def _installation_id(self, connection) -> int:
-        row = connection.execute(select(installation.c.id).order_by(installation.c.id).limit(1)).scalar()
+    def _installation_id(self, connection=None) -> int:
+        if self._configuration_engine is self._engine and connection is not None:
+            row = connection.execute(
+                select(installation.c.id).order_by(installation.c.id).limit(1)
+            ).scalar()
+        else:
+            with self._configuration_engine.connect() as config_connection:
+                row = config_connection.execute(
+                    select(installation.c.id).order_by(installation.c.id).limit(1)
+                ).scalar()
         if row is None:
             raise RelayTestError("no_configuration", "no installation is configured")
         return int(row)
@@ -58,6 +79,7 @@ class SqlRelayTestRepository:
     def claim(self, credential_digest: str, now: datetime, lease_seconds: int) -> dict:
         from datetime import timedelta
         now = self._at(now)
+        config, revision = self._configuration.current()
         with transaction(self._engine, self._location) as connection:
             iid = self._installation_id(connection)
             control = connection.execute(select(relay_test_control).where(relay_test_control.c.installation_id == iid)).mappings().first()
@@ -68,7 +90,6 @@ class SqlRelayTestRepository:
                 raise RelayTestError("relay_test_active", "a relay-test session is already active")
             if control["fault_latched"]:
                 raise RelayTestError("relay_test_fault_latched", "safety recovery is still required")
-            config, revision = SqlConfigRepository(self._engine, self._location).current()
             # AppConfig preserves the operator's configured order.  Snapshot it
             # once so panel order stays stable for the entire session.
             enabled = [h for h in config.heaters if h.enabled]
@@ -78,6 +99,13 @@ class SqlRelayTestRepository:
             connection.execute(relay_test_session.insert().values(id=session_id, installation_id=iid, owner_credential_digest=credential_digest, status="starting", installation_revision=revision, requested_at=now, lease_expires_at=now + timedelta(seconds=lease_seconds), last_owner_seen_at=now))
             connection.execute(relay_test_control.update().where(relay_test_control.c.installation_id == iid).values(session_id=session_id, updated_at=now))
             connection.execute(relay_test_output.insert(), [{"session_id": session_id, "heater_id": h.id, "heater_name": h.name, "position": i, "power_w": h.power_w, "desired_state": False, "command_seq": 0, "result": "idle"} for i, h in enumerate(enabled)])
+            # Close the cross-store race: if configuration changed after the
+            # snapshot but before the application commit, roll the session back.
+            _, confirmed_revision = self._configuration.current()
+            if confirmed_revision != revision:
+                raise ConfigConflictError(
+                    "configuration changed while relay-test startup was prepared"
+                )
             self._event(connection, iid, session_id, "session_start", now, "accepted")
             return self._view(connection, session_id, credential_digest) or {}
 
@@ -99,6 +127,7 @@ class SqlRelayTestRepository:
 
     def command(self, session_id: str, heater_id: str, state: bool, credential_digest: str, now: datetime) -> dict:
         now = self._at(now)
+        config, revision = self._configuration.current()
         with transaction(self._engine, self._location) as connection:
             self._owner(connection, session_id, credential_digest, now)
             iid = self._installation_id(connection)
@@ -107,7 +136,6 @@ class SqlRelayTestRepository:
                 raise RelayTestError("relay_test_fault_latched", "safety recovery is still required")
             output = connection.execute(select(relay_test_output).where(and_(relay_test_output.c.session_id == session_id, relay_test_output.c.heater_id == heater_id))).mappings().first()
             if output is None: raise RelayTestError("not_found", "the requested heater is not in this relay-test session", heater_id)
-            config, revision = SqlConfigRepository(self._engine, self._location).current()
             if revision != self._owner(connection, session_id, credential_digest, now)["installation_revision"]:
                 raise RelayTestError("relay_test_configuration_changed", "the installation configuration changed")
             proposed = sum(int(row["power_w"]) for row in connection.execute(select(relay_test_output).where(relay_test_output.c.session_id == session_id)).mappings() if row["heater_id"] != heater_id and bool(row["desired_state"]))
@@ -159,7 +187,7 @@ class SqlRelayTestRepository:
                 return False
             if (now - from_utc(heartbeat["updated_at"])).total_seconds() > max(3 * float(heartbeat["poll_seconds"]), 30):
                 return False
-            _, revision = SqlConfigRepository(self._engine, self._location).current()
+            _, revision = self._configuration.current()
             return revision == row["installation_revision"]
 
     def unknown(self, session_id: str, heater_id: str, sequence: int, now: datetime, code: str = "driver_failed") -> None:

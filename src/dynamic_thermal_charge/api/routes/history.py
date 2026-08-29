@@ -39,7 +39,9 @@ PAGE_DESCRIPTION = (
 
 def _reader(store: Store) -> SqlHistoryReader:
     return SqlHistoryReader(
-        store.engine, store.repository.installation_id(), store.location
+        store.application_engine or store.engine,
+        store.repository.installation_id(),
+        store.location,
     )
 
 
@@ -195,7 +197,9 @@ def get_relay_tests(
 def post_prune(request: Request, store: Store = Depends(usable_store)) -> PruneResponse:
     config, _ = store.repository.current()
     recorder = SqlHistoryRecorder(
-        store.engine, store.repository.installation_id(), store.location
+        store.application_engine or store.engine,
+        store.repository.installation_id(),
+        store.location,
     )
     report = recorder.prune(request.app.state.clock(), config.retention_days)
     return PruneResponse(

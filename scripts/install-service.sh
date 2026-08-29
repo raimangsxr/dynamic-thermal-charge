@@ -57,7 +57,7 @@ if ! id "${SERVICE_USER}" >/dev/null 2>&1; then
 fi
 
 install -d -m 0755 -o root -g root "${INSTALL_ROOT}" "${CONFIG_ROOT}"
-install -d -m 0750 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${STATE_ROOT}"
+install -d -m 0700 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${STATE_ROOT}"
 
 if [[ ! -x "${INSTALL_ROOT}/venv/bin/python" ]]; then
   python3.12 -m venv "${INSTALL_ROOT}/venv"
@@ -87,6 +87,8 @@ EXTRA_LIST=$(IFS=,; echo "${EXTRAS[*]}")
 # configuration has to be re-entered by hand (FR-031). Seeding the example
 # installation on top of that would put example data between the operator and
 # the configuration they are about to reproduce, so we do not do it (FR-030).
+# Historical upgrade guidance retained for operators: run `db init --no-seed`
+# when importing an old config.yaml.pre-database; it is NOT migrated automatically.
 UPGRADING_FROM_FILE=false
 if [[ -e "${CONFIG_ROOT}/config.yaml" ]]; then
   UPGRADING_FROM_FILE=true
@@ -95,12 +97,11 @@ if [[ -e "${CONFIG_ROOT}/config.yaml" ]]; then
   chown root:"${SERVICE_USER}" "${CONFIG_ROOT}/config.yaml.pre-database"
 fi
 
-if [[ ! -e "${CONFIG_ROOT}/environment" ]]; then
-  install -m 0600 -o root -g root \
-    "${PROJECT_ROOT}/deploy/environment.example" \
-    "${CONFIG_ROOT}/environment"
-else
-  echo "Keeping existing ${CONFIG_ROOT}/environment"
+# A legacy environment file is evidence for the explicit import command. It is
+# retained, never sourced by the installed services and never deleted here.
+if [[ -e "${CONFIG_ROOT}/environment" ]]; then
+  chmod 0600 "${CONFIG_ROOT}/environment"
+  echo "Keeping legacy ${CONFIG_ROOT}/environment for an explicit dry-run/import"
 fi
 
 install -m 0644 -o root -g root \
@@ -138,7 +139,7 @@ fi
 if [[ ${WITH_MQTT} == true ]]; then
   echo
   echo "  The MQTT publisher is installed as a SEPARATE service. Configure"
-  echo "  DTC_MQTT_HOST and any broker credentials in the environment file."
+  echo "  the broker and credentials in Configuración del sistema."
   echo "  It has no GPIO group and installing it does not initialise or migrate"
   echo "  the database, start a service, or enable one at boot."
 fi
@@ -146,37 +147,29 @@ fi
 systemctl daemon-reload
 
 DTC="${INSTALL_ROOT}/venv/bin/dynamic-thermal-charge"
+BOOTSTRAP_OUTPUT=$(runuser -u "${SERVICE_USER}" -- "${DTC}" db init)
 
 echo
-echo "Installation complete. Before starting:"
-echo "  1. Set DTC_DATABASE_URL and AEMET_API_KEY in ${CONFIG_ROOT}/environment"
+echo "Installation complete. Bootstrap was initialised with protected local SQLite stores:"
+echo "${BOOTSTRAP_OUTPUT}"
+echo "  Review with: ${DTC} config show"
+# Legacy documentation only (never used to configure runtime):
+# python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
+# DTC_API_TOKEN is now created and stored by onboarding.
 if [[ ${UPGRADING_FROM_FILE} == true ]]; then
   echo
   echo "  ATTENTION: this host was configured with a file. Your previous"
   echo "  configuration has been kept at:"
   echo "    ${CONFIG_ROOT}/config.yaml.pre-database"
-  echo "  It is NOT migrated automatically. Create an empty database and"
-  echo "  re-enter the installation by hand, checking BCM pins, active_high and"
-  echo "  the power cap against that file:"
-  echo "    set -a; . ${CONFIG_ROOT}/environment; set +a"
-  echo "    ${DTC} db init --no-seed"
-  echo "    ${DTC} config add-heater ...   # one per storage heater"
-  echo "    ${DTC} config show             # verify field by field"
+  echo "  It is NOT read by runtime services. Run the legacy import dry-run"
+  echo "  before starting services, then verify the report and import explicitly."
 else
-  echo "  2. Initialise the database once:"
-  echo "       set -a; . ${CONFIG_ROOT}/environment; set +a"
-  echo "       ${DTC} db init"
-  echo "  3. Review the seeded installation: ${DTC} config show"
+  echo "  Open the panel and use the one-time onboarding credential printed above."
 fi
 if [[ ${WITH_API} == true ]]; then
   echo
-  echo "  The HTTP API is installed as a SEPARATE service. Before starting it,"
-  echo "  generate its credential and put it in ${CONFIG_ROOT}/environment:"
-  echo "    python3 -c 'import secrets; print(secrets.token_urlsafe(32))'"
-  echo "    # DTC_API_TOKEN=<the generated value>"
-  echo
-  echo "  The API refuses to start with an empty, short or example token, so it"
-  echo "  cannot end up listening unprotected. It listens on 127.0.0.1 by"
+  echo "  The HTTP API starts with only health/onboarding available until the"
+  echo "  one-time credential creates an administrator token. It listens on 127.0.0.1 by"
   echo "  default; exposing it on the network is a deliberate change and it"
   echo "  serves in clear text. See the README before doing that."
 fi

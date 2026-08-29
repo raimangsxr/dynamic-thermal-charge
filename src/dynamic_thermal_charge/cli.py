@@ -1,7 +1,7 @@
 """Command-line entry point. See specs/001-config-database/contracts/cli.md.
 
-Configuration comes from the database named by ``DTC_DATABASE_URL``. There is no
-configuration file any more, and no code path here reads one.
+Configuration comes from the bootstrap-selected database. There is no
+configuration file or runtime database URL.
 
 Every administrative subcommand -- ``db``, ``config``, ``history`` -- is
 guaranteed never to construct an output driver, so no administrative operation
@@ -39,12 +39,13 @@ from .persistence import (
     SchemaVersionError,
     SecretRejectedError,
 )
-# url.py is stdlib-only by design, so importing it here does not pull in the db
-# extra and keeps "the variable is missing" reportable without SQLAlchemy.
+# The URL parser is retained only for the explicit legacy-import boundary;
+# normal runtime commands never resolve a URL.
 from .persistence.url import DatabaseUrlError as _DatabaseUrlError
+from .persistence.topology import BootstrapIncompatibleError
 
-# api/settings.py is stdlib-only by design, so importing it here does not pull in
-# the api extra and keeps "the token is missing" reportable without FastAPI.
+# API validation stays stdlib-only, keeping CLI errors actionable without
+# importing the optional web stack.
 from .api.settings import ApiSettingsError as _ApiSettingsError
 from .scheduler import ChargeScheduler, ScheduleResult
 from .service import ControllerService, PlanRefresh
@@ -94,6 +95,19 @@ def build_parser() -> argparse.ArgumentParser:
     database_actions.add_parser(
         "upgrade", help="apply pending migrations; never seeds"
     )
+    database_actions.add_parser(
+        "bootstrap-init",
+        help="create the mandatory local bootstrap and print onboarding access once",
+    )
+    database_actions.add_parser(
+        "bootstrap-doctor",
+        help="inspect bootstrap read-only; never creates, migrates, or repairs it",
+    )
+    legacy_import = database_actions.add_parser(
+        "import-legacy", help="dry-run or import one pre-bootstrap environment/database"
+    )
+    legacy_import.add_argument("--environment", type=Path, required=True)
+    legacy_import.add_argument("--apply", action="store_true", help="apply after reviewing the default dry-run")
 
     configuration = subcommands.add_parser("config", help="inspect and edit config")
     configuration_actions = configuration.add_subparsers(
@@ -164,10 +178,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="override the configured window start, ISO format",
     )
     run.add_argument(
-        "--driver", choices=("simulated", "gpio"), default="simulated",
-        help="output driver for controller mode (default: simulated)",
-    )
-    run.add_argument(
         "--log-level",
         type=str.upper,
         choices=("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"),
@@ -178,8 +188,8 @@ def build_parser() -> argparse.ArgumentParser:
     api = subcommands.add_parser(
         "api", help="serve the HTTP API (a separate service from the controller)"
     )
-    api.add_argument("--host", default=None, help="override DTC_API_HOST")
-    api.add_argument("--port", type=int, default=None, help="override DTC_API_PORT")
+    api.add_argument("--host", default=None, help="operational bind-host override")
+    api.add_argument("--port", type=int, default=None, help="operational bind-port override")
     api.add_argument(
         "--log-level",
         type=str.upper,
@@ -235,6 +245,8 @@ def main(argv: list[str] | None = None) -> int:
             else EXIT_STORE_UNAVAILABLE
         )
         return _fail(code, exc)
+    except BootstrapIncompatibleError as exc:
+        return _fail(EXIT_SCHEMA_UNKNOWN, exc)
     except ConfigStoreUnavailableError as exc:
         return _fail(EXIT_STORE_UNAVAILABLE, exc)
     except ConfigStoreError as exc:
@@ -272,14 +284,16 @@ def _fail(code: int, message: object) -> int:
 
 def _reject_configuration_path(arguments: list[str]) -> None:
     """Explain the removal of the configuration file argument (FR-006)."""
+    if len(arguments) >= 2 and arguments[:2] == ["db", "import-legacy"]:
+        return
     for argument in arguments:
         if argument.startswith("-"):
             continue
         if argument.endswith((".yaml", ".yml")) or "/" in argument:
             raise SystemExit(
                 f"error: {argument!r} looks like a configuration file path, but "
-                "configuration now lives in a database. Set DTC_DATABASE_URL and run "
-                "'dtc db init' once; then use 'dtc config show' and 'dtc config set'. "
+                "configuration now lives in the bootstrap-selected database. Run "
+                "'dtc db init' once; then use the system configuration panel. "
                 "See the README for the upgrade procedure."
             )
         return
@@ -325,15 +339,61 @@ def _configured_store():
 # ------------------------------------------------------------------------- db
 
 def _run_db(args: argparse.Namespace) -> int:
-    from .persistence.bootstrap import initialise, upgrade
+    if args.db_command == "import-legacy":
+        import json
+        from .persistence.legacy_import import import_legacy
+        from .persistence.paths import StorePaths
 
-    store = _open_store()
+        report = import_legacy(
+            args.environment, StorePaths.production(), apply=args.apply
+        )
+        print(json.dumps(report.public_dict(), sort_keys=True))
+        if not args.apply:
+            print("Dry-run only; rerun with --apply after reviewing this sanitized report.")
+        return EXIT_OK
+    if args.db_command == "bootstrap-init":
+        from .persistence.bootstrap_store import BootstrapRepository
+        from .persistence.paths import StorePaths
+
+        report = BootstrapRepository(StorePaths.production()).initialise()
+        print(f"Bootstrap: {report.locator.public_dict()['driver']}, revision {report.locator_revision}")
+        if report.onboarding_token is not None:
+            print("One-time onboarding credential:")
+            print(report.onboarding_token)
+        else:
+            print("Bootstrap already initialized; no credential was reissued.")
+        return EXIT_OK
+    if args.db_command == "bootstrap-doctor":
+        import json
+
+        from .persistence.bootstrap_store import inspect_bootstrap
+        from .persistence.paths import StorePaths
+
+        print(json.dumps(inspect_bootstrap(StorePaths.production()), sort_keys=True))
+        return EXIT_OK
+
+    from .persistence.bootstrap import initialise_at, upgrade
+    from .persistence.paths import StorePaths
+
     if args.db_command == "init":
-        report = initialise(store, allow_seed=not args.no_seed)
-    else:
-        report = upgrade(store)
+        _store, report, onboarding_token = initialise_at(
+            StorePaths.production(), allow_seed=not args.no_seed
+        )
+        for line in report.describe():
+            print(line)
+        if onboarding_token is not None:
+            print("One-time onboarding credential:")
+            print(onboarding_token)
+        return EXIT_OK
+
+    store, report, onboarding_token = initialise_at(
+        StorePaths.production(), allow_seed=False
+    )
     for line in report.describe():
         print(line)
+    if onboarding_token is not None:
+        print("One-time onboarding credential:")
+        print(onboarding_token)
     return EXIT_OK
 
 
@@ -561,15 +621,19 @@ def _run_history(args: argparse.Namespace) -> int:
     store = _configured_store()
     config, _ = store.repository.current()
     recorder = SqlHistoryRecorder(
-        store.engine, store.repository.installation_id(), store.location
+        store.application_engine or store.engine,
+        store.repository.installation_id(),
+        store.location,
     )
-    report = recorder.prune(datetime.now().astimezone(), config.retention_days)
-    if config.retention_days is None:
+    system = store.system_configuration.current().configuration
+    retention_days = system.operations.retention_days
+    report = recorder.prune(datetime.now().astimezone(), retention_days)
+    if retention_days is None:
         print("retention is unlimited; nothing pruned")
     elif report.total == 0:
-        print(f"nothing older than {config.retention_days} days to prune")
+        print(f"nothing older than {retention_days} days to prune")
     else:
-        print(f"pruned {report.total} rows older than {config.retention_days} days:")
+        print(f"pruned {report.total} rows older than {retention_days} days:")
         for table, count in sorted(report.deleted.items()):
             print(f"  {table}: {count}")
     return EXIT_OK
@@ -580,7 +644,9 @@ def _run_history(args: argparse.Namespace) -> int:
 def _run(args: argparse.Namespace) -> int:
     store = _configured_store()
     config, revision = store.repository.current()
-    configure_logging(args.log_level or config.logging.level)
+    system_snapshot = store.system_configuration.current()
+    system = system_snapshot.configuration
+    configure_logging(args.log_level or system.logging.level)
     logger.info(
         "Configuration loaded from %s: revision %d, %d heaters",
         store.location.description.describe(),
@@ -591,11 +657,14 @@ def _run(args: argparse.Namespace) -> int:
         logger.info("Configuration validation succeeded")
         return EXIT_OK
 
-    provider = (
-        build_weather_provider(config.weather) if config.weather is not None else None
-    )
+    aemet_secret = system_snapshot.secrets.get("aemet_api_key")
+    provider = build_weather_provider(
+        config.weather,
+        api_key=None if aemet_secret is None else aemet_secret.value,
+    ) if config.weather is not None else None
+    driver_name = system.output.driver
     if args.watch_weather:
-        if args.driver != "simulated":
+        if driver_name != "simulated":
             raise ValueError("--watch-weather does not use an output driver")
         if config.weather is None or provider is None:
             raise ValueError("--watch-weather requires weather configuration")
@@ -607,9 +676,7 @@ def _run(args: argparse.Namespace) -> int:
             raise ValueError("--controller does not accept --start")
         if config.weather is None or provider is None:
             raise ValueError("--controller requires weather configuration")
-        return _run_controller(store, config, revision, provider, args.driver)
-    if args.driver != "simulated":
-        raise ValueError("--driver is only valid with --controller")
+        return _run_controller(store, config, revision, provider, driver_name, system)
 
     start = _select_start(config, args.start)
     forecast = provider.forecast_for(start.date()) if provider is not None else None
@@ -692,22 +759,29 @@ def _run_controller(
     revision: int,
     provider: WeatherProvider,
     driver_name: str = "simulated",
+    system=None,
 ) -> int:
     from .persistence.heartbeat import SqlHeartbeatPublisher
     from .persistence.history import SqlHistoryRecorder
     from .persistence.controller_log import ControllerLogHandler
 
     assert config.weather is not None
+    if store.context is not None:
+        store.context.publish_process_revision("controller")
     installation_id = store.repository.installation_id()
-    history = SqlHistoryRecorder(store.engine, installation_id, store.location)
-    web_log_handler = ControllerLogHandler(store.engine, installation_id, store.location)
+    application_engine = store.application_engine or store.engine
+    history = SqlHistoryRecorder(application_engine, installation_id, store.location)
+    max_events = 1000 if system is None else system.logging.max_events
+    web_log_handler = ControllerLogHandler(
+        application_engine, installation_id, store.location, max_events=max_events
+    )
     logging.getLogger().addHandler(web_log_handler)
     # The controller's proof of life, so a separate API can tell "now" from
     # "the last thing anyone knew". Publishing it can never stop the loop.
     heartbeat = SqlHeartbeatPublisher(
-        store.engine,
+        application_engine,
         installation_id,
-        poll_seconds=config.runtime.poll_seconds,
+        poll_seconds=(config.runtime.poll_seconds if system is None else system.operations.controller_poll_seconds),
         driver_kind=driver_name,
         location=store.location,
     )
@@ -756,6 +830,12 @@ def _run_controller(
                 current_plan_ref[0] = history.record_plan(
                     plan, forecast_ref, live_revision
                 )
+                if store.context is not None:
+                    # The fallback snapshot is refreshed only after the plan
+                    # and its source forecast have been accepted by canonical
+                    # storage.
+                    from .persistence.context import _json_ready
+                    store.context.refresh_fallback(plan=_json_ready(plan))
                 return PlanRefresh(
                     plan=plan,
                     next_refresh_seconds=cycle.next_poll_seconds,
@@ -766,10 +846,10 @@ def _run_controller(
                 controller=controller,
                 store=PlanStore(config.runtime.state_file),
                 refresh_plan=refresh_plan,
-                poll_seconds=config.runtime.poll_seconds,
+                poll_seconds=(config.runtime.poll_seconds if system is None else system.operations.controller_poll_seconds),
                 error_retry_seconds=config.weather.watchdog.retry_minutes * 60,
                 history=history,
-                retention_days=config.retention_days,
+                retention_days=(config.retention_days if system is None else system.operations.retention_days),
                 heartbeat=heartbeat,
             )
             return service.run()
@@ -851,17 +931,20 @@ def _run_api(args: argparse.Namespace) -> int:
         import uvicorn
 
         from .api import create_app
-        from .api.settings import load_settings
+        from .api.settings import settings_from_repository
     except ImportError as exc:
         raise ValueError(
             f"the HTTP API extra is not installed: {exc}. Install it with "
             "python -m pip install 'dynamic-thermal-charge[api]'"
         ) from exc
 
-    settings = load_settings()
+    store = _configured_store()
+    settings = settings_from_repository(store.system_configuration)
+    if store.context is not None:
+        store.context.publish_process_revision("mqtt")
     host = args.host or settings.host
     port = args.port or settings.port
-    app = create_app(settings)
+    app = create_app(settings, store_factory=lambda: store)
     logger.info("Serving the HTTP API on %s:%d", host, port)
     # Bare uvicorn on purpose: uvicorn[standard] would pull uvloop and
     # httptools, neither of which has an armv7l wheel.
@@ -880,21 +963,22 @@ def _run_mqtt() -> int:
     from .mqtt.indoor import IndoorMessageProcessor
     from .mqtt.publisher import MqttPublisher, StoreSnapshotReader
     from .mqtt.service import MqttService
-    from .mqtt.settings import load_settings
+    from .mqtt.settings import settings_from_repository
     from .mqtt.topics import TopicLayout
     from .persistence.heartbeat import read_heartbeat
     from .persistence.history import SqlStatusReader
 
-    settings = load_settings()
     store = _configured_store()
+    settings = settings_from_repository(store.system_configuration)
     installation_id = store.repository.installation_id()
     topics = TopicLayout(settings.prefix, settings.discovery_prefix)
-    status_reader = SqlStatusReader(store.engine, installation_id, store.location)
+    application_engine = store.application_engine or store.engine
+    status_reader = SqlStatusReader(application_engine, installation_id, store.location)
     snapshots = StoreSnapshotReader(
         config_repository=store.repository,
         schema_gate=store.gate,
         heartbeat_reader=lambda: read_heartbeat(
-            store.engine, installation_id, store.location
+            application_engine, installation_id, store.location
         ),
         status_reader=status_reader,
         clock=lambda: datetime.now(timezone.utc),

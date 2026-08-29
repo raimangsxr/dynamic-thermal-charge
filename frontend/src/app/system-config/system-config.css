@@ -1,0 +1,15 @@
+main { max-width: 76rem; margin: 1.5rem auto; padding: 0 1rem; }
+section { padding: 1.25rem; }
+.mode-banner { background: #fff1c7; border: 2px solid var(--warning); padding: .8rem; margin-bottom: 1rem; }
+.sections { display: flex; flex-wrap: wrap; gap: .5rem; margin: 1rem 0; }
+.sections button { padding: .5rem .8rem; }
+.sections .active { background: var(--primary); color: white; }
+.fields { display: grid; grid-template-columns: minmax(12rem, 1fr) minmax(14rem, 2fr); gap: .75rem; align-items: center; max-width: 48rem; }
+input, select { padding: .55rem; border: 1px solid var(--border); border-radius: .4rem; width: 100%; }
+small { color: var(--muted); }
+.secret { display: grid; grid-template-columns: 2fr 1fr 2fr; gap: .6rem; margin: .6rem 0; align-items: center; }
+.save { margin-top: 1rem; padding: .65rem 1rem; background: var(--primary); color: white; }
+.error { color: var(--danger); }.success { color: #176b35; }
+.dialog { position: fixed; inset: 50% auto auto 50%; transform: translate(-50%, -50%); max-width: 34rem; background: white; border: 2px solid var(--warning); border-radius: .6rem; padding: 1.2rem; box-shadow: 0 1rem 3rem #0005; z-index: 30; }
+.dialog button { padding: .6rem; margin-right: .5rem; }
+@media (max-width: 40rem) { .fields, .secret { grid-template-columns: 1fr; } }

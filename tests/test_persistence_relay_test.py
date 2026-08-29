@@ -32,7 +32,10 @@ def test_relay_test_events_are_paged_and_terminal_retention_is_bounded(initialis
     installation_id = initialised_store.repository.installation_id()
     page = SqlHistoryReader(initialised_store.engine, installation_id).relay_tests(limit=1)
     assert page.items and page.items[0]["session_id"] == session_id
-    report = SqlHistoryRecorder(initialised_store.engine, installation_id).prune(
+    report = SqlHistoryRecorder(
+        initialised_store.application_engine or initialised_store.engine,
+        installation_id,
+    ).prune(
         clock.advance(days=2), retention_days=1
     )
     assert report.deleted["relay_test_session"] == 1
@@ -54,12 +57,13 @@ def test_latch_recovery_requires_the_observed_generation(initialised_store, cloc
 def test_audit_failure_degrades_without_blocking_terminal_safety(initialised_store, clock):
     repo = initialised_store.relay_tests
     session_id = repo.claim(relay_test_credential_digest("owner"), clock(), 30)["session"]["id"]
-    with initialised_store.engine.begin() as connection:
+    engine = initialised_store.application_engine or initialised_store.engine
+    with engine.begin() as connection:
         connection.execute(text("CREATE TRIGGER relay_event_failure BEFORE INSERT ON relay_test_event BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END"))
     repo.end(session_id, clock())
     assert repo.get(session_id)["session"]["status"] == "ended"
     assert repo.current()["audit"]["degraded"] is True
-    with initialised_store.engine.begin() as connection:
+    with engine.begin() as connection:
         connection.execute(text("DROP TRIGGER relay_event_failure"))
     repo.arm_latch(session_id, clock(), "off_sweep_failed")
     assert repo.current()["audit"]["degraded"] is False

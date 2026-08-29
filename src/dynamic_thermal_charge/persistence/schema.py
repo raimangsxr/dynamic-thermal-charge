@@ -40,11 +40,27 @@ from sqlalchemy import (
     MetaData,
     String,
     Table,
+    Text,
     UniqueConstraint,
 )
 
 
-metadata = MetaData()
+configuration_metadata = MetaData()
+application_metadata = MetaData()
+
+configuration_schema_version = Table(
+    "configuration_schema_version",
+    configuration_metadata,
+    Column("id", Integer, primary_key=True),
+    Column("revision", Integer, nullable=False),
+)
+
+application_schema_version = Table(
+    "application_schema_version",
+    application_metadata,
+    Column("id", Integer, primary_key=True),
+    Column("revision", Integer, nullable=False),
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -53,7 +69,7 @@ metadata = MetaData()
 
 installation = Table(
     "installation",
-    metadata,
+    configuration_metadata,
     Column("id", Integer, primary_key=True),
     Column("name", String(120), nullable=False),
     # Optimistic locking. Grows monotonically; see research.md D9.
@@ -99,7 +115,7 @@ installation = Table(
 
 weather_config = Table(
     "weather_config",
-    metadata,
+    configuration_metadata,
     Column("id", Integer, primary_key=True),
     Column(
         "installation_id",
@@ -132,7 +148,7 @@ weather_config = Table(
 
 heater = Table(
     "heater",
-    metadata,
+    configuration_metadata,
     Column("id", Integer, primary_key=True),
     Column(
         "installation_id",
@@ -162,7 +178,7 @@ heater = Table(
 
 output_config = Table(
     "output_config",
-    metadata,
+    configuration_metadata,
     Column("id", Integer, primary_key=True),
     Column(
         "heater_id",
@@ -185,7 +201,7 @@ output_config = Table(
 
 thermal_profile = Table(
     "thermal_profile",
-    metadata,
+    configuration_metadata,
     Column("id", Integer, primary_key=True),
     Column(
         "heater_id",
@@ -213,11 +229,10 @@ thermal_profile = Table(
 
 indoor_reading = Table(
     "indoor_reading",
-    metadata,
+    application_metadata,
     Column(
         "heater_pk",
         Integer,
-        ForeignKey("heater.id", ondelete="CASCADE"),
         primary_key=True,
     ),
     Column("celsius", Float, nullable=False),
@@ -231,12 +246,11 @@ indoor_reading = Table(
 
 forecast = Table(
     "forecast",
-    metadata,
+    application_metadata,
     Column("id", Integer, primary_key=True),
     Column(
         "installation_id",
         Integer,
-        ForeignKey("installation.id", ondelete="CASCADE"),
         nullable=False,
     ),
     Column("forecast_date", Date, nullable=False),
@@ -255,12 +269,11 @@ forecast = Table(
 
 plan = Table(
     "plan",
-    metadata,
+    application_metadata,
     Column("id", Integer, primary_key=True),
     Column(
         "installation_id",
         Integer,
-        ForeignKey("installation.id", ondelete="CASCADE"),
         nullable=False,
     ),
     # Answers "which configuration produced this night's plan".
@@ -283,7 +296,7 @@ plan = Table(
 
 plan_slot = Table(
     "plan_slot",
-    metadata,
+    application_metadata,
     Column("id", Integer, primary_key=True),
     Column("plan_id", Integer, ForeignKey("plan.id", ondelete="CASCADE"), nullable=False),
     # Text, NOT a foreign key: history must outlive the heater it refers to.
@@ -295,7 +308,7 @@ plan_slot = Table(
 
 plan_allocation = Table(
     "plan_allocation",
-    metadata,
+    application_metadata,
     Column("id", Integer, primary_key=True),
     Column("plan_id", Integer, ForeignKey("plan.id", ondelete="CASCADE"), nullable=False),
     Column("heater_id", String(64), nullable=False),
@@ -312,12 +325,11 @@ plan_allocation = Table(
 
 output_transition = Table(
     "output_transition",
-    metadata,
+    application_metadata,
     Column("id", Integer, primary_key=True),
     Column(
         "installation_id",
         Integer,
-        ForeignKey("installation.id", ondelete="CASCADE"),
         nullable=False,
     ),
     Column("heater_id", String(64), nullable=False),
@@ -332,7 +344,7 @@ output_transition = Table(
 
 config_change = Table(
     "config_change",
-    metadata,
+    configuration_metadata,
     Column("id", Integer, primary_key=True),
     Column(
         "installation_id",
@@ -359,12 +371,11 @@ config_change = Table(
 
 controller_heartbeat = Table(
     "controller_heartbeat",
-    metadata,
+    application_metadata,
     Column("id", Integer, primary_key=True),
     Column(
         "installation_id",
         Integer,
-        ForeignKey("installation.id", ondelete="CASCADE"),
         nullable=False,
         unique=True,
     ),
@@ -396,9 +407,9 @@ controller_heartbeat = Table(
 # This is deliberately not a system journal or a generic file reader.
 controller_log_event = Table(
     "controller_log_event",
-    metadata,
+    application_metadata,
     Column("id", Integer, primary_key=True),
-    Column("installation_id", Integer, ForeignKey("installation.id", ondelete="CASCADE"), nullable=False),
+    Column("installation_id", Integer, nullable=False),
     Column("occurred_at", DateTime, nullable=False),
     Column("level", String(16), nullable=False),
     Column("logger", String(160), nullable=False),
@@ -411,8 +422,8 @@ controller_log_event = Table(
 # heater/session identifiers: relay-test evidence must remain readable after a
 # heater is removed from configuration.
 relay_test_control = Table(
-    "relay_test_control", metadata,
-    Column("installation_id", Integer, ForeignKey("installation.id", ondelete="CASCADE"), primary_key=True),
+    "relay_test_control", application_metadata,
+    Column("installation_id", Integer, primary_key=True),
     Column("session_id", String(36), nullable=True),
     Column("fault_latched", Boolean, nullable=False, server_default="0"),
     Column("fault_generation", Integer, nullable=False, server_default="0"),
@@ -427,9 +438,9 @@ relay_test_control = Table(
     CheckConstraint("fault_generation >= 0", name="ck_relay_test_fault_generation"),
 )
 relay_test_session = Table(
-    "relay_test_session", metadata,
+    "relay_test_session", application_metadata,
     Column("id", String(36), primary_key=True),
-    Column("installation_id", Integer, ForeignKey("installation.id", ondelete="CASCADE"), nullable=False),
+    Column("installation_id", Integer, nullable=False),
     Column("owner_credential_digest", String(64), nullable=False),
     Column("status", String(16), nullable=False),
     Column("installation_revision", Integer, nullable=False),
@@ -441,7 +452,7 @@ relay_test_session = Table(
     Index("ix_relay_test_session_installation_requested", "installation_id", "requested_at"),
 )
 relay_test_output = Table(
-    "relay_test_output", metadata,
+    "relay_test_output", application_metadata,
     Column("session_id", String(36), ForeignKey("relay_test_session.id", ondelete="CASCADE"), primary_key=True),
     Column("heater_id", String(64), primary_key=True), Column("heater_name", String(120), nullable=False),
     Column("position", Integer, nullable=False), Column("power_w", Integer, nullable=False),
@@ -454,13 +465,104 @@ relay_test_output = Table(
     Index("ix_relay_test_output_session_position", "session_id", "position"),
 )
 relay_test_event = Table(
-    "relay_test_event", metadata,
-    Column("id", Integer, primary_key=True), Column("installation_id", Integer, ForeignKey("installation.id", ondelete="CASCADE"), nullable=False),
+    "relay_test_event", application_metadata,
+    Column("id", Integer, primary_key=True), Column("installation_id", Integer, nullable=False),
     Column("session_id", String(36), nullable=False), Column("kind", String(32), nullable=False), Column("heater_id", String(64)),
     Column("requested_state", Boolean), Column("result", String(16), nullable=False), Column("code", String(64)),
     Column("occurred_at", DateTime, nullable=False), Column("detail", String(512)),
     Index("ix_relay_test_event_installation_occurred", "installation_id", "occurred_at", "id"),
 )
+
+
+# Database-resident system configuration.  Documents are versioned and always
+# validated through typed domain models before they reach these columns.
+system_configuration = Table(
+    "system_configuration",
+    configuration_metadata,
+    Column("id", Integer, primary_key=True),
+    Column("revision", Integer, nullable=False),
+    Column("format_version", Integer, nullable=False),
+    Column("database_json", Text, nullable=False),
+    Column("api_json", Text, nullable=False),
+    Column("mqtt_json", Text, nullable=False),
+    Column("weather_json", Text, nullable=False),
+    Column("output_json", Text, nullable=False),
+    Column("logging_json", Text, nullable=False),
+    Column("operations_json", Text, nullable=False),
+    Column("created_at", DateTime, nullable=False),
+    Column("updated_at", DateTime, nullable=False),
+    CheckConstraint("revision >= 1", name="ck_system_configuration_revision"),
+)
+system_secret = Table(
+    "system_secret",
+    configuration_metadata,
+    Column("name", String(64), primary_key=True),
+    Column("value", Text, nullable=False),
+    Column("kind", String(16), nullable=False),
+    Column("rotated_at", DateTime, nullable=False),
+    CheckConstraint(
+        "kind IN ('digest', 'recoverable')", name="ck_system_secret_kind"
+    ),
+)
+system_audit_event = Table(
+    "system_audit_event",
+    configuration_metadata,
+    Column("id", Integer, primary_key=True),
+    Column("actor", String(160), nullable=False),
+    Column("action", String(32), nullable=False),
+    Column("section", String(64), nullable=False),
+    Column("fields", Text, nullable=False),
+    Column("revision_before", Integer, nullable=True),
+    Column("revision_after", Integer, nullable=True),
+    Column("result", String(24), nullable=False),
+    Column("occurred_at", DateTime, nullable=False),
+)
+process_applied_revision = Table(
+    "process_applied_revision",
+    application_metadata,
+    Column("process", String(32), primary_key=True),
+    Column("applied_revision", Integer, nullable=False),
+    Column("desired_revision", Integer, nullable=False),
+    Column("state", String(24), nullable=False),
+    Column("updated_at", DateTime, nullable=False),
+    CheckConstraint(
+        "state IN ('applied', 'pending_apply', 'pending_restart')",
+        name="ck_process_applied_revision_state",
+    ),
+)
+
+reconciled_event = Table(
+    "reconciled_event",
+    application_metadata,
+    Column("event_id", String(36), primary_key=True),
+    Column("event_type", String(64), nullable=False),
+    Column("payload_version", Integer, nullable=False),
+    Column("aggregate_id", String(128), nullable=False),
+    Column("aggregate_order", Integer, nullable=False),
+    Column("configuration_revision", Integer, nullable=False),
+    Column("occurred_at", DateTime, nullable=False),
+    Column("payload_json", Text, nullable=False),
+    Column("reconciled_at", DateTime, nullable=False),
+)
+
+
+# Compatibility metadata for the legacy one-database migrator and tests.  New
+# runtime code creates ``configuration_metadata`` and ``application_metadata``
+# independently; the combined metadata is never used by StorageContext.
+metadata = MetaData()
+for _table in configuration_metadata.sorted_tables:
+    if _table not in {
+        configuration_schema_version,
+        system_configuration,
+        system_secret,
+        system_audit_event,
+    }:
+        _table.to_metadata(metadata)
+for _table in application_metadata.sorted_tables:
+    if _table not in {
+        application_schema_version, process_applied_revision, reconciled_event
+    }:
+        _table.to_metadata(metadata)
 
 
 # Constraint name -> (field, human explanation). Used to turn an IntegrityError
@@ -562,18 +664,44 @@ RETAINED_TABLES: tuple[tuple[Table, str], ...] = (
     (controller_log_event, "occurred_at"),
 )
 
-CONFIG_TABLES = (installation, weather_config, heater, output_config, thermal_profile)
+CONFIG_TABLES = (
+    installation,
+    weather_config,
+    heater,
+    output_config,
+    thermal_profile,
+    config_change,
+    system_configuration,
+    system_secret,
+    system_audit_event,
+)
+APPLICATION_TABLES = (
+    indoor_reading,
+    forecast,
+    plan,
+    plan_slot,
+    plan_allocation,
+    output_transition,
+    controller_heartbeat,
+    controller_log_event,
+    relay_test_control,
+    relay_test_session,
+    relay_test_output,
+    relay_test_event,
+    process_applied_revision,
+    reconciled_event,
+)
 HISTORY_TABLES = (
     forecast,
     plan,
     plan_slot,
     plan_allocation,
     output_transition,
-    config_change,
 )
 
 __all__ = [
     "CONFIG_TABLES",
+    "APPLICATION_TABLES",
     "CONSTRAINT_FIELDS",
     "controller_heartbeat",
     "controller_log_event",
@@ -584,6 +712,15 @@ __all__ = [
     "heater",
     "installation",
     "metadata",
+    "configuration_metadata",
+    "application_metadata",
+    "configuration_schema_version",
+    "application_schema_version",
+    "system_configuration",
+    "system_secret",
+    "system_audit_event",
+    "process_applied_revision",
+    "reconciled_event",
     "output_config",
     "output_transition",
     "plan",

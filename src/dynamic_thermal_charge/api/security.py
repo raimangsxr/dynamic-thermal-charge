@@ -59,7 +59,38 @@ def authorize(request: Request, authorization: str | None) -> None:
     """Raise unless the request carries the configured credential."""
     settings: ApiSettings = request.app.state.settings
     offered = extract_token(authorization)
-    if offered is not None and tokens_match(offered, settings.token):
+    active_settings = settings
+    # Persisted token rotation is hot: every request resolves the canonical
+    # digest. Explicit clear-text settings remain an injected test boundary.
+    if settings.token is None:
+        try:
+            from .settings import settings_from_repository
+            store = request.app.state.store_factory()
+            active_settings = settings_from_repository(store.system_configuration)
+            request.app.state.settings = active_settings
+        except Exception:
+            # During a classified canonical outage, authentication remains
+            # available from the local continuity snapshot.  The snapshot only
+            # contains the non-reversible administrator digest.
+            try:
+                store = request.app.state.store_factory()
+                snapshot = store.context.fallback.snapshot()
+                if snapshot is not None and snapshot.admin_token_digest:
+                    from ..system_settings import SystemConfiguration
+                    from .settings import ApiSettings
+                    docs = snapshot.configuration.get("system")
+                    if isinstance(docs, dict):
+                        system = SystemConfiguration.from_documents(docs)
+                        active_settings = ApiSettings(
+                            token_digest=snapshot.admin_token_digest,
+                            host=system.api.host,
+                            port=system.api.port,
+                            stale_seconds=system.api.stale_seconds,
+                            cors_origins=system.api.cors_origins,
+                        )
+            except Exception:
+                active_settings = settings
+    if offered is not None and active_settings.accepts(offered):
         return
     # The token itself is never logged, not even a rejected one.
     logger.warning(

@@ -7,29 +7,35 @@ import logging
 import pytest
 
 from dynamic_thermal_charge.api.settings import (
-    CORS_ORIGINS_ENV,
     DEFAULT_HOST,
     DEFAULT_PORT,
-    HOST_ENV,
     MINIMUM_TOKEN_LENGTH,
-    PORT_ENV,
-    STALE_SECONDS_ENV,
-    TOKEN_ENV,
+    ApiSettings,
     ApiSettingsError,
-    load_settings,
+    settings_from_repository,
 )
 from tests.conftest import API_TOKEN, AUTH
-
-
-VALID = {TOKEN_ENV: "v" * 40}
 
 
 # --------------------------------------------------------------------------- #
 # Settings: restrictive by default (FR-006, FR-044)
 # --------------------------------------------------------------------------- #
 
-def test_settings_defaults_are_restrictive():
-    settings = load_settings(VALID)
+def _configure_token(store, token="v" * 40):
+    from dynamic_thermal_charge.persistence.secret_digest import digest_secret
+    from dynamic_thermal_charge.persistence.system_configuration import SecretAction, SecretMutation
+    repository = store.system_configuration
+    revision = repository.current().revision
+    repository.update_section(
+        "api", {}, expected_revision=revision,
+        secret_mutations={"admin_token_digest": SecretMutation(SecretAction.REPLACE, digest_secret(token))},
+        actor="test",
+    )
+
+
+def test_settings_defaults_are_restrictive(initialised_store):
+    _configure_token(initialised_store)
+    settings = settings_from_repository(initialised_store.system_configuration)
     assert settings.host == DEFAULT_HOST == "127.0.0.1"
     assert settings.port == DEFAULT_PORT
     assert settings.cors_origins == (), "a cross-origin client is allowed by default"
@@ -37,62 +43,31 @@ def test_settings_defaults_are_restrictive():
     assert settings.stale_seconds is None
 
 
-def test_exposing_the_api_takes_a_deliberate_act():
-    settings = load_settings({**VALID, HOST_ENV: "0.0.0.0"})
+def test_exposing_the_api_takes_a_deliberate_persisted_edit(initialised_store):
+    _configure_token(initialised_store)
+    repository = initialised_store.system_configuration
+    revision = repository.current().revision
+    repository.update_section("api", {"host": "0.0.0.0"}, expected_revision=revision, actor="test")
+    settings = settings_from_repository(repository)
     assert settings.exposed_beyond_localhost is True
 
 
-@pytest.mark.parametrize(
-    ("environment", "reason"),
-    [
-        ({}, "absent"),
-        ({TOKEN_ENV: ""}, "empty"),
-        ({TOKEN_ENV: "   "}, "blank"),
-        ({TOKEN_ENV: "short"}, "too short"),
-        ({TOKEN_ENV: "x" * (MINIMUM_TOKEN_LENGTH - 1)}, "one short of the minimum"),
-        ({TOKEN_ENV: "x" * 32}, "an obvious placeholder"),
-    ],
-)
-def test_an_unusable_token_refuses_to_start(environment, reason):
+@pytest.mark.parametrize("token", ["", "   ", "short", "x" * (MINIMUM_TOKEN_LENGTH - 1), "x" * 32])
+def test_an_unusable_clear_token_refuses_to_start(token):
     """FR-011: the API must never end up listening without real protection."""
     with pytest.raises(ApiSettingsError) as error:
-        load_settings(environment)
-    assert TOKEN_ENV in str(error.value)
+        ApiSettings(token=token)
+    assert "token" in str(error.value)
 
 
-def test_the_refusal_explains_how_to_generate_a_token():
-    with pytest.raises(ApiSettingsError) as error:
-        load_settings({})
-    assert "secrets.token_urlsafe" in str(error.value)
+def test_missing_persisted_digest_starts_only_the_onboarding_surface(initialised_store):
+    settings = settings_from_repository(initialised_store.system_configuration)
+    assert settings.configured is False
+    assert settings.accepts("anything") is False
 
 
 def test_a_token_of_the_minimum_length_is_accepted():
-    load_settings({TOKEN_ENV: "a1b2" * 8})
-
-
-@pytest.mark.parametrize("value", ["nope", "0", "70000", "-1"])
-def test_an_invalid_port_refuses_to_start(value):
-    with pytest.raises(ApiSettingsError):
-        load_settings({**VALID, PORT_ENV: value})
-
-
-@pytest.mark.parametrize("value", ["nope", "0", "-5"])
-def test_an_invalid_tolerance_refuses_to_start(value):
-    with pytest.raises(ApiSettingsError):
-        load_settings({**VALID, STALE_SECONDS_ENV: value})
-
-
-def test_a_wildcard_origin_is_refused():
-    """Browsers refuse a wildcard with credentials, and this API needs one."""
-    with pytest.raises(ApiSettingsError, match=r"\*"):
-        load_settings({**VALID, CORS_ORIGINS_ENV: "*"})
-
-
-def test_origins_are_parsed_from_a_comma_separated_list():
-    settings = load_settings(
-        {**VALID, CORS_ORIGINS_ENV: "http://localhost:4200, https://panel.lan"}
-    )
-    assert settings.cors_origins == ("http://localhost:4200", "https://panel.lan")
+    ApiSettings(token="a1b2" * 8)
 
 
 # --------------------------------------------------------------------------- #

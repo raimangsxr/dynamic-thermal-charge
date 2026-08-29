@@ -27,6 +27,8 @@ import type {
   ControllerLogPageDto, ControllerLogLevel,
   TransitionHistoryDto,
   RelayTestStartDto, RelayTestViewDto,
+  DatabaseCandidateDto, MigrationDto, OnboardingStatusDto, SecretEditDto,
+  SystemConfigurationDto, SystemSection, TopologyDto, ConnectionTestDto,
 } from './api.types';
 
 const BASE = '/api/v1';
@@ -108,6 +110,29 @@ export class Api {
 
   prune(): Observable<PruneDto> {
     return this.http.post<PruneDto>(`${BASE}/history/prune`, {});
+  }
+  onboardingStatus(): Observable<OnboardingStatusDto> { return this.http.get<OnboardingStatusDto>(`${BASE}/onboarding/status`); }
+  completeOnboarding(onboardingCredential: string, administratorToken: string): Observable<void> {
+    return this.http.post<void>(`${BASE}/onboarding/complete`, {
+      onboarding_credential: onboardingCredential, administrator_token: administratorToken,
+    });
+  }
+  systemConfiguration(): Observable<SystemConfigurationDto> { return this.http.get<SystemConfigurationDto>(`${BASE}/system/configuration`); }
+  topology(): Observable<TopologyDto> { return this.http.get<TopologyDto>(`${BASE}/system/topology`); }
+  patchSystem(section: SystemSection, expectedRevision: number, values: Record<string, unknown>, secrets: Record<string, SecretEditDto>): Observable<SystemConfigurationDto> {
+    return this.http.patch<SystemConfigurationDto>(`${BASE}/system/configuration/${section}`, {
+      expected_revision: expectedRevision, values, secrets,
+    });
+  }
+  testDatabase(candidate: DatabaseCandidateDto): Observable<{ ok: boolean; driver: string; tls: boolean | null }> {
+    return this.http.post<{ ok: boolean; driver: string; tls: boolean | null }>(`${BASE}/system/tests/database`, candidate);
+  }
+  testMqtt(): Observable<ConnectionTestDto> { return this.http.post<ConnectionTestDto>(`${BASE}/system/tests/mqtt`, {}); }
+  testWeather(): Observable<ConnectionTestDto> { return this.http.post<ConnectionTestDto>(`${BASE}/system/tests/weather`, {}); }
+  migrateDatabase(expectedLocatorRevision: number, candidate: DatabaseCandidateDto): Observable<MigrationDto> {
+    return this.http.post<MigrationDto>(`${BASE}/system/migrations`, {
+      expected_locator_revision: expectedLocatorRevision, confirmed: true, destination: candidate,
+    });
   }
   relayTestStart(): Observable<RelayTestStartDto> { return this.http.post<RelayTestStartDto>(`${BASE}/relay-test`, {}); }
   relayTest(credential?: string | null): Observable<RelayTestViewDto | null> { return this.http.get<RelayTestViewDto | null>(`${BASE}/relay-test`, credential ? { headers: { 'X-Relay-Test-Credential': credential } } : {}); }

@@ -1,4 +1,4 @@
-import { Component, inject } from '@angular/core';
+import { Component, inject, signal } from '@angular/core';
 import { Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 
 import { Auth } from './core/auth';
@@ -15,6 +15,7 @@ import { RelayTestSession } from './core/relay-test-session';
         <div class="links">
         <a routerLink="/estado" routerLinkActive="active">Estado</a>
         <a routerLink="/configuracion" routerLinkActive="active">Configuración</a>
+        <a routerLink="/configuracion-sistema" routerLinkActive="active">Sistema</a>
         <a routerLink="/historico" routerLinkActive="active">Histórico</a>
         <a routerLink="/diagnostico" routerLinkActive="active">Diagnóstico</a>
         <a routerLink="/prueba-reles" routerLinkActive="active">Prueba de relés</a>
@@ -24,6 +25,11 @@ import { RelayTestSession } from './core/relay-test-session';
         </div>
         <button type="button" (click)="signOut()">Cerrar sesión</button>
       </nav>
+    }
+    @if (topology(); as state) {
+      @if (state.mode !== 'normal') {
+        <div class="global-mode" role="alert">Modo {{ state.mode }}: configuración de solo lectura · {{ state.pending_events }} eventos pendientes</div>
+      }
     }
     <router-outlet />
   `,
@@ -38,6 +44,7 @@ import { RelayTestSession } from './core/relay-test-session';
     a { text-decoration: none; padding: 0.3rem 0; color: var(--primary); }
     a.active { font-weight: 700; border-bottom: 2px solid currentColor; }
     button { margin-left: auto; font: inherit; cursor: pointer; padding: 0.45rem 0.7rem; }
+    .global-mode { padding: .65rem max(1rem, calc((100vw - 76rem) / 2)); background: #fff1c7; border-bottom: 2px solid var(--warning); }
     @media (max-width: 42rem) { .brand { width: 100%; } button { margin-left: 0; } }
   `,
 })
@@ -46,11 +53,13 @@ export class App {
   readonly relay = inject(RelayTestSession);
   private readonly api = inject(Api);
   private readonly router = inject(Router);
+  readonly topology = signal<import('./core/api.types').TopologyDto | null>(null);
 
   constructor() {
     // This initial read makes an externally-owned session or persistent latch
     // visible from every authenticated route.  It never renews a lease.
     if (this.auth.authenticated()) {
+      this.api.topology().subscribe({ next: (state) => this.topology.set(state), error: () => undefined });
       this.api.relayTest(this.relay.credential()).subscribe({
         next: (view) => this.relay.observe(view),
         error: () => undefined,

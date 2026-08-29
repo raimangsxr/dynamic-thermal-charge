@@ -13,7 +13,7 @@ Group=dynamic-thermal-charge
 WorkingDirectory=/var/lib/dynamic-thermal-charge
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
-EnvironmentFile=/etc/dynamic-thermal-charge/environment
+# Broker settings and credentials are read from the canonical configuration store.
 ExecStart=/opt/dynamic-thermal-charge/venv/bin/dynamic-thermal-charge mqtt
 TimeoutStartSec=120s
 Restart=on-failure

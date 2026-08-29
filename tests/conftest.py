@@ -25,7 +25,7 @@ from dynamic_thermal_charge.persistence import (
     PruneReport,
     SchemaStatus,
 )
-from dynamic_thermal_charge.persistence.url import DATABASE_URL_ENV
+from dynamic_thermal_charge.persistence.paths import StorePaths
 
 
 # --------------------------------------------------------------------------- #
@@ -38,15 +38,21 @@ def sqlite_url(tmp_path) -> str:
 
 
 @pytest.fixture
-def store_env(sqlite_url) -> dict[str, str]:
-    return {DATABASE_URL_ENV: sqlite_url}
+def store_paths(tmp_path) -> StorePaths:
+    return StorePaths.in_directory(tmp_path / "stores")
 
 
 @pytest.fixture
-def store(store_env):
-    from dynamic_thermal_charge.persistence.bootstrap import open_store
+def store_env(store_paths) -> StorePaths:
+    """Compatibility fixture name while individual tests migrate to StorePaths."""
+    return store_paths
 
-    return open_store(store_env, clock=lambda: FIXED_NOW)
+
+@pytest.fixture
+def store(store_paths):
+    from dynamic_thermal_charge.persistence.bootstrap import initialise_at
+
+    return initialise_at(store_paths, allow_seed=False)[0]
 
 
 @pytest.fixture
@@ -62,7 +68,7 @@ def recorder(initialised_store):
     from dynamic_thermal_charge.persistence.history import SqlHistoryRecorder
 
     return SqlHistoryRecorder(
-        initialised_store.engine,
+        initialised_store.application_engine or initialised_store.engine,
         initialised_store.repository.installation_id(),
         initialised_store.location,
     )
@@ -90,13 +96,11 @@ def api_settings():
 
 
 @pytest.fixture
-def api_app(initialised_store, api_settings, api_clock, store_env):
+def api_app(initialised_store, api_settings, api_clock, store_paths):
     from dynamic_thermal_charge.api import create_app
-    from dynamic_thermal_charge.persistence.bootstrap import open_store
-
     return create_app(
         settings=api_settings,
-        store_factory=lambda: open_store(store_env),
+        store_factory=lambda: initialised_store,
         clock=api_clock,
     )
 
@@ -114,7 +118,7 @@ def heartbeat(initialised_store):
     from dynamic_thermal_charge.persistence.heartbeat import SqlHeartbeatPublisher
 
     return SqlHeartbeatPublisher(
-        initialised_store.engine,
+        initialised_store.application_engine or initialised_store.engine,
         initialised_store.repository.installation_id(),
         poll_seconds=5.0,
         driver_kind="gpio",
