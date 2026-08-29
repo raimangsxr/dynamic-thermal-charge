@@ -11,7 +11,7 @@ services:
     env_file: [{ path: /etc/app/app.env, required: false }]
     volumes: ["/srv/app/data:/var/lib/dynamic-thermal-charge"]
     devices: ["/dev/gpiomem:/dev/gpiomem"]
-    healthcheck: { test: ["CMD", "python", "-m", "dynamic_thermal_charge", "run", "--check-config"], interval: 30s, timeout: 10s, retries: 3 }
+    healthcheck: { test: ["CMD", "python", "-m", "dynamic_thermal_charge", "run", "--check-config"], interval: 5s, timeout: 10s, start_period: 15s, retries: 12 }
     logging: { driver: json-file, options: { max-size: 10m, max-file: "3" } }
   backend-api:
     image: ${DOCKERHUB_USERNAME:?set DOCKERHUB_USERNAME}/dynamic-thermal-charge-backend:${APP_VERSION:?set APP_VERSION}
@@ -20,7 +20,7 @@ services:
     env_file: [{ path: /etc/app/app.env, required: false }]
     volumes: ["/srv/app/data:/var/lib/dynamic-thermal-charge"]
     expose: ["8080"]
-    healthcheck: { test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')"], interval: 30s, timeout: 5s, retries: 5 }
+    healthcheck: { test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')"], interval: 5s, timeout: 5s, start_period: 15s, retries: 12 }
     logging: { driver: json-file, options: { max-size: 10m, max-file: "3" } }
   backend-mqtt:
     image: ${DOCKERHUB_USERNAME:?set DOCKERHUB_USERNAME}/dynamic-thermal-charge-backend:${APP_VERSION:?set APP_VERSION}

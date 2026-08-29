@@ -22,6 +22,8 @@ def test_backend_image_runs_idempotent_initialisation_before_its_command() -> No
     entrypoint = ENTRYPOINT.read_text(encoding="utf-8")
     assert 'ENTRYPOINT ["/usr/local/bin/dynamic-thermal-charge-entrypoint"]' in dockerfile
     assert "python -m dynamic_thermal_charge db init --quiet" in entrypoint
+    assert 'DTC_API_TOKEN:?set DTC_API_TOKEN in /etc/app/app.env' in entrypoint
+    assert "--admin-token-env DTC_API_TOKEN" in entrypoint
     assert '"python", "-m", "dynamic_thermal_charge"' in dockerfile or "python -m dynamic_thermal_charge" in dockerfile
     assert 'exec "$@"' in entrypoint
 

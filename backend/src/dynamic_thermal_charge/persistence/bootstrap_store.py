@@ -195,6 +195,24 @@ class BootstrapRepository:
                 .values(installation_state="unconfigured", updated_at=now)
             )
 
+    def mark_configured(self) -> None:
+        """Complete first-run state after an administrator token was seeded."""
+        now = _aware(self._clock()).isoformat()
+        with self.engine.begin() as connection:
+            connection.execute(
+                update(bootstrap_state)
+                .where(
+                    (bootstrap_state.c.id == 1)
+                    & (bootstrap_state.c.installation_state != "configured")
+                )
+                .values(
+                    installation_state="configured",
+                    onboarding_digest=None,
+                    onboarding_expires_at=None,
+                    updated_at=now,
+                )
+            )
+
     def compare_and_swap_locator(
         self, expected_revision: int, locator: DatabaseLocator
     ) -> int:

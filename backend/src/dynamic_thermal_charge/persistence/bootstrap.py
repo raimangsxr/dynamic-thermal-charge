@@ -169,11 +169,14 @@ def initialise_at(
     paths=None,
     *,
     allow_seed: bool = True,
+    admin_token: str | None = None,
 ) -> tuple[Store, InitReport, str | None]:
     from .context import StorageContext
 
     result = StorageContext.initialise(
-        paths, seed_functional_configuration=allow_seed
+        paths,
+        seed_functional_configuration=allow_seed,
+        admin_token=admin_token,
     )
     store = store_from_context(result.context)
     heaters = 0
@@ -189,7 +192,7 @@ def initialise_at(
         seeded=seeded,
         heaters=heaters,
     )
-    return store, report, result.bootstrap.onboarding_token
+    return store, report, None if admin_token is not None else result.bootstrap.onboarding_token
 
 
 def initialise(
