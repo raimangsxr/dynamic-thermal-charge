@@ -109,8 +109,11 @@ API, controller y MQTT.
 ## Despliegue Docker
 
 El runtime de producción usa únicamente Docker Compose. GitHub Actions ejecuta
-`make check`, construye y publica ambas imágenes en Docker Hub con el SHA del
-commit. `deploy/release` contiene la versión autorizada; no se usa `latest`.
+`make check`, compila el frontend y construye ambas imágenes sin publicarlas en
+cada PR. Las imágenes solo se publican en Docker Hub cuando se publica una
+GitHub Release, usando el tag de la release; no se usa `latest`. En ese mismo
+workflow `deploy/release` se actualiza con ese tag, que es la versión autorizada
+por GitOps.
 
 En una Raspberry nueva instala Docker, crea `/etc/app/app.env` con permisos
 `0600`, prepara `/opt/app/repo` y `/srv/app/data`, clona el repositorio y
