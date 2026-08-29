@@ -48,4 +48,13 @@ El frontend se publica en el puerto `80`. La API solo se expone dentro de la
 red Docker y el panel la consume mediante nginx.
 
 Para actualizaciones automatizadas, `deploy/reconcile.sh` lee `deploy/release`,
-descarga las imágenes y aplica la versión indicada.
+descarga las imágenes y aplica la versión indicada. El cronjob se instala con:
+
+```sh
+sudo /opt/app/repo/deploy/reconciler-cronjob.sh
+```
+
+La entrada se ejecuta cada cinco minutos y escribe únicamente actualizaciones o
+errores, con timestamp, en `/opt/app/reconciler.log`. El reconciliador usa
+`rromani` como usuario de Docker Hub, por lo que no necesita variables de
+entorno adicionales.
