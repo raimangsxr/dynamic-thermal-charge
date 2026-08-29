@@ -16,6 +16,7 @@ import argparse
 from contextlib import contextmanager
 from datetime import datetime
 import logging
+import os
 from pathlib import Path
 import signal
 import sys
@@ -96,6 +97,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--quiet",
         action="store_true",
         help="initialise silently; intended for container startup",
+    )
+    initialise.add_argument(
+        "--admin-token-env",
+        default=None,
+        help="seed the administrator token from this environment variable and skip onboarding",
     )
     database_actions.add_parser(
         "upgrade", help="apply pending migrations; never seeds"
@@ -381,8 +387,19 @@ def _run_db(args: argparse.Namespace) -> int:
     from .persistence.paths import StorePaths
 
     if args.db_command == "init":
+        admin_token = (
+            os.environ.get(args.admin_token_env)
+            if args.admin_token_env is not None
+            else None
+        )
+        if admin_token is not None:
+            from .api.settings import ApiSettings
+
+            ApiSettings(token=admin_token)
         _store, report, onboarding_token = initialise_at(
-            StorePaths.production(), allow_seed=not args.no_seed
+            StorePaths.production(),
+            allow_seed=not args.no_seed,
+            admin_token=admin_token,
         )
         if args.quiet:
             return EXIT_OK

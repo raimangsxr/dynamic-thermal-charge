@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import date, datetime, time, timezone
 from enum import Enum
+import fcntl
 import threading
 from typing import Iterator
 from uuid import uuid4
@@ -23,8 +24,13 @@ from .locator import DatabaseLocator
 from .paths import StorePaths
 from .relay_test import SqlRelayTestRepository
 from .repository import SqlConfigRepository, SqlIndoorReadingRepository
+from .secret_digest import digest_secret
 from .seed import example_installation
-from .system_configuration import SystemConfigurationRepository
+from .system_configuration import (
+    SecretAction,
+    SecretMutation,
+    SystemConfigurationRepository,
+)
 from .topology import TopologyMode, TopologyState
 from .topology import StorageFailureKind, classify_storage_failure
 
@@ -80,26 +86,34 @@ class StorageContext:
         paths: StorePaths | None = None,
         *,
         seed_functional_configuration: bool = True,
+        admin_token: str | None = None,
     ) -> StorageBootstrapResult:
         resolved = paths or StorePaths.production()
-        bootstrap_repository = BootstrapRepository(resolved)
-        bootstrap_result = bootstrap_repository.initialise()
-        fallback = FallbackRepository(resolved)
-        engines = build_canonical_engines(bootstrap_result.locator, resolved)
-        initialise_canonical_schemas(engines)
-        generation = _build_generation(
-            bootstrap_result.locator, engines, fallback
-        )
-        generation.system_configuration.initialise()
-        if seed_functional_configuration:
-            generation.configuration.seed(example_installation(), "default")
-        context = cls(resolved, bootstrap_repository, fallback, generation)
-        if not generation.configuration.is_empty():
-            context.refresh_fallback()
-        return StorageBootstrapResult(
-            context=context,
-            bootstrap=bootstrap_result,
-        )
+        with _initialisation_lock(resolved):
+            bootstrap_repository = BootstrapRepository(resolved)
+            bootstrap_result = bootstrap_repository.initialise()
+            fallback = FallbackRepository(resolved)
+            engines = build_canonical_engines(bootstrap_result.locator, resolved)
+            initialise_canonical_schemas(engines)
+            generation = _build_generation(
+                bootstrap_result.locator, engines, fallback
+            )
+            generation.system_configuration.initialise()
+            if seed_functional_configuration:
+                generation.configuration.seed(example_installation(), "default")
+            if admin_token is not None:
+                _seed_admin_token(
+                    generation.system_configuration,
+                    bootstrap_repository,
+                    admin_token,
+                )
+            context = cls(resolved, bootstrap_repository, fallback, generation)
+            if not generation.configuration.is_empty():
+                context.refresh_fallback()
+            return StorageBootstrapResult(
+                context=context,
+                bootstrap=bootstrap_result,
+            )
 
     @classmethod
     def open(
@@ -273,6 +287,55 @@ def _build_generation(
             engines.application, engines.application_location
         ),
     )
+
+
+@contextmanager
+def _initialisation_lock(paths: StorePaths) -> Iterator[None]:
+    """Serialise startup migrations shared by the Compose runtime services.
+
+    The controller, API and MQTT containers all run the common entrypoint and
+    therefore initialise the same SQLite stores at the same time on a fresh
+    installation. SQLite's busy timeout is not enough here: two processes can
+    both observe a missing schema before either creates it. An advisory file
+    lock closes that check-and-create window, and the kernel releases it if a
+    process dies during startup.
+    """
+    paths.state_directory.mkdir(parents=True, exist_ok=True)
+    lock_path = paths.state_directory / ".initialise.lock"
+    with lock_path.open("a+") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _seed_admin_token(system_configuration, bootstrap, admin_token: str) -> None:
+    """Persist the deployment token and close the first-run gate."""
+    if bootstrap.state().installation_state == "configured":
+        return
+    snapshot = system_configuration.current()
+    revision = snapshot.revision
+    system_configuration.update_section(
+        "api",
+        {},
+        expected_revision=revision,
+        secret_mutations={
+            "admin_token_digest": SecretMutation(
+                SecretAction.REPLACE, digest_secret(admin_token)
+            )
+        },
+        actor="deployment",
+    )
+    system_configuration.record_audit(
+        actor="deployment",
+        action="bootstrap",
+        section="api",
+        fields=("admin_token_digest",),
+        revision_before=revision,
+        revision_after=revision + 1,
+    )
+    bootstrap.mark_configured()
 
 
 def _json_ready(value):

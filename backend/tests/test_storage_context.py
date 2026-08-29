@@ -1,3 +1,4 @@
+import multiprocessing as mp
 from datetime import datetime, timezone
 
 import pytest
@@ -16,6 +17,12 @@ from dynamic_thermal_charge.persistence.paths import StorePaths
 NOW = datetime(2026, 8, 28, 12, 0, tzinfo=timezone.utc)
 
 
+def _initialise_store_in_child(directory: str) -> bool:
+    context = StorageContext.initialise(StorePaths.in_directory(directory)).context
+    context.close()
+    return True
+
+
 def test_context_initialises_and_reopens_without_database_environment(tmp_path, monkeypatch):
     monkeypatch.setenv("DTC_DATABASE_URL", "postgresql://must-be-ignored/ignored")
     paths = StorePaths.in_directory(tmp_path)
@@ -31,6 +38,15 @@ def test_context_initialises_and_reopens_without_database_environment(tmp_path, 
     assert reopened.generation.configuration.current()[1] == 1
     assert reopened.generation.system_configuration.current().revision == 1
     reopened.close()
+
+
+def test_concurrent_initialisation_serialises_shared_sqlite_migrations(tmp_path):
+    if "fork" not in mp.get_all_start_methods():
+        pytest.skip("the deployment target uses fork for process startup")
+    context = mp.get_context("fork")
+    with context.Pool(3) as pool:
+        results = pool.map(_initialise_store_in_child, [str(tmp_path)] * 3)
+    assert results == [True, True, True]
 
 
 def test_generation_replacement_waits_for_inflight_lease(tmp_path):

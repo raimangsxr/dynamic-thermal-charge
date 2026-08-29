@@ -24,11 +24,20 @@ cd frontend && npm run build
 En la Raspberry prepara `/srv/app/data` para el estado persistente y configura
 las variables de Compose:
 
+En `/etc/app/app.env` debe existir el token administrativo que usará el panel:
+
+```dotenv
+DTC_API_TOKEN=un-token-aleatorio-de-al-menos-32-caracteres
+```
+
+El primer arranque lo guarda de forma no reversible y marca la instalación como
+configurada; no se solicita ninguna credencial adicional de inicialización.
+
 ```sh
 export DOCKERHUB_USERNAME=rromani
 export APP_VERSION=VERSION
 sudo -E docker compose -f deploy/compose.yaml pull
-sudo -E docker compose -f deploy/compose.yaml up -d --remove-orphans --wait
+sudo -E docker compose -f deploy/compose.yaml up -d --remove-orphans --wait --wait-timeout 120
 ```
 
 Los tres contenedores backend comparten `/srv/app/data` y ejecutan una

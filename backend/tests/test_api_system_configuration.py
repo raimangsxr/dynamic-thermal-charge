@@ -8,6 +8,21 @@ from dynamic_thermal_charge.persistence.paths import StorePaths
 from tests.conftest import AUTH
 
 
+def test_deployment_token_skips_onboarding(tmp_path):
+    paths = StorePaths.in_directory(tmp_path / "deployment-token")
+    token = "deployment-token-" + "a" * 32
+    store, _report, onboarding_token = initialise_at(paths, admin_token=token)
+    assert onboarding_token is None
+    store.context.close()
+
+    app = create_app(store_factory=lambda: open_store(paths))
+    client = TestClient(app)
+    assert client.get("/api/v1/onboarding/status").json()["required"] is False
+    assert client.get(
+        "/api/v1/config", headers={"Authorization": f"Bearer {token}"}
+    ).status_code == 200
+
+
 def test_onboarding_is_one_use_and_enables_persisted_authentication(tmp_path):
     paths = StorePaths.in_directory(tmp_path / "onboarding")
     _store, _report, onboarding_token = initialise_at(paths, allow_seed=True)

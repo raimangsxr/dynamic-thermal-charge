@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from dynamic_thermal_charge import cli
+from dynamic_thermal_charge.persistence.bootstrap_store import inspect_bootstrap
 from dynamic_thermal_charge.persistence.paths import StorePaths
 
 
@@ -42,6 +43,18 @@ def test_init_creates_and_seeds_an_empty_database(run):
     assert code == cli.EXIT_OK
     assert "Schema created" in out
     assert "Seeded" in out
+
+
+def test_init_can_seed_the_administrator_token_from_the_environment(run, monkeypatch):
+    token = "deployment-token-" + "b" * 32
+    monkeypatch.setenv("DTC_API_TOKEN", token)
+    code, out, err = run(
+        "db", "init", "--quiet", "--admin-token-env", "DTC_API_TOKEN"
+    )
+    assert code == cli.EXIT_OK
+    assert out == ""
+    assert "database" in err
+    assert inspect_bootstrap(run.paths)["installation_state"] == "configured"
 
 
 def test_init_is_idempotent(initialised):
