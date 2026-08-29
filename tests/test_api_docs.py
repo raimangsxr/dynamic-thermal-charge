@@ -51,7 +51,7 @@ def test_every_operation_documents_its_error_codes(client):
     """FR-042: a client should learn the failure modes from the contract."""
     paths = _spec(client)["paths"]
     for path, operations in paths.items():
-        if path == "/health":
+        if path in {"/health", "/api/v1/onboarding/status"}:
             continue  # the one route that cannot fail on authentication
         for method, operation in operations.items():
             responses = set(operation.get("responses", {}))

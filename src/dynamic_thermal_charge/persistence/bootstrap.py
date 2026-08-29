@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Mapping
 
 from sqlalchemy.engine import Engine
@@ -33,6 +34,11 @@ class Store:
     indoor_readings: SqlIndoorReadingRepository
     gate: SchemaVersionGate
     relay_tests: SqlRelayTestRepository
+    configuration_engine: Engine | None = None
+    application_engine: Engine | None = None
+    context: object | None = None
+    system_configuration: object | None = None
+    applied_revisions: object | None = None
 
 
 @dataclass(frozen=True)
@@ -64,7 +70,7 @@ class InitReport:
         return lines
 
 
-def open_store(
+def open_legacy_store(
     environ: Mapping[str, str] | None = None,
     clock: Callable[[], object] | None = None,
     engine_timeouts: tuple[float, float] | None = None,
@@ -82,7 +88,7 @@ def open_store(
     )
 
 
-def initialise(
+def initialise_legacy(
     store: Store,
     seed_config: AppConfig | None = None,
     seed_name: str = SEED_INSTALLATION_NAME,
@@ -116,9 +122,98 @@ def initialise(
     )
 
 
-def upgrade(store: Store) -> InitReport:
+def upgrade_legacy(store: Store) -> InitReport:
     """Apply pending migrations only. Never seeds."""
-    return initialise(store, allow_seed=False)
+    return initialise_legacy(store, allow_seed=False)
+
+
+def store_from_context(context) -> Store:
+    from .active_schema import ActiveSchemaGate
+    generation = context.generation
+    return Store(
+        location=generation.engines.application_location,
+        # ``engine`` remains the configuration engine for compatibility with
+        # the pre-split repository API. Runtime data must use
+        # ``application_engine`` explicitly.
+        engine=generation.engines.configuration,
+        repository=generation.configuration,
+        indoor_readings=generation.indoor_readings,
+        gate=ActiveSchemaGate(
+            generation.engines.configuration, generation.engines.application
+        ),  # type: ignore[arg-type]
+        relay_tests=generation.relay_tests,
+        configuration_engine=generation.engines.configuration,
+        application_engine=generation.engines.application,
+        context=context,
+        system_configuration=generation.system_configuration,
+        applied_revisions=generation.applied_revisions,
+    )
+
+
+def open_store(
+    paths=None,
+    clock: Callable[[], object] | None = None,
+    engine_timeouts: tuple[float, float] | None = None,
+) -> Store:
+    """Open the bootstrap-selected stores; runtime never reads an environment."""
+    from .context import StorageContext
+    from .paths import StorePaths
+
+    if paths is not None and not isinstance(paths, StorePaths):
+        raise TypeError("open_store expects StorePaths, never an environment mapping")
+    context = StorageContext.open(paths, engine_timeouts=engine_timeouts)
+    return store_from_context(context)
+
+
+def initialise_at(
+    paths=None,
+    *,
+    allow_seed: bool = True,
+) -> tuple[Store, InitReport, str | None]:
+    from .context import StorageContext
+
+    result = StorageContext.initialise(
+        paths, seed_functional_configuration=allow_seed
+    )
+    store = store_from_context(result.context)
+    heaters = 0
+    seeded = False
+    if allow_seed:
+        config, _revision = store.repository.current()
+        heaters = len(config.heaters)
+        seeded = result.bootstrap.created
+    report = InitReport(
+        schema_created=result.bootstrap.created,
+        migrated_from=None,
+        revision="split-1/1",
+        seeded=seeded,
+        heaters=heaters,
+    )
+    return store, report, result.bootstrap.onboarding_token
+
+
+def initialise(
+    store: Store,
+    seed_config: AppConfig | None = None,
+    seed_name: str = SEED_INSTALLATION_NAME,
+    allow_seed: bool = True,
+) -> InitReport:
+    """Compatibility no-op for an already initialised split Store."""
+    if store.context is None:
+        return initialise_legacy(store, seed_config, seed_name, allow_seed)
+    seeded = False
+    heaters = 0
+    if allow_seed and store.repository.is_empty():
+        config = seed_config if seed_config is not None else example_installation()
+        seeded = store.repository.seed(config, seed_name)
+        heaters = len(config.heaters) if seeded else 0
+    return InitReport(False, None, "split-1/1", seeded, heaters)
+
+
+def upgrade(store: Store) -> InitReport:
+    if store.context is None:
+        return upgrade_legacy(store)
+    return InitReport(False, None, "split-1/1", False, 0)
 
 
 __all__ = [
@@ -126,6 +221,9 @@ __all__ = [
     "InitReport",
     "Store",
     "initialise",
+    "initialise_at",
+    "open_legacy_store",
+    "initialise_legacy",
     "open_store",
     "upgrade",
 ]

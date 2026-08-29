@@ -175,13 +175,15 @@ def test_a_read_failure_is_not_silently_swallowed(initialised_store, publisher):
 # FR-048b: the first migration over a real installation's data
 # --------------------------------------------------------------------------- #
 
-def test_migrating_from_phase_one_preserves_data(store):
+def test_migrating_from_phase_one_preserves_data(sqlite_url):
     """Seed on 0001, migrate to 0002, and lose nothing."""
     from alembic import command
 
     from dynamic_thermal_charge.persistence import SchemaStatus
-    from dynamic_thermal_charge.persistence.bootstrap import initialise
+    from dynamic_thermal_charge.persistence.bootstrap import initialise, open_legacy_store
     from dynamic_thermal_charge.persistence.migrations import _config
+
+    store = open_legacy_store({"DTC_DATABASE_URL": sqlite_url})
 
     # Stop at the previous phase's revision, as a real installation would be.
     command.upgrade(_config(store.engine), "0001_initial_schema")
@@ -209,12 +211,15 @@ def test_migrating_from_phase_one_preserves_data(store):
     assert after.runtime.poll_seconds == 7.0
 
 
-def test_a_phase_one_database_is_behind_not_unknown(store):
+def test_a_phase_one_database_is_behind_not_unknown(sqlite_url):
     """The failure mode phase 1 armed on purpose; we are its first candidate."""
     from alembic import command
 
     from dynamic_thermal_charge.persistence import SchemaStatus, SchemaVersionError
     from dynamic_thermal_charge.persistence.migrations import _config
+    from dynamic_thermal_charge.persistence.bootstrap import open_legacy_store
+
+    store = open_legacy_store({"DTC_DATABASE_URL": sqlite_url})
 
     command.upgrade(_config(store.engine), "0001_initial_schema")
     assert store.gate.check() is SchemaStatus.BEHIND

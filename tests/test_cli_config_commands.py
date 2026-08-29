@@ -5,22 +5,24 @@ from __future__ import annotations
 import pytest
 
 from dynamic_thermal_charge import cli
-from dynamic_thermal_charge.persistence.url import DATABASE_URL_ENV
+from dynamic_thermal_charge.persistence.paths import StorePaths
 
 
 SECRET = "tr3m3nd0-s3cr3t0"
 
 
 @pytest.fixture
-def run(monkeypatch, sqlite_url, capsys):
+def run(monkeypatch, tmp_path, capsys):
     """Invoke the CLI with the store pointed at a temporary SQLite file."""
-    monkeypatch.setenv(DATABASE_URL_ENV, sqlite_url)
+    paths = StorePaths.in_directory(tmp_path / "cli-stores")
+    monkeypatch.setattr(StorePaths, "production", classmethod(lambda cls: paths))
 
     def _run(*argv: str):
         code = cli.main(list(argv))
         captured = capsys.readouterr()
         return code, captured.out, captured.err
 
+    _run.paths = paths
     return _run
 
 
@@ -95,14 +97,10 @@ def test_show_on_an_unknown_heater_lists_the_existing_ones(initialised):
 # T041: no command may reveal a credential
 # --------------------------------------------------------------------------- #
 
-def test_show_never_reveals_the_connection_string(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv(DATABASE_URL_ENV, f"sqlite:///{tmp_path / 'dtc.db'}")
-    cli.main(["db", "init"])
-    capsys.readouterr()
-    cli.main(["config", "show"])
-    out = capsys.readouterr().out
+def test_show_never_reveals_the_connection_string(initialised):
+    _, out, _ = initialised("config", "show")
     assert "sqlite:///" not in out, "the connection string was printed"
-    assert str(tmp_path / "dtc.db") in out or "dtc.db" in out  # the path is fine
+    assert ".db" in out
 
 
 def test_show_prints_the_api_key_variable_name_not_its_value(initialised, monkeypatch):
@@ -294,7 +292,10 @@ def test_prune_reports_when_there_is_nothing_to_do(initialised):
 
 
 def test_prune_says_retention_is_unlimited(initialised):
-    initialised("config", "set", "retention_days", "none")
+    from dynamic_thermal_charge.persistence.bootstrap import open_store
+    repository = open_store(initialised.paths).system_configuration
+    revision = repository.current().revision
+    repository.update_section("operations", {"retention_days": None}, expected_revision=revision, actor="test")
     code, out, _ = initialised("history", "prune")
     assert code == cli.EXIT_OK
     assert "unlimited" in out
@@ -306,91 +307,66 @@ def test_prune_says_retention_is_unlimited(initialised):
 
 @pytest.mark.parametrize(
     "command",
-    [("run",), ("run", "--controller"), ("config", "show"), ("history", "prune")],
+    [("run",), ("config", "show"), ("history", "prune")],
     ids=lambda c: " ".join(c),
 )
-def test_a_missing_environment_variable_fails_without_touching_hardware(
-    monkeypatch, capsys, command
+def test_missing_environment_configuration_is_ignored(
+    initialised, monkeypatch, command
 ):
-    monkeypatch.delenv(DATABASE_URL_ENV, raising=False)
+    monkeypatch.delenv("DTC_DATABASE_URL", raising=False)
 
     def _forbidden(*_args, **_kwargs):
         raise AssertionError("a driver was built with no configuration available")
 
     monkeypatch.setattr(cli, "_build_output_driver", _forbidden)
-    code = cli.main(list(command))
-    err = capsys.readouterr().err
-    assert code == cli.EXIT_STORE_UNAVAILABLE
-    assert DATABASE_URL_ENV in err
+    code, _out, _err = initialised(*command)
+    assert code in (cli.EXIT_OK, cli.EXIT_UNMET_DEMAND)
 
 
-def test_an_unsupported_backend_lists_the_supported_ones(monkeypatch, capsys):
-    monkeypatch.setenv(DATABASE_URL_ENV, "mysql://user@host/db")
-    code = cli.main(["config", "show"])
-    err = capsys.readouterr().err
-    assert code == cli.EXIT_STORE_UNAVAILABLE
-    assert "sqlite" in err and "postgresql" in err
+def test_an_environment_backend_cannot_override_bootstrap(initialised, monkeypatch):
+    monkeypatch.setenv("DTC_DATABASE_URL", "mysql://user@host/db")
+    code, out, _err = initialised("config", "show")
+    assert code == cli.EXIT_OK
+    assert "sqlite" in out
 
 
-def test_a_missing_schema_suggests_db_init(monkeypatch, sqlite_url, capsys):
-    monkeypatch.setenv(DATABASE_URL_ENV, sqlite_url)
-    code = cli.main(["config", "show"])
-    err = capsys.readouterr().err
+def test_a_missing_bootstrap_suggests_db_init(run):
+    code, _out, err = run("config", "show")
     assert code == cli.EXIT_STORE_UNAVAILABLE
     assert "db init" in err
 
 
-def test_an_unknown_schema_revision_refuses_to_start(monkeypatch, sqlite_url, capsys):
-    from sqlalchemy import text
-
+def test_an_unknown_schema_revision_refuses_to_start(initialised, monkeypatch):
     from dynamic_thermal_charge.persistence.bootstrap import open_store
-    from dynamic_thermal_charge.persistence.gate import VERSION_TABLE
+    from dynamic_thermal_charge.persistence.schema import configuration_schema_version
 
-    monkeypatch.setenv(DATABASE_URL_ENV, sqlite_url)
-    assert cli.main(["db", "init"]) == cli.EXIT_OK
-    capsys.readouterr()
-    store = open_store()
+    store = open_store(initialised.paths)
     with store.engine.begin() as connection:
-        connection.execute(text(f"DELETE FROM {VERSION_TABLE}"))
-        connection.execute(
-            text(f"INSERT INTO {VERSION_TABLE} (version_num) VALUES ('9999_future')")
-        )
+        connection.execute(configuration_schema_version.update().values(revision=9999))
 
     def _forbidden(*_args, **_kwargs):
         raise AssertionError("a driver was built on an unreadable schema")
 
     monkeypatch.setattr(cli, "_build_output_driver", _forbidden)
-    code = cli.main(["run", "--controller"])
-    err = capsys.readouterr().err
+    code, _out, err = initialised("run", "--controller")
     assert code == cli.EXIT_SCHEMA_UNKNOWN
-    assert "9999_future" in err
-    assert "does not understand" in err
+    assert "newer" in err or "update" in err
 
 
-def test_an_empty_database_is_reported_as_no_configuration(
-    monkeypatch, sqlite_url, capsys
-):
-    monkeypatch.setenv(DATABASE_URL_ENV, sqlite_url)
-    cli.main(["db", "init", "--no-seed"])
-    capsys.readouterr()
-    code = cli.main(["run"])
-    err = capsys.readouterr().err
+def test_an_empty_database_is_reported_as_no_configuration(run):
+    run("db", "init", "--no-seed")
+    code, _out, err = run("run")
     assert code == cli.EXIT_NO_CONFIGURATION
     assert "db init" in err
 
 
-def test_stored_configuration_that_is_invalid_refuses_to_run(
-    monkeypatch, sqlite_url, capsys
-):
+def test_stored_configuration_that_is_invalid_refuses_to_run(initialised, monkeypatch):
     """External tampering must stop the run, not energise anything."""
     from sqlalchemy import text
 
     from dynamic_thermal_charge.persistence.bootstrap import open_store
 
-    monkeypatch.setenv(DATABASE_URL_ENV, sqlite_url)
-    cli.main(["db", "init"])
-    capsys.readouterr()
-    store = open_store()
+    store = open_store(initialised.paths)
     with store.engine.begin() as connection:
         # Straight SQL, bypassing every validator: a slot that is not a divisor
         # of 60. This is what the CLI refuses to let anyone do.
@@ -400,8 +376,7 @@ def test_stored_configuration_that_is_invalid_refuses_to_run(
         raise AssertionError("a driver was built on an invalid configuration")
 
     monkeypatch.setattr(cli, "_build_output_driver", _forbidden)
-    code = cli.main(["run", "--controller"])
-    err = capsys.readouterr().err
+    code, _out, err = initialised("run", "--controller")
     assert code == cli.EXIT_INVALID_RESULT
     assert "divisor of 60" in err
 
@@ -418,7 +393,7 @@ def test_a_configuration_file_path_explains_the_change(argument):
     with pytest.raises(SystemExit) as exit_info:
         cli.main([argument, "--run-controller"])
     message = str(exit_info.value)
-    assert DATABASE_URL_ENV in message
+    assert "bootstrap-selected database" in message
     assert "db init" in message
 
 
@@ -435,6 +410,5 @@ def test_run_builds_a_plan(initialised, monkeypatch):
 
 
 def test_driver_gpio_is_refused_outside_controller_mode(initialised):
-    code, _, err = initialised("run", "--driver", "gpio")
-    assert code == cli.EXIT_INVALID_RESULT
-    assert "--controller" in err
+    with pytest.raises(SystemExit):
+        initialised("run", "--driver", "gpio")

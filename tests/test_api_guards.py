@@ -207,13 +207,14 @@ print("ON" if switched_on else "OFF", "WEB" if web else "NOWEB")
 # The api subcommand builds no driver either
 # --------------------------------------------------------------------------- #
 
-def test_the_api_subcommand_builds_no_output_driver(monkeypatch, sqlite_url, capsys):
+def test_the_api_subcommand_builds_no_output_driver(monkeypatch, tmp_path, capsys):
     from dynamic_thermal_charge import cli
-    from dynamic_thermal_charge.api.settings import TOKEN_ENV
-    from dynamic_thermal_charge.persistence.url import DATABASE_URL_ENV
+    from dynamic_thermal_charge.persistence.bootstrap import initialise_at
+    from dynamic_thermal_charge.persistence.paths import StorePaths
 
-    monkeypatch.setenv(DATABASE_URL_ENV, sqlite_url)
-    monkeypatch.setenv(TOKEN_ENV, "s" * 40)
+    paths = StorePaths.in_directory(tmp_path / "api-command")
+    initialise_at(paths)
+    monkeypatch.setattr(StorePaths, "production", classmethod(lambda cls: paths))
     monkeypatch.setattr(
         cli,
         "_build_output_driver",
@@ -228,12 +229,16 @@ def test_the_api_subcommand_builds_no_output_driver(monkeypatch, sqlite_url, cap
     assert served["port"] == 8080
 
 
-def test_the_api_subcommand_refuses_an_unusable_token(monkeypatch, sqlite_url, capsys):
+def test_the_api_subcommand_starts_safe_onboarding_without_an_admin_token(monkeypatch, tmp_path, capsys):
     from dynamic_thermal_charge import cli
-    from dynamic_thermal_charge.api.settings import TOKEN_ENV
-    from dynamic_thermal_charge.persistence.url import DATABASE_URL_ENV
+    from dynamic_thermal_charge.persistence.bootstrap import initialise_at
+    from dynamic_thermal_charge.persistence.paths import StorePaths
+    import uvicorn
 
-    monkeypatch.setenv(DATABASE_URL_ENV, sqlite_url)
-    monkeypatch.delenv(TOKEN_ENV, raising=False)
-    assert cli.main(["api"]) == cli.EXIT_INVALID_RESULT
-    assert TOKEN_ENV in capsys.readouterr().err
+    paths = StorePaths.in_directory(tmp_path / "api-onboarding")
+    initialise_at(paths)
+    monkeypatch.setattr(StorePaths, "production", classmethod(lambda cls: paths))
+    served = {}
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: served.update(kw))
+    assert cli.main(["api"]) == cli.EXIT_OK
+    assert served["host"] == "127.0.0.1"

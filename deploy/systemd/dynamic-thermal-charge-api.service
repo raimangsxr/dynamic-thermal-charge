@@ -14,9 +14,7 @@ Group=dynamic-thermal-charge
 WorkingDirectory=/var/lib/dynamic-thermal-charge
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
-EnvironmentFile=/etc/dynamic-thermal-charge/environment
-# Configuration comes from DTC_DATABASE_URL and the API settings come from
-# DTC_API_* , both in the environment file above.
+# Bootstrap selects the canonical store; API/security settings live there.
 ExecStart=/opt/dynamic-thermal-charge/venv/bin/dynamic-thermal-charge api
 # Importing the web stack takes seconds on a Raspberry Pi 2B, and the first boot
 # after an update is slower still. No ExecStartPre: it would pay that cost twice.

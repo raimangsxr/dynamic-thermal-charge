@@ -60,7 +60,9 @@ def get_status(
     observed_at: datetime = request.app.state.clock()
     config, _revision = store.repository.current()
     reader = SqlStatusReader(
-        store.engine, store.repository.installation_id(), store.location
+        store.application_engine or store.engine,
+        store.repository.installation_id(),
+        store.location,
     )
 
     last_states = reader.last_output_states()

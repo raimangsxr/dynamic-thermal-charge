@@ -104,6 +104,24 @@ const TABLE: Record<ApiErrorCode, Omit<Explained, 'action'> & { action: string }
     onDevice: true,
     fieldScoped: false,
   },
+  degraded_mode: {
+    title: 'El sistema está en modo degradado',
+    action: 'La configuración es de solo lectura hasta recuperar la base canónica.',
+    onDevice: true,
+    fieldScoped: false,
+  },
+  operation_in_progress: {
+    title: 'Ya hay una operación en curso',
+    action: 'Espera a que termine antes de iniciar otra.',
+    onDevice: false,
+    fieldScoped: false,
+  },
+  connection_test_failed: {
+    title: 'La prueba de conexión ha fallado',
+    action: 'Revisa host, TLS, credenciales y permisos.',
+    onDevice: false,
+    fieldScoped: false,
+  },
   internal_error: {
     title: 'La petición no se pudo completar',
     action: 'Consulta los registros del servicio en el dispositivo.',

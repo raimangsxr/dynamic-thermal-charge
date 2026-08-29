@@ -1,7 +1,6 @@
 """HTTP edge for relay-test coordination; it never imports a driver."""
 from __future__ import annotations
 
-import os
 from fastapi import APIRouter, Depends, Header, Request, status
 
 from ...persistence import RelayTestError
@@ -15,8 +14,11 @@ from ..security import new_relay_test_credential, relay_test_credential_digest
 router = APIRouter()
 ERRORS = {401: {"description": "Unauthorized"}, 403: {"description": "Not owner"}, 404: {"description": "Not found"}, 409: {"description": "Relay test conflict"}, 503: {"description": "Controller unavailable"}}
 
-def _lease() -> int:
-    return int(os.environ.get("DTC_RELAY_TEST_LEASE_SECONDS", "30"))
+def _lease(store: Store) -> int:
+    repository = store.system_configuration
+    if repository is None:
+        return 30
+    return repository.current().configuration.operations.relay_test_lease_seconds
 
 def _digest(credential: str | None) -> str:
     if not credential:
@@ -32,7 +34,11 @@ def _translate(exc: RelayTestError):
 def _view(store: Store, raw: dict | None) -> RelayTestView | None:
     if raw is None:
         return None
-    heartbeat = read_heartbeat(store.engine, store.repository.installation_id(), store.location)
+    heartbeat = read_heartbeat(
+        store.application_engine or store.engine,
+        store.repository.installation_id(),
+        store.location,
+    )
     current = heartbeat is not None
     session = raw.get("session")
     safety = raw["safety"]
@@ -48,7 +54,7 @@ def _view(store: Store, raw: dict | None) -> RelayTestView | None:
 def start(request: Request, store: Store = Depends(usable_store)):
     credential = new_relay_test_credential()
     try:
-        view = store.relay_tests.claim(relay_test_credential_digest(credential), request.app.state.clock(), _lease())
+        view = store.relay_tests.claim(relay_test_credential_digest(credential), request.app.state.clock(), _lease(store))
     except RelayTestError as exc: _translate(exc)
     session = view["session"]
     return RelayTestStartResponse(session_id=session["id"], client_credential=credential, status="starting", lease_expires_at=session["lease_expires_at"])
@@ -65,7 +71,7 @@ def get(session_id: str, store: Store = Depends(usable_store), x_relay_test_cred
 
 @router.post("/relay-test/{session_id}/lease", responses=ERRORS)
 def lease(session_id: str, request: Request, store: Store = Depends(usable_store), x_relay_test_credential: str | None = Header(default=None)):
-    try: return _view(store, store.relay_tests.renew(session_id, _digest(x_relay_test_credential), request.app.state.clock(), _lease()))
+    try: return _view(store, store.relay_tests.renew(session_id, _digest(x_relay_test_credential), request.app.state.clock(), _lease(store)))
     except RelayTestError as exc: _translate(exc)
 
 @router.put("/relay-test/{session_id}/heaters/{heater_id}", response_model=RelayTestCommandResponse, status_code=status.HTTP_202_ACCEPTED, responses=ERRORS)

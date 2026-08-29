@@ -145,7 +145,7 @@ def _change_view(change: ConfigChange) -> ChangeResponse:
     description=(
         "Includes the configuration revision, needed for any write, and the "
         "schema revision. Never returns the database location or the value of the "
-        "weather provider's key: only the NAME of its environment variable."
+        "weather provider's key: only whether a key is configured."
     ),
 )
 def get_config(store: Store = Depends(usable_store)) -> ConfigResponse:
@@ -218,6 +218,7 @@ def patch_config(
     change = store.repository.set_field(
         payload.revision, entity, None, payload.field, payload.value
     )
+    store.context.refresh_fallback()
     return _change_view(change)
 
 
@@ -246,6 +247,7 @@ def patch_heater(
         if "does not exist" in str(exc):
             raise not_found(str(exc), field="heater_id") from exc
         raise
+    store.context.refresh_fallback()
     return _change_view(change)
 
 
@@ -308,6 +310,7 @@ def post_heater(
                 heater_id=payload.id,
             ) from exc
         raise
+    store.context.refresh_fallback()
     return _change_view(change)
 
 
@@ -332,6 +335,7 @@ def delete_heater(
         if "does not exist" in str(exc):
             raise not_found(str(exc), field="heater_id") from exc
         raise
+    store.context.refresh_fallback()
     return _change_view(change)
 
 

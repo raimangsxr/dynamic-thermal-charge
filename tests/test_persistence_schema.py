@@ -178,13 +178,10 @@ def test_the_schema_declares_every_expected_table():
     }
 
 
-def test_indoor_reading_uses_the_integer_heater_primary_key():
+def test_indoor_reading_uses_the_integer_heater_identity_without_cross_store_fk():
     assert indoor_reading.c.heater_pk.primary_key
     assert indoor_reading.c.heater_pk.type.python_type is int
-    target = next(iter(indoor_reading.c.heater_pk.foreign_keys)).target_fullname
-    assert target == "heater.id"
-    foreign_key = next(iter(indoor_reading.c.heater_pk.foreign_keys))
-    assert foreign_key.ondelete == "CASCADE"
+    assert not indoor_reading.c.heater_pk.foreign_keys
 
 
 def test_indoor_configuration_columns_have_compatible_defaults():
@@ -194,12 +191,13 @@ def test_indoor_configuration_columns_have_compatible_defaults():
     assert installation_table.c.indoor_max_plausible_c.server_default.arg == "50"
 
 
-def test_migrating_from_0002_preserves_existing_configuration(store):
+def test_migrating_from_0002_preserves_existing_configuration(sqlite_url):
     from alembic import command
 
-    from dynamic_thermal_charge.persistence.bootstrap import initialise
+    from dynamic_thermal_charge.persistence.bootstrap import initialise, open_legacy_store
     from dynamic_thermal_charge.persistence.migrations import _config
 
+    store = open_legacy_store({"DTC_DATABASE_URL": sqlite_url})
     initialise(store)
     config_before, revision_before = store.repository.current()
 
@@ -376,10 +374,10 @@ def test_no_column_uses_an_engine_specific_type():
 def test_the_migrations_build_exactly_the_declared_schema(sqlite_url):
     from sqlalchemy import inspect
 
-    from dynamic_thermal_charge.persistence.bootstrap import initialise, open_store
+    from dynamic_thermal_charge.persistence.bootstrap import initialise, open_legacy_store
     from dynamic_thermal_charge.persistence.url import DATABASE_URL_ENV
 
-    store = open_store({DATABASE_URL_ENV: sqlite_url})
+    store = open_legacy_store({DATABASE_URL_ENV: sqlite_url})
     initialise(store, allow_seed=False)
     inspector = inspect(store.engine)
 

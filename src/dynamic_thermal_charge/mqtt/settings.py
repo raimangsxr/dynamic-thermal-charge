@@ -1,10 +1,8 @@
-"""MQTT deployment settings loaded exclusively from the environment."""
+"""MQTT settings projected from canonical database configuration."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-import os
-from typing import Mapping
 
 from . import MqttConfigurationError
 
@@ -21,73 +19,27 @@ class MqttSettings:
     publish_seconds: float = 15.0
 
 
-def _boolean(environ: Mapping[str, str], name: str, default: bool) -> bool:
-    raw = environ.get(name)
-    if raw is None:
-        return default
-    normalized = raw.strip().lower()
-    if normalized in {"1", "true", "yes", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "off"}:
-        return False
-    raise MqttConfigurationError(
-        f"{name} must be true or false; received an invalid value"
-    )
-
-
-def _integer(environ: Mapping[str, str], name: str, default: int) -> int:
-    try:
-        return int(environ.get(name, str(default)))
-    except ValueError as exc:
-        raise MqttConfigurationError(f"{name} must be a whole number") from exc
-
-
-def _number(environ: Mapping[str, str], name: str, default: float) -> float:
-    try:
-        return float(environ.get(name, str(default)))
-    except ValueError as exc:
-        raise MqttConfigurationError(f"{name} must be a number") from exc
-
-
-def load_settings(environ: Mapping[str, str] | None = None) -> MqttSettings:
-    source = os.environ if environ is None else environ
-    host = source.get("DTC_MQTT_HOST", "").strip()
-    if not host:
-        raise MqttConfigurationError("DTC_MQTT_HOST is required")
-    port = _integer(source, "DTC_MQTT_PORT", 1883)
-    if not 1 <= port <= 65535:
-        raise MqttConfigurationError("DTC_MQTT_PORT must be between 1 and 65535")
-    cadence = _number(source, "DTC_MQTT_PUBLISH_SECONDS", 15.0)
-    if cadence <= 0:
-        raise MqttConfigurationError("DTC_MQTT_PUBLISH_SECONDS must be positive")
-    username = source.get("DTC_MQTT_USERNAME") or None
-    password = source.get("DTC_MQTT_PASSWORD") or None
-    if username is not None and password is None:
-        raise MqttConfigurationError(
-            "DTC_MQTT_PASSWORD is required when DTC_MQTT_USERNAME is set"
-        )
-    if password is not None and username is None:
-        raise MqttConfigurationError(
-            "DTC_MQTT_USERNAME is required when DTC_MQTT_PASSWORD is set"
-        )
-    prefix = source.get("DTC_MQTT_PREFIX", "dtc").strip().strip("/")
-    discovery_prefix = source.get(
-        "DTC_MQTT_DISCOVERY_PREFIX", "homeassistant"
-    ).strip().strip("/")
-    if not prefix:
-        raise MqttConfigurationError("DTC_MQTT_PREFIX cannot be empty")
-    if not discovery_prefix:
-        raise MqttConfigurationError("DTC_MQTT_DISCOVERY_PREFIX cannot be empty")
+def settings_from_repository(repository) -> MqttSettings:
+    snapshot = repository.current()
+    configured = snapshot.configuration.mqtt
+    if not configured.enabled:
+        raise MqttConfigurationError("MQTT is disabled in system configuration")
+    if not configured.host:
+        raise MqttConfigurationError("MQTT host is missing in system configuration")
+    username = snapshot.secrets.get("mqtt_username")
+    password = snapshot.secrets.get("mqtt_password")
+    if (username is None) != (password is None):
+        raise MqttConfigurationError("MQTT username and password must be configured together")
     return MqttSettings(
-        host=host,
-        port=port,
-        tls=_boolean(source, "DTC_MQTT_TLS", False),
-        username=username,
-        password=password,
-        prefix=prefix,
-        discovery_prefix=discovery_prefix,
-        publish_seconds=cadence,
+        host=configured.host,
+        port=configured.port,
+        tls=configured.tls,
+        username=None if username is None else username.value,
+        password=None if password is None else password.value,
+        prefix=configured.prefix.strip("/"),
+        discovery_prefix=configured.discovery_prefix.strip("/"),
+        publish_seconds=configured.publish_seconds,
     )
 
 
-__all__ = ["MqttSettings", "load_settings"]
+__all__ = ["MqttSettings", "settings_from_repository"]

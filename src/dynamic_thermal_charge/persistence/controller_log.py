@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, insert, select
@@ -19,10 +18,11 @@ LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
 
 class ControllerLogHandler(logging.Handler):
     """Logging handler which never lets database trouble affect control."""
-    def __init__(self, engine: Engine, installation_id: int, location: StoreLocation | None = None) -> None:
+    def __init__(self, engine: Engine, installation_id: int, location: StoreLocation | None = None,
+                 max_events: int = DEFAULT_MAX_EVENTS) -> None:
         super().__init__()
         self._engine, self._installation_id, self._location = engine, installation_id, location
-        self._max_events = _retention_limit()
+        self._max_events = min(max(10, max_events), 100_000)
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
@@ -65,12 +65,3 @@ class SqlControllerLogReader:
         rows = rows[:size]
         return {"items": [{"id": int(row["id"]), "occurred_at": from_utc(row["occurred_at"]), "level": row["level"], "logger": row["logger"], "message": row["message"]} for row in rows],
                 "limit_applied": size, "has_more": has_more, "next_before_id": int(rows[-1]["id"]) if has_more and rows else None}
-
-
-def _retention_limit() -> int:
-    """Read a deliberately small operational knob without risking startup."""
-    try:
-        value = int(os.environ.get("DTC_CONTROLLER_LOG_MAX_EVENTS", str(DEFAULT_MAX_EVENTS)))
-    except ValueError:
-        return DEFAULT_MAX_EVENTS
-    return min(max(10, value), 100_000)

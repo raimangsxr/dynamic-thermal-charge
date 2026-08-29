@@ -11,9 +11,7 @@ Group=dynamic-thermal-charge
 WorkingDirectory=/var/lib/dynamic-thermal-charge
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
-EnvironmentFile=/etc/dynamic-thermal-charge/environment
-# Configuration comes from DTC_DATABASE_URL, set in the environment file above.
-# There is no configuration file argument any more.
+# Runtime configuration is resolved from bootstrap.db and the canonical store.
 ExecStartPre=/opt/dynamic-thermal-charge/venv/bin/dynamic-thermal-charge run --check-config
 ExecStart=/opt/dynamic-thermal-charge/venv/bin/dynamic-thermal-charge run --controller
 Restart=on-failure
@@ -31,7 +29,7 @@ ProtectKernelModules=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
 LockPersonality=true
-# Holds the local SQLite database and its WAL sidecars, plus the active plan cache.
+# Holds bootstrap.db, fallback.db and (when selected) the SQLite canonical stores.
 ReadWritePaths=/var/lib/dynamic-thermal-charge
 
 [Install]

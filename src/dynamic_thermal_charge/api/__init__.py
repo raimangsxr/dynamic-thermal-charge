@@ -12,7 +12,7 @@ import logging
 from datetime import datetime
 from typing import TYPE_CHECKING, Callable
 
-from .settings import ApiSettings, load_settings
+from .settings import ApiSettings, settings_from_repository
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from fastapi import FastAPI
@@ -58,7 +58,14 @@ def create_app(
     from .errors import register_error_handlers
     from .security import require_token
 
-    resolved = settings or load_settings()
+    default_store = None
+    if settings is None:
+        default_store = (store_factory or _default_store_factory)()
+        if default_store.system_configuration is None:
+            raise RuntimeError("system configuration repository is unavailable")
+        resolved = settings_from_repository(default_store.system_configuration)
+    else:
+        resolved = settings
 
     app = FastAPI(
         title="Dynamic Thermal Charge",
@@ -71,11 +78,15 @@ def create_app(
         openapi_url=None,
     )
     app.state.settings = resolved
-    app.state.store_factory = store_factory or _default_store_factory
+    app.state.store_factory = store_factory or (
+        (lambda: default_store) if default_store is not None else _default_store_factory
+    )
     from .dependencies import utc_now
 
     app.state.clock = clock or utc_now
     app.state.last_heartbeat = None
+    if default_store is not None and default_store.context is not None:
+        default_store.context.publish_process_revision("api")
 
     register_error_handlers(app)
 
@@ -93,11 +104,14 @@ def create_app(
     from .routes import docs as docs_routes
     from .routes import health as health_routes
     from .routes import history as history_routes
+    from .routes import onboarding as onboarding_routes
     from .routes import status as status_routes
+    from .routes import system as system_routes
     from .routes import relay_test as relay_test_routes
 
     # No credential: deliberately mute (FR-052).
     app.include_router(health_routes.router, tags=["health"])
+    app.include_router(onboarding_routes.router)
     # Everything else, credential required -- documentation included.
     protected = [Depends(require_token)]
     app.include_router(
@@ -113,6 +127,9 @@ def create_app(
         prefix=API_PREFIX,
         tags=["history"],
         dependencies=protected,
+    )
+    app.include_router(
+        system_routes.router, prefix=API_PREFIX, tags=["system"], dependencies=protected
     )
     app.include_router(docs_routes.router, dependencies=protected, tags=["docs"])
 

@@ -6,7 +6,6 @@ from dataclasses import dataclass, replace
 from datetime import date
 import json
 import logging
-import os
 from typing import Any, Callable, Mapping, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -126,7 +125,7 @@ class FallbackWeatherProvider:
 
 def build_weather_provider(
     config: WeatherConfig,
-    environ: Mapping[str, str] | None = None,
+    api_key: str | None = None,
     http_get: HttpGet | None = None,
 ) -> WeatherProvider:
     if config.provider == "simulated":
@@ -134,10 +133,9 @@ def build_weather_provider(
         return SimulatedWeatherProvider(config.simulated)
 
     assert config.aemet is not None
-    environment = os.environ if environ is None else environ
     primary = AemetWeatherProvider(
         config.aemet,
-        api_key=environment.get(config.aemet.api_key_env, ""),
+        api_key=api_key or "",
         http_get=http_get,
     )
     if config.fallback is None:

@@ -1,15 +1,31 @@
-"""Environment-only MQTT settings never expose credentials."""
+"""Database-resident MQTT settings never expose credentials."""
 
 import pytest
 
 from dynamic_thermal_charge.mqtt import MqttConfigurationError
-from dynamic_thermal_charge.mqtt.settings import load_settings
+from dynamic_thermal_charge.mqtt.settings import settings_from_repository
+from dynamic_thermal_charge.persistence import ConfigValidationError
+from dynamic_thermal_charge.persistence.system_configuration import SecretAction, SecretMutation
 
 
-def test_host_is_required_and_defaults_are_documented():
-    with pytest.raises(MqttConfigurationError, match="DTC_MQTT_HOST"):
-        load_settings({})
-    settings = load_settings({"DTC_MQTT_HOST": "broker.local"})
+def _update(store, patch, secrets=None):
+    repository = store.system_configuration
+    revision = repository.current().revision
+    repository.update_section(
+        "mqtt", patch, expected_revision=revision,
+        secret_mutations=secrets, actor="test",
+    )
+
+
+def test_disabled_mqtt_is_explicit(initialised_store):
+    with pytest.raises(MqttConfigurationError, match="disabled"):
+        settings_from_repository(initialised_store.system_configuration)
+
+
+def test_host_and_defaults_are_loaded_from_database(initialised_store, monkeypatch):
+    monkeypatch.setenv("DTC_MQTT_HOST", "must-be-ignored")
+    _update(initialised_store, {"enabled": True, "host": "broker.local"})
+    settings = settings_from_repository(initialised_store.system_configuration)
     assert settings.host == "broker.local"
     assert settings.port == 1883
     assert settings.tls is False
@@ -18,42 +34,26 @@ def test_host_is_required_and_defaults_are_documented():
     assert settings.publish_seconds == 15
 
 
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [
-        ("DTC_MQTT_PORT", "0"),
-        ("DTC_MQTT_PORT", "65536"),
-        ("DTC_MQTT_PORT", "abc"),
-        ("DTC_MQTT_PUBLISH_SECONDS", "0"),
-        ("DTC_MQTT_PUBLISH_SECONDS", "abc"),
-        ("DTC_MQTT_TLS", "perhaps"),
-    ],
-)
-def test_invalid_ranges_and_types_name_the_variable(field, value):
-    with pytest.raises(MqttConfigurationError, match=field):
-        load_settings({"DTC_MQTT_HOST": "broker", field: value})
-
-
-def test_tls_credentials_and_custom_cadence_are_loaded_without_secret_repr():
+def test_tls_credentials_and_custom_cadence_are_loaded_without_secret_repr(initialised_store):
     secret = "never-print-this"
-    settings = load_settings(
-        {
-            "DTC_MQTT_HOST": "tunnel",
-            "DTC_MQTT_PORT": "8883",
-            "DTC_MQTT_TLS": "true",
-            "DTC_MQTT_USERNAME": "dtc",
-            "DTC_MQTT_PASSWORD": secret,
-            "DTC_MQTT_PREFIX": "house/dtc",
-            "DTC_MQTT_DISCOVERY_PREFIX": "ha",
-            "DTC_MQTT_PUBLISH_SECONDS": "2.5",
-        }
+    _update(
+        initialised_store,
+        {"enabled": True, "host": "tunnel", "port": 8883, "tls": True,
+         "prefix": "house/dtc", "discovery_prefix": "ha", "publish_seconds": 2.5},
+        {"mqtt_username": SecretMutation(SecretAction.REPLACE, "dtc"),
+         "mqtt_password": SecretMutation(SecretAction.REPLACE, secret)},
     )
+    settings = settings_from_repository(initialised_store.system_configuration)
     assert settings.tls is True
     assert settings.publish_seconds == 2.5
     assert settings.password == secret
     assert secret not in repr(settings)
 
 
-def test_username_requires_password_and_error_never_echoes_it():
-    with pytest.raises(MqttConfigurationError, match="DTC_MQTT_PASSWORD"):
-        load_settings({"DTC_MQTT_HOST": "broker", "DTC_MQTT_USERNAME": "dtc"})
+def test_username_requires_password_atomically(initialised_store):
+    with pytest.raises(ConfigValidationError, match="pair"):
+        _update(
+            initialised_store,
+            {"enabled": True, "host": "broker"},
+            {"mqtt_username": SecretMutation(SecretAction.REPLACE, "dtc")},
+        )

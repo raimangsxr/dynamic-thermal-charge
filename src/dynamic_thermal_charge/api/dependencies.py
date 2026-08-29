@@ -87,7 +87,9 @@ def controller_view(request: Request, store: Store = Depends(usable_store)):
 
     settings: ApiSettings = request.app.state.settings
     heartbeat = read_heartbeat(
-        store.engine, store.repository.installation_id(), store.location
+        store.application_engine or store.engine,
+        store.repository.installation_id(),
+        store.location,
     )
     previous = getattr(request.app.state, "last_heartbeat", None)
     view = evaluate(

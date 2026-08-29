@@ -9,7 +9,8 @@ from tests.conftest import AUTH
 
 def _write(initialised_store, count: int = 2) -> None:
     handler = ControllerLogHandler(
-        initialised_store.engine, initialised_store.repository.installation_id(), initialised_store.location
+        initialised_store.application_engine or initialised_store.engine,
+        initialised_store.repository.installation_id(), initialised_store.location
     )
     logger = logging.getLogger("dynamic_thermal_charge.controller-test")
     logger.addHandler(handler)
