@@ -1,0 +1,9 @@
+[Unit]
+Description=Reconcile Dynamic Thermal Charge release
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+Environment=DOCKERHUB_USERNAME=REPLACE_ME
+ExecStart=/bin/sh /opt/app/repo/deploy/reconcile.sh

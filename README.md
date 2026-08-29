@@ -105,3 +105,15 @@ cd frontend && npm run build
 Los tests PostgreSQL reales se ejecutan con el marcador de PostgreSQL cuando
 hay un servidor disponible; la suite SQLite cubre bootstrap, fallback, saga,
 API, controller y MQTT.
+
+## Despliegue Docker
+
+El runtime de producción usa únicamente Docker Compose. GitHub Actions ejecuta
+`make check`, construye y publica ambas imágenes en Docker Hub con el SHA del
+commit. `deploy/release` contiene la versión autorizada; no se usa `latest`.
+
+En una Raspberry nueva instala Docker, crea `/etc/app/app.env` con permisos
+`0600`, prepara `/opt/app/repo` y `/srv/app/data`, clona el repositorio y
+configura `DOCKERHUB_USERNAME` en `app-reconcile.service`. Activa únicamente
+`app-reconcile.timer`. El reconciliador valida Compose, descarga la release y
+ejecuta `docker compose up -d --remove-orphans --wait`.
