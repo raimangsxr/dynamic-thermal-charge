@@ -5,13 +5,17 @@ import { Auth } from './core/auth';
 import { Api } from './core/api';
 import { RelayTestSession } from './core/relay-test-session';
 
+declare const __APP_VERSION__: string;
+
 @Component({
   selector: 'app-root',
   imports: [RouterOutlet, RouterLink, RouterLinkActive],
   template: `
     @if (auth.authenticated()) {
       <nav aria-label="Navegación principal">
-        <a class="brand" routerLink="/estado">Dynamic Thermal Charge</a>
+        <a class="brand" routerLink="/estado">
+          Dynamic Thermal Charge <span class="version" aria-label="Versión {{ version }}">v{{ version }}</span>
+        </a>
         <div class="links">
         <a routerLink="/estado" routerLinkActive="active">Estado</a>
         <a routerLink="/configuracion" routerLinkActive="active">Configuración</a>
@@ -40,6 +44,7 @@ import { RelayTestSession } from './core/relay-test-session';
       background: var(--surface); position: sticky; top: 0; z-index: 10;
     }
     .brand { font-weight: 750; color: var(--ink); white-space: nowrap; }
+    .version { color: var(--muted); font-size: .72rem; font-weight: 500; letter-spacing: .02em; margin-left: .2rem; }
     .links { display: flex; flex-wrap: wrap; gap: .25rem .8rem; }
     a { text-decoration: none; padding: 0.3rem 0; color: var(--primary); }
     a.active { font-weight: 700; border-bottom: 2px solid currentColor; }
@@ -49,6 +54,7 @@ import { RelayTestSession } from './core/relay-test-session';
   `,
 })
 export class App {
+  readonly version = __APP_VERSION__;
   readonly auth = inject(Auth);
   readonly relay = inject(RelayTestSession);
   private readonly api = inject(Api);

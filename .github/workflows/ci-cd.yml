@@ -44,3 +44,4 @@ jobs:
           file: frontend/Dockerfile
           push: false
           tags: dynamic-thermal-charge-frontend:ci-${{ github.sha }}
+          build-args: APP_VERSION=ci-${{ github.sha }}

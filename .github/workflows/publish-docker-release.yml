@@ -76,6 +76,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ secrets.DOCKERHUB_USERNAME }}/dynamic-thermal-charge-frontend:${{ env.RELEASE_VERSION }}
+          build-args: APP_VERSION=${{ env.RELEASE_VERSION }}
       - name: Update GitOps release pointer
         run: |
           git fetch --quiet origin main
