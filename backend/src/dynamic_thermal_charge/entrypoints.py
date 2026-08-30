@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import logging
 import os
+from dataclasses import replace
 
 from .persistence.bootstrap import initialise_at, open_store
 from .persistence.paths import StorePaths
@@ -38,6 +39,91 @@ def initialise_storage() -> None:
         report.revision,
         report.heaters,
         "; onboarding credential created" if onboarding_token else "",
+    )
+
+
+def initialise_dev_storage() -> None:
+    """Initialise an isolated development store from environment settings."""
+    from .models import SimulatedForecastConfig
+    from .api.settings import ApiSettings
+    from .persistence.bootstrap_store import BootstrapRepository
+    from .persistence.locator import DatabaseDriver, DatabaseLocator
+    from .persistence.seed import example_installation
+    from .persistence.secret_digest import digest_secret
+    from .persistence.system_configuration import SecretAction, SecretMutation
+
+    token = os.environ.get(
+        "DTC_API_TOKEN", "dev-admin-token-local-please-remember-123"
+    )
+    ApiSettings(token=token)
+    paths = StorePaths.production()
+    bootstrap = BootstrapRepository(paths)
+    result = bootstrap.initialise()
+    driver = os.environ.get("DEV_DATABASE", "sqlite").strip().lower()
+    if driver == "postgresql" and result.locator.driver is DatabaseDriver.SQLITE:
+        locator = _dev_postgres_locator()
+        bootstrap.compare_and_swap_locator(result.locator_revision, locator)
+    store_result = initialise_at(paths, allow_seed=False, admin_token=token)
+    store, _report, _onboarding = store_result
+    system = store.system_configuration.current()
+    if result.created:
+        store.system_configuration.update_section(
+            "api", {"host": "0.0.0.0"}, expected_revision=system.revision, actor="dev-init"
+        )
+        system = store.system_configuration.current()
+        store.system_configuration.update_section(
+            "mqtt", {"enabled": True, "host": os.environ.get("DEV_MQTT_HOST", "mosquitto")},
+            expected_revision=system.revision, actor="dev-init",
+        )
+        system = store.system_configuration.current()
+        store.system_configuration.update_section(
+            "weather", {"provider": "simulated"}, expected_revision=system.revision, actor="dev-init"
+        )
+        system = store.system_configuration.current()
+        store.system_configuration.update_section(
+            "output", {"driver": "simulated"}, expected_revision=system.revision, actor="dev-init"
+        )
+    elif "admin_token_digest" not in system.secrets:
+        store.system_configuration.update_section(
+            "api",
+            {},
+            expected_revision=system.revision,
+            secret_mutations={
+                "admin_token_digest": SecretMutation(
+                    SecretAction.REPLACE, digest_secret(token)
+                )
+            },
+            actor="dev-init",
+        )
+    if store.repository.is_empty():
+        config = example_installation()
+        config = replace(
+            config,
+            weather=replace(
+                config.weather,
+                provider="simulated",
+                simulated=SimulatedForecastConfig(
+                    average_temperature_c=8.0, minimum_temperature_c=3.0
+                ),
+                aemet=None,
+            ),
+        )
+        store.repository.seed(config, "default")
+    bootstrap.mark_configured()
+
+
+def _dev_postgres_locator():
+    from .persistence.locator import DatabaseDriver, DatabaseLocator
+
+    return DatabaseLocator(
+        DatabaseDriver.POSTGRESQL,
+        host=os.environ.get("DEV_POSTGRES_HOST", "postgres"),
+        port=int(os.environ.get("DEV_POSTGRES_PORT", "5432")),
+        database=os.environ.get("DEV_POSTGRES_DB", "dtc"),
+        username=os.environ.get("DEV_POSTGRES_USER", "dtc"),
+        password=os.environ.get("DEV_POSTGRES_PASSWORD", "dtc-dev-password"),
+        tls=False,
+        trusted_no_tls=True,
     )
 
 
@@ -145,6 +231,8 @@ def run_mqtt() -> None:
 __all__ = [
     "check_configuration",
     "initialise_storage",
+    "initialise_dev_storage",
+    "_dev_postgres_locator",
     "run_api",
     "run_controller",
     "run_mqtt",

@@ -1,0 +1,30 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${DTC_DEV_POSTGRES_DB:-dtc}
+      POSTGRES_USER: ${DTC_DEV_POSTGRES_USER:-dtc}
+      POSTGRES_PASSWORD: ${DTC_DEV_POSTGRES_PASSWORD:-dtc-dev-password}
+    volumes: ["dev-postgres-data:/var/lib/postgresql/data"]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"], interval: 5s, timeout: 5s, retries: 12 }
+  dev-init:
+    environment:
+      DEV_DATABASE: postgresql
+      DEV_POSTGRES_HOST: "${DTC_DEV_POSTGRES_HOST:-postgres}"
+      DEV_POSTGRES_PORT: "${DTC_DEV_POSTGRES_PORT:-5432}"
+      DEV_POSTGRES_DB: "${DTC_DEV_POSTGRES_DB:-dtc}"
+      DEV_POSTGRES_USER: "${DTC_DEV_POSTGRES_USER:-dtc}"
+      DEV_POSTGRES_PASSWORD: "${DTC_DEV_POSTGRES_PASSWORD:-dtc-dev-password}"
+    depends_on: { postgres: { condition: service_healthy } }
+  backend:
+    volumes: ["dev-postgres-state:/var/lib/dynamic-thermal-charge"]
+    environment: { DEV_DATABASE: postgresql }
+  backend-api:
+    volumes: ["dev-postgres-state:/var/lib/dynamic-thermal-charge"]
+    environment: { DEV_DATABASE: postgresql }
+  backend-mqtt:
+    volumes: ["dev-postgres-state:/var/lib/dynamic-thermal-charge"]
+    environment: { DEV_DATABASE: postgresql }
+volumes:
+  dev-postgres-data:
+  dev-postgres-state:

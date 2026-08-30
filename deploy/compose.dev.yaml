@@ -1,0 +1,51 @@
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    ports: ["1883:1883"]
+    volumes:
+      - dev-mosquitto-data:/mosquitto/data
+      - ./mosquitto.dev.conf:/mosquitto/config/mosquitto.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -h 127.0.0.1 -t '$$SYS/broker/version' -C 1 -W 2 >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+  dev-init:
+    build: { context: ../backend, dockerfile: Dockerfile }
+    entrypoint: ["python"]
+    command: ["-c", "from dynamic_thermal_charge.entrypoints import initialise_dev_storage; initialise_dev_storage()"]
+    environment:
+      DTC_API_TOKEN: "${DTC_API_TOKEN:-dev-admin-token-local-please-remember-123}"
+      DEV_DATABASE: sqlite
+    volumes: ["dev-sqlite-state:/var/lib/dynamic-thermal-charge"]
+  backend:
+    build: { context: ../backend, dockerfile: Dockerfile }
+    volumes: ["dev-sqlite-state:/var/lib/dynamic-thermal-charge"]
+    depends_on:
+      dev-init: { condition: service_completed_successfully }
+    environment: { DTC_API_TOKEN: "${DTC_API_TOKEN:-dev-admin-token-local-please-remember-123}" }
+  backend-api:
+    build: { context: ../backend, dockerfile: Dockerfile }
+    command: ["python", "-c", "from dynamic_thermal_charge.entrypoints import run_api; run_api()"]
+    ports: ["8080:8080"]
+    volumes: ["dev-sqlite-state:/var/lib/dynamic-thermal-charge"]
+    depends_on:
+      dev-init: { condition: service_completed_successfully }
+    environment: { DTC_API_TOKEN: "${DTC_API_TOKEN:-dev-admin-token-local-please-remember-123}" }
+    healthcheck: { test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')"], interval: 5s, timeout: 5s, retries: 12 }
+  backend-mqtt:
+    build: { context: ../backend, dockerfile: Dockerfile }
+    command: ["python", "-c", "from dynamic_thermal_charge.entrypoints import run_mqtt; run_mqtt()"]
+    volumes: ["dev-sqlite-state:/var/lib/dynamic-thermal-charge"]
+    depends_on:
+      dev-init: { condition: service_completed_successfully }
+      mosquitto: { condition: service_healthy }
+    environment: { DTC_API_TOKEN: "${DTC_API_TOKEN:-dev-admin-token-local-please-remember-123}" }
+  frontend:
+    build: { context: .., dockerfile: frontend/Dockerfile, args: { APP_VERSION: dev } }
+    ports: ["8081:80"]
+    depends_on:
+      backend-api: { condition: service_healthy }
+volumes:
+  dev-sqlite-state:
+  dev-mosquitto-data:
