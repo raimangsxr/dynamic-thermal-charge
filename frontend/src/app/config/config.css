@@ -1,16 +1,48 @@
-.config { max-width: 60rem; margin: 0 auto; padding: 1rem; }
-h2 { margin: 1.5rem 0 0.5rem; font-size: 1.1rem; }
-.revisions { color: #555; }
-.fields, fieldset { display: grid; gap: 0.5rem; }
-fieldset { margin: 0 0 1rem; border: 1px solid #ddd; border-radius: 4px; padding: 0.75rem; }
-legend { font-weight: 600; padding: 0 0.35rem; }
-.field { display: grid; grid-template-columns: minmax(9rem, 14rem) 1fr auto; gap: 0.5rem; align-items: center; }
-.field label { font-family: ui-monospace, monospace; font-size: 0.9rem; }
-.field input { padding: 0.4rem; font: inherit; min-width: 0; }
-.field button { font: inherit; padding: 0.35rem 0.7rem; cursor: pointer; }
-.field-error { grid-column: 1 / -1; margin: 0; color: #a00; font-size: 0.9rem; }
-.banner { padding: 0.75rem 1rem; border-left: 4px solid; margin: 1rem 0; }
-.warn { border-color: #7a4a00; background: #fdf7ee; }
-.alert { border-color: #a00; background: #fdf0f0; }
-.saved { color: #0a6b2d; font-weight: 600; }
-@media (max-width: 40rem) { .field { grid-template-columns: 1fr; } }
+.config { width: min(100% - 2rem, 76rem); margin: 0 auto; padding: 1.5rem 0 3rem; }
+.page-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1rem; }
+.eyebrow { margin: 0 0 .25rem; color: var(--primary); font-size: .74rem; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
+h1 { margin: 0; font-size: clamp(1.7rem, 4vw, 2.25rem); }
+.revisions { margin: .4rem 0 0; color: var(--muted); font-size: .9rem; }
+.surface { padding: 1.25rem; }
+.configuration-section { margin-top: 1rem; }
+.section-heading, .form-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; }
+h2 { margin: 0; font-size: 1.25rem; }
+h3 { margin: 0; color: var(--ink); font-size: 1rem; }
+.field-group + .field-group { margin-top: 1.5rem; }
+.field-group h3 { margin-bottom: .75rem; color: var(--muted); font-size: .86rem; letter-spacing: .03em; text-transform: uppercase; }
+.fields, .heater-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .25rem 1rem; }
+.field { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .65rem; align-items: center; min-width: 0; }
+.field mat-form-field { min-width: 0; width: 100%; }
+.field button { white-space: nowrap; }
+.banner { padding: .8rem 1rem; border-left: 4px solid; margin: 1rem 0; }
+.banner p { margin: .25rem 0 .65rem; }
+.banner-actions, .form-actions { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+.warn { border-color: #9a6200; background: #fff8e8; }
+.alert { border-color: var(--danger); background: #fff1f2; }
+.saved { display: flex; align-items: center; gap: .35rem; color: #176b35; font-weight: 650; }
+.saved mat-icon { font-size: 1.15rem; width: 1.15rem; height: 1.15rem; }
+.heaters-section { margin-bottom: 2rem; }
+.heater-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 23rem), 1fr)); gap: 1rem; margin-top: 1rem; }
+.heater-card { min-width: 0; }
+.heater-card mat-card-content { padding-top: 1rem; }
+.heater-card mat-card-actions { flex-wrap: wrap; }
+.heater-form { margin-top: 1.25rem; padding: 1rem; border: 1px solid var(--primary); border-radius: .75rem; background: color-mix(in srgb, var(--primary) 4%, var(--surface)); }
+.form-heading { margin-bottom: 1rem; }
+.form-heading p { margin: .3rem 0 0; color: var(--muted); font-size: .9rem; }
+.form-grid { margin-bottom: .5rem; }
+.thermal-details { margin: .75rem 0 1rem; border-top: 1px solid var(--border); padding-top: .75rem; }
+.thermal-details summary { cursor: pointer; color: var(--primary); font-weight: 650; margin-bottom: .75rem; }
+.field-error { grid-column: 1 / -1; margin: .2rem 0 .75rem; color: var(--danger); font-size: .88rem; }
+.empty { color: var(--muted); }
+@media (max-width: 46rem) {
+  .config { width: min(100% - 1rem, 76rem); padding-top: 1rem; }
+  .surface { padding: 1rem .75rem; }
+  .section-heading { align-items: stretch; flex-direction: column; }
+  .section-heading button { align-self: flex-start; }
+  .fields, .heater-fields { grid-template-columns: minmax(0, 1fr); }
+  .field { grid-template-columns: minmax(0, 1fr) auto; }
+}
+@media (max-width: 25rem) {
+  .field { grid-template-columns: 1fr; gap: .15rem; }
+  .field button { justify-self: start; margin-bottom: .4rem; }
+}

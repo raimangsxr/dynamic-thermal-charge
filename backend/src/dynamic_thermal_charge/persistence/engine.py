@@ -24,7 +24,7 @@ from .url import SQLITE_BACKEND, StoreLocation
 logger = logging.getLogger(__name__)
 
 # SQLite ships foreign_keys OFF, so half of the schema's integrity guarantees
-# would be decorative without this. WAL lets the controller read while the CLI
+# would be decorative without this. WAL lets the controller read while another
 # edits; synchronous=FULL is what principle IV's durability requirement needs.
 SQLITE_PRAGMAS: tuple[tuple[str, str], ...] = (
     ("foreign_keys", "ON"),

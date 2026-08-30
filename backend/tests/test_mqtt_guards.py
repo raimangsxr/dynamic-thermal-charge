@@ -45,7 +45,7 @@ def test_only_the_optional_adapter_may_import_paho():
     assert not offenders
 
 
-def test_core_and_cli_import_when_paho_is_unavailable():
+def test_core_and_runtime_import_when_paho_is_unavailable():
     code = """
 import sys
 class BlockPaho:
@@ -55,7 +55,7 @@ class BlockPaho:
         return None
 sys.meta_path.insert(0, BlockPaho())
 import dynamic_thermal_charge
-import dynamic_thermal_charge.cli
+import dynamic_thermal_charge.runtime
 import dynamic_thermal_charge.mqtt
 """
     subprocess.run([sys.executable, "-c", code], cwd=ROOT, check=True)

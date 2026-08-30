@@ -1,7 +1,7 @@
 """Schema migrations.
 
 Alembic is imported **only** from inside this package, and this package is only
-imported by ``db init`` and ``db upgrade``. The service start-up path never
+imported by the explicit initialization path. The service start-up path never
 imports it: ``import alembic.config`` costs ~224 ms on a development machine, so
 of the order of seconds on the deployment target, and it would drag Mako and
 MarkupSafe into a process that runs for months (research.md D4).

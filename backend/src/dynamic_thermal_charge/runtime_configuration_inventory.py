@@ -3,8 +3,8 @@
 Runtime processes are being migrated away from these inputs.  Keeping the
 inventory in code makes the migration exhaustive: a new environment lookup
 cannot be added without declaring where the value belongs in the database.
-The explicit legacy import command may use this inventory; normal entrypoints
-must not.
+The explicit legacy import flow may use this inventory; normal entrypoints must
+not.
 """
 
 from __future__ import annotations
@@ -53,8 +53,8 @@ LEGACY_ENVIRONMENT_INPUTS: dict[str, LegacyConfigurationInput] = {
     for item in (
         _persisted("DTC_DATABASE_URL", "database", "persistence.url", secret=True),
         _persisted("DTC_API_TOKEN", "api_security", "api.settings", secret=True),
-        _persisted("DTC_API_HOST", "api", "api.settings", "cli"),
-        _persisted("DTC_API_PORT", "api", "api.settings", "cli"),
+        _persisted("DTC_API_HOST", "api", "api.settings", "legacy_import"),
+        _persisted("DTC_API_PORT", "api", "api.settings", "legacy_import"),
         _persisted("DTC_API_STALE_SECONDS", "operations", "api.settings"),
         _persisted("DTC_API_CORS_ORIGINS", "api", "api.settings"),
         _persisted("DTC_MQTT_HOST", "mqtt", "mqtt.settings"),
@@ -75,8 +75,8 @@ LEGACY_ENVIRONMENT_INPUTS: dict[str, LegacyConfigurationInput] = {
     )
 }
 
-# The runtime no longer reads YAML.  The one-shot legacy importer introduced by
-# this change will be the only allowed configuration-file reader.
+# The runtime no longer reads YAML. The one-shot legacy importer is the only
+# allowed configuration-file reader.
 LEGACY_RUNTIME_CONFIGURATION_FILES: tuple[str, ...] = ()
 
 

@@ -6,7 +6,6 @@ import sqlite3
 import pytest
 from sqlalchemy import inspect, select, update
 
-from dynamic_thermal_charge import cli
 from dynamic_thermal_charge.persistence import ConfigConflictError
 from dynamic_thermal_charge.persistence.bootstrap_store import (
     BootstrapRepository,
@@ -146,22 +145,6 @@ def test_doctor_is_read_only_for_missing_healthy_and_incompatible_stores(tmp_pat
     assert paths.bootstrap.read_bytes() == incompatible
     with repository.engine.connect() as connection:
         assert connection.execute(select(bootstrap_schema_version.c.revision)).scalar_one() == 2
-
-
-def test_cli_bootstrap_commands_use_fixed_resolver_and_doctor_never_repairs(
-    tmp_path, monkeypatch, capsys
-):
-    paths = StorePaths.in_directory(tmp_path)
-    monkeypatch.setattr(StorePaths, "production", classmethod(lambda cls: paths))
-
-    assert cli.main(["db", "bootstrap-init"]) == cli.EXIT_OK
-    first = capsys.readouterr().out
-    assert "One-time onboarding credential" in first
-    assert cli.main(["db", "bootstrap-init"]) == cli.EXIT_OK
-    assert "no credential was reissued" in capsys.readouterr().out
-    assert cli.main(["db", "bootstrap-doctor"]) == cli.EXIT_OK
-    report = json.loads(capsys.readouterr().out)
-    assert report["status"] == "ok"
 
 
 @pytest.mark.parametrize(

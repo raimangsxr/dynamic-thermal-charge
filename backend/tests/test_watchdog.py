@@ -1,7 +1,7 @@
 from datetime import date, datetime
 import logging
 
-from dynamic_thermal_charge.cli import _run_watchdog
+from dynamic_thermal_charge.runtime import _run_watchdog
 from dynamic_thermal_charge.persistence.seed import example_installation
 from dynamic_thermal_charge.models import WeatherWatchdogConfig
 from dynamic_thermal_charge.watchdog import ForecastWatchdog

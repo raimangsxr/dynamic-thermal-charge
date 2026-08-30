@@ -374,6 +374,54 @@ describe('Config', () => {
     expect(el().textContent).toContain('rev. 9');
   });
 
+  /* --------------------------------------------------------------- CRUD */
+
+  it('creates an accumulator with the configuration revision', () => {
+    load();
+    fixture.componentInstance.openAddHeater();
+    fixture.componentInstance.updateHeaterForm('id', 'cocina');
+    fixture.componentInstance.updateHeaterForm('power_kw', '1.2');
+    fixture.componentInstance.updateHeaterForm('full_charge_hours', '7');
+    fixture.componentInstance.saveHeater();
+    const request = backend.expectOne('/api/v1/config/heaters');
+    expect(request.request.method).toBe('POST');
+    expect(request.request.body).toMatchObject({ revision: 3, id: 'cocina', power_kw: 1.2, full_charge_hours: 7 });
+    request.flush(change({ action: 'add', entity: 'heater', entity_key: 'cocina' }));
+    backend.expectOne('/api/v1/config').flush(configDto({ config_revision: 4 }));
+    expect(fixture.componentInstance.heaterForm()).toBeNull();
+  });
+
+  it('edits an accumulator and advances the revision returned by each field write', () => {
+    load();
+    fixture.componentInstance.openEditHeater(fixture.componentInstance.config()!.heaters[0]);
+    fixture.componentInstance.updateHeaterForm('target_charge', '0.8');
+    fixture.componentInstance.saveHeater();
+    const request = backend.expectOne('/api/v1/config/heaters/salon');
+    expect(request.request.body).toEqual({ revision: 3, field: 'target_charge', value: '0.8' });
+    request.flush(change({ entity: 'heater', entity_key: 'salon', field: 'target_charge', revision_after: 4 }));
+    backend.expectOne('/api/v1/config').flush(configDto({ config_revision: 4 }));
+    expect(fixture.componentInstance.heaterForm()).toBeNull();
+  });
+
+  it('cancels the accumulator form without writing', () => {
+    load();
+    fixture.componentInstance.openAddHeater();
+    fixture.componentInstance.updateHeaterForm('id', 'cocina');
+    fixture.componentInstance.cancelHeaterForm();
+    backend.expectNone((candidate) => candidate.method === 'POST' || candidate.method === 'PATCH');
+    expect(fixture.componentInstance.heaterForm()).toBeNull();
+  });
+
+  it('removes an accumulator with the current revision', () => {
+    load();
+    fixture.componentInstance.removeHeater('salon');
+    const request = backend.expectOne((candidate) => candidate.method === 'DELETE' && candidate.url === '/api/v1/config/heaters/salon');
+    expect(request.request.method).toBe('DELETE');
+    expect(request.request.params.get('revision')).toBe('3');
+    request.flush(change({ action: 'remove', entity: 'heater', entity_key: 'salon' }));
+    backend.expectOne('/api/v1/config').flush(configDto({ config_revision: 4, heaters: [] }));
+  });
+
   afterEach(() => {
     backend.match(() => true);
   });

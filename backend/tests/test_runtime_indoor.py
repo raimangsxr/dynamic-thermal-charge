@@ -3,7 +3,7 @@
 from dataclasses import replace
 from datetime import datetime, timezone
 
-from dynamic_thermal_charge import cli
+from dynamic_thermal_charge import runtime
 from dynamic_thermal_charge.models import IndoorReading
 from dynamic_thermal_charge.persistence import ConfigStoreUnavailableError
 from dynamic_thermal_charge.persistence.seed import example_installation
@@ -35,14 +35,14 @@ class Readings:
 
 def test_each_recalculation_reads_once_and_returns_selected_temperatures():
     readings = Readings({"salon": IndoorReading("salon", 19.0, NOW)})
-    tracker = cli._IndoorFallbackTracker()
+    tracker = runtime._IndoorFallbackTracker()
     assert tracker.select(_config(), readings, NOW) == {"salon": 19.0}
     assert tracker.select(_config(), readings, NOW) == {"salon": 19.0}
     assert readings.calls == 2
 
 
 def test_store_failure_or_missing_reading_continues_with_fallback(caplog):
-    tracker = cli._IndoorFallbackTracker()
+    tracker = runtime._IndoorFallbackTracker()
     failed = Readings(error=ConfigStoreUnavailableError("offline"))
     assert tracker.select(_config(), failed, NOW) == {}
     assert tracker.select(_config(), failed, NOW) == {}
@@ -52,7 +52,7 @@ def test_store_failure_or_missing_reading_continues_with_fallback(caplog):
 def test_fallback_and_recovery_are_logged_once_per_transition(caplog):
     caplog.set_level("INFO")
     readings = Readings()
-    tracker = cli._IndoorFallbackTracker()
+    tracker = runtime._IndoorFallbackTracker()
     tracker.select(_config(), readings, NOW)
     tracker.select(_config(), readings, NOW)
     readings.values = {"salon": IndoorReading("salon", 20, NOW)}

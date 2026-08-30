@@ -11,12 +11,12 @@ services:
     env_file: [{ path: /etc/app/app.env, required: false }]
     volumes: ["/srv/app/data:/var/lib/dynamic-thermal-charge"]
     devices: ["/dev/gpiomem:/dev/gpiomem"]
-    healthcheck: { test: ["CMD", "python", "-m", "dynamic_thermal_charge", "run", "--check-config"], interval: 5s, timeout: 10s, start_period: 15s, retries: 12 }
+    healthcheck: { test: ["CMD", "python", "-c", "from dynamic_thermal_charge.entrypoints import check_configuration; check_configuration()"], interval: 5s, timeout: 10s, start_period: 15s, retries: 12 }
     logging: { driver: json-file, options: { max-size: 10m, max-file: "3" } }
   backend-api:
     image: ${DOCKERHUB_USERNAME:?set DOCKERHUB_USERNAME}/dynamic-thermal-charge-backend:${APP_VERSION:?set APP_VERSION}
     restart: unless-stopped
-    command: ["python", "-m", "dynamic_thermal_charge", "api", "--host", "0.0.0.0", "--port", "8080"]
+    command: ["python", "-c", "from dynamic_thermal_charge.entrypoints import run_api; run_api()"]
     env_file: [{ path: /etc/app/app.env, required: false }]
     volumes: ["/srv/app/data:/var/lib/dynamic-thermal-charge"]
     expose: ["8080"]
@@ -25,7 +25,7 @@ services:
   backend-mqtt:
     image: ${DOCKERHUB_USERNAME:?set DOCKERHUB_USERNAME}/dynamic-thermal-charge-backend:${APP_VERSION:?set APP_VERSION}
     restart: unless-stopped
-    command: ["python", "-m", "dynamic_thermal_charge", "mqtt"]
+    command: ["python", "-c", "from dynamic_thermal_charge.entrypoints import run_mqtt; run_mqtt()"]
     env_file: [{ path: /etc/app/app.env, required: false }]
     volumes: ["/srv/app/data:/var/lib/dynamic-thermal-charge"]
     logging: { driver: json-file, options: { max-size: 10m, max-file: "3" } }

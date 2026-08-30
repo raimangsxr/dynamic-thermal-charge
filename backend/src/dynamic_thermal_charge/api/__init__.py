@@ -48,9 +48,8 @@ def create_app(
     """Build the application. Raises if the credential is unusable.
 
     FastAPI is imported **here**, not at module level, so that importing
-    ``api.settings`` -- which the CLI does, to report a missing token without the
-    optional extra -- costs nothing. It also keeps ``import cli`` from loading the
-    whole web stack.
+    ``api.settings`` without importing the optional web stack costs nothing. The
+    web edge is loaded only when the API process starts.
     """
     from fastapi import Depends, FastAPI
     from fastapi.middleware.cors import CORSMiddleware

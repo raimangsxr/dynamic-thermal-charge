@@ -128,7 +128,7 @@ def test_every_route_handler_is_synchronous():
         "dynamic_thermal_charge.controller",
         "dynamic_thermal_charge.drivers",
         "dynamic_thermal_charge.service",
-        "dynamic_thermal_charge.cli",
+        "dynamic_thermal_charge.runtime",
         "dynamic_thermal_charge.api.settings",
     ],
 )
@@ -204,33 +204,28 @@ print("ON" if switched_on else "OFF", "WEB" if web else "NOWEB")
 
 
 # --------------------------------------------------------------------------- #
-# The api subcommand builds no driver either
+# The API process builds no driver either
 # --------------------------------------------------------------------------- #
 
-def test_the_api_subcommand_builds_no_output_driver(monkeypatch, tmp_path, capsys):
-    from dynamic_thermal_charge import cli
+def test_the_api_entrypoint_builds_no_output_driver(monkeypatch, tmp_path, capsys):
+    from dynamic_thermal_charge.entrypoints import run_api
     from dynamic_thermal_charge.persistence.bootstrap import initialise_at
     from dynamic_thermal_charge.persistence.paths import StorePaths
 
     paths = StorePaths.in_directory(tmp_path / "api-command")
     initialise_at(paths)
     monkeypatch.setattr(StorePaths, "production", classmethod(lambda cls: paths))
-    monkeypatch.setattr(
-        cli,
-        "_build_output_driver",
-        lambda *a, **k: pytest.fail("the api subcommand built an output driver"),
-    )
     served: dict = {}
     import uvicorn
 
     monkeypatch.setattr(uvicorn, "run", lambda app, **kw: served.update(kw))
-    assert cli.main(["api"]) == cli.EXIT_OK
+    run_api()
     assert served["host"] == "127.0.0.1"
     assert served["port"] == 8080
 
 
-def test_the_api_subcommand_starts_safe_onboarding_without_an_admin_token(monkeypatch, tmp_path, capsys):
-    from dynamic_thermal_charge import cli
+def test_the_api_entrypoint_starts_safe_onboarding_without_an_admin_token(monkeypatch, tmp_path, capsys):
+    from dynamic_thermal_charge.entrypoints import run_api
     from dynamic_thermal_charge.persistence.bootstrap import initialise_at
     from dynamic_thermal_charge.persistence.paths import StorePaths
     import uvicorn
@@ -240,5 +235,5 @@ def test_the_api_subcommand_starts_safe_onboarding_without_an_admin_token(monkey
     monkeypatch.setattr(StorePaths, "production", classmethod(lambda cls: paths))
     served = {}
     monkeypatch.setattr(uvicorn, "run", lambda app, **kw: served.update(kw))
-    assert cli.main(["api"]) == cli.EXIT_OK
+    run_api()
     assert served["host"] == "127.0.0.1"

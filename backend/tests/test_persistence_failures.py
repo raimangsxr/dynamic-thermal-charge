@@ -294,12 +294,12 @@ def test_no_runtime_module_imports_yaml():
 
 
 def test_no_runtime_module_imports_an_http_server():
-    """The HTTP surface is confined to api/ and to the `api` subcommand.
+    """The HTTP surface is confined to api/ and to the API process entrypoint.
 
     Written in the previous phase, when there was no network interface at all.
     Constitution 1.1.0 anticipates an HTTP API as an edge, so the ban is now
     bounded rather than absolute: everything outside api/ must still be free of
-    it, and cli.py may reach for the server only to run that one subcommand.
+    it, and entrypoints.py may reach for the server only to run that process.
     """
     forbidden = {
         "http.server",
@@ -321,12 +321,12 @@ def test_no_runtime_module_imports_an_http_server():
             for name in _module_imports(path)
             if name in forbidden or name.split(".")[0] in forbidden
         )
-        if path.name == "cli.py":
-            # Only to launch the api subcommand, and only lazily inside it.
+        if path.name == "entrypoints.py":
+            # Only to launch the API process, and only lazily inside it.
             names = [name for name in names if name != "uvicorn"]
             assert "import uvicorn" not in path.read_text(encoding="utf-8").split(
-                "def _run_api"
-            )[0], "cli.py imports the server at module level, not inside the subcommand"
+                "def run_api"
+            )[0], "entrypoints.py imports the server at module level, not inside the process entrypoint"
         if names:
             offenders[path.relative_to(SRC).as_posix()] = names
     assert not offenders, (
@@ -342,12 +342,11 @@ def test_no_runtime_module_declares_a_configuration_file_path():
         hits = [
             line.strip()
             for line in text.splitlines()
-            # cli.py mentions the extensions on purpose, to explain their removal.
             if (".yaml" in line or ".yml" in line)
             and not line.lstrip().startswith("#")
             and "looks like a configuration file" not in text.split(line)[0][-400:]
         ]
-        if hits and path.name not in ("cli.py", "seed.py"):
+        if hits and path.name not in ("seed.py",):
             offenders[path.relative_to(SRC).as_posix()] = hits
     assert not offenders, f"a configuration file path is still referenced: {offenders}"
 

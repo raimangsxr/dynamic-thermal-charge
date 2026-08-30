@@ -3,7 +3,7 @@
 Every write goes through the existing ``ConfigRepository``: the validation, the
 atomicity and the optimistic lock are the ones already in place, not a second
 implementation. Relaxing any of them here would mean the API could store what the
-CLI refuses (FR-025).
+the configuration repository refuses (FR-025).
 """
 
 from __future__ import annotations
