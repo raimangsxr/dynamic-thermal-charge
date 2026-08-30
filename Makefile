@@ -2,7 +2,7 @@
 setup:
 	python3 -m pip install -e 'backend[dev]'
 dev:
-	python -m dynamic_thermal_charge run --check-config
+	python -c 'from dynamic_thermal_charge.entrypoints import check_configuration; check_configuration()'
 test:
 	python -m pytest backend/tests
 lint:

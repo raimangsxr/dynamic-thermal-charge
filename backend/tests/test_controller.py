@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from dynamic_thermal_charge.cli import (
+from dynamic_thermal_charge.runtime import (
     _handle_termination_signal,
     _run_output_self_test,
 )

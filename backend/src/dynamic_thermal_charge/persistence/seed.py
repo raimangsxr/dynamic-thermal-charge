@@ -5,7 +5,7 @@ exists, nothing is touched (FR-012).
 
 Every value that has physical consequences -- pins, active level, maximum power,
 charge window -- is declared explicitly here rather than defaulted, so
-``config show`` displays it and the operator can compare it against the
+the configuration API displays it and the operator can compare it against the
 installation (principle III).
 """
 

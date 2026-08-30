@@ -41,8 +41,8 @@ sudo -E docker compose -f deploy/compose.yaml up -d --remove-orphans --wait --wa
 ```
 
 Los tres contenedores backend comparten `/srv/app/data` y ejecutan una
-inicialización idempotente antes de arrancar. No hay que ejecutar ningún CLI ni
-instalar Python, Node o servicios systemd en la Raspberry.
+inicialización idempotente antes de arrancar. No hay que ejecutar comandos de
+inicialización ni instalar Python, Node o servicios systemd en la Raspberry.
 
 El frontend se publica en el puerto `80`. La API solo se expone dentro de la
 red Docker y el panel la consume mediante nginx.
