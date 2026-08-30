@@ -58,3 +58,31 @@ La entrada se ejecuta cada cinco minutos y escribe únicamente actualizaciones o
 errores, con timestamp, en `/opt/app/reconciler.log`. El reconciliador usa
 `rromani` como usuario de Docker Hub, por lo que no necesita variables de
 entorno adicionales.
+
+## Desarrollo con Docker Compose
+
+SQLite:
+
+```sh
+docker compose -f deploy/compose.dev.yaml up -d --build --wait
+```
+
+El panel queda en `http://localhost:8081`, la API en `http://localhost:8080` y
+MQTT en `localhost:1883`. Configura `DTC_API_TOKEN` con al menos 32 caracteres
+(si no se define, se usa un token de desarrollo que conviene rotar). Los datos
+están aislados en `dev-state` y `dev-mosquitto-data`; reinícialos con `down -v`.
+
+PostgreSQL:
+
+```sh
+docker compose -f deploy/compose.dev.yaml -f deploy/compose.dev-postgres.yaml up -d --build --wait
+```
+
+El bootstrap permanece en SQLite (`dev-postgres-state`) y PostgreSQL usa el
+volumen `dev-postgres-data`; el entorno SQLite conserva sus datos en
+`dev-sqlite-state`. Sus variables configurables son
+`DTC_DEV_POSTGRES_HOST`, `DTC_DEV_POSTGRES_PORT`, `DTC_DEV_POSTGRES_DB`,
+`DTC_DEV_POSTGRES_USER` y `DTC_DEV_POSTGRES_PASSWORD`.
+Cada arranque conserva los datos existentes y aplica las migraciones pendientes
+del esquema, igual que producción. Para borrar solo PostgreSQL usa
+`docker compose -f deploy/compose.dev.yaml -f deploy/compose.dev-postgres.yaml down -v`.
