@@ -1,0 +1,11 @@
+{
+  "standard": "ai-engineering-standard",
+  "version": "1.0.0",
+  "profiles": [
+    "python-fastapi",
+    "angular"
+  ],
+  "agents": [
+    "codex"
+  ]
+}

@@ -1,0 +1,23 @@
+name: aes-standard
+version: 1
+description: Lean SDD workflow with one approved change contract before implementation
+
+artifacts:
+  - id: change
+    generates: change.md
+    description: Compact contract containing goal, requirements, acceptance criteria, decisions, and implementation tasks
+    template: change.md
+    instruction: |
+      Create the smallest contract that removes implementation ambiguity.
+      Inspect relevant repository evidence first. Never invent product behavior.
+      If an unresolved answer could change what gets built, ask the user before finalizing this artifact.
+      Keep `Status: draft` until the user explicitly approves the complete contract.
+      Keep requirements observable and tasks short. Do not add speculative scope.
+    requires: []
+
+apply:
+  requires: [change]
+  tracks: change.md
+  instruction: |
+    Require `Status: approved` before coding. Implement only the approved change contract. Read relevant code on demand.
+    Mark only Tasks checkboxes as work completes. Stop and ask if implementation exposes new functional ambiguity.

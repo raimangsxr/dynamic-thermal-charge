@@ -1,0 +1,32 @@
+name: aes-complex
+version: 1
+description: Lean SDD workflow for changes that require an explicit technical design before implementation
+
+artifacts:
+  - id: change
+    generates: change.md
+    description: Compact behavior contract and implementation task list
+    template: change.md
+    instruction: |
+      Create the smallest contract that removes product ambiguity.
+      Inspect relevant repository evidence first and ask the user about unresolved behavior.
+      Keep `Status: draft` until the user explicitly approves the complete contract and design.
+      Do not put technical design detail here unless it is itself a requirement.
+    requires: []
+
+  - id: design
+    generates: design.md
+    description: Minimal technical design needed to make a high-risk or cross-cutting change implementable
+    template: design.md
+    instruction: |
+      Document only non-obvious technical decisions needed before coding.
+      Do not repeat requirements. Prefer the simplest design that satisfies the approved change.
+      Any unresolved decision that changes behavior must be asked of the user, not assumed.
+    requires: [change]
+
+apply:
+  requires: [design]
+  tracks: change.md
+  instruction: |
+    Require `Status: approved` before coding. Implement only the approved change and design. Read relevant code on demand.
+    Mark only Tasks checkboxes as work completes. Stop and ask if new functional ambiguity appears.
