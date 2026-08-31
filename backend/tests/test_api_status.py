@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from dynamic_thermal_charge.scheduler import ChargeScheduler
-from dynamic_thermal_charge.weather import OutdoorForecast
+from dynamic_thermal_charge.weather import HourlyForecastPoint, OutdoorForecast
 from tests.conftest import API_NOW, AUTH
 
 
@@ -107,6 +107,51 @@ def test_unmet_minutes_are_reported(client, heartbeat, recorded_night):
     assert any(a["unmet_minutes"] > 0 for a in allocations)
     for allocation in allocations:
         assert allocation["requested_minutes"] == 480
+
+
+def test_planning_endpoint_returns_hourly_series_and_all_intervals(
+    client, initialised_store, recorder, api_clock
+):
+    config, revision = initialised_store.repository.current()
+    initialised_store.repository.set_field(
+        revision, "heater", "salon", "thermal_loss_c_per_hour", "0.5"
+    )
+    config, revision = initialised_store.repository.current()
+    points = tuple(
+        HourlyForecastPoint(API_NOW - timedelta(hours=1) + timedelta(hours=index), 4 + index)
+        for index in range(9)
+    )
+    forecast_ref = recorder.record_forecast(
+        OutdoorForecast(
+            date=API_NOW.date(), average_temperature_c=8, minimum_temperature_c=4,
+            maximum_temperature_c=12, source="aemet", hourly_points=points,
+        )
+    )
+    plan = ChargeScheduler().build(
+        config.site, config.heaters, WINDOW_START,
+        requested_charge_minutes={heater.id: (60 if heater.id == "salon" else 0) for heater in config.heaters},
+        hourly_points=points,
+        fallback_temperature_c=8,
+    )
+    recorder.record_plan(plan, forecast_ref, revision)
+    response = client.get("/api/v1/planning", headers=AUTH)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["forecast"]["hourly_points"]
+    assert len(body["plan"]["slots"]) == config.site.window_minutes // config.site.slot_minutes
+    assert len(body["timeline"]) == 48 * 60 // config.site.slot_minutes
+    assert body["horizon_end"]
+    assert body["timeline"][0]["charge_minutes_by_heater"]["salon"] > 0, body["timeline"][:2]
+    assert body["timeline"][16]["charge_minutes_by_heater"]["salon"] < body["timeline"][15]["charge_minutes_by_heater"]["salon"]
+    assert body["max_total_power_w"] == config.site.max_total_power_w
+
+
+def test_planning_endpoint_explicitly_reports_absence(client, heartbeat):
+    heartbeat.publish(API_NOW, degraded=False)
+    body = client.get("/api/v1/planning", headers=AUTH).json()
+    assert body["plan"] is None
+    assert body["forecast"] is None
+    assert body["absence_reason"] == "no_current_or_next_plan"
 
 
 # --------------------------------------------------------------------------- #

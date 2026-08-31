@@ -14,6 +14,11 @@ export const routes: Routes = [
     loadComponent: () => import('./status/status').then((m) => m.Status),
   },
   {
+    path: 'planificacion',
+    canActivate: [requireCredential],
+    loadComponent: () => import('./planning/planning').then((m) => m.Planning),
+  },
+  {
     path: 'configuracion',
     canActivate: [requireCredential],
     loadComponent: () => import('./config/config').then((m) => m.Config),

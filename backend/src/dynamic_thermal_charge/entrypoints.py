@@ -148,6 +148,9 @@ def run_controller() -> None:
         config.weather,
         api_key=(system_snapshot.secrets["aemet_api_key"].value
                  if "aemet_api_key" in system_snapshot.secrets else None),
+        timezone_name=(
+            config.schedule.timezone if config.schedule is not None else "UTC"
+        ),
     ) if config.weather is not None else None
     if config.weather is None or provider is None:
         raise RuntimeError("controller requires weather configuration")

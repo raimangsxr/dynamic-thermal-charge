@@ -225,14 +225,17 @@ def heater_from_rows(
         )
         thermal = None
         if thermal_row is not None:
-            thermal = ThermalProfile(
+                thermal = ThermalProfile(
                 target_temperature_c=float(thermal_row["target_temperature_c"]),
                 design_outdoor_temperature_c=float(
                     thermal_row["design_outdoor_temperature_c"]
                 ),
                 thermal_factor=float(thermal_row["thermal_factor"]),
-                min_charge=float(thermal_row["min_charge"]),
-                max_charge=float(thermal_row["max_charge"]),
+                    min_charge=float(thermal_row["min_charge"]),
+                    max_charge=float(thermal_row["max_charge"]),
+                    thermal_loss_c_per_hour=float(
+                        thermal_row.get("thermal_loss_c_per_hour", 0.0)
+                    ),
             )
         return Heater(
             id=heater_id,
@@ -386,6 +389,7 @@ def thermal_params(profile: ThermalProfile, heater_key: int) -> dict[str, Any]:
         "thermal_factor": profile.thermal_factor,
         "min_charge": profile.min_charge,
         "max_charge": profile.max_charge,
+        "thermal_loss_c_per_hour": profile.thermal_loss_c_per_hour,
     }
 
 

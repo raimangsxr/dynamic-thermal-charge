@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 import json
 import logging
+import math
 from typing import Any, Callable, Mapping, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+from zoneinfo import ZoneInfo
 
 from .models import AemetConfig, SimulatedForecastConfig, WeatherConfig
 
@@ -17,6 +19,30 @@ logger = logging.getLogger(__name__)
 AEMET_BASE_URL = "https://opendata.aemet.es/opendata"
 JsonObject = Any
 HttpGet = Callable[[str, Mapping[str, str], float], JsonObject]
+
+
+@dataclass(frozen=True)
+class HourlyForecastPoint:
+    """One validated outdoor temperature at an instant.
+
+    A point may be marked as interpolated when a plan had to use the daily
+    summary because the hourly provider did not cover that interval.
+    """
+
+    timestamp: datetime
+    temperature_c: float
+    interpolated: bool = False
+
+    @property
+    def at(self) -> datetime:
+        """Compatibility alias for callers that describe points by ``at``."""
+        return self.timestamp
+
+    def __post_init__(self) -> None:
+        if self.timestamp.tzinfo is None:
+            raise ValueError("hourly forecast timestamp requires a timezone")
+        if not math.isfinite(self.temperature_c):
+            raise ValueError("hourly forecast temperature must be finite")
 
 
 @dataclass(frozen=True)
@@ -31,6 +57,7 @@ class OutdoorForecast:
     #: primary provider. The history records it as ``fallback`` so an audit can
     #: answer "did the real provider work that night" (FR-017).
     from_fallback: bool = False
+    hourly_points: tuple[HourlyForecastPoint, ...] = ()
 
 
 class WeatherProvider(Protocol):
@@ -39,8 +66,11 @@ class WeatherProvider(Protocol):
 
 
 class SimulatedWeatherProvider:
-    def __init__(self, config: SimulatedForecastConfig) -> None:
+    def __init__(
+        self, config: SimulatedForecastConfig, timezone_name: str = "UTC"
+    ) -> None:
         self._config = config
+        self._timezone = ZoneInfo(timezone_name)
 
     def forecast_for(self, forecast_date: date) -> OutdoorForecast:
         maximum_temperature_c = (
@@ -53,6 +83,14 @@ class SimulatedWeatherProvider:
             minimum_temperature_c=self._config.minimum_temperature_c,
             maximum_temperature_c=maximum_temperature_c,
             source="simulated",
+            hourly_points=tuple(
+                HourlyForecastPoint(
+                    datetime.combine(forecast_date, datetime.min.time(), tzinfo=self._timezone)
+                    + timedelta(hours=hour),
+                    self._config.average_temperature_c,
+                )
+                for hour in range(48)
+            ),
         )
 
 
@@ -66,10 +104,12 @@ class AemetWeatherProvider:
         config: AemetConfig,
         api_key: str,
         http_get: HttpGet | None = None,
+        timezone_name: str = "UTC",
     ) -> None:
         self._config = config
         self._api_key = api_key
         self._http_get = http_get or _http_get_json
+        self._timezone = ZoneInfo(timezone_name)
 
     def forecast_for(self, forecast_date: date) -> OutdoorForecast:
         if not self._api_key:
@@ -77,7 +117,7 @@ class AemetWeatherProvider:
                 f"AEMET API key is missing ({self._config.api_key_env})"
             )
         endpoint = (
-            f"{AEMET_BASE_URL}/api/prediccion/especifica/municipio/diaria/"
+            f"{AEMET_BASE_URL}/api/prediccion/especifica/municipio/horaria/"
             f"{self._config.municipality_code}"
         )
         envelope = self._http_get(
@@ -101,7 +141,7 @@ class AemetWeatherProvider:
             {"Accept": "application/json"},
             self._config.timeout_seconds,
         )
-        return _parse_aemet_forecast(payload, forecast_date)
+        return _parse_aemet_forecast(payload, forecast_date, self._timezone)
 
 
 class FallbackWeatherProvider:
@@ -127,49 +167,146 @@ def build_weather_provider(
     config: WeatherConfig,
     api_key: str | None = None,
     http_get: HttpGet | None = None,
+    timezone_name: str = "UTC",
 ) -> WeatherProvider:
     if config.provider == "simulated":
         assert config.simulated is not None
-        return SimulatedWeatherProvider(config.simulated)
+        return SimulatedWeatherProvider(config.simulated, timezone_name)
 
     assert config.aemet is not None
     primary = AemetWeatherProvider(
         config.aemet,
         api_key=api_key or "",
         http_get=http_get,
+        timezone_name=timezone_name,
     )
     if config.fallback is None:
         return primary
     return FallbackWeatherProvider(
         primary,
-        SimulatedWeatherProvider(config.fallback),
+        SimulatedWeatherProvider(config.fallback, timezone_name),
     )
 
 
-def _parse_aemet_forecast(payload: Any, forecast_date: date) -> OutdoorForecast:
+def _parse_aemet_forecast(
+    payload: Any,
+    forecast_date: date,
+    local_timezone: timezone | ZoneInfo = timezone.utc,
+) -> OutdoorForecast:
     try:
         municipality = payload[0]
         days = municipality["prediccion"]["dia"]
         day = next(item for item in days if item["fecha"].startswith(forecast_date.isoformat()))
-        minimum = float(day["temperatura"]["minima"])
-        maximum = float(day["temperatura"]["maxima"])
     except (IndexError, KeyError, StopIteration, TypeError, ValueError) as exc:
         raise WeatherProviderError(
             f"AEMET forecast has no valid temperatures for {forecast_date.isoformat()}"
         ) from exc
+    daily_temperature = day.get("temperatura")
+    minimum: float | None = None
+    maximum: float | None = None
+    if isinstance(daily_temperature, dict):
+        try:
+            minimum = float(daily_temperature["minima"])
+            maximum = float(daily_temperature["maxima"])
+        except (KeyError, TypeError, ValueError):
+            minimum = maximum = None
     municipality_name = municipality.get("nombre")
     province = municipality.get("provincia")
     location_parts = [
         str(part) for part in (municipality_name, province) if part
     ]
+    hourly_points = _parse_aemet_hourly_points(
+        days, forecast_date, local_timezone
+    )
+    if hourly_points:
+        temperatures = [
+            point.temperature_c
+            for point in hourly_points
+            if point.timestamp.astimezone(local_timezone).date() == forecast_date
+        ] or [point.temperature_c for point in hourly_points]
+        # Keep the daily summary as the stable public value when AEMET sent it,
+        # while deriving it for payloads that only contain hourly values.
+        average = sum(temperatures) / len(temperatures)
+        minimum = min(temperatures) if minimum is None else minimum
+        maximum = max(temperatures) if maximum is None else maximum
+    else:
+        if minimum is None or maximum is None:
+            raise WeatherProviderError(
+                f"AEMET forecast has no valid temperatures for {forecast_date.isoformat()}"
+            )
+        average = (minimum + maximum) / 2
     return OutdoorForecast(
         date=forecast_date,
-        average_temperature_c=(minimum + maximum) / 2,
+        average_temperature_c=average,
         minimum_temperature_c=minimum,
         maximum_temperature_c=maximum,
         source="aemet",
         location=", ".join(location_parts) or None,
+        hourly_points=hourly_points,
     )
+
+
+def _parse_aemet_hourly_points(
+    days: Any,
+    forecast_date: date,
+    local_timezone: timezone | ZoneInfo,
+) -> tuple[HourlyForecastPoint, ...]:
+    """Normalize AEMET's list-shaped hourly temperatures.
+
+    AEMET has returned both numeric ``hora`` values and ranges such as
+    ``"03-04"`` over time. Invalid entries are ignored, but a list that has no
+    valid temperature is rejected by the caller rather than silently becoming
+    a zero-degree forecast.
+    """
+    if not isinstance(days, list):
+        return ()
+    points: list[HourlyForecastPoint] = []
+    saw_hourly_payload = False
+    for day in days:
+        if not isinstance(day, dict):
+            continue
+        raw_temperatures = day.get("temperatura")
+        if isinstance(raw_temperatures, list):
+            items = raw_temperatures
+            saw_hourly_payload = True
+        elif isinstance(raw_temperatures, dict) and not {
+            "minima", "maxima"
+        }.intersection(raw_temperatures):
+            items = [
+                {"hora": hour, "value": value}
+                for hour, value in raw_temperatures.items()
+            ]
+            saw_hourly_payload = True
+        else:
+            continue
+        raw_date = str(day.get("fecha", ""))[:10]
+        try:
+            day_date = date.fromisoformat(raw_date)
+        except ValueError:
+            continue
+        if not forecast_date <= day_date < forecast_date + timedelta(days=2):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            raw_value = item.get("value", item.get("valor", item.get("temperature")))
+            raw_hour = item.get("hora", item.get("hour"))
+            try:
+                temperature = float(raw_value)
+                hour = int(str(raw_hour).split("-")[0].strip())
+                if not 0 <= hour <= 23 or not math.isfinite(temperature):
+                    raise ValueError
+                timestamp = datetime.combine(
+                    day_date, datetime.min.time(), tzinfo=local_timezone
+                ) + timedelta(hours=hour)
+                points.append(HourlyForecastPoint(timestamp, temperature))
+            except (TypeError, ValueError):
+                continue
+    if saw_hourly_payload and not points:
+        raise WeatherProviderError(
+            f"AEMET forecast has no valid hourly temperatures for {forecast_date.isoformat()}"
+        )
+    return tuple(sorted({(point.timestamp, point.temperature_c): point for point in points}.values(), key=lambda point: point.timestamp))
 
 
 def _http_get_json(

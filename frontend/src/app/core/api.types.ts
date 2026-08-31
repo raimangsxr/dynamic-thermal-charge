@@ -65,6 +65,62 @@ export interface ForecastDto {
   municipality: string | null;
 }
 
+export interface HourlyForecastPointDto {
+  timestamp: string;
+  temperature_c: number;
+  interpolated: boolean;
+}
+
+export interface PlanningForecastDto extends ForecastDto {
+  hourly_points: HourlyForecastPointDto[];
+}
+
+export interface PlanningSlotDto extends PlanSlotDto {
+  total_power_w: number;
+  temperature_c: number | null;
+  temperature_interpolated: boolean;
+}
+
+export interface PlanningTimelineSlotDto {
+  start: string;
+  end: string;
+  heater_ids: string[];
+  total_power_w: number;
+  temperature_c: number | null;
+  temperature_interpolated: boolean;
+  charge_minutes_by_heater: Record<string, number>;
+}
+
+export interface PlanningPlanDto {
+  window_start: string;
+  window_end: string;
+  slot_minutes: number;
+  installation_revision: number;
+  created_at: string;
+  slots: PlanningSlotDto[];
+}
+
+export interface PlanningHeaterDto {
+  id: string;
+  name: string;
+  power_w: number;
+  priority: number;
+  enabled: boolean;
+}
+
+export interface PlanningDto {
+  observed_at: string;
+  max_total_power_w: number;
+  plan: PlanningPlanDto | null;
+  forecast: PlanningForecastDto | null;
+  allocations: AllocationDto[];
+  heaters: PlanningHeaterDto[];
+  horizon_start: string | null;
+  horizon_end: string | null;
+  timeline: PlanningTimelineSlotDto[];
+  absence_reason: string | null;
+}
+
 export interface AllocationDto {
   heater_id: string;
   requested_minutes: number;
@@ -104,6 +160,7 @@ export interface ThermalDto {
   thermal_factor: number;
   min_charge: number;
   max_charge: number;
+  thermal_loss_c_per_hour: number;
 }
 
 export interface HeaterDto {
@@ -185,6 +242,7 @@ export interface AddHeaterRequest {
   thermal_factor?: number;
   min_charge?: number;
   max_charge?: number;
+  thermal_loss_c_per_hour?: number;
 }
 
 export interface ChangeDto {

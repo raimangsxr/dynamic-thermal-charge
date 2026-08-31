@@ -24,6 +24,7 @@ import type {
   PruneDto,
   SetFieldRequest,
   StatusDto,
+  PlanningDto,
   ControllerLogPageDto, ControllerLogLevel,
   TransitionHistoryDto,
   RelayTestStartDto, RelayTestViewDto,
@@ -48,6 +49,10 @@ export class Api {
 
   status(): Observable<StatusDto> {
     return this.http.get<StatusDto>(`${BASE}/status`);
+  }
+
+  planning(): Observable<PlanningDto> {
+    return this.http.get<PlanningDto>(`${BASE}/planning`);
   }
 
   controllerLog(query: { limit?: number; beforeId?: number; afterId?: number; level?: ControllerLogLevel; q?: string } = {}): Observable<ControllerLogPageDto> {

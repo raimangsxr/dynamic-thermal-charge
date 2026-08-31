@@ -29,7 +29,7 @@ def _patch(client, field, value, revision=None, heater=None):
 def test_the_whole_configuration_is_readable(client):
     body = _config(client)
     assert body["config_revision"] == 1
-    assert body["schema_revision"] == "0005_controller_log_events"
+    assert body["schema_revision"] == "0007_thermal_loss"
     assert body["max_total_power_kw"] == 5.2
     assert body["slot_minutes"] == 30
     assert body["retention_days"] == 365
@@ -54,6 +54,7 @@ def test_one_heater_is_readable(client):
     assert body["power_kw"] == 2.8
     assert body["output"] == {"kind": "gpio", "pin": 17, "active_high": False}
     assert body["thermal"]["target_temperature_c"] == 21.0
+    assert body["thermal"]["thermal_loss_c_per_hour"] == 0.0
 
 
 def test_an_unknown_heater_lists_the_existing_ones(client):
@@ -172,6 +173,9 @@ def test_a_thermal_field_changes(client):
     heaters = {h["id"]: h for h in _config(client)["heaters"]}
     assert heaters["salon"]["thermal"]["target_temperature_c"] == 22.5
     assert heaters["entrada"]["thermal"]["target_temperature_c"] == 18.0
+    assert _patch(client, "thermal_loss_c_per_hour", "0.5", heater="salon").status_code == 200
+    heaters = {h["id"]: h for h in _config(client)["heaters"]}
+    assert heaters["salon"]["thermal"]["thermal_loss_c_per_hour"] == 0.5
 
 
 def test_retention_can_be_set_to_unlimited(client):

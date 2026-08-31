@@ -52,6 +52,27 @@
       }
     </section>
 
+    @if (data.weather; as weather) {
+      <section class="surface configuration-section" aria-labelledby="weather-title">
+        <div class="section-heading"><div><p class="eyebrow">Previsión</p><h2 id="weather-title">Weather</h2></div></div>
+        <div class="field-group">
+          <h3>Proveedor</h3>
+          <div class="fields">
+            <div class="field" data-field="provider">
+              <mat-form-field appearance="outline">
+                <mat-label>Proveedor de previsión{{ register('provider', null) }}</mat-label>
+                <mat-select id="provider" name="provider" [ngModel]="pending()[key('provider', null)] ?? weatherText(weather)" (ngModelChange)="edit('provider', null, $event)">
+                  @for (provider of weatherProviders; track provider.value) { <mat-option [value]="provider.value">{{ provider.label }}</mat-option> }
+                </mat-select>
+              </mat-form-field>
+              @if (fieldErrors()[key('provider', null)]; as error) { <p class="field-error" role="alert" data-error="provider">{{ error }}</p> }
+              <button mat-stroked-button type="button" (click)="submit('provider', null)" data-save="provider">Guardar</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    }
+
     <section class="surface configuration-section heaters-section" aria-labelledby="heaters-title">
       <div class="section-heading">
         <div><p class="eyebrow">Equipos</p><h2 id="heaters-title">Acumuladores</h2></div>
@@ -81,6 +102,7 @@
             <mat-form-field appearance="outline"><mat-label>Factor térmico</mat-label><input matInput type="number" step="0.1" name="thermal_factor" [ngModel]="form.thermal_factor" (ngModelChange)="updateHeaterForm('thermal_factor', $event)" /></mat-form-field>
             <mat-form-field appearance="outline"><mat-label>Carga mínima</mat-label><input matInput type="number" step="0.01" name="min_charge" [ngModel]="form.min_charge" (ngModelChange)="updateHeaterForm('min_charge', $event)" /></mat-form-field>
             <mat-form-field appearance="outline"><mat-label>Carga máxima</mat-label><input matInput type="number" step="0.01" name="max_charge" [ngModel]="form.max_charge" (ngModelChange)="updateHeaterForm('max_charge', $event)" /></mat-form-field>
+            <mat-form-field appearance="outline"><mat-label>Pérdida térmica (°C/h)</mat-label><input matInput type="number" min="0" step="0.1" name="thermal_loss_c_per_hour" [ngModel]="form.thermal_loss_c_per_hour" (ngModelChange)="updateHeaterForm('thermal_loss_c_per_hour', $event)" /><mat-hint>Caída equivalente por hora sin carga</mat-hint></mat-form-field>
           </div></details>
           @if (heaterFormError()) { <p class="field-error" role="alert" data-testid="heater-form-error">{{ heaterFormError() }}</p> }
           <div class="form-actions"><button mat-flat-button color="primary" type="submit" [disabled]="heaterSaving()">{{ heaterFormMode() === 'add' ? 'Crear acumulador' : 'Guardar cambios' }}</button><button mat-button type="button" (click)="cancelHeaterForm()">Cancelar</button></div>

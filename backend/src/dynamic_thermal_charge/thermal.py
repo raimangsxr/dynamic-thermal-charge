@@ -5,10 +5,10 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Mapping
+from typing import Mapping, Sequence
 
 from .models import Heater, IndoorReading
-from .weather import OutdoorForecast
+from .weather import HourlyForecastPoint, OutdoorForecast
 
 
 logger = logging.getLogger(__name__)
@@ -58,7 +58,15 @@ class ThermalDemandEngine:
         heaters: tuple[Heater, ...],
         forecast: OutdoorForecast,
         indoor_temperatures: Mapping[str, float] | None = None,
+        *,
+        window_start: datetime | None = None,
+        window_end: datetime | None = None,
     ) -> dict[str, int]:
+        outdoor_temperature = _window_average(
+            forecast.hourly_points, window_start, window_end
+        )
+        if outdoor_temperature is None:
+            outdoor_temperature = forecast.average_temperature_c
         logger.info(
             "Calculating thermal demand from %s forecast: average=%.1f C, minimum=%.1f C, maximum=%.1f C",
             forecast.source,
@@ -85,7 +93,7 @@ class ThermalDemandEngine:
                 - profile.design_outdoor_temperature_c
             )
             source_temperature = (
-                forecast.average_temperature_c
+                outdoor_temperature
                 if indoor_temperatures is None or heater.id not in indoor_temperatures
                 else indoor_temperatures[heater.id]
             )
@@ -113,3 +121,24 @@ class ThermalDemandEngine:
 
         logger.info("Thermal charge demand calculated (minutes): %s", demands)
         return demands
+
+
+def _window_average(
+    points: Sequence[HourlyForecastPoint],
+    window_start: datetime | None,
+    window_end: datetime | None,
+) -> float | None:
+    """Return the mean of detailed points intersecting a planning window."""
+    if not points:
+        return None
+    if window_start is None or window_end is None:
+        usable = points
+    else:
+        usable = tuple(
+            point
+            for point in points
+            if window_start <= point.timestamp < window_end
+        )
+    if not usable:
+        return None
+    return sum(point.temperature_c for point in usable) / len(usable)

@@ -62,6 +62,7 @@ function configDto(overrides: Partial<ConfigDto> = {}): ConfigDto {
           thermal_factor: 1,
           min_charge: 0.1,
           max_charge: 1,
+          thermal_loss_c_per_hour: 0,
         },
       },
     ],
@@ -127,6 +128,13 @@ describe('Config', () => {
     expect(element.textContent).toContain('rev. 3');
     expect(element.textContent).toContain('0003_indoor_temperature');
     expect(element.querySelector('[data-heater="salon"]')).not.toBeNull();
+  });
+
+  it('renders the weather provider as a supported-options dropdown', () => {
+    const element = load();
+    expect(element.querySelector('[aria-labelledby="weather-title"]')).not.toBeNull();
+    expect(element.querySelector('[data-field="provider"] mat-select')).not.toBeNull();
+    expect(fixture.componentInstance.weatherProviders.map((provider) => provider.value)).toEqual(['aemet', 'simulated']);
   });
 
   /* --------------------------------------------------------------- editing */

@@ -24,6 +24,7 @@ from .mapping import from_utc, to_utc
 from .schema import (
     RETAINED_TABLES,
     forecast as forecast_table,
+    forecast_hour,
     output_transition,
     plan as plan_table,
     plan_allocation,
@@ -67,6 +68,17 @@ class SqlHistoryRecorder:
                         retrieved_at=to_utc(_now_of(forecast)),
                     )
                 ).inserted_primary_key[0]
+                hourly_rows = [
+                    {
+                        "forecast_id": forecast_id,
+                        "observed_at": to_utc(point.timestamp),
+                        "temperature_c": float(point.temperature_c),
+                        "interpolated": bool(getattr(point, "interpolated", False)),
+                    }
+                    for point in getattr(forecast, "hourly_points", ())
+                ]
+                if hourly_rows:
+                    connection.execute(insert(forecast_hour), hourly_rows)
             return ForecastRef(id=int(forecast_id))
         except Exception:
             logger.error(
@@ -109,6 +121,10 @@ class SqlHistoryRecorder:
                         "heater_id": heater_id,
                         "slot_start": to_utc(slot.start),
                         "slot_end": to_utc(slot.end),
+                        "temperature_c": getattr(slot, "temperature_c", None),
+                        "temperature_interpolated": bool(
+                            getattr(slot, "temperature_interpolated", False)
+                        ),
                     }
                     for slot in slots
                     for heater_id in slot.heater_ids
@@ -254,6 +270,7 @@ class SqlHistoryRecorder:
         """Row counts per history table. Used by the tests and by diagnostics."""
         tables = (
             forecast_table,
+            forecast_hour,
             plan_table,
             plan_slot,
             plan_allocation,
@@ -506,8 +523,8 @@ class SqlStatusReader:
                 latest[heater_id] = (bool(row["state"]), from_utc(row["occurred_at"]))
         return latest
 
-    def plan_in_progress(self, at: datetime) -> dict | None:
-        """The plan whose window contains ``at``, with its slots and allocations.
+    def plan_in_progress(self, at: datetime, *, include_next: bool = False) -> dict | None:
+        """Read the current plan, or the next future plan when requested.
 
         Never the last past plan: presenting an expired window as if it were
         running is the same kind of lie as presenting a stale output state as
@@ -518,15 +535,24 @@ class SqlStatusReader:
         moment = to_utc(at)
         with store_errors(self._location):
             with self._engine.connect() as connection:
+                current_condition = (
+                    (plan_table.c.window_start <= moment)
+                    & (plan_table.c.window_end > moment)
+                )
+                plan_condition = current_condition
+                if include_next:
+                    plan_condition = current_condition | (plan_table.c.window_start >= moment)
                 plan_row = (
                     connection.execute(
                         select(plan_table)
                         .where(
                             (plan_table.c.installation_id == self._installation_id)
-                            & (plan_table.c.window_start <= moment)
-                            & (plan_table.c.window_end > moment)
+                            & plan_condition
                         )
-                        .order_by(plan_table.c.created_at.desc())
+                        .order_by(
+                            plan_table.c.window_start,
+                            plan_table.c.created_at.desc(),
+                        )
                         .limit(1)
                     )
                     .mappings()
@@ -563,6 +589,17 @@ class SqlStatusReader:
                         .mappings()
                         .first()
                     )
+                forecast_hours = []
+                if forecast_row is not None:
+                    forecast_hours = (
+                        connection.execute(
+                            select(forecast_hour)
+                            .where(forecast_hour.c.forecast_id == forecast_row["id"])
+                            .order_by(forecast_hour.c.observed_at)
+                        )
+                        .mappings()
+                        .all()
+                    )
 
         return {
             "plan": {
@@ -577,6 +614,8 @@ class SqlStatusReader:
                     "heater_id": str(row["heater_id"]),
                     "slot_start": from_utc(row["slot_start"]),
                     "slot_end": from_utc(row["slot_end"]),
+                    "temperature_c": row["temperature_c"],
+                    "temperature_interpolated": bool(row["temperature_interpolated"]),
                 }
                 for row in slots
             ],
@@ -601,9 +640,21 @@ class SqlStatusReader:
                     "minimum_temperature_c": forecast_row["minimum_temperature_c"],
                     "maximum_temperature_c": forecast_row["maximum_temperature_c"],
                     "municipality": forecast_row["municipality"],
+                    "hourly_points": [
+                        {
+                            "timestamp": from_utc(row["observed_at"]),
+                            "temperature_c": float(row["temperature_c"]),
+                            "interpolated": bool(row["interpolated"]),
+                        }
+                        for row in forecast_hours
+                    ],
                 }
             ),
         }
+
+    def planning(self, at: datetime) -> dict | None:
+        """Return the active plan or, outside a window, the next future plan."""
+        return self.plan_in_progress(at, include_next=True)
 
 
 __all__ = [

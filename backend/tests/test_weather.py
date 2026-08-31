@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 import logging
 
 import pytest
@@ -33,6 +33,22 @@ def aemet_payload():
     ]
 
 
+def hourly_aemet_payload():
+    return [{
+        "nombre": "Madrid",
+        "provincia": "Madrid",
+        "prediccion": {"dia": [
+            {"fecha": "2026-01-15T00:00:00", "temperatura": [
+                {"hora": 0, "value": "2"}, {"hora": 1, "value": "4"},
+                {"hora": 2, "value": "bad"}, {"hora": 3},
+            ]},
+            {"fecha": "2026-01-16T00:00:00", "temperatura": [
+                {"hora": "00-01", "value": "8"},
+            ]},
+        ]},
+    }]
+
+
 def test_aemet_fetches_envelope_and_daily_data() -> None:
     calls = []
 
@@ -63,6 +79,55 @@ def test_aemet_fetches_envelope_and_daily_data() -> None:
     assert calls[0][1]["api_key"] == "secret-key"
     assert "api_key" not in calls[1][1]
     assert calls[0][2] == 7
+
+
+def test_aemet_fetches_hourly_endpoint_and_normalizes_valid_points() -> None:
+    calls = []
+
+    def http_get(url, headers, timeout):
+        calls.append((url, headers, timeout))
+        return {"estado": 200, "datos": "https://data.example/hourly.json"} if len(calls) == 1 else hourly_aemet_payload()
+
+    provider = AemetWeatherProvider(
+        AemetConfig(municipality_code="28079"),
+        api_key="secret-key",
+        http_get=http_get,
+    )
+    result = provider.forecast_for(date(2026, 1, 15))
+
+    assert calls[0][0].endswith("/prediccion/especifica/municipio/horaria/28079")
+    assert calls[0][1]["api_key"] == "secret-key"
+    assert "api_key" not in calls[1][1]
+    assert [point.temperature_c for point in result.hourly_points] == [2, 4, 8]
+    assert result.average_temperature_c == pytest.approx(3)
+    assert result.minimum_temperature_c == 2
+    assert result.maximum_temperature_c == 4
+
+
+def test_aemet_rejects_an_hourly_payload_without_usable_temperature() -> None:
+    payload = [{"prediccion": {"dia": [{
+        "fecha": "2026-01-15T00:00:00",
+        "temperatura": [{"hora": 1, "value": "not-a-number"}, {"hora": 2}],
+    }]}}]
+    provider = AemetWeatherProvider(
+        AemetConfig(municipality_code="28079"),
+        api_key="secret-key",
+        http_get=lambda url, headers, timeout: {"estado": 200, "datos": "https://data.example/hourly.json"} if headers.get("api_key") else payload,
+    )
+    with pytest.raises(WeatherProviderError, match="hourly"):
+        provider.forecast_for(date(2026, 1, 15))
+
+
+def test_simulated_forecast_has_a_deterministic_48_hour_series() -> None:
+    config = WeatherConfig(
+        provider="simulated",
+        simulated=SimulatedForecastConfig(average_temperature_c=8, minimum_temperature_c=3),
+    )
+    first = build_weather_provider(config).forecast_for(date(2026, 1, 15))
+    second = build_weather_provider(config).forecast_for(date(2026, 1, 15))
+    assert first.hourly_points == second.hourly_points
+    assert len(first.hourly_points) == 48
+    assert first.hourly_points[0].timestamp == datetime(2026, 1, 15, tzinfo=first.hourly_points[0].timestamp.tzinfo)
 
 
 def test_aemet_rejects_missing_forecast_day() -> None:

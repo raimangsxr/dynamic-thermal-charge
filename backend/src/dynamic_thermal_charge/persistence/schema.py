@@ -215,6 +215,7 @@ thermal_profile = Table(
     Column("thermal_factor", Float, nullable=False, server_default="1.0"),
     Column("min_charge", Float, nullable=False, server_default="0.0"),
     Column("max_charge", Float, nullable=False, server_default="1.0"),
+    Column("thermal_loss_c_per_hour", Float, nullable=False, server_default="0.0"),
     CheckConstraint(
         "design_outdoor_temperature_c < target_temperature_c",
         name="ck_thermal_design_below_target",
@@ -223,6 +224,9 @@ thermal_profile = Table(
     CheckConstraint(
         "min_charge >= 0 AND min_charge <= max_charge AND max_charge <= 1",
         name="ck_thermal_charge_bounds",
+    ),
+    CheckConstraint(
+        "thermal_loss_c_per_hour >= 0", name="ck_thermal_loss_non_negative"
     ),
 )
 
@@ -267,6 +271,18 @@ forecast = Table(
     Index("ix_forecast_retention", "installation_id", "retrieved_at"),
 )
 
+forecast_hour = Table(
+    "forecast_hour",
+    application_metadata,
+    Column("id", Integer, primary_key=True),
+    Column("forecast_id", Integer, ForeignKey("forecast.id", ondelete="CASCADE"), nullable=False),
+    Column("observed_at", DateTime, nullable=False),
+    Column("temperature_c", Float, nullable=False),
+    Column("interpolated", Boolean, nullable=False, server_default="0"),
+    UniqueConstraint("forecast_id", "observed_at", name="uq_forecast_hour"),
+    Index("ix_forecast_hour_forecast_time", "forecast_id", "observed_at"),
+)
+
 plan = Table(
     "plan",
     application_metadata,
@@ -303,6 +319,8 @@ plan_slot = Table(
     Column("heater_id", String(64), nullable=False),
     Column("slot_start", DateTime, nullable=False),
     Column("slot_end", DateTime, nullable=False),
+    Column("temperature_c", Float, nullable=True),
+    Column("temperature_interpolated", Boolean, nullable=False, server_default="0"),
     UniqueConstraint("plan_id", "heater_id", "slot_start", name="uq_plan_slot"),
 )
 
@@ -620,6 +638,10 @@ CONSTRAINT_FIELDS: dict[str, tuple[str, str]] = {
         "min_charge",
         "the charge limits must satisfy 0 <= min_charge <= max_charge <= 1",
     ),
+    "ck_thermal_loss_non_negative": (
+        "thermal_loss_c_per_hour",
+        "thermal_loss_c_per_hour must be non-negative",
+    ),
     "ck_forecast_source": ("source", "the forecast source is not recognised"),
     "ck_plan_window": ("window_end", "the plan window must end after it starts"),
     "ck_plan_allocation_minutes": (
@@ -633,6 +655,10 @@ CONSTRAINT_FIELDS: dict[str, tuple[str, str]] = {
     "uq_plan_allocation": (
         "heater_id",
         "a plan cannot record two allocations for the same heater",
+    ),
+    "uq_forecast_hour": (
+        "observed_at",
+        "a forecast cannot record two temperatures for the same instant",
     ),
     "ck_change_action": ("action", "the change action is not recognised"),
     "ck_change_revision": ("revision_after", "revisions must advance by exactly one"),
@@ -678,6 +704,7 @@ CONFIG_TABLES = (
 APPLICATION_TABLES = (
     indoor_reading,
     forecast,
+    forecast_hour,
     plan,
     plan_slot,
     plan_allocation,
@@ -693,6 +720,7 @@ APPLICATION_TABLES = (
 )
 HISTORY_TABLES = (
     forecast,
+    forecast_hour,
     plan,
     plan_slot,
     plan_allocation,
@@ -709,6 +737,7 @@ __all__ = [
     "RETAINED_TABLES",
     "config_change",
     "forecast",
+    "forecast_hour",
     "heater",
     "installation",
     "metadata",

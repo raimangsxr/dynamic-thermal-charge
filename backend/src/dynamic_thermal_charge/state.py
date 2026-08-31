@@ -30,6 +30,8 @@ class PlanStore:
                     "end": slot.end.isoformat(),
                     "heater_ids": list(slot.heater_ids),
                     "total_power_w": slot.total_power_w,
+                    "temperature_c": slot.temperature_c,
+                    "temperature_interpolated": slot.temperature_interpolated,
                 }
                 for slot in plan.slots
             ],
@@ -72,6 +74,14 @@ class PlanStore:
                     end=datetime.fromisoformat(item["end"]),
                     heater_ids=tuple(item["heater_ids"]),
                     total_power_w=int(item["total_power_w"]),
+                    temperature_c=(
+                        None
+                        if item.get("temperature_c") is None
+                        else float(item["temperature_c"])
+                    ),
+                    temperature_interpolated=bool(
+                        item.get("temperature_interpolated", False)
+                    ),
                 )
                 for item in payload["slots"]
             )

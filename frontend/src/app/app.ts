@@ -32,6 +32,9 @@ declare const __APP_VERSION__: string;
             <a class="nav-link" routerLink="/estado" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }" (click)="closeDrawer(drawer)">
               <mat-icon aria-hidden="true">dashboard</mat-icon><span>Estado</span>
             </a>
+            <a class="nav-link" routerLink="/planificacion" routerLinkActive="active" (click)="closeDrawer(drawer)">
+              <mat-icon aria-hidden="true">schedule</mat-icon><span>Planificación</span>
+            </a>
             <a class="nav-link" routerLink="/configuracion" routerLinkActive="active" (click)="closeDrawer(drawer)">
               <mat-icon aria-hidden="true">tune</mat-icon><span>Configuración</span>
             </a>

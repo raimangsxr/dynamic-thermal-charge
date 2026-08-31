@@ -50,18 +50,24 @@ export interface HeaterForm {
   thermal_factor: string;
   min_charge: string;
   max_charge: string;
+  thermal_loss_c_per_hour: string;
 }
 
 const HEATER_EDIT_FIELDS = [
   'name', 'model', 'power_kw', 'full_charge_hours', 'target_charge', 'priority',
   'enabled', 'indoor_topic', 'output_type', 'pin', 'active_high',
   'target_temperature_c', 'design_outdoor_temperature_c', 'thermal_factor',
-  'min_charge', 'max_charge',
+  'min_charge', 'max_charge', 'thermal_loss_c_per_hour',
 ] as const;
 
 const INSTALLATION_GROUPS = [
   { title: 'Parámetros de carga', fields: ['max_total_power_kw', 'slot_minutes', 'retention_days', 'poll_seconds', 'log_level'] },
   { title: 'Política de temperatura interior', fields: ['indoor_max_age_minutes', 'indoor_min_plausible_c', 'indoor_max_plausible_c'] },
+] as const;
+
+const WEATHER_PROVIDERS = [
+  { value: 'aemet', label: 'AEMET' },
+  { value: 'simulated', label: 'Simulado' },
 ] as const;
 
 @Component({
@@ -107,6 +113,7 @@ export class Config {
   readonly heaterFormError = signal('');
   readonly heaterSaving = signal(false);
   readonly installationGroups = INSTALLATION_GROUPS;
+  readonly weatherProviders = WEATHER_PROVIDERS;
   readonly dirty = computed(() => Object.keys(this.pending()).length > 0);
 
   constructor() { this.load(); }
@@ -139,6 +146,7 @@ export class Config {
       retention_days: 'Retención de históricos (días)', poll_seconds: 'Intervalo de sondeo (s)',
       log_level: 'Nivel de registro', indoor_max_age_minutes: 'Antigüedad máxima interior (min)',
       indoor_min_plausible_c: 'Temperatura interior mínima (°C)', indoor_max_plausible_c: 'Temperatura interior máxima (°C)',
+      thermal_loss_c_per_hour: 'Pérdida térmica (°C/h)',
     };
     return labels[field] ?? field;
   }
@@ -190,12 +198,16 @@ export class Config {
     return String(value);
   }
 
+  weatherText(weather: ConfigDto['weather']): string {
+    return weather?.provider ?? '';
+  }
+
   heaterText(heater: ConfigDto['heaters'][number], field: string): string {
     if (field === 'pin') return heater.output.pin === null ? '' : String(heater.output.pin);
     if (field === 'active_high') return String(heater.output.active_high);
     if (field === 'output_type') return heater.output.kind;
-    if (['target_temperature_c', 'design_outdoor_temperature_c', 'thermal_factor', 'min_charge', 'max_charge'].includes(field)) {
-      const value = heater.thermal?.[field as 'target_temperature_c' | 'design_outdoor_temperature_c' | 'thermal_factor' | 'min_charge' | 'max_charge'];
+    if (['target_temperature_c', 'design_outdoor_temperature_c', 'thermal_factor', 'min_charge', 'max_charge', 'thermal_loss_c_per_hour'].includes(field)) {
+      const value = heater.thermal?.[field as 'target_temperature_c' | 'design_outdoor_temperature_c' | 'thermal_factor' | 'min_charge' | 'max_charge' | 'thermal_loss_c_per_hour'];
       return value === null || value === undefined ? '' : String(value);
     }
     const value = (heater as unknown as Record<string, unknown>)[field];
@@ -205,7 +217,7 @@ export class Config {
   openAddHeater(): void {
     this.heaterFormMode.set('add');
     this.heaterFormError.set('');
-    this.heaterForm.set({ id: '', name: '', model: '', power_kw: '1', full_charge_hours: '8', target_charge: '1', priority: '0', enabled: true, indoor_topic: '', output: 'simulated', pin: '', active_high: true, target_temperature_c: '', design_outdoor_temperature_c: '', thermal_factor: '1', min_charge: '0', max_charge: '1' });
+    this.heaterForm.set({ id: '', name: '', model: '', power_kw: '1', full_charge_hours: '8', target_charge: '1', priority: '0', enabled: true, indoor_topic: '', output: 'simulated', pin: '', active_high: true, target_temperature_c: '', design_outdoor_temperature_c: '', thermal_factor: '1', min_charge: '0', max_charge: '1', thermal_loss_c_per_hour: '0' });
   }
 
   openEditHeater(heater: ConfigDto['heaters'][number]): void {
@@ -216,7 +228,7 @@ export class Config {
       target_charge: String(heater.target_charge), priority: String(heater.priority), enabled: heater.enabled, indoor_topic: heater.indoor_topic ?? '',
       output: heater.output.kind, pin: heater.output.pin === null ? '' : String(heater.output.pin), active_high: heater.output.active_high,
       target_temperature_c: heater.thermal ? String(heater.thermal.target_temperature_c) : '', design_outdoor_temperature_c: heater.thermal ? String(heater.thermal.design_outdoor_temperature_c) : '',
-      thermal_factor: heater.thermal ? String(heater.thermal.thermal_factor) : '', min_charge: heater.thermal ? String(heater.thermal.min_charge) : '', max_charge: heater.thermal ? String(heater.thermal.max_charge) : '',
+      thermal_factor: heater.thermal ? String(heater.thermal.thermal_factor) : '', min_charge: heater.thermal ? String(heater.thermal.min_charge) : '', max_charge: heater.thermal ? String(heater.thermal.max_charge) : '', thermal_loss_c_per_hour: heater.thermal ? String(heater.thermal.thermal_loss_c_per_hour) : '',
     });
   }
 
@@ -247,7 +259,7 @@ export class Config {
         power_kw: Number(form.power_kw), full_charge_hours: Number(form.full_charge_hours), target_charge: Number(form.target_charge), priority: Number(form.priority),
         enabled: form.enabled, indoor_topic: form.indoor_topic.trim() || null, output: form.output, pin: form.pin.trim() ? Number(form.pin) : null, active_high: form.active_high,
         target_temperature_c: thermalPart ? Number(form.target_temperature_c) : null, design_outdoor_temperature_c: thermalPart ? Number(form.design_outdoor_temperature_c) : null,
-        thermal_factor: Number(form.thermal_factor), min_charge: Number(form.min_charge), max_charge: Number(form.max_charge),
+        thermal_factor: Number(form.thermal_factor), min_charge: Number(form.min_charge), max_charge: Number(form.max_charge), thermal_loss_c_per_hour: Number(form.thermal_loss_c_per_hour),
       };
       this.api.addHeater(payload).subscribe({ next: (change) => this.finishHeaterSave(`Acumulador creado: ${change.entity_key ?? form.id}`), error: (error: unknown) => this.rejectHeater(error) });
       return;
