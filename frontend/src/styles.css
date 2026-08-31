@@ -9,7 +9,7 @@
 body {
   margin: 0; background: var(--canvas); overflow-x: hidden;
   color: var(--text);
-  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font: 400 16px/1.5 Roboto, sans-serif;
 }
 h1, h2, h3 { color: var(--ink); }
 button, input, select { font: inherit; }
