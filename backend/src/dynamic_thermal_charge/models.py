@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
+import math
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
@@ -29,6 +30,7 @@ class ThermalProfile:
     thermal_factor: float = 1.0
     min_charge: float = 0.0
     max_charge: float = 1.0
+    thermal_loss_c_per_hour: float = 0.0
 
     def __post_init__(self) -> None:
         if self.design_outdoor_temperature_c >= self.target_temperature_c:
@@ -37,6 +39,8 @@ class ThermalProfile:
             raise ValueError("thermal_factor must be positive")
         if not 0 <= self.min_charge <= self.max_charge <= 1:
             raise ValueError("thermal charge limits must satisfy 0 <= min <= max <= 1")
+        if not math.isfinite(self.thermal_loss_c_per_hour) or self.thermal_loss_c_per_hour < 0:
+            raise ValueError("thermal_loss_c_per_hour must be finite and non-negative")
 
 
 @dataclass(frozen=True)

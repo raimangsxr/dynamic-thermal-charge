@@ -127,6 +127,62 @@ class StatusResponse(BaseModel):
     allocations: list[AllocationSummary] = Field(default_factory=list)
 
 
+class HourlyForecastPointView(BaseModel):
+    timestamp: datetime
+    temperature_c: float
+    interpolated: bool = False
+
+
+class PlanningForecastView(ForecastSummary):
+    hourly_points: list[HourlyForecastPointView] = Field(default_factory=list)
+
+
+class PlanningSlotView(PlanSlotView):
+    total_power_w: int = 0
+    temperature_c: float | None = None
+    temperature_interpolated: bool = False
+
+
+class PlanningTimelineSlotView(BaseModel):
+    start: datetime
+    end: datetime
+    heater_ids: list[str]
+    total_power_w: int = 0
+    temperature_c: float | None = None
+    temperature_interpolated: bool = False
+    charge_minutes_by_heater: dict[str, float] = Field(default_factory=dict)
+
+
+class PlanningHeaterView(BaseModel):
+    id: str
+    name: str
+    power_w: int
+    priority: int
+    enabled: bool
+
+
+class PlanningPlanView(BaseModel):
+    window_start: datetime
+    window_end: datetime
+    slot_minutes: int
+    installation_revision: int
+    created_at: datetime
+    slots: list[PlanningSlotView]
+
+
+class PlanningResponse(BaseModel):
+    observed_at: datetime
+    max_total_power_w: int
+    plan: PlanningPlanView | None = None
+    forecast: PlanningForecastView | None = None
+    allocations: list[AllocationSummary] = Field(default_factory=list)
+    heaters: list[PlanningHeaterView] = Field(default_factory=list)
+    horizon_start: datetime | None = None
+    horizon_end: datetime | None = None
+    timeline: list[PlanningTimelineSlotView] = Field(default_factory=list)
+    absence_reason: str | None = None
+
+
 class ControllerLogEvent(BaseModel):
     id: int
     occurred_at: datetime
@@ -152,6 +208,7 @@ class ThermalProfileView(BaseModel):
     thermal_factor: float
     min_charge: float
     max_charge: float
+    thermal_loss_c_per_hour: float
 
 
 class OutputView(BaseModel):
@@ -243,6 +300,7 @@ class AddHeaterRequest(BaseModel):
     thermal_factor: float = 1.0
     min_charge: float = 0.0
     max_charge: float = 1.0
+    thermal_loss_c_per_hour: float = 0.0
 
 
 class ChangeResponse(BaseModel):
@@ -444,6 +502,12 @@ __all__ = [
     "HeaterState",
     "PlanPage",
     "PlanSummary",
+    "PlanningForecastView",
+    "PlanningResponse",
+    "PlanningPlanView",
+    "PlanningSlotView",
+    "PlanningHeaterView",
+    "HourlyForecastPointView",
     "PowerSnapshot",
     "PruneResponse",
     "RelayTestHistoryPage",

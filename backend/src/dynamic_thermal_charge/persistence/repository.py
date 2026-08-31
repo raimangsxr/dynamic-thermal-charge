@@ -177,6 +177,11 @@ HEATER_FIELDS: dict[str, tuple[str, str, Callable[[str, str], Any]]] = {
     "thermal_factor": ("thermal", "thermal_factor", _parse_float),
     "min_charge": ("thermal", "min_charge", _parse_float),
     "max_charge": ("thermal", "max_charge", _parse_float),
+    "thermal_loss_c_per_hour": (
+        "thermal",
+        "thermal_loss_c_per_hour",
+        _parse_float,
+    ),
 }
 
 WEATHER_FIELDS: dict[str, tuple[str, Callable[[str, str], Any]]] = {
@@ -242,7 +247,7 @@ class SqlConfigRepository:
                 select(output_table).where(output_table.c.heater_id == heater_row["id"])
             ).mappings().first()
             thermal_row = connection.execute(
-                select(thermal_table).where(
+                self._select_present(connection, thermal_table).where(
                     thermal_table.c.heater_id == heater_row["id"]
                 )
             ).mappings().first()
@@ -339,7 +344,11 @@ class SqlConfigRepository:
         if heater.thermal is not None:
             connection.execute(
                 insert(thermal_table).values(
-                    **thermal_params(heater.thermal, heater_key)
+                    **self._compatible_params(
+                        connection,
+                        thermal_table.name,
+                        thermal_params(heater.thermal, heater_key),
+                    )
                 )
             )
 

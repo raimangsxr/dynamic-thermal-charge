@@ -7,7 +7,7 @@ Each public entrypoint is called by the deployment directly.
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 import signal
 import time
@@ -62,13 +62,21 @@ def _build_plan(
             forecast.maximum_temperature_c,
         )
         requested_charge_minutes = ThermalDemandEngine().calculate(
-            config.heaters, forecast, indoor_temperatures=indoor_temperatures
+            config.heaters,
+            forecast,
+            indoor_temperatures=indoor_temperatures,
+            window_start=start,
+            window_end=start + timedelta(minutes=config.site.window_minutes),
         )
     return ChargeScheduler().build(
         config.site,
         config.heaters,
         start,
         requested_charge_minutes=requested_charge_minutes,
+        hourly_points=None if forecast is None else forecast.hourly_points,
+        fallback_temperature_c=(
+            None if forecast is None else forecast.average_temperature_c
+        ),
     )
 
 

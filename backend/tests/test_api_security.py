@@ -76,6 +76,7 @@ def test_a_token_of_the_minimum_length_is_accepted():
 
 PROTECTED = [
     ("get", "/api/v1/status"),
+    ("get", "/api/v1/planning"),
     ("get", "/api/v1/config"),
     ("get", "/api/v1/config/heaters/salon"),
     ("get", "/api/v1/history/plans"),

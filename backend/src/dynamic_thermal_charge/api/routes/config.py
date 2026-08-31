@@ -59,6 +59,7 @@ def _heater_view(heater: Heater) -> HeaterResponse:
                 thermal_factor=heater.thermal.thermal_factor,
                 min_charge=heater.thermal.min_charge,
                 max_charge=heater.thermal.max_charge,
+                thermal_loss_c_per_hour=heater.thermal.thermal_loss_c_per_hour,
             )
         ),
     )
@@ -282,6 +283,7 @@ def post_heater(
             thermal_factor=payload.thermal_factor,
             min_charge=payload.min_charge,
             max_charge=payload.max_charge,
+            thermal_loss_c_per_hour=payload.thermal_loss_c_per_hour,
         )
     heater = Heater(
         id=payload.id,

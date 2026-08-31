@@ -39,6 +39,8 @@ KNOWN_REVISIONS: tuple[str, ...] = (
     "0003_indoor_temperature",
     "0004_relay_test_mode",
     "0005_controller_log_events",
+    "0006_hourly_forecast",
+    "0007_thermal_loss",
 )
 EXPECTED_REVISION = KNOWN_REVISIONS[-1]
 

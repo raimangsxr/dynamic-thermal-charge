@@ -1,8 +1,9 @@
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 
 from dynamic_thermal_charge.models import Heater, OutputConfig, SiteConfig
 from dynamic_thermal_charge.scheduler import ChargeScheduler, align_to_slot
+from dynamic_thermal_charge.weather import HourlyForecastPoint
 
 
 def heater(identifier: str, power_w: int, priority: int, target: float = 1) -> Heater:
@@ -95,3 +96,21 @@ def test_uses_calculated_charge_minutes_when_provided() -> None:
     assert result.allocated_minutes == {"a": 30}
     assert result.slots[0].heater_ids == ("a",)
     assert all(not slot.heater_ids for slot in result.slots[1:])
+
+
+def test_allocates_the_coldest_intervals_first() -> None:
+    site = SiteConfig(max_total_power_w=3000, slot_minutes=30, window_minutes=60)
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    result = ChargeScheduler().build(
+        site,
+        (heater("a", 2400, 10),),
+        start,
+        requested_charge_minutes={"a": 30},
+        hourly_points=(
+            HourlyForecastPoint(start, 12),
+            HourlyForecastPoint(start.replace(hour=0, minute=30), 2),
+        ),
+    )
+    assert result.slots[0].heater_ids == ()
+    assert result.slots[1].heater_ids == ("a",)
+    assert result.slots[1].temperature_c == 2

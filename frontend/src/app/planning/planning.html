@@ -1,0 +1,73 @@
+<section class="planning">
+  <header class="page-header">
+    <div>
+      <h1>Planificación</h1>
+      <p>La previsión y el plan aceptado por el controlador.</p>
+    </div>
+    <button type="button" (click)="refresh()">Actualizar</button>
+  </header>
+
+  @if (loading() && !snapshot()) { <p class="empty">Consultando…</p> }
+  @if (failure(); as error) {
+    <div class="banner alert" role="alert" data-testid="planning-error">
+      <strong>{{ error.title }}</strong><p>{{ error.action }}</p>
+    </div>
+  }
+
+  @if (snapshot(); as data) {
+    @if (data.forecast; as forecast) {
+      <div class="metadata">
+        <span><strong>Origen:</strong> {{ sourceText(forecast.source) }}</span>
+        <span><strong>Fecha:</strong> {{ forecast.date }}</span>
+        <span><strong>Puntos:</strong> {{ forecast.hourly_points.length }}</span>
+        @if (data.plan) { <span><strong>Configuración rev.:</strong> {{ data.plan.installation_revision }}</span> }
+      </div>
+    } @else {
+      <p class="empty" data-testid="planning-no-forecast">Sin previsión utilizable; las temperaturas no se rellenan con ceros.</p>
+    }
+
+    @if (!data.plan) {
+      <p class="empty" data-testid="planning-empty">No hay un plan actual ni próximo. No se inventan intervalos.</p>
+    } @else {
+      <p class="window" data-testid="planning-window">
+        Ventana {{ data.plan.window_start }}–{{ data.plan.window_end }} · horizonte de 48 h {{ data.horizon_start }}–{{ data.horizon_end }} · configuración rev. {{ data.plan.installation_revision }}
+      </p>
+      @if (hasUnmet(data)) {
+        <div class="banner warn" role="alert" data-testid="planning-deficit">
+          <strong>Carga no atendida</strong>
+          <ul>@for (allocation of data.allocations; track allocation.heater_id) {
+            @if (allocation.unmet_minutes > 0) { <li>{{ allocation.heater_id }}: faltan {{ hours(allocation.unmet_minutes) }} h</li> }
+          }</ul>
+        </div>
+      }
+
+      <section class="visualization" aria-labelledby="temperature-title">
+        <h2 id="temperature-title">Temperatura por intervalo</h2>
+        <div class="chart-wrap"><canvas #temperatureChart aria-label="Gráfico de temperaturas horarias"></canvas></div>
+      </section>
+      <section class="visualization" aria-labelledby="heater-title">
+        <h2 id="heater-title">Carga por acumulador</h2>
+        <div class="chart-wrap"><canvas #heaterChart aria-label="Gráfico de carga por acumulador"></canvas></div>
+      </section>
+      <section class="visualization" aria-labelledby="aggregate-title">
+        <h2 id="aggregate-title">Potencia agregada frente al límite</h2>
+        <div class="chart-wrap"><canvas #aggregateChart aria-label="Gráfico de potencia agregada y límite"></canvas></div>
+      </section>
+      <section class="visualization" aria-labelledby="cumulative-title">
+        <h2 id="cumulative-title">Carga acumulada por acumulador</h2>
+        <p class="hint">La reserva parte de cero, aumenta durante la carga y desciende sin carga según la pérdida térmica configurada y el delta entre objetivo y previsión.</p>
+        <div class="chart-wrap"><canvas #cumulativeChart aria-label="Gráfico de minutos de carga acumulados por acumulador"></canvas></div>
+      </section>
+
+      <div class="table-scroll">
+        <table data-testid="planning-table">
+          <caption>Detalle accesible del plan {{ data.plan.window_start }}–{{ data.plan.window_end }}</caption>
+          <thead><tr><th>Intervalo</th><th>Temperatura</th><th>Acumuladores</th><th>Potencia</th><th>Carga acumulada</th></tr></thead>
+          <tbody>@for (slot of data.timeline; track slot.start; let slotIndex = $index) {
+            <tr><th scope="row">{{ slotLabel(slot) }}</th><td>{{ slot.temperature_c === null ? 'sin dato' : slot.temperature_c + ' °C' }}@if (slot.temperature_interpolated) { <small> (interpolado)</small> }</td><td>{{ slot.heater_ids.length ? slot.heater_ids.join(', ') : 'ninguno' }}</td><td>{{ slot.total_power_w }} W</td><td>{{ cumulativeLabel(data, slotIndex) }}</td></tr>
+          }</tbody>
+        </table>
+      </div>
+    }
+  }
+</section>

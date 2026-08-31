@@ -47,6 +47,13 @@ inicialización ni instalar Python, Node o servicios systemd en la Raspberry.
 El frontend se publica en el puerto `80`. La API solo se expone dentro de la
 red Docker y el panel la consume mediante nginx.
 
+El panel autenticado incluye la sección `Planificación`, que consulta el plan
+aceptado por el controlador en `GET /api/v1/planning` y muestra la previsión
+horaria, las asignaciones y cualquier déficit sin recalcular desde el navegador.
+La misma vista proyecta 48 horas completas; la carga acumulada de cada
+acumulador se expresa en minutos equivalentes y desciende según `Pérdida
+térmica (°C/h)`, configurable en el perfil térmico de cada acumulador.
+
 Para actualizaciones automatizadas, `deploy/reconcile.sh` lee `deploy/release`,
 descarga las imágenes y aplica la versión indicada. El cronjob se instala con:
 
