@@ -85,7 +85,7 @@ declare const __APP_VERSION__: string;
     .shell { min-height: 100dvh; background: var(--canvas); }
     .navigation { width: 17rem; border-right: 1px solid var(--border); background: var(--surface); }
     .navigation-header { padding: 1.25rem 1rem .9rem; border-bottom: 1px solid var(--border); }
-    .brand { display: grid; grid-template-columns: auto 1fr; align-items: center; column-gap: .65rem; color: var(--ink); text-decoration: none; font-weight: 750; line-height: 1.2; }
+    .brand { display: grid; grid-template-columns: auto 1fr; align-items: center; column-gap: .65rem; color: var(--ink); text-decoration: none; font-weight: 700; line-height: 1.2; }
     .brand-mark { display: grid; place-items: center; width: 2.25rem; height: 2.25rem; border-radius: .7rem; background: var(--primary); color: #fff; font-size: .72rem; letter-spacing: .04em; }
     .version { grid-column: 2; color: var(--muted); font-size: .72rem; font-weight: 500; margin-top: -.35rem; }
     .nav-list { display: grid; gap: .15rem; padding: .65rem .5rem; }
@@ -96,7 +96,7 @@ declare const __APP_VERSION__: string;
     .nav-link.relay-alert { color: var(--danger); }
     .app-toolbar { position: sticky; top: 0; z-index: 10; box-shadow: 0 1px 5px #15223a20; }
     .menu-button { margin-right: .5rem; }
-    .toolbar-title { font-size: 1rem; font-weight: 650; }
+    .toolbar-title { font-size: 1rem; font-weight: 500; }
     .toolbar-spacer { flex: 1 1 auto; }
     .page-content { min-width: 0; }
     .global-mode { padding: .65rem max(1rem, calc((100vw - 76rem) / 2)); background: #fff1c7; border-bottom: 2px solid var(--warning); }
