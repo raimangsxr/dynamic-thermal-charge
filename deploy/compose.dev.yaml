@@ -1,3 +1,16 @@
+x-backend-develop: &backend-develop
+  watch:
+    - action: rebuild
+      path: ../backend/src
+    - action: rebuild
+      path: ../backend/pyproject.toml
+    - action: rebuild
+      path: ../backend/README.md
+    - action: rebuild
+      path: ../backend/Dockerfile
+    - action: rebuild
+      path: ../backend/entrypoint.sh
+
 services:
   mosquitto:
     image: eclipse-mosquitto:2
@@ -20,12 +33,14 @@ services:
     volumes: ["dev-sqlite-state:/var/lib/dynamic-thermal-charge"]
   backend:
     build: { context: ../backend, dockerfile: Dockerfile }
+    develop: *backend-develop
     volumes: ["dev-sqlite-state:/var/lib/dynamic-thermal-charge"]
     depends_on:
       dev-init: { condition: service_completed_successfully }
     environment: { DTC_API_TOKEN: "${DTC_API_TOKEN:-dev-admin-token-local-please-remember-123}" }
   backend-api:
     build: { context: ../backend, dockerfile: Dockerfile }
+    develop: *backend-develop
     command: ["python", "-c", "from dynamic_thermal_charge.entrypoints import run_api; run_api()"]
     ports: ["8080:8080"]
     volumes: ["dev-sqlite-state:/var/lib/dynamic-thermal-charge"]
@@ -35,6 +50,7 @@ services:
     healthcheck: { test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')"], interval: 5s, timeout: 5s, retries: 12 }
   backend-mqtt:
     build: { context: ../backend, dockerfile: Dockerfile }
+    develop: *backend-develop
     command: ["python", "-c", "from dynamic_thermal_charge.entrypoints import run_mqtt; run_mqtt()"]
     volumes: ["dev-sqlite-state:/var/lib/dynamic-thermal-charge"]
     depends_on:
@@ -43,6 +59,10 @@ services:
     environment: { DTC_API_TOKEN: "${DTC_API_TOKEN:-dev-admin-token-local-please-remember-123}" }
   frontend:
     build: { context: .., dockerfile: frontend/Dockerfile, args: { APP_VERSION: dev } }
+    develop:
+      watch:
+        - action: rebuild
+          path: ../frontend
     ports: ["8081:80"]
     depends_on:
       backend-api: { condition: service_healthy }
