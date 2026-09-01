@@ -29,6 +29,7 @@ from dynamic_thermal_charge.system_settings import (
     SystemConfiguration,
     WeatherSystemSettings,
 )
+from dynamic_thermal_charge.weather import weather_config_from_system
 
 
 NOW = datetime(2026, 8, 28, 12, 0, tzinfo=timezone.utc)
@@ -68,6 +69,8 @@ def test_typed_defaults_and_cross_field_validation():
         )
     with pytest.raises(ValueError, match="required"):
         WeatherSystemSettings(provider="aemet")
+    with pytest.raises(ValueError, match="5 digits"):
+        WeatherSystemSettings(provider="aemet", municipality_code="123")
     with pytest.raises(ValueError, match="renewal"):
         OperationsSystemSettings(
             relay_test_lease_seconds=10, relay_test_lease_renew_seconds=10
@@ -167,6 +170,54 @@ def test_required_postgres_and_aemet_secrets_are_validated(system_repository):
             secret_mutations={"aemet_api_key": SecretMutation(SecretAction.CLEAR)},
             actor="admin",
         )
+
+
+def test_weather_settings_round_trip_and_runtime_projection(system_repository):
+    repository, _engines = system_repository
+    revision = repository.update_section(
+        "weather",
+        {
+            "provider": "aemet",
+            "municipality_code": "28079",
+            "timeout_seconds": 12.5,
+            "simulated_average_temperature_c": 9.0,
+            "simulated_minimum_temperature_c": 4.0,
+            "fallback_average_temperature_c": 7.0,
+            "fallback_minimum_temperature_c": 1.0,
+            "retry_minutes": 20,
+            "refresh_minutes": 240,
+        },
+        expected_revision=1,
+        secret_mutations={
+            "aemet_api_key": SecretMutation(SecretAction.REPLACE, "runtime-key")
+        },
+        actor="admin",
+    )
+    snapshot = repository.current()
+    assert revision == snapshot.revision == 2
+    assert snapshot.configuration.weather == WeatherSystemSettings(
+        provider="aemet",
+        municipality_code="28079",
+        timeout_seconds=12.5,
+        simulated_average_temperature_c=9.0,
+        simulated_minimum_temperature_c=4.0,
+        fallback_average_temperature_c=7.0,
+        fallback_minimum_temperature_c=1.0,
+        retry_minutes=20,
+        refresh_minutes=240,
+    )
+    runtime = weather_config_from_system(snapshot.configuration.weather)
+    assert runtime.provider == "aemet"
+    assert runtime.aemet is not None
+    assert runtime.aemet.municipality_code == "28079"
+    assert runtime.aemet.timeout_seconds == 12.5
+    assert runtime.fallback is not None
+    assert runtime.fallback.average_temperature_c == 7.0
+    assert runtime.watchdog.retry_minutes == 20
+    public = repository.public_snapshot()
+    assert public["sections"]["weather"]["municipality_code"] == "28079"
+    assert "aemet_api_key" not in str(public["sections"]["weather"])
+    assert public["secrets"]["aemet_api_key"]["configured"] is True
 
 
 def test_public_catalog_is_allow_list_complete():

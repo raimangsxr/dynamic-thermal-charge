@@ -66,7 +66,6 @@ const CONFIG: ConfigDto = {
   poll_seconds: 5,
   retention_days: 365,
   schedule: null,
-  weather: null,
   heaters: [
     {
       id: 'salon',

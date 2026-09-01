@@ -27,7 +27,6 @@ from ..schemas import (
     ScheduleView,
     SetFieldRequest,
     ThermalProfileView,
-    WeatherView,
 )
 
 
@@ -81,38 +80,6 @@ def _config_view(config, revision: int) -> ConfigResponse:
             end_time=f"{config.schedule.end_time:%H:%M}",
             weekdays=list(config.schedule.weekdays),
         )
-    weather = None
-    if config.weather is not None:
-        aemet = config.weather.aemet
-        weather = WeatherView(
-            provider=config.weather.provider,
-            municipality_code=None if aemet is None else aemet.municipality_code,
-            # The NAME of the variable. Never its value (FR-022).
-            api_key_env=None if aemet is None else aemet.api_key_env,
-            timeout_seconds=None if aemet is None else aemet.timeout_seconds,
-            simulated_average_temperature_c=(
-                None
-                if config.weather.simulated is None
-                else config.weather.simulated.average_temperature_c
-            ),
-            simulated_minimum_temperature_c=(
-                None
-                if config.weather.simulated is None
-                else config.weather.simulated.minimum_temperature_c
-            ),
-            fallback_average_temperature_c=(
-                None
-                if config.weather.fallback is None
-                else config.weather.fallback.average_temperature_c
-            ),
-            fallback_minimum_temperature_c=(
-                None
-                if config.weather.fallback is None
-                else config.weather.fallback.minimum_temperature_c
-            ),
-            retry_minutes=config.weather.watchdog.retry_minutes,
-            refresh_minutes=config.weather.watchdog.refresh_minutes,
-        )
     return ConfigResponse(
         config_revision=revision,
         schema_revision=EXPECTED_REVISION,
@@ -127,7 +94,6 @@ def _config_view(config, revision: int) -> ConfigResponse:
         poll_seconds=config.runtime.poll_seconds,
         retention_days=config.retention_days,
         schedule=schedule,
-        weather=weather,
         heaters=[_heater_view(heater) for heater in config.heaters],
     )
 
@@ -152,8 +118,8 @@ def _change_view(change: ConfigChange) -> ChangeResponse:
     summary="The whole installation configuration",
     description=(
         "Includes the configuration revision, needed for any write, and the "
-        "schema revision. Never returns the database location or the value of the "
-        "weather provider's key: only whether a key is configured."
+        "schema revision. Weather settings and its managed secret are available "
+        "only through the system configuration API."
     ),
 )
 def get_config(store: Store = Depends(usable_store)) -> ConfigResponse:
@@ -180,17 +146,14 @@ def get_heater(heater_id: str, store: Store = Depends(usable_store)) -> HeaterRe
 
 
 def _route_field(field: str) -> tuple[str, bool]:
-    """Decide whether a field belongs to the installation or to the weather block."""
+    """Decide whether a field belongs to the installation."""
     from ...persistence.repository import (
         HEATER_FIELDS,
         INSTALLATION_FIELDS,
-        WEATHER_FIELDS,
     )
 
     if field in INSTALLATION_FIELDS:
         return "installation", True
-    if field in WEATHER_FIELDS:
-        return "weather", True
     if field in HEATER_FIELDS:
         raise not_found(
             f"{field!r} is a heater field; use PATCH /config/heaters/{{id}}",
@@ -198,8 +161,7 @@ def _route_field(field: str) -> tuple[str, bool]:
         )
     raise not_found(
         f"unknown field {field!r}. Installation fields: "
-        f"{', '.join(sorted(INSTALLATION_FIELDS))}. Weather fields: "
-        f"{', '.join(sorted(WEATHER_FIELDS))}. Heater fields (via "
+        f"{', '.join(sorted(INSTALLATION_FIELDS))}. Heater fields (via "
         f"PATCH /config/heaters/{{id}}): {', '.join(sorted(HEATER_FIELDS))}",
         field=field,
     )
@@ -209,7 +171,7 @@ def _route_field(field: str) -> tuple[str, bool]:
     "/config",
     response_model=ChangeResponse,
     responses=ERROR_RESPONSES,
-    summary="Change one installation or weather field",
+    summary="Change one installation field",
     description=(
         "`revision` is mandatory: it is the optimistic lock. Send the revision you "
         "read, and if somebody else wrote first you get 409 instead of silently "

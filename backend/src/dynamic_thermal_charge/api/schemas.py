@@ -334,20 +334,6 @@ class ScheduleView(BaseModel):
     weekdays: list[int]
 
 
-class WeatherView(BaseModel):
-    provider: str
-    municipality_code: str | None = None
-    #: The NAME of the environment variable, never its value.
-    api_key_env: str | None = None
-    timeout_seconds: float | None = None
-    simulated_average_temperature_c: float | None = None
-    simulated_minimum_temperature_c: float | None = None
-    fallback_average_temperature_c: float | None = None
-    fallback_minimum_temperature_c: float | None = None
-    retry_minutes: int
-    refresh_minutes: int
-
-
 class ConfigResponse(BaseModel):
     config_revision: int
     schema_revision: str
@@ -362,7 +348,6 @@ class ConfigResponse(BaseModel):
     poll_seconds: float
     retention_days: int | None
     schedule: ScheduleView | None = None
-    weather: WeatherView | None = None
     heaters: list[HeaterResponse]
 
 

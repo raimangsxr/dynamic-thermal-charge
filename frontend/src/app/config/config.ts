@@ -65,11 +65,6 @@ const INSTALLATION_GROUPS = [
   { title: 'Política de temperatura interior', fields: ['indoor_max_age_minutes', 'indoor_min_plausible_c', 'indoor_max_plausible_c'] },
 ] as const;
 
-const WEATHER_PROVIDERS = [
-  { value: 'aemet', label: 'AEMET' },
-  { value: 'simulated', label: 'Simulado' },
-] as const;
-
 @Component({
   selector: 'dtc-confirm-dialog',
   imports: [MatButtonModule, MatDialogModule],
@@ -113,7 +108,6 @@ export class Config {
   readonly heaterFormError = signal('');
   readonly heaterSaving = signal(false);
   readonly installationGroups = INSTALLATION_GROUPS;
-  readonly weatherProviders = WEATHER_PROVIDERS;
   readonly dirty = computed(() => Object.keys(this.pending()).length > 0);
 
   constructor() { this.load(); }
@@ -196,10 +190,6 @@ export class Config {
     const value = (config as unknown as Record<string, unknown>)[field];
     if (value === null || value === undefined) return field === 'retention_days' ? 'none' : '';
     return String(value);
-  }
-
-  weatherText(weather: ConfigDto['weather']): string {
-    return weather?.provider ?? '';
   }
 
   heaterText(heater: ConfigDto['heaters'][number], field: string): string {

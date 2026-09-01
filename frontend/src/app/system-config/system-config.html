@@ -6,7 +6,7 @@
   }
   <section>
     <h1>Configuración del sistema</h1>
-    <p>Backend, integraciones, seguridad y comportamiento de los procesos. La configuración de acumuladores permanece en su sección propia.</p>
+    <p>Backend, integraciones, seguridad, previsión y comportamiento de los procesos. La configuración de acumuladores permanece en su sección propia.</p>
     <nav class="sections" aria-label="Secciones de configuración del sistema">
       @for (section of sections; track section) { <button type="button" [class.active]="selected() === section" (click)="choose(section)">{{ section }}</button> }
     </nav>
@@ -15,16 +15,25 @@
     @if (configuration(); as data) {
       <form (ngSubmit)="requestSave()">
         <p>Revisión global {{ data.revision }}</p>
-        <div class="fields">
-          @for (field of fields(); track field.name) {
-            <label [for]="field.name">{{ field.name }} <small>{{ data.activation[selected() + '.' + field.name] }}</small></label>
-            @if (field.type === 'boolean') {
-              <select [id]="field.name" [name]="field.name" [ngModel]="value(field.name)" (ngModelChange)="edit(field.name, $event)" [disabled]="!writable()"><option [ngValue]="true">Sí</option><option [ngValue]="false">No</option></select>
-            } @else {
-              <input [id]="field.name" [name]="field.name" [type]="field.type" [ngModel]="value(field.name)" (ngModelChange)="edit(field.name, $event)" [disabled]="!writable()" />
-            }
-          }
-        </div>
+        @for (group of groups(); track group.title) {
+          <div class="field-group">
+            <h2>{{ group.title }}</h2>
+            <div class="fields">
+              @for (field of group.fields; track field.name) {
+                <label [for]="field.name">{{ field.name }} <small>{{ data.activation[selected() + '.' + field.name] }}</small></label>
+                @if (field.type === 'boolean') {
+                  <select [id]="field.name" [name]="field.name" [ngModel]="value(field.name)" (ngModelChange)="edit(field.name, $event)" [disabled]="!writable()"><option [ngValue]="true">Sí</option><option [ngValue]="false">No</option></select>
+                } @else if (field.type === 'select') {
+                  <select [id]="field.name" [name]="field.name" [ngModel]="value(field.name)" (ngModelChange)="edit(field.name, $event)" [disabled]="!writable()">
+                    @for (option of field.options ?? []; track option.value) { <option [value]="option.value">{{ option.label }}</option> }
+                  </select>
+                } @else {
+                  <input [id]="field.name" [name]="field.name" [type]="field.type" [ngModel]="value(field.name)" (ngModelChange)="edit(field.name, $event)" [disabled]="!writable()" />
+                }
+              }
+            </div>
+          </div>
+        }
         @if (secrets().length) {
           <h2>Secretos</h2><p>Los valores guardados nunca vuelven al navegador.</p>
           @for (secret of secrets(); track secret) {

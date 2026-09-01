@@ -32,18 +32,6 @@ function configDto(overrides: Partial<ConfigDto> = {}): ConfigDto {
       end_time: '08:00',
       weekdays: [0, 1, 2, 3, 4, 5, 6],
     },
-    weather: {
-      provider: 'aemet',
-      municipality_code: '15057',
-      api_key_env: 'AEMET_API_KEY',
-      timeout_seconds: 10,
-      simulated_average_temperature_c: null,
-      simulated_minimum_temperature_c: null,
-      fallback_average_temperature_c: 8,
-      fallback_minimum_temperature_c: 3,
-      retry_minutes: 15,
-      refresh_minutes: 180,
-    },
     heaters: [
       {
         id: 'salon',
@@ -128,13 +116,6 @@ describe('Config', () => {
     expect(element.textContent).toContain('rev. 3');
     expect(element.textContent).toContain('0003_indoor_temperature');
     expect(element.querySelector('[data-heater="salon"]')).not.toBeNull();
-  });
-
-  it('renders the weather provider as a supported-options dropdown', () => {
-    const element = load();
-    expect(element.querySelector('[aria-labelledby="weather-title"]')).not.toBeNull();
-    expect(element.querySelector('[data-field="provider"] mat-select')).not.toBeNull();
-    expect(fixture.componentInstance.weatherProviders.map((provider) => provider.value)).toEqual(['aemet', 'simulated']);
   });
 
   /* --------------------------------------------------------------- editing */

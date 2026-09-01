@@ -66,12 +66,9 @@ def test_an_unknown_heater_lists_the_existing_ones(client):
     assert "salon" in body["message"]
 
 
-def test_the_weather_block_gives_the_variable_name_not_the_key(client, monkeypatch):
-    """FR-022."""
-    monkeypatch.setenv("AEMET_API_KEY", "the-real-secret-value")
+def test_general_configuration_does_not_expose_weather_settings(client):
     body = _config(client)
-    assert body["weather"]["api_key_env"] == "AEMET_API_KEY"
-    assert "the-real-secret-value" not in str(body)
+    assert "weather" not in body
 
 
 def test_no_response_ever_carries_the_connection_string_or_the_token(client):
@@ -133,12 +130,6 @@ def test_an_installation_field_changes(client):
     assert body["new_value"] == "6000", "the audit trail mixed kW and W"
     assert body["revision_before"] == 1 and body["revision_after"] == 2
     assert _config(client)["max_total_power_kw"] == 6.0
-
-
-def test_a_weather_field_changes(client):
-    response = _patch(client, "retry_minutes", "20")
-    assert response.status_code == 200
-    assert _config(client)["weather"]["retry_minutes"] == 20
 
 
 def test_a_heater_field_changes_only_that_heater(client):

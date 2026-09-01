@@ -80,6 +80,51 @@ def test_system_sections_are_allow_listed_revisioned_and_secret_free(client):
     assert conflict.status_code == 409
 
 
+def test_weather_system_section_round_trips_all_fields_and_secret(client):
+    snapshot = client.get("/api/v1/system/configuration", headers=AUTH).json()
+    response = client.patch(
+        "/api/v1/system/configuration/weather",
+        headers=AUTH,
+        json={
+            "expected_revision": snapshot["revision"],
+            "values": {
+                "provider": "aemet",
+                "municipality_code": "28079",
+                "timeout_seconds": 12.5,
+                "simulated_average_temperature_c": 9,
+                "simulated_minimum_temperature_c": 4,
+                "fallback_average_temperature_c": 7,
+                "fallback_minimum_temperature_c": 1,
+                "retry_minutes": 20,
+                "refresh_minutes": 240,
+            },
+            "secrets": {"aemet_api_key": {"action": "replace", "value": "secret-key"}},
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["sections"]["weather"]["refresh_minutes"] == 240
+    assert body["secrets"]["aemet_api_key"]["configured"] is True
+    assert "secret-key" not in response.text
+
+
+def test_aemet_system_update_without_municipality_or_secret_is_atomic(client):
+    snapshot = client.get("/api/v1/system/configuration", headers=AUTH).json()
+    response = client.patch(
+        "/api/v1/system/configuration/weather",
+        headers=AUTH,
+        json={
+            "expected_revision": snapshot["revision"],
+            "values": {"provider": "aemet", "municipality_code": ""},
+            "secrets": {"aemet_api_key": {"action": "clear"}},
+        },
+    )
+    assert response.status_code == 422
+    current = client.get("/api/v1/system/configuration", headers=AUTH).json()
+    assert current["revision"] == snapshot["revision"]
+    assert current["sections"]["weather"]["provider"] == "simulated"
+
+
 def test_topology_and_catalog_never_expose_locator_credentials(client):
     topology = client.get("/api/v1/system/topology", headers=AUTH)
     catalog = client.get("/api/v1/system/catalog", headers=AUTH)

@@ -204,20 +204,6 @@ export interface ScheduleDto {
   weekdays: number[];
 }
 
-export interface WeatherDto {
-  provider: 'simulated' | 'aemet';
-  municipality_code: string | null;
-  /** The NAME of the environment variable. Never its value. */
-  api_key_env: string | null;
-  timeout_seconds: number | null;
-  simulated_average_temperature_c: number | null;
-  simulated_minimum_temperature_c: number | null;
-  fallback_average_temperature_c: number | null;
-  fallback_minimum_temperature_c: number | null;
-  retry_minutes: number;
-  refresh_minutes: number;
-}
-
 export interface ConfigDto {
   config_revision: number;
   schema_revision: string;
@@ -232,7 +218,6 @@ export interface ConfigDto {
   poll_seconds: number;
   retention_days: number | null;
   schedule: ScheduleDto | null;
-  weather: WeatherDto | null;
   heaters: HeaterDto[];
 }
 
