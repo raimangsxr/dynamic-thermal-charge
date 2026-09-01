@@ -175,7 +175,7 @@ def run_api() -> None:
 def run_mqtt() -> None:
     from .mqtt.client import PahoMqttClient
     from .mqtt.commands import CommandProcessor
-    from .mqtt.indoor import IndoorMessageProcessor
+    from .mqtt.indoor import ChargeTelemetryMessageProcessor, IndoorMessageProcessor
     from .mqtt.publisher import MqttPublisher, StoreSnapshotReader
     from .mqtt.service import MqttService
     from .mqtt.settings import settings_from_repository
@@ -212,6 +212,17 @@ def run_mqtt() -> None:
         store.indoor_readings,
         clock=lambda: datetime.now(timezone.utc),
     )
+    charge_telemetry = ChargeTelemetryMessageProcessor(
+        store.repository,
+        store.planning,
+        clock=lambda: datetime.now(timezone.utc),
+    )
+
+    def handle_telemetry(message):
+        # Preserve the legacy indoor-temperature path while accepting the new
+        # three-topic contract. Each processor ignores topics it does not own.
+        indoor.handle(message)
+        charge_telemetry.handle(message)
     service = MqttService(
         transport,
         topics,
@@ -220,7 +231,7 @@ def run_mqtt() -> None:
         publisher=publisher,
         publish_seconds=settings.publish_seconds,
         command_handler=commands.handle,
-        indoor_handler=indoor.handle,
+        indoor_handler=handle_telemetry,
     )
     try:
         service.start()

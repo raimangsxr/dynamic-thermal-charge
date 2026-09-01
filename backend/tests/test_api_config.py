@@ -29,7 +29,7 @@ def _patch(client, field, value, revision=None, heater=None):
 def test_the_whole_configuration_is_readable(client):
     body = _config(client)
     assert body["config_revision"] == 1
-    assert body["schema_revision"] == "0007_thermal_loss"
+    assert body["schema_revision"] == "0008_automatic_charge_planning"
     assert body["max_total_power_kw"] == 5.2
     assert body["slot_minutes"] == 30
     assert body["retention_days"] == 365

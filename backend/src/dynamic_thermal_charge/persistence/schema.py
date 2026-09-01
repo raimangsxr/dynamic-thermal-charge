@@ -230,6 +230,145 @@ thermal_profile = Table(
     ),
 )
 
+# Automatic charge-planning data is additive to the original static scheduler.
+# The tables use the domain heater id (rather than a cross-database FK) so an
+# application history remains explainable after a heater is removed.
+charge_planning_site = Table(
+    "charge_planning_site",
+    configuration_metadata,
+    Column("installation_id", Integer, ForeignKey("installation.id", ondelete="CASCADE"), primary_key=True),
+    Column("revision", Integer, nullable=False, server_default="1"),
+    Column("replan_minutes", Integer, nullable=False, server_default="30"),
+    Column("forecast_horizon_hours", Integer, nullable=False, server_default="48"),
+    Column("aemet_query_hour", Integer, nullable=False, server_default="12"),
+    CheckConstraint("replan_minutes > 0", name="ck_charge_site_replan"),
+    CheckConstraint("revision >= 1", name="ck_charge_site_revision"),
+    CheckConstraint("forecast_horizon_hours > 0", name="ck_charge_site_horizon"),
+    CheckConstraint("aemet_query_hour >= 0 AND aemet_query_hour <= 23", name="ck_charge_site_query_hour"),
+)
+
+charge_constraint = Table(
+    "charge_constraint",
+    configuration_metadata,
+    Column("id", Integer, primary_key=True),
+    Column("installation_id", Integer, ForeignKey("installation.id", ondelete="CASCADE"), nullable=False),
+    Column("heater_id", String(64), nullable=False),
+    Column("target_charge", Float, nullable=False),
+    Column("at_time", String(5), nullable=False),
+    Column("weekdays", String(32), nullable=False),
+    Column("enabled", Boolean, nullable=False, server_default="1"),
+    Column("created_at", DateTime, nullable=False),
+    Column("updated_at", DateTime, nullable=False),
+    CheckConstraint("target_charge >= 0 AND target_charge <= 1", name="ck_charge_constraint_target"),
+    UniqueConstraint("installation_id", "heater_id", "at_time", "weekdays", name="uq_charge_constraint_rule"),
+    Index("ix_charge_constraint_installation_heater", "installation_id", "heater_id"),
+)
+
+heater_charge_config = Table(
+    "heater_charge_config",
+    configuration_metadata,
+    Column("installation_id", Integer, ForeignKey("installation.id", ondelete="CASCADE"), nullable=False),
+    Column("heater_id", String(64), primary_key=True),
+    Column("temperature_topic", String(512), nullable=True),
+    Column("target_temperature_topic", String(512), nullable=True),
+    Column("stored_charge_topic", String(512), nullable=True),
+    Column("reserve_percent", Float, nullable=False, server_default="0"),
+    Column("room_inertia_hours", Float, nullable=False, server_default="8"),
+    Column("outdoor_loss_per_hour", Float, nullable=False, server_default="0.08"),
+    Column("emission_c_per_hour", Float, nullable=False, server_default="1"),
+    CheckConstraint("reserve_percent >= 0 AND reserve_percent <= 100", name="ck_heater_charge_reserve"),
+    CheckConstraint("room_inertia_hours > 0", name="ck_heater_charge_inertia"),
+    CheckConstraint("outdoor_loss_per_hour >= 0 AND outdoor_loss_per_hour <= 1", name="ck_heater_charge_loss"),
+    CheckConstraint("emission_c_per_hour >= 0", name="ck_heater_charge_emission"),
+    UniqueConstraint("installation_id", "heater_id", name="uq_heater_charge_config"),
+)
+
+heater_telemetry = Table(
+    "heater_telemetry",
+    application_metadata,
+    Column("installation_id", Integer, nullable=False),
+    Column("heater_id", String(64), primary_key=True),
+    Column("temperature_c", Float, nullable=True),
+    Column("temperature_received_at", DateTime, nullable=True),
+    Column("target_temperature_c", Float, nullable=True),
+    Column("target_received_at", DateTime, nullable=True),
+    Column("stored_charge_percent", Float, nullable=True),
+    Column("stored_charge_received_at", DateTime, nullable=True),
+    Column("invalid_field", String(32), nullable=True),
+    Column("invalid_at", DateTime, nullable=True),
+    CheckConstraint("stored_charge_percent IS NULL OR (stored_charge_percent >= 0 AND stored_charge_percent <= 100)", name="ck_telemetry_charge"),
+    Index("ix_heater_telemetry_installation", "installation_id", "heater_id"),
+)
+
+forecast_cycle = Table(
+    "forecast_cycle",
+    application_metadata,
+    Column("id", Integer, primary_key=True),
+    Column("installation_id", Integer, nullable=False),
+    Column("local_date", Date, nullable=False),
+    Column("scheduled_at", DateTime, nullable=False),
+    Column("attempt", Integer, nullable=False, server_default="0"),
+    Column("next_retry_at", DateTime, nullable=True),
+    Column("last_error", String(512), nullable=True),
+    Column("last_forecast_id", Integer, ForeignKey("forecast.id", ondelete="SET NULL"), nullable=True),
+    Column("stale", Boolean, nullable=False, server_default="0"),
+    Column("updated_at", DateTime, nullable=False),
+    UniqueConstraint("installation_id", "local_date", name="uq_forecast_cycle_day"),
+    CheckConstraint("attempt >= 0 AND attempt <= 6", name="ck_forecast_cycle_attempt"),
+)
+
+automatic_plan = Table(
+    "automatic_plan",
+    application_metadata,
+    Column("id", Integer, primary_key=True),
+    Column("installation_id", Integer, nullable=False),
+    Column("configuration_revision", Integer, nullable=False),
+    Column("constraints_revision", Integer, nullable=False),
+    Column("forecast_id", Integer, ForeignKey("forecast.id", ondelete="SET NULL"), nullable=True),
+    Column("horizon_start", DateTime, nullable=False),
+    Column("horizon_end", DateTime, nullable=False),
+    Column("slot_minutes", Integer, nullable=False),
+    Column("status", String(24), nullable=False),
+    Column("reason", String(32), nullable=False),
+    Column("input_token", String(64), nullable=False),
+    Column("score_json", Text, nullable=False),
+    Column("deficits_json", Text, nullable=False),
+    Column("inputs_json", Text, nullable=False),
+    Column("active", Boolean, nullable=False, server_default="0"),
+    Column("created_at", DateTime, nullable=False),
+    CheckConstraint("horizon_end > horizon_start", name="ck_automatic_plan_horizon"),
+    CheckConstraint("status IN ('feasible', 'deficit', 'best_effort', 'preview')", name="ck_automatic_plan_status"),
+    Index("ix_automatic_plan_installation_created", "installation_id", "created_at"),
+)
+
+automatic_plan_slot = Table(
+    "automatic_plan_slot",
+    application_metadata,
+    Column("id", Integer, primary_key=True),
+    Column("plan_id", Integer, ForeignKey("automatic_plan.id", ondelete="CASCADE"), nullable=False),
+    Column("slot_start", DateTime, nullable=False),
+    Column("slot_end", DateTime, nullable=False),
+    Column("heater_ids_json", Text, nullable=False),
+    Column("power_w", Integer, nullable=False),
+    Column("stored_charge_json", Text, nullable=False),
+    Column("required_charge_json", Text, nullable=False),
+    Column("outdoor_temperature_c", Float, nullable=True),
+    UniqueConstraint("plan_id", "slot_start", name="uq_automatic_plan_slot"),
+)
+
+plan_audit = Table(
+    "plan_audit",
+    application_metadata,
+    Column("id", Integer, primary_key=True),
+    Column("installation_id", Integer, nullable=False),
+    Column("plan_id", Integer, ForeignKey("automatic_plan.id", ondelete="SET NULL"), nullable=True),
+    Column("event", String(32), nullable=False),
+    Column("reason", String(64), nullable=False),
+    Column("details_json", Text, nullable=False),
+    Column("occurred_at", DateTime, nullable=False),
+    Index("ix_plan_audit_installation_time", "installation_id", "occurred_at"),
+)
+
 
 indoor_reading = Table(
     "indoor_reading",
@@ -574,11 +713,16 @@ for _table in configuration_metadata.sorted_tables:
         system_configuration,
         system_secret,
         system_audit_event,
+        charge_planning_site,
+        charge_constraint,
+        heater_charge_config,
     }:
         _table.to_metadata(metadata)
 for _table in application_metadata.sorted_tables:
     if _table not in {
-        application_schema_version, process_applied_revision, reconciled_event
+        application_schema_version, process_applied_revision, reconciled_event,
+        heater_telemetry, forecast_cycle, automatic_plan, automatic_plan_slot,
+        plan_audit,
     }:
         _table.to_metadata(metadata)
 
@@ -667,6 +811,11 @@ CONSTRAINT_FIELDS: dict[str, tuple[str, str]] = {
         "driver_kind",
         "the driver kind must be simulated or gpio",
     ),
+    "ck_charge_site_replan": ("replan_minutes", "the replan cadence must be positive"),
+    "ck_charge_site_horizon": ("forecast_horizon_hours", "the forecast horizon must be positive"),
+    "ck_charge_site_query_hour": ("aemet_query_hour", "the AEMET query hour must be between 0 and 23"),
+    "ck_charge_constraint_target": ("target_charge", "the constraint target must be between 0 and 1"),
+    "ck_telemetry_charge": ("stored_charge_percent", "stored charge must be between 0 and 100"),
     "ck_relay_test_fault_generation": ("fault_generation", "the fault generation cannot be negative"),
     "ck_relay_test_session_status": ("status", "the relay-test status is not recognised"),
     "ck_relay_test_output_power": ("power_w", "the relay-test output power must be positive"),
@@ -696,6 +845,9 @@ CONFIG_TABLES = (
     heater,
     output_config,
     thermal_profile,
+    charge_planning_site,
+    charge_constraint,
+    heater_charge_config,
     config_change,
     system_configuration,
     system_secret,
@@ -703,8 +855,10 @@ CONFIG_TABLES = (
 )
 APPLICATION_TABLES = (
     indoor_reading,
+    heater_telemetry,
     forecast,
     forecast_hour,
+    forecast_cycle,
     plan,
     plan_slot,
     plan_allocation,
@@ -715,15 +869,22 @@ APPLICATION_TABLES = (
     relay_test_session,
     relay_test_output,
     relay_test_event,
+    automatic_plan,
+    automatic_plan_slot,
+    plan_audit,
     process_applied_revision,
     reconciled_event,
 )
 HISTORY_TABLES = (
     forecast,
     forecast_hour,
+    forecast_cycle,
     plan,
     plan_slot,
     plan_allocation,
+    automatic_plan,
+    automatic_plan_slot,
+    plan_audit,
     output_transition,
 )
 
@@ -756,6 +917,14 @@ __all__ = [
     "plan_allocation",
     "plan_slot",
     "thermal_profile",
+    "charge_planning_site",
+    "charge_constraint",
+    "heater_charge_config",
+    "heater_telemetry",
+    "forecast_cycle",
+    "automatic_plan",
+    "automatic_plan_slot",
+    "plan_audit",
     "weather_config",
     "relay_test_control", "relay_test_session", "relay_test_output", "relay_test_event",
 ]

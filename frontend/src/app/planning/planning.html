@@ -15,6 +15,26 @@
   }
 
   @if (snapshot(); as data) {
+    <section class="constraints" aria-labelledby="constraints-title">
+      <div class="section-header"><div><h2 id="constraints-title">Constraints por acumulador</h2><p class="hint">Define el porcentaje deseado, la hora límite y los días. Se puede cargar en cualquier intervalo antes de cumplirlo.</p></div><button type="button" (click)="addConstraint()">Añadir constraint</button></div>
+      @for (constraint of draftConstraints(); track $index; let index = $index) {
+        <div class="constraint-row">
+          <label [for]="'constraint-heater-' + index">Acumulador</label>
+          <select [id]="'constraint-heater-' + index" [ngModel]="constraint.heater_id" (ngModelChange)="editConstraint(index, 'heater_id', $event)">
+            @for (heater of data.heaters; track heater.id) { <option [value]="heater.id">{{ heater.name }}</option> }
+          </select>
+          <label [for]="'constraint-charge-' + index">Carga %</label>
+          <input [id]="'constraint-charge-' + index" type="number" min="0" max="1" step="0.05" [ngModel]="constraint.target_charge" (ngModelChange)="editConstraint(index, 'target_charge', $event)" />
+          <label [for]="'constraint-time-' + index">Hora</label>
+          <input [id]="'constraint-time-' + index" type="time" [ngModel]="constraint.at_time" (ngModelChange)="editConstraint(index, 'at_time', $event)" />
+          <fieldset><legend>Días</legend>@for (day of [0,1,2,3,4,5,6]; track day) { <label><input type="checkbox" [checked]="constraint.weekdays.includes(day)" (change)="toggleDay(index, day)" />{{ ['L','M','X','J','V','S','D'][day] }}</label> }</fieldset>
+          <button type="button" class="secondary" (click)="removeConstraint(index)">Quitar</button>
+        </div>
+      }
+      <div class="constraint-actions"><button type="button" (click)="recalculate()">Recalcular vista previa</button><button type="button" class="secondary" (click)="refresh()">Descartar</button><button type="button" [disabled]="!preview()" (click)="activate()">Guardar y activar</button></div>
+      @if (actionMessage()) { <p role="status">{{ actionMessage() }}</p> } @if (actionError()) { <p class="error" role="alert">{{ actionError() }}</p> }
+      @if (preview(); as candidate) { <div class="preview" role="status"><strong>Preview: {{ candidate.status }}</strong> · {{ candidate.slots.length }} intervalos · puntuación {{ candidate.score.join(' / ') }} @if (candidate.deficits.length) { <span class="warning"> · Déficits detectados: {{ candidate.deficits.length }}</span> }</div> }
+    </section>
     @if (data.forecast; as forecast) {
       <div class="metadata">
         <span><strong>Origen:</strong> {{ sourceText(forecast.source) }}</span>

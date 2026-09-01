@@ -78,4 +78,56 @@ class IndoorMessageProcessor:
         return True
 
 
-__all__ = ["IndoorMessageProcessor"]
+class ChargeTelemetryMessageProcessor:
+    """Validate and persist the three independent accumulator MQTT values."""
+
+    def __init__(self, config_repository, planning_repository, *, clock: Callable[[], datetime]):
+        self._config_repository = config_repository
+        self._planning = planning_repository
+        self._clock = clock
+
+    def handle(self, message: IncomingMessage) -> bool:
+        try:
+            config, _revision = self._config_repository.current()
+        except ConfigStoreError as exc:
+            logger.error("Cannot resolve charge telemetry topic: %s", exc)
+            return False
+        match = None
+        for heater in config.heaters:
+            topics = {
+                (heater.temperature_topic or heater.indoor_topic): "temperature_c",
+                heater.target_temperature_topic: "target_temperature_c",
+                heater.stored_charge_topic: "stored_charge_percent",
+            }
+            field = topics.get(message.topic)
+            if field is not None:
+                match = (heater.id, field)
+                break
+        if match is None:
+            return False
+        heater_id, field = match
+        try:
+            raw = message.payload.decode("utf-8", errors="strict").strip()
+            value = float(raw)
+            if not raw or not math.isfinite(value):
+                raise ValueError("empty or non-finite value")
+            if field == "stored_charge_percent" and not 0 <= value <= 100:
+                raise ValueError("stored charge must be between 0 and 100")
+            if field != "stored_charge_percent" and not -50 <= value <= 80:
+                raise ValueError("temperature is outside the safe range")
+        except (UnicodeDecodeError, ValueError) as exc:
+            logger.error("Invalid %s for heater %s on topic %s: %s", field, heater_id, message.topic, exc)
+            try:
+                self._planning.invalidate_telemetry(heater_id, field, self._clock())
+            except Exception as store_exc:
+                logger.error("Could not invalidate charge telemetry: %s", store_exc)
+            return False
+        try:
+            self._planning.record_telemetry(heater_id, field, value, self._clock())
+        except ConfigStoreError as exc:
+            logger.error("Could not store charge telemetry for %s: %s", heater_id, exc)
+            return False
+        return True
+
+
+__all__ = ["ChargeTelemetryMessageProcessor", "IndoorMessageProcessor"]

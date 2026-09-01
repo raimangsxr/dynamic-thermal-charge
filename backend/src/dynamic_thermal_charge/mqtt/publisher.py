@@ -251,6 +251,13 @@ class StoreSnapshotReader:
             )
             if heater.indoor_topic is not None:
                 result.append(heater.indoor_topic)
+            result.extend(
+                topic for topic in (
+                    heater.temperature_topic,
+                    heater.target_temperature_topic,
+                    heater.stored_charge_topic,
+                ) if topic is not None
+            )
         return tuple(result)
 
     @staticmethod

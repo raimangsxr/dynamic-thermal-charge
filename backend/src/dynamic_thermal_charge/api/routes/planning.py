@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Request
 
 from ...persistence.bootstrap import Store
 from ...persistence.history import SqlStatusReader
+from ...charge_planning import DeterministicChargeOptimizer, PlanningInput
+from ...models import ChargeConstraint, ChargeTelemetry
+from ...persistence import ConfigValidationError
 from ..dependencies import usable_store
 from ..schemas import (
+    ERROR_RESPONSES,
     AllocationSummary,
     HourlyForecastPointView,
     PlanningForecastView,
@@ -19,6 +23,14 @@ from ..schemas import (
     PlanningSlotView,
     PlanningTimelineSlotView,
     READ_RESPONSES,
+    ChargeConstraintRequest,
+    ChargeConstraintView,
+    ChargeTelemetryView,
+    PlanningActivateRequest,
+    PlanningDeficitView,
+    PlanningPreviewRequest,
+    PlanningPreviewResponse,
+    HeaterChargeConfigRequest,
 )
 
 
@@ -54,12 +66,33 @@ def get_planning(
         for heater in config.heaters
     ]
     if snapshot is None:
-        return PlanningResponse(
+        automatic = store.planning.active_plan()
+        if automatic is not None:
+            automatic_plan = PlanningPlanView(
+                window_start=automatic["horizon_start"],
+                window_end=automatic["horizon_end"],
+                slot_minutes=automatic["slot_minutes"],
+                installation_revision=_revision,
+                created_at=automatic["created_at"],
+                slots=[PlanningSlotView(start=item["start"], end=item["end"], heater_ids=item["heater_ids"], total_power_w=item["power_w"], temperature_c=item["outdoor_temperature_c"], temperature_interpolated=False) for item in automatic["slots"]],
+            )
+            response = PlanningResponse(
+                observed_at=observed_at,
+                max_total_power_w=config.site.max_total_power_w,
+                heaters=heaters,
+                plan=automatic_plan,
+                horizon_start=automatic["horizon_start"],
+                horizon_end=automatic["horizon_end"],
+                timeline=[PlanningTimelineSlotView(start=item["start"], end=item["end"], heater_ids=item["heater_ids"], total_power_w=item["power_w"], temperature_c=item["outdoor_temperature_c"], temperature_interpolated=False, charge_minutes_by_heater={key: config.site.slot_minutes if key in item["heater_ids"] else 0 for key in (heater.id for heater in config.heaters)}) for item in automatic["slots"]],
+            )
+            return _enrich(response, store, observed_at)
+        response = PlanningResponse(
             observed_at=observed_at,
             max_total_power_w=config.site.max_total_power_w,
             heaters=heaters,
             absence_reason="no_current_or_next_plan",
         )
+        return _enrich(response, store, observed_at)
 
     forecast = snapshot["forecast"]
     forecast_view = None
@@ -115,7 +148,7 @@ def get_planning(
         slot_delta,
     )
 
-    return PlanningResponse(
+    response = PlanningResponse(
         observed_at=observed_at,
         max_total_power_w=config.site.max_total_power_w,
         plan=PlanningPlanView(**plan_data, slots=slots),
@@ -125,6 +158,143 @@ def get_planning(
         horizon_start=horizon_start,
         horizon_end=horizon_end,
         timeline=timeline,
+    )
+    return _enrich(response, store, observed_at)
+
+
+@router.post("/planning/preview", response_model=PlanningPreviewResponse, responses=ERROR_RESPONSES)
+def preview_planning(
+    request: PlanningPreviewRequest,
+    app_request: Request,
+    store: Store = Depends(usable_store),
+) -> PlanningPreviewResponse:
+    site = store.planning.site()
+    if request.expected_revision is not None and request.expected_revision != site["revision"]:
+        raise ConfigValidationError("planning configuration changed; recalculate before saving")
+    constraints = _parse_constraints(request.constraints)
+    plan = _build_automatic_plan(store, app_request.app.state.clock(), constraints, site)
+    return _preview_response(plan, constraints)
+
+
+@router.post("/planning/activate", response_model=PlanningPreviewResponse, responses=ERROR_RESPONSES)
+def activate_planning(
+    request: PlanningActivateRequest,
+    app_request: Request,
+    store: Store = Depends(usable_store),
+) -> PlanningPreviewResponse:
+    site = store.planning.site()
+    if request.expected_revision != site["revision"]:
+        raise ConfigValidationError("constraints changed; recalculate before saving")
+    constraints = _parse_constraints(request.constraints)
+    plan = _build_automatic_plan(store, app_request.app.state.clock(), constraints, site)
+    if plan.input_token != request.token:
+        raise ConfigValidationError("the preview inputs changed; recalculate before activating")
+    blocking = [item for item in plan.deficits if item.reason == "power_limit_or_capacity" and item.deficit_percent > 0]
+    if blocking:
+        raise ConfigValidationError("the constraints cannot be satisfied within the configured power/capacity; resolve the conflict before activating", field="constraints")
+    new_revision = store.planning.replace_constraints(constraints, request.expected_revision)
+    store.planning.save_plan(plan, configuration_revision=store.repository.current()[1], constraints_revision=new_revision, reason="activated", active=True)
+    return _preview_response(plan, constraints)
+
+
+@router.patch("/planning/heaters/{heater_id}", response_model=PlanningResponse, responses=ERROR_RESPONSES)
+def update_heater_planning(
+    heater_id: str,
+    payload: HeaterChargeConfigRequest,
+    app_request: Request,
+    store: Store = Depends(usable_store),
+) -> PlanningResponse:
+    config, _revision = store.repository.current()
+    if heater_id not in {heater.id for heater in config.heaters}:
+        raise ConfigValidationError("heater does not exist", field="heater_id", heater_id=heater_id)
+    store.planning.update_heater_charge_config(heater_id, payload.model_dump())
+    # Re-read through the public projection so the response cannot contain a
+    # partially applied topic configuration.
+    return get_planning(app_request, store)
+
+
+def _enrich(response: PlanningResponse, store: Store, observed_at: datetime) -> PlanningResponse:
+    planning = store.planning
+    telemetry = planning.telemetry()
+    views = []
+    for heater in response.heaters:
+        value = telemetry.get(heater.id)
+        if value is None:
+            views.append(ChargeTelemetryView(heater_id=heater.id, missing_fields=["temperature_c", "target_temperature_c", "stored_charge_percent"]))
+            continue
+        ages = [
+            (observed_at - stamp).total_seconds()
+            for stamp in (value.temperature_received_at, value.target_received_at, value.stored_charge_received_at)
+            if stamp is not None
+        ]
+        missing = [field for field, item in (("temperature_c", value.temperature_c), ("target_temperature_c", value.target_temperature_c), ("stored_charge_percent", value.stored_charge_percent)) if item is None]
+        oldest = max(ages, default=None)
+        stale = bool(missing or oldest is None or oldest > 900)
+        views.append(ChargeTelemetryView(
+            heater_id=heater.id,
+            temperature_c=value.temperature_c,
+            target_temperature_c=value.target_temperature_c,
+            stored_charge_percent=value.stored_charge_percent,
+            temperature_received_at=value.temperature_received_at,
+            target_received_at=value.target_received_at,
+            stored_charge_received_at=value.stored_charge_received_at,
+            state="telemetry_stale" if stale else "ready",
+            missing_fields=missing,
+            oldest_age_seconds=oldest,
+        ))
+    constraints = [ChargeConstraintView(id=item.id, heater_id=item.heater_id, target_charge=item.target_charge, at_time=item.at.strftime("%H:%M"), weekdays=list(item.weekdays)) for item in planning.constraints()]
+    active = planning.active_plan()
+    response.constraints = constraints
+    response.telemetry = views
+    response.plan_status = None if active is None else active["status"]
+    response.deficits = [] if active is None else [PlanningDeficitView(**item) for item in active["deficits"]]
+    response.preview_token = None if active is None else active["input_token"]
+    response.constraints_revision = planning.site()["revision"]
+    return response
+
+
+def _parse_constraints(items: list[ChargeConstraintRequest]) -> tuple[ChargeConstraint, ...]:
+    result = []
+    from ...persistence.mapping import parse_time
+    for item in items:
+        try:
+            parsed_time = parse_time(item.at_time, "at_time")
+            weekdays = tuple(item.weekdays)
+            result.append(ChargeConstraint(heater_id=item.heater_id, target_charge=item.target_charge, at=parsed_time, weekdays=weekdays))
+        except (ValueError, TypeError) as exc:
+            raise ConfigValidationError(str(exc), field="constraints", heater_id=item.heater_id) from exc
+    return tuple(result)
+
+
+def _build_automatic_plan(store: Store, observed_at: datetime, constraints: tuple[ChargeConstraint, ...], site: dict[str, int]):
+    config, _revision = store.repository.current()
+    known_heaters = {heater.id for heater in config.heaters}
+    for constraint in constraints:
+        if constraint.heater_id not in known_heaters:
+            raise ConfigValidationError("heater does not exist", field="heater_id", heater_id=constraint.heater_id)
+    timezone_name = config.schedule.timezone if config.schedule is not None else "UTC"
+    request = PlanningInput(
+        heaters=config.heaters,
+        telemetry=store.planning.telemetry(),
+        constraints=constraints,
+        forecast=store.planning.latest_forecast(),
+        horizon_start=observed_at,
+        horizon_hours=site["forecast_horizon_hours"],
+        slot_minutes=config.site.slot_minutes,
+        max_total_power_w=config.site.max_total_power_w,
+        timezone_name=timezone_name,
+    )
+    return DeterministicChargeOptimizer().build(request)
+
+
+def _preview_response(plan, constraints) -> PlanningPreviewResponse:
+    return PlanningPreviewResponse(
+        token=plan.input_token, status=plan.status, score=list(plan.score),
+        horizon_start=plan.horizon_start, horizon_end=plan.horizon_end,
+        slot_minutes=plan.slot_minutes,
+        slots=[{"start": item.start, "end": item.end, "heater_ids": list(item.heater_ids), "power_w": item.power_w, "stored_charge_percent": item.stored_charge_percent, "required_charge_percent": item.required_charge_percent, "outdoor_temperature_c": item.outdoor_temperature_c} for item in plan.slots],
+        deficits=[PlanningDeficitView(**item.__dict__) for item in plan.deficits],
+        constraints=[ChargeConstraintView(id=item.id, heater_id=item.heater_id, target_charge=item.target_charge, at_time=item.at.strftime("%H:%M"), weekdays=list(item.weekdays)) for item in constraints],
     )
 
 

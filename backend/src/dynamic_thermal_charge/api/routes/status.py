@@ -29,6 +29,8 @@ from ..schemas import (
     PlanSummary,
     PowerSnapshot,
     StatusResponse,
+    ChargeTelemetryView,
+    PlanningDeficitView,
 )
 
 
@@ -117,6 +119,19 @@ def get_status(
             AllocationSummary(**allocation) for allocation in snapshot["allocations"]
         ]
 
+    telemetry_views = []
+    telemetry_snapshot = store.planning.telemetry()
+    for heater in config.heaters:
+        value = telemetry_snapshot.get(heater.id)
+        if value is None:
+            telemetry_views.append(ChargeTelemetryView(heater_id=heater.id, missing_fields=["temperature_c", "target_temperature_c", "stored_charge_percent"]))
+            continue
+        stamps = (value.temperature_received_at, value.target_received_at, value.stored_charge_received_at)
+        ages = [(observed_at - item).total_seconds() for item in stamps if item is not None]
+        missing = [name for name, item in (("temperature_c", value.temperature_c), ("target_temperature_c", value.target_temperature_c), ("stored_charge_percent", value.stored_charge_percent)) if item is None]
+        oldest = max(ages, default=None)
+        telemetry_views.append(ChargeTelemetryView(heater_id=heater.id, temperature_c=value.temperature_c, target_temperature_c=value.target_temperature_c, stored_charge_percent=value.stored_charge_percent, temperature_received_at=value.temperature_received_at, target_received_at=value.target_received_at, stored_charge_received_at=value.stored_charge_received_at, state="telemetry_stale" if missing or oldest is None or oldest > 900 else "ready", missing_fields=missing, oldest_age_seconds=oldest))
+    active_automatic = store.planning.active_plan()
     return StatusResponse(
         observed_at=observed_at,
         controller=ControllerHealth(
@@ -139,6 +154,9 @@ def get_status(
         plan=plan,
         forecast=forecast,
         allocations=allocations,
+        telemetry=telemetry_views,
+        plan_status=None if active_automatic is None else active_automatic["status"],
+        deficits=[] if active_automatic is None else [PlanningDeficitView(**item) for item in active_automatic["deficits"]],
     )
 
 

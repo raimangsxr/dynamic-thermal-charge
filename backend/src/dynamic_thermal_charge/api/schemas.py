@@ -13,7 +13,7 @@ decision.
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, time
 
 from pydantic import BaseModel, Field
 
@@ -125,6 +125,9 @@ class StatusResponse(BaseModel):
     )
     forecast: ForecastSummary | None = None
     allocations: list[AllocationSummary] = Field(default_factory=list)
+    telemetry: list["ChargeTelemetryView"] = Field(default_factory=list)
+    plan_status: str | None = None
+    deficits: list["PlanningDeficitView"] = Field(default_factory=list)
 
 
 class HourlyForecastPointView(BaseModel):
@@ -181,6 +184,92 @@ class PlanningResponse(BaseModel):
     horizon_end: datetime | None = None
     timeline: list[PlanningTimelineSlotView] = Field(default_factory=list)
     absence_reason: str | None = None
+    constraints: list["ChargeConstraintView"] = Field(default_factory=list)
+    telemetry: list["ChargeTelemetryView"] = Field(default_factory=list)
+    plan_status: str | None = None
+    deficits: list["PlanningDeficitView"] = Field(default_factory=list)
+    preview_token: str | None = None
+    constraints_revision: int = 1
+
+
+class ChargeConstraintView(BaseModel):
+    id: int | None = None
+    heater_id: str
+    target_charge: float
+    at_time: str
+    weekdays: list[int]
+    enabled: bool = True
+
+
+class ChargeTelemetryView(BaseModel):
+    heater_id: str
+    temperature_c: float | None = None
+    target_temperature_c: float | None = None
+    stored_charge_percent: float | None = None
+    temperature_received_at: datetime | None = None
+    target_received_at: datetime | None = None
+    stored_charge_received_at: datetime | None = None
+    state: str = "telemetry_stale"
+    missing_fields: list[str] = Field(default_factory=list)
+    oldest_age_seconds: float | None = None
+
+
+class PlanningDeficitView(BaseModel):
+    heater_id: str
+    target_charge_percent: float
+    projected_charge_percent: float
+    deficit_percent: float
+    reason: str
+
+
+class ChargeConstraintRequest(BaseModel):
+    heater_id: str
+    target_charge: float = Field(ge=0, le=1)
+    at_time: str
+    weekdays: list[int] = Field(min_length=1)
+
+
+class PlanningPreviewRequest(BaseModel):
+    constraints: list[ChargeConstraintRequest]
+    expected_revision: int | None = None
+
+
+class PlanningPreviewResponse(BaseModel):
+    token: str
+    status: str
+    score: list[float]
+    horizon_start: datetime
+    horizon_end: datetime
+    slot_minutes: int
+    slots: list[dict]
+    deficits: list[PlanningDeficitView] = Field(default_factory=list)
+    constraints: list[ChargeConstraintView] = Field(default_factory=list)
+
+
+class PlanningActivateRequest(BaseModel):
+    token: str
+    constraints: list[ChargeConstraintRequest]
+    expected_revision: int
+
+
+class AutomaticPlanAuditItem(BaseModel):
+    id: int
+    plan_id: int | None = None
+    event: str
+    reason: str
+    details: dict
+    occurred_at: datetime
+
+
+class AutomaticPlanAuditPage(BaseModel):
+    items: list[AutomaticPlanAuditItem]
+
+
+class HeaterChargeConfigRequest(BaseModel):
+    temperature_topic: str | None = None
+    target_temperature_topic: str | None = None
+    stored_charge_topic: str | None = None
+    reserve_percent: float = Field(ge=0, le=100)
 
 
 class ControllerLogEvent(BaseModel):
@@ -209,6 +298,9 @@ class ThermalProfileView(BaseModel):
     min_charge: float
     max_charge: float
     thermal_loss_c_per_hour: float
+    room_inertia_hours: float = 8.0
+    outdoor_loss_per_hour: float = 0.08
+    emission_c_per_hour: float = 1.0
 
 
 class OutputView(BaseModel):
@@ -227,6 +319,10 @@ class HeaterResponse(BaseModel):
     priority: int
     enabled: bool
     indoor_topic: str | None = None
+    temperature_topic: str | None = None
+    target_temperature_topic: str | None = None
+    stored_charge_topic: str | None = None
+    reserve_percent: float = 0.0
     output: OutputView
     thermal: ThermalProfileView | None = None
 

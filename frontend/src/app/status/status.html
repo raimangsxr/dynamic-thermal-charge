@@ -62,6 +62,15 @@
       </ul>
     }
 
+    @if (data.telemetry?.length) {
+      <section class="telemetry" aria-labelledby="telemetry-title">
+        <h2 id="telemetry-title">Telemetría de carga</h2>
+        <div class="table-scroll"><table><caption class="sr-only">Telemetría independiente por acumulador</caption><thead><tr><th>Acumulador</th><th>Temperatura</th><th>Objetivo</th><th>Carga almacenada</th><th>Estado</th></tr></thead><tbody>
+          @for (item of data.telemetry; track item.heater_id) { <tr [class.stale]="item.state === 'telemetry_stale'"><th scope="row">{{ item.heater_id }}</th><td>{{ item.temperature_c === null ? 'sin dato' : item.temperature_c + ' °C' }}</td><td>{{ item.target_temperature_c === null ? 'sin dato' : item.target_temperature_c + ' °C' }}</td><td>{{ item.stored_charge_percent === null ? 'sin dato' : item.stored_charge_percent + ' %' }}</td><td>@if (item.state === 'telemetry_stale') { <strong>Caducada o incompleta</strong> } @else { válida }</td></tr> }
+        </tbody></table></div>
+      </section>
+    }
+
     <!-- FR-015: the deficit is prominent, not buried. -->
     @if (unmet().length > 0) {
       <div class="banner warn" data-testid="unmet">

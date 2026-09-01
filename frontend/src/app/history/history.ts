@@ -7,6 +7,7 @@
  */
 
 import { HttpErrorResponse } from '@angular/common/http';
+import { JsonPipe } from '@angular/common';
 import { Component, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 
@@ -18,15 +19,16 @@ import type {
   PageDto,
   PlanHistoryDto,
   TransitionHistoryDto,
+  AutomaticPlanAuditPage,
 } from '../core/api.types';
 import { type Explained, UNREACHABLE, explain } from '../core/errors';
 import { formatInstant } from '../shared/age/age';
 
-type Tab = 'plans' | 'forecasts' | 'transitions';
+type Tab = 'plans' | 'forecasts' | 'transitions' | 'planning';
 
 @Component({
   selector: 'dtc-history',
-  imports: [FormsModule],
+  imports: [FormsModule, JsonPipe],
   templateUrl: './history.html',
   styleUrl: './history.css',
 })
@@ -43,6 +45,7 @@ export class History {
   readonly plans = signal<PageDto<PlanHistoryDto> | null>(null);
   readonly forecasts = signal<PageDto<ForecastHistoryDto> | null>(null);
   readonly transitions = signal<PageDto<TransitionHistoryDto> | null>(null);
+  readonly planningAudit = signal<AutomaticPlanAuditPage | null>(null);
 
   /** Heater ids present in the configuration, to flag the ones that are gone. */
   readonly configuredHeaters = signal<Set<string>>(new Set());
@@ -55,6 +58,8 @@ export class History {
         return this.forecasts();
       case 'transitions':
         return this.transitions();
+      case 'planning':
+        return null;
     }
   });
 
@@ -128,8 +133,13 @@ export class History {
             error: onError,
           });
         return;
+      case 'planning':
+        this.api.planningAudit({ from: query.from, to: query.to, limit: query.limit }).subscribe({ next: (page) => { this.planningAudit.set(page); clear(); }, error: onError });
+        return;
     }
   }
+
+  planningEmpty(): boolean { const page = this.planningAudit(); return page !== null && page.items.length === 0; }
 
   next(): void {
     const cursor = this.page()?.next_cursor;

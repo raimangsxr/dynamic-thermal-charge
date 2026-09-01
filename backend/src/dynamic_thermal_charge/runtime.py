@@ -17,9 +17,10 @@ from zoneinfo import ZoneInfo
 from .controller import ChargeController
 from .drivers import OutputDriver, RecordingOutputDriver, SimulatedOutputDriver
 from .gpio_driver import GpioOutputDriver
-from .models import AppConfig
+from .charge_planning import DeterministicChargeOptimizer, PlanningInput
+from .models import AppConfig, ChargeTelemetry
 from .persistence import ConfigStoreError, PlanRef
-from .scheduler import ChargeScheduler, ScheduleResult
+from .scheduler import ChargeScheduler, ScheduleResult, ScheduleSlot
 from .service import ControllerService, PlanRefresh
 from .state import PlanStore
 from .thermal import ThermalDemandEngine, select_indoor_temperatures
@@ -162,6 +163,25 @@ def _run_controller(
                 # Re-read the configuration each refresh so an edit takes effect
                 # on the next recalculation, never mid-plan (FR-039).
                 live_config, live_revision = store.repository.current()
+                planning_site = store.planning.site()
+                automatic_constraints = store.planning.constraints()
+                if automatic_constraints or store.planning.active_plan() is not None:
+                    automatic = _build_automatic_runtime_plan(
+                        store, live_config, now, automatic_constraints, planning_site
+                    )
+                    if automatic is not None:
+                        store.planning.save_plan(
+                            automatic[0],
+                            configuration_revision=live_revision,
+                            constraints_revision=planning_site["revision"],
+                            reason="periodic",
+                            active=True,
+                        )
+                        return PlanRefresh(
+                            plan=automatic[1],
+                            next_refresh_seconds=planning_site["replan_minutes"] * 60,
+                            plan_ref=None,
+                        )
                 start = (
                     live_config.schedule.active_or_next_start(now)
                     if live_config.schedule is not None
@@ -209,6 +229,38 @@ def _run_controller(
             web_log_handler.close()
             if driver is not None:
                 driver.close()
+
+
+def _build_automatic_runtime_plan(
+    store, config: AppConfig, now: datetime, constraints, planning_site: dict[str, int]
+):
+    """Build the controller-facing schedule from the automatic plan value."""
+    telemetry = store.planning.telemetry()
+    valid: dict[str, ChargeTelemetry] = {}
+    for heater_id, value in telemetry.items():
+        stamps = (value.temperature_received_at, value.target_received_at, value.stored_charge_received_at)
+        if all(item is not None and (now - item).total_seconds() <= 900 for item in stamps):
+            valid[heater_id] = value
+    timezone_name = config.schedule.timezone if config.schedule is not None else "UTC"
+    request = PlanningInput(
+        heaters=config.heaters,
+        telemetry=valid,
+        constraints=constraints,
+        forecast=store.planning.latest_forecast(),
+        horizon_start=now,
+        horizon_hours=planning_site["forecast_horizon_hours"],
+        slot_minutes=config.site.slot_minutes,
+        max_total_power_w=config.site.max_total_power_w,
+        timezone_name=timezone_name,
+    )
+    plan = DeterministicChargeOptimizer().build(request)
+    legacy_slots = tuple(
+        ScheduleSlot(slot.start, slot.end, slot.heater_ids, slot.power_w, slot.outdoor_temperature_c, False)
+        for slot in plan.slots
+    )
+    allocated = {heater.id: sum(config.site.slot_minutes for slot in plan.slots if heater.id in slot.heater_ids) for heater in config.heaters}
+    unmet = {item.heater_id: round(item.deficit_percent * config.heaters[[h.id for h in config.heaters].index(item.heater_id)].full_charge_minutes / 100) for item in plan.deficits if item.deficit_percent > 0}
+    return plan, ScheduleResult(legacy_slots, allocated, unmet)
 
 
 class _IndoorFallbackTracker:

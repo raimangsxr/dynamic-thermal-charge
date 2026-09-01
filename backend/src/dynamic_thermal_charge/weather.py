@@ -98,6 +98,56 @@ class WeatherProviderError(RuntimeError):
     """A weather forecast could not be obtained or interpreted."""
 
 
+@dataclass(frozen=True)
+class ForecastCycleState:
+    """Persistent state for one local AEMET retrieval cycle."""
+
+    local_date: date
+    scheduled_at: datetime
+    attempt: int = 0
+    next_retry_at: datetime | None = None
+    last_error: str | None = None
+    stale: bool = False
+    completed: bool = False
+
+
+class DailyAemetCycle:
+    """Schedule one daily request and exactly five hourly retries.
+
+    The state is deliberately serialisable and injectable; a process restart can
+    restore it without resetting the retry count or fabricating a forecast.
+    """
+
+    MAX_RETRIES = 5
+
+    def __init__(self, query_hour: int = 12, timezone_name: str = "UTC") -> None:
+        if not 0 <= query_hour <= 23:
+            raise ValueError("query_hour must be between 0 and 23")
+        self._query_hour = query_hour
+        self._zone = ZoneInfo(timezone_name)
+
+    def initial_state(self, local_date: date) -> ForecastCycleState:
+        scheduled = datetime.combine(local_date, datetime.min.time(), tzinfo=self._zone).replace(hour=self._query_hour)
+        return ForecastCycleState(local_date=local_date, scheduled_at=scheduled)
+
+    @property
+    def timezone(self) -> ZoneInfo:
+        return self._zone
+
+    def due(self, state: ForecastCycleState, now: datetime) -> bool:
+        moment = now.astimezone(self._zone)
+        return (not state.completed) and ((state.attempt == 0 and moment >= state.scheduled_at) or state.next_retry_at is not None and moment >= state.next_retry_at)
+
+    def success(self, state: ForecastCycleState) -> ForecastCycleState:
+        return replace(state, next_retry_at=None, last_error=None, stale=False, completed=True)
+
+    def failure(self, state: ForecastCycleState, now: datetime, error: str) -> ForecastCycleState:
+        attempt = state.attempt + 1
+        if attempt > self.MAX_RETRIES:
+            return replace(state, attempt=attempt, next_retry_at=None, last_error=error, stale=True, completed=True)
+        return replace(state, attempt=attempt, next_retry_at=now.astimezone(timezone.utc) + timedelta(hours=1), last_error=error, stale=True)
+
+
 class AemetWeatherProvider:
     def __init__(
         self,

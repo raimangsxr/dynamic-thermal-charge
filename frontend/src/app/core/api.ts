@@ -25,6 +25,7 @@ import type {
   SetFieldRequest,
   StatusDto,
   PlanningDto,
+  PlanningConstraintRequest, PlanningPreviewDto, AutomaticPlanAuditPage,
   ControllerLogPageDto, ControllerLogLevel,
   TransitionHistoryDto,
   RelayTestStartDto, RelayTestViewDto,
@@ -53,6 +54,13 @@ export class Api {
 
   planning(): Observable<PlanningDto> {
     return this.http.get<PlanningDto>(`${BASE}/planning`);
+  }
+
+  planningPreview(constraints: PlanningConstraintRequest[], expectedRevision?: number): Observable<PlanningPreviewDto> {
+    return this.http.post<PlanningPreviewDto>(`${BASE}/planning/preview`, { constraints, expected_revision: expectedRevision });
+  }
+  planningActivate(token: string, constraints: PlanningConstraintRequest[], expectedRevision: number): Observable<PlanningPreviewDto> {
+    return this.http.post<PlanningPreviewDto>(`${BASE}/planning/activate`, { token, constraints, expected_revision: expectedRevision });
   }
 
   controllerLog(query: { limit?: number; beforeId?: number; afterId?: number; level?: ControllerLogLevel; q?: string } = {}): Observable<ControllerLogPageDto> {
@@ -111,6 +119,9 @@ export class Api {
     return this.http.get<PageDto<TransitionHistoryDto>>(`${BASE}/history/transitions`, {
       params: this.historyParams(query),
     });
+  }
+  planningAudit(query: Pick<HistoryQuery, 'from' | 'to' | 'limit'> = {}): Observable<AutomaticPlanAuditPage> {
+    return this.http.get<AutomaticPlanAuditPage>(`${BASE}/history/planning-audit`, { params: this.historyParams(query) });
   }
 
   prune(): Observable<PruneDto> {

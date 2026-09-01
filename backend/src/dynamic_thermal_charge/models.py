@@ -31,6 +31,9 @@ class ThermalProfile:
     min_charge: float = 0.0
     max_charge: float = 1.0
     thermal_loss_c_per_hour: float = 0.0
+    room_inertia_hours: float = 8.0
+    outdoor_loss_per_hour: float = 0.08
+    emission_c_per_hour: float = 1.0
 
     def __post_init__(self) -> None:
         if self.design_outdoor_temperature_c >= self.target_temperature_c:
@@ -41,6 +44,12 @@ class ThermalProfile:
             raise ValueError("thermal charge limits must satisfy 0 <= min <= max <= 1")
         if not math.isfinite(self.thermal_loss_c_per_hour) or self.thermal_loss_c_per_hour < 0:
             raise ValueError("thermal_loss_c_per_hour must be finite and non-negative")
+        if self.room_inertia_hours <= 0:
+            raise ValueError("room_inertia_hours must be positive")
+        if not 0 <= self.outdoor_loss_per_hour <= 1:
+            raise ValueError("outdoor_loss_per_hour must be between 0 and 1")
+        if self.emission_c_per_hour < 0:
+            raise ValueError("emission_c_per_hour must be non-negative")
 
 
 @dataclass(frozen=True)
@@ -56,6 +65,10 @@ class Heater:
     model: str | None = None
     enabled: bool = True
     indoor_topic: str | None = None
+    temperature_topic: str | None = None
+    target_temperature_topic: str | None = None
+    stored_charge_topic: str | None = None
+    reserve_percent: float = 0.0
 
     def __post_init__(self) -> None:
         if not self.id:
@@ -69,6 +82,16 @@ class Heater:
         if self.indoor_topic is not None:
             topic = self.indoor_topic.strip()
             object.__setattr__(self, "indoor_topic", topic or None)
+        for field_name in (
+            "temperature_topic",
+            "target_temperature_topic",
+            "stored_charge_topic",
+        ):
+            value = getattr(self, field_name)
+            if value is not None:
+                object.__setattr__(self, field_name, value.strip() or None)
+        if not 0 <= self.reserve_percent <= 100:
+            raise ValueError(f"heater {self.id}: reserve_percent must be between 0 and 100")
 
     @property
     def requested_charge_minutes(self) -> int:
@@ -83,6 +106,9 @@ class SiteConfig:
     indoor_max_age_minutes: int = 30
     indoor_min_plausible_c: float = -20.0
     indoor_max_plausible_c: float = 50.0
+    replan_minutes: int = 30
+    forecast_horizon_hours: int = 48
+    aemet_query_hour: int = 12
 
     def __post_init__(self) -> None:
         if self.max_total_power_w <= 0:
@@ -101,6 +127,12 @@ class SiteConfig:
             raise ValueError(
                 "indoor plausible range must satisfy minimum < maximum"
             )
+        if self.replan_minutes <= 0:
+            raise ValueError("replan_minutes must be positive")
+        if self.forecast_horizon_hours <= 0:
+            raise ValueError("forecast_horizon_hours must be positive")
+        if not 0 <= self.aemet_query_hour <= 23:
+            raise ValueError("aemet_query_hour must be between 0 and 23")
 
 
 @dataclass(frozen=True)
@@ -114,6 +146,76 @@ class IndoorReading:
             raise ValueError("indoor reading heater id cannot be empty")
         if self.received_at.tzinfo is None:
             raise ValueError("indoor reading received_at requires a timezone")
+
+
+@dataclass(frozen=True)
+class ChargeConstraint:
+    """A recurring desired stored-charge result for one accumulator."""
+
+    heater_id: str
+    target_charge: float
+    at: time
+    weekdays: tuple[int, ...] = tuple(range(7))
+    id: int | None = None
+
+    def __post_init__(self) -> None:
+        if not self.heater_id:
+            raise ValueError("constraint heater_id cannot be empty")
+        if not 0 <= self.target_charge <= 1:
+            raise ValueError("constraint target_charge must be between 0 and 1")
+        if self.at.second or self.at.microsecond or self.at.tzinfo is not None:
+            raise ValueError("constraint at must be a wall-clock HH:MM time")
+        if not self.weekdays or any(day not in range(7) for day in self.weekdays):
+            raise ValueError("constraint weekdays must contain values from 0 to 6")
+        if tuple(self.weekdays) != tuple(sorted(set(self.weekdays))):
+            raise ValueError("constraint weekdays must be sorted and unique")
+
+
+@dataclass(frozen=True)
+class ChargeTelemetry:
+    """Latest independent MQTT values for one accumulator."""
+
+    heater_id: str
+    temperature_c: float | None = None
+    target_temperature_c: float | None = None
+    stored_charge_percent: float | None = None
+    temperature_received_at: datetime | None = None
+    target_received_at: datetime | None = None
+    stored_charge_received_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if not self.heater_id:
+            raise ValueError("telemetry heater_id cannot be empty")
+        for value in (
+            self.temperature_c,
+            self.target_temperature_c,
+            self.stored_charge_percent,
+        ):
+            if value is not None and not math.isfinite(value):
+                raise ValueError("telemetry values must be finite")
+        if self.stored_charge_percent is not None and not 0 <= self.stored_charge_percent <= 100:
+            raise ValueError("stored charge must be between 0 and 100")
+        for received_at in (
+            self.temperature_received_at,
+            self.target_received_at,
+            self.stored_charge_received_at,
+        ):
+            if received_at is not None and received_at.tzinfo is None:
+                raise ValueError("telemetry timestamps require a timezone")
+
+
+@dataclass(frozen=True)
+class TelemetryHealth:
+    heater_id: str
+    state: str
+    missing_fields: tuple[str, ...] = ()
+    oldest_age_seconds: float | None = None
+
+
+@dataclass(frozen=True)
+class TelemetrySnapshot:
+    values: dict[str, ChargeTelemetry]
+    health: dict[str, TelemetryHealth]
 
 
 @dataclass(frozen=True)

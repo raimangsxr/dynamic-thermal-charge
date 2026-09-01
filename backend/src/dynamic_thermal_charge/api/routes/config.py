@@ -45,6 +45,10 @@ def _heater_view(heater: Heater) -> HeaterResponse:
         priority=heater.priority,
         enabled=heater.enabled,
         indoor_topic=heater.indoor_topic,
+        temperature_topic=heater.temperature_topic,
+        target_temperature_topic=heater.target_temperature_topic,
+        stored_charge_topic=heater.stored_charge_topic,
+        reserve_percent=heater.reserve_percent,
         output=OutputView(
             kind=heater.output.kind,
             pin=heater.output.pin,
@@ -60,6 +64,9 @@ def _heater_view(heater: Heater) -> HeaterResponse:
                 min_charge=heater.thermal.min_charge,
                 max_charge=heater.thermal.max_charge,
                 thermal_loss_c_per_hour=heater.thermal.thermal_loss_c_per_hour,
+                room_inertia_hours=heater.thermal.room_inertia_hours,
+                outdoor_loss_per_hour=heater.thermal.outdoor_loss_per_hour,
+                emission_c_per_hour=heater.thermal.emission_c_per_hour,
             )
         ),
     )

@@ -44,6 +44,7 @@ from .mapping import (
     weather_params,
 )
 from .schema import (
+    heater_charge_config,
     config_change,
     heater as heater_table,
     indoor_reading as indoor_reading_table,
@@ -254,6 +255,38 @@ class SqlConfigRepository:
             combined.append((heater_row, output_row, thermal_row))
 
         config = config_from_rows(installation_row, weather_row, combined)
+        charge_rows = {}
+        if inspect(connection).has_table(heater_charge_config.name):
+            charge_rows = {
+                str(row["heater_id"]): row
+                for row in connection.execute(
+                    select(heater_charge_config).where(
+                        heater_charge_config.c.installation_id == installation_id
+                    )
+                ).mappings().all()
+            }
+        if charge_rows:
+            config = replace(
+                config,
+                heaters=tuple(
+                    replace(
+                        item,
+                        temperature_topic=charge_rows.get(item.id, {}).get("temperature_topic"),
+                        target_temperature_topic=charge_rows.get(item.id, {}).get("target_temperature_topic"),
+                        stored_charge_topic=charge_rows.get(item.id, {}).get("stored_charge_topic"),
+                        reserve_percent=float(charge_rows.get(item.id, {}).get("reserve_percent", 0.0)),
+                        thermal=(
+                            None if item.thermal is None else replace(
+                                item.thermal,
+                                room_inertia_hours=float(charge_rows[item.id].get("room_inertia_hours", item.thermal.room_inertia_hours)),
+                                outdoor_loss_per_hour=float(charge_rows[item.id].get("outdoor_loss_per_hour", item.thermal.outdoor_loss_per_hour)),
+                                emission_c_per_hour=float(charge_rows[item.id].get("emission_c_per_hour", item.thermal.emission_c_per_hour)),
+                            )
+                        ),
+                    ) if item.id in charge_rows else item
+                    for item in config.heaters
+                ),
+            )
         return config, int(installation_row["revision"])
 
     def installation_id(self) -> int:
@@ -341,6 +374,20 @@ class SqlConfigRepository:
         connection.execute(
             insert(output_table).values(**output_params(heater, heater_key))
         )
+        if inspect(connection).has_table(heater_charge_config.name):
+            connection.execute(
+                insert(heater_charge_config).values(
+                    installation_id=installation_id,
+                    heater_id=heater.id,
+                    temperature_topic=heater.temperature_topic or heater.indoor_topic,
+                    target_temperature_topic=heater.target_temperature_topic,
+                    stored_charge_topic=heater.stored_charge_topic,
+                    reserve_percent=heater.reserve_percent,
+                    room_inertia_hours=8 if heater.thermal is None else heater.thermal.room_inertia_hours,
+                    outdoor_loss_per_hour=0.08 if heater.thermal is None else heater.thermal.outdoor_loss_per_hour,
+                    emission_c_per_hour=1 if heater.thermal is None else heater.thermal.emission_c_per_hour,
+                )
+            )
         if heater.thermal is not None:
             connection.execute(
                 insert(thermal_table).values(
