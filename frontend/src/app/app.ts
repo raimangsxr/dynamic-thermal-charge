@@ -19,8 +19,22 @@ declare const __APP_VERSION__: string;
   ],
   template: `
     @if (auth.authenticated()) {
+      <mat-toolbar class="app-toolbar" color="primary">
+        <button mat-icon-button type="button" class="menu-button" (click)="toggleDrawer()"
+                [attr.aria-label]="navigationOpen() ? 'Cerrar navegación principal' : 'Abrir navegación principal'"
+                data-testid="navigation-toggle">
+          <mat-icon aria-hidden="true">{{ navigationOpen() ? 'menu_open' : 'menu' }}</mat-icon>
+        </button>
+        <span class="toolbar-title">Panel de control</span><span class="toolbar-spacer"></span>
+        <button mat-icon-button type="button" (click)="signOut()" aria-label="Cerrar sesión" data-testid="logout">
+          <mat-icon aria-hidden="true">logout</mat-icon>
+        </button>
+      </mat-toolbar>
+
       <mat-sidenav-container class="shell">
-        <mat-sidenav #drawer class="navigation" [mode]="mobile() ? 'over' : 'side'" [opened]="!mobile()" aria-label="Navegación principal">
+        <mat-sidenav #drawer class="navigation" [mode]="mobile() ? 'over' : 'side'"
+                     [opened]="navigationOpen()" [fixedInViewport]="true" [fixedTopGap]="64"
+                     (openedChange)="onDrawerOpenedChange($event)" aria-label="Navegación principal">
           <div class="navigation-header">
             <a class="brand" routerLink="/estado" (click)="closeDrawer(drawer)">
               <span class="brand-mark" aria-hidden="true">DTC</span>
@@ -58,19 +72,7 @@ declare const __APP_VERSION__: string;
           </nav>
         </mat-sidenav>
 
-        <mat-sidenav-content>
-          <mat-toolbar class="app-toolbar" color="primary">
-            @if (mobile()) {
-              <button mat-icon-button type="button" class="menu-button" (click)="drawer.toggle()" aria-label="Abrir navegación principal">
-                <mat-icon aria-hidden="true">menu</mat-icon>
-              </button>
-            }
-            <span class="toolbar-title">Panel de control</span><span class="toolbar-spacer"></span>
-            <button mat-icon-button type="button" (click)="signOut()" aria-label="Cerrar sesión" data-testid="logout">
-              <mat-icon aria-hidden="true">logout</mat-icon>
-            </button>
-          </mat-toolbar>
-
+        <mat-sidenav-content class="shell-content">
           @if (topology(); as state) {
             @if (state.mode !== 'normal') {
               <div class="global-mode" role="alert">Modo {{ state.mode }}: configuración de solo lectura · {{ state.pending_events }} eventos pendientes</div>
@@ -84,8 +86,8 @@ declare const __APP_VERSION__: string;
     }
   `,
   styles: `
-    :host { display: block; min-height: 100dvh; }
-    .shell { min-height: 100dvh; background: var(--canvas); }
+    :host { display: block; height: 100dvh; overflow: hidden; }
+    .shell { height: calc(100dvh - 4rem); margin-top: 4rem; background: var(--canvas); }
     .navigation { width: 17rem; border-right: 1px solid var(--border); background: var(--surface); }
     .navigation-header { padding: 1.25rem 1rem .9rem; border-bottom: 1px solid var(--border); }
     .brand { display: grid; grid-template-columns: auto 1fr; align-items: center; column-gap: .65rem; color: var(--ink); text-decoration: none; font-weight: 700; line-height: 1.2; }
@@ -97,11 +99,12 @@ declare const __APP_VERSION__: string;
     .nav-link.active { background: color-mix(in srgb, var(--primary) 12%, transparent); color: var(--primary); font-weight: 700; }
     .nav-link.active mat-icon { color: var(--primary); }
     .nav-link.relay-alert { color: var(--danger); }
-    .app-toolbar { position: sticky; top: 0; z-index: 10; box-shadow: 0 1px 5px #15223a20; }
+    .app-toolbar { position: fixed; inset: 0 0 auto; z-index: 1000; width: 100%; box-shadow: 0 1px 5px #15223a20; }
     .menu-button { margin-right: .5rem; }
     .toolbar-title { font-size: 1rem; font-weight: 500; }
     .toolbar-spacer { flex: 1 1 auto; }
-    .page-content { min-width: 0; }
+    .shell-content { height: 100%; overflow-y: auto; }
+    .page-content { min-width: 0; min-height: 100%; }
     .global-mode { padding: .65rem max(1rem, calc((100vw - 76rem) / 2)); background: #fff1c7; border-bottom: 2px solid var(--warning); }
     @media (max-width: 47.99rem) { .navigation { width: min(17rem, 86vw); } }
   `,
@@ -115,14 +118,22 @@ export class App {
   private readonly destroyRef = inject(DestroyRef);
   private readonly mediaQuery = globalThis.matchMedia?.('(max-width: 47.99rem)') ?? null;
   readonly mobile = signal(false);
+  readonly navigationOpen = signal(true);
   readonly topology = signal<import('./core/api.types').TopologyDto | null>(null);
+  private navigationChangeRequested: boolean | null = null;
 
   constructor() {
     if (this.mediaQuery) {
       this.mobile.set(this.mediaQuery.matches);
+      this.navigationOpen.set(!this.mediaQuery.matches);
       const updateViewport = (event: MediaQueryListEvent) => this.mobile.set(event.matches);
+      const updateNavigation = (event: MediaQueryListEvent) => this.navigationOpen.set(!event.matches);
       this.mediaQuery.addEventListener('change', updateViewport);
-      this.destroyRef.onDestroy(() => this.mediaQuery?.removeEventListener('change', updateViewport));
+      this.mediaQuery.addEventListener('change', updateNavigation);
+      this.destroyRef.onDestroy(() => {
+        this.mediaQuery?.removeEventListener('change', updateViewport);
+        this.mediaQuery?.removeEventListener('change', updateNavigation);
+      });
     }
 
     // This initial read makes an externally-owned session or persistent latch
@@ -134,7 +145,25 @@ export class App {
   }
 
   closeDrawer(drawer: MatSidenav): void {
-    if (this.mobile()) void drawer.close();
+    if (this.mobile()) {
+      this.navigationChangeRequested = false;
+      this.navigationOpen.set(false);
+      void drawer.close();
+    }
+  }
+
+  toggleDrawer(): void {
+    const opened = !this.navigationOpen();
+    this.navigationChangeRequested = opened;
+    this.navigationOpen.set(opened);
+  }
+
+  onDrawerOpenedChange(opened: boolean): void {
+    if (this.navigationChangeRequested !== null) {
+      if (opened !== this.navigationChangeRequested) return;
+      this.navigationChangeRequested = null;
+    }
+    this.navigationOpen.set(opened);
   }
 
   signOut(): void {

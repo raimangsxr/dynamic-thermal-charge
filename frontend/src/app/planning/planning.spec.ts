@@ -1,10 +1,23 @@
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
+import { MatDialog } from '@angular/material/dialog';
 import { TestBed, type ComponentFixture } from '@angular/core/testing';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { PlanningDto } from '../core/api.types';
 import { Planning } from './planning';
+
+const chartState = vi.hoisted(() => ({ configs: [] as Array<{ data: { labels: unknown[]; datasets: Array<{ label?: string }> } }> }));
+
+vi.mock('chart.js/auto', () => ({
+  Chart: class {
+    constructor(_target: unknown, config: { data: { labels: unknown[]; datasets: Array<{ label?: string }> } }) {
+      chartState.configs.push(config);
+    }
+
+    destroy(): void {}
+  },
+}));
 
 const PLANNING: PlanningDto = {
   observed_at: '2026-01-16T01:00:00Z',
@@ -49,24 +62,89 @@ describe('Planning', () => {
       imports: [Planning],
       providers: [provideHttpClient(), provideHttpClientTesting()],
     }).compileComponents();
+    chartState.configs.length = 0;
     fixture = TestBed.createComponent(Planning);
     backend = TestBed.inject(HttpTestingController);
     fixture.detectChanges();
   });
 
-  it('loads the protected planning projection and renders all visual levels', () => {
+  it('loads the protected planning projection and renders summaries and all visual levels', () => {
     backend.expectOne('/api/v1/planning').flush(PLANNING);
     fixture.detectChanges();
     const element = fixture.nativeElement as HTMLElement;
+    expect(element.querySelector('[data-testid="forecast-summary"]')).not.toBeNull();
+    expect(element.querySelector('[data-testid="planning-summary"]')).not.toBeNull();
+    expect(element.querySelector('[data-testid="forecast-summary"]')?.textContent).toContain('Registros horarios');
+    expect(element.querySelector('[data-testid="forecast-summary"]')?.textContent).toContain('Última consulta');
+    expect(element.querySelector('[data-testid="forecast-summary"]')?.textContent).toContain('16 ene 2026');
+    expect(element.querySelector('[data-testid="forecast-detail-button"]')).not.toBeNull();
+    expect(element.querySelector('[data-testid="planning-detail-button"]')).not.toBeNull();
+    expect(element.querySelector('[data-testid="temperature-card"]')).not.toBeNull();
+    expect(element.querySelector('[data-testid="heater-card"]')).not.toBeNull();
+    expect(element.querySelector('[data-testid="aggregate-card"]')).not.toBeNull();
+    expect(element.querySelector('[data-testid="cumulative-card"]')).not.toBeNull();
     expect(element.querySelector('[aria-labelledby="temperature-title"]')).not.toBeNull();
     expect(element.querySelector('[aria-labelledby="heater-title"]')).not.toBeNull();
     expect(element.querySelector('[aria-labelledby="aggregate-title"]')).not.toBeNull();
     expect(element.querySelector('[aria-labelledby="cumulative-title"]')).not.toBeNull();
-    expect(element.querySelector('[data-testid="planning-table"] tbody tr')).not.toBeNull();
-    expect(element.querySelector('[data-testid="planning-table"]')?.textContent).toContain('Carga acumulada');
+    expect(element.querySelector('[data-testid="planning-table"]')).toBeNull();
     expect(element.querySelector('[data-testid="planning-deficit"]')?.textContent).toContain('Carga no atendida');
-    expect(element.querySelector('[data-testid="forecast-table"] tbody tr')).not.toBeNull();
+    expect(element.querySelector('[data-testid="forecast-table"]')).toBeNull();
+    expect(element.querySelector('[data-testid="forecast-chart-card"]')).not.toBeNull();
     expect(element.querySelector('[data-testid="forecast-next-run"]')?.textContent).toContain('Próxima consulta automática');
+    expect(element.querySelector('section.planning')).toBeNull();
+    expect(element.querySelectorAll('[data-testid$="-card"]')).toHaveLength(5);
+  });
+
+  it('creates all data-backed charts when the initial response arrives after AfterViewInit', async () => {
+    backend.expectOne('/api/v1/planning').flush(PLANNING);
+    await fixture.whenStable();
+
+    expect(chartState.configs).toHaveLength(5);
+    expect(fixture.componentInstance.slotLabel(PLANNING.plan!.slots[0])).toBe(
+      fixture.componentInstance.dateTime(PLANNING.plan!.slots[0].start),
+    );
+    expect(fixture.componentInstance.slotLabel(PLANNING.plan!.slots[0])).not.toContain('–');
+    expect(chartState.configs[1].data.labels).toEqual([
+      fixture.componentInstance.dateTime(PLANNING.timeline[0].start),
+      '',
+    ]);
+  });
+
+  it('opens forecast and planning details in accessible dialogs with explicit close actions', async () => {
+    backend.expectOne('/api/v1/planning').flush(PLANNING);
+    fixture.detectChanges();
+
+    const element = fixture.nativeElement as HTMLElement;
+    element.querySelector<HTMLButtonElement>('[data-testid="forecast-detail-button"]')?.click();
+    await fixture.whenStable();
+    expect(document.querySelector('mat-dialog-container')).not.toBeNull();
+    expect(document.querySelector('mat-dialog-container')?.textContent).toContain('3 °C');
+    expect(document.querySelector('.cdk-overlay-backdrop')).not.toBeNull();
+    expect(document.querySelector('[data-testid="detail-dialog-close"]')).not.toBeNull();
+    (document.querySelector<HTMLButtonElement>('[data-testid="detail-dialog-close"]'))?.click();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(document.querySelector('mat-dialog-container')).toBeNull();
+
+    element.querySelector<HTMLButtonElement>('[data-testid="planning-detail-button"]')?.click();
+    await fixture.whenStable();
+    expect(document.querySelector('mat-dialog-container')?.textContent).toContain('Detalle de la planificación');
+    (document.querySelector<HTMLButtonElement>('[data-testid="detail-dialog-close"]'))?.click();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  });
+
+  it('opens both detail dialogs with a wide responsive viewport-bound width', () => {
+    backend.expectOne('/api/v1/planning').flush(PLANNING);
+    fixture.detectChanges();
+    const dialog = TestBed.inject(MatDialog);
+    const open = vi.spyOn(dialog, 'open').mockReturnValue({} as never);
+
+    fixture.componentInstance.openForecastDetails();
+    fixture.componentInstance.openPlanningDetails();
+
+    expect(open.mock.calls[0][1]).toMatchObject({ width: 'min(92vw, 72rem)' });
+    expect(open.mock.calls[1][1]).toMatchObject({ width: 'min(92vw, 72rem)' });
+    open.mockRestore();
   });
 
   it('states explicitly when there is no plan instead of fabricating rows', () => {
@@ -83,5 +161,14 @@ describe('Planning', () => {
   it('shows the reserve dropping when the next interval has no charge', () => {
     expect(fixture.componentInstance.cumulativeMinutes(PLANNING, 'salon', 0)).toBe(30);
     expect(fixture.componentInstance.cumulativeMinutes(PLANNING, 'salon', 1)).toBe(20);
+  });
+
+  it('uses the received hourly temperatures and exposes sparse labels with complete tooltips', () => {
+    expect(fixture.componentInstance.forecastTemperatures(PLANNING.forecast!.hourly_points)).toEqual([3, 4]);
+    const labels = Array.from({ length: 11 }, (_item, index) => `intervalo-${index}`);
+    expect(fixture.componentInstance.intervalLabels(labels)).toEqual([
+      'intervalo-0', '', '', '', '', 'intervalo-5', '', '', '', '', 'intervalo-10',
+    ]);
+    expect(fixture.componentInstance.intervalTooltipLabel(labels, 7)).toBe('intervalo-7');
   });
 });

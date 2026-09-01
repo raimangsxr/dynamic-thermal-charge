@@ -1,11 +1,113 @@
 import { HttpErrorResponse } from '@angular/common/http';
-import { AfterViewInit, Component, ElementRef, OnDestroy, ViewChild, inject, signal } from '@angular/core';
+import { AfterViewInit, Component, ElementRef, Injector, OnDestroy, ViewChild, afterNextRender, inject, signal } from '@angular/core';
+import { MAT_DIALOG_DATA, MatDialog, MatDialogModule } from '@angular/material/dialog';
+import { MatButtonModule } from '@angular/material/button';
 import { FormsModule } from '@angular/forms';
 import { Chart } from 'chart.js/auto';
+import type { ChartOptions, TooltipItem } from 'chart.js';
 
 import { Api } from '../core/api';
-import type { ApiErrorDto, PlanningConstraintRequest, PlanningDto, PlanningPreviewDto, PlanningSlotDto } from '../core/api.types';
+import type { ApiErrorDto, HourlyForecastPointDto, PlanningConstraintRequest, PlanningDto, PlanningPreviewDto, PlanningSlotDto } from '../core/api.types';
 import { type Explained, UNREACHABLE, explain } from '../core/errors';
+
+interface PlanningDetailDialogData {
+  kind: 'forecast' | 'planning';
+  planning: PlanningDto;
+}
+
+@Component({
+  selector: 'dtc-planning-detail-dialog',
+  imports: [MatButtonModule, MatDialogModule],
+  template: `
+    <h2 mat-dialog-title>{{ data.kind === 'forecast' ? 'Detalle de la previsión' : 'Detalle de la planificación' }}</h2>
+    <mat-dialog-content>
+      @if (data.kind === 'forecast' && data.planning.forecast; as forecast) {
+        <dl class="detail-list">
+          <div><dt>Origen</dt><dd>{{ sourceText(forecast.source) }}</dd></div>
+          <div><dt>Fecha</dt><dd>{{ dateText(forecast.date) }}</dd></div>
+          <div><dt>Municipio</dt><dd>{{ forecast.municipality || 'no disponible' }}</dd></div>
+          <div><dt>Rango horario</dt><dd>{{ forecastRange(forecast.hourly_points) }}</dd></div>
+          <div><dt>Registros horarios</dt><dd>{{ forecast.hourly_points.length }}</dd></div>
+          <div><dt>Temperaturas</dt><dd>{{ temperatures(forecast) }}</dd></div>
+          <div><dt>Última consulta</dt><dd>{{ dateTime(data.planning.forecast_last_attempt_at) }}</dd></div>
+          <div><dt>Próxima consulta</dt><dd>{{ dateTime(data.planning.forecast_next_run_at) }}</dd></div>
+        </dl>
+        @if (forecast.hourly_points.length) {
+          <div class="table-scroll">
+            <table><caption>Registros horarios recibidos</caption><thead><tr><th>Hora</th><th>Temperatura</th></tr></thead><tbody>
+              @for (point of forecast.hourly_points; track point.timestamp) {
+                <tr><th scope="row">{{ dateTime(point.timestamp) }}</th><td>{{ point.temperature_c }} °C</td></tr>
+              }
+            </tbody></table>
+          </div>
+        }
+      } @else if (data.kind === 'forecast') {
+        <p>No hay datos de previsión horaria disponibles.</p>
+        <p>Última consulta: {{ dateTime(data.planning.forecast_last_attempt_at) }} · Próxima consulta: {{ dateTime(data.planning.forecast_next_run_at) }}</p>
+      } @else if (data.planning.plan; as plan) {
+        <dl class="detail-list">
+          <div><dt>Ventana</dt><dd>{{ dateTime(plan.window_start) }}–{{ dateTime(plan.window_end) }}</dd></div>
+          <div><dt>Horizonte</dt><dd>{{ dateTime(data.planning.horizon_start) }}–{{ dateTime(data.planning.horizon_end) }}</dd></div>
+          <div><dt>Intervalo</dt><dd>{{ plan.slot_minutes }} minutos</dd></div>
+          <div><dt>Registros de planificación</dt><dd>{{ plan.slots.length }}</dd></div>
+          <div><dt>Creado</dt><dd>{{ dateTime(plan.created_at) }}</dd></div>
+          <div><dt>Revisión de configuración</dt><dd>{{ plan.installation_revision }}</dd></div>
+        </dl>
+        <div class="table-scroll">
+          <table><caption>Intervalos planificados</caption><thead><tr><th>Intervalo</th><th>Acumuladores</th><th>Potencia</th></tr></thead><tbody>
+            @for (slot of plan.slots; track slot.start) {
+              <tr><th scope="row">{{ dateTime(slot.start) }}–{{ dateTime(slot.end) }}</th><td>{{ slot.heater_ids.length ? slot.heater_ids.join(', ') : 'ninguno' }}</td><td>{{ slot.total_power_w }} W</td></tr>
+            }
+          </tbody></table>
+        </div>
+      } @else {
+        <p>No hay un plan actual ni próximo.</p>
+      }
+    </mat-dialog-content>
+    <mat-dialog-actions align="end">
+      <button mat-button mat-dialog-close type="button" data-testid="detail-dialog-close">Cerrar</button>
+    </mat-dialog-actions>
+  `,
+  styles: `
+    .detail-list { display: grid; gap: .6rem; margin: 0; }
+    .detail-list div { display: grid; grid-template-columns: minmax(9rem, .7fr) 1fr; gap: 1rem; }
+    dt { color: var(--muted); font-weight: 600; } dd { margin: 0; }
+    .table-scroll { overflow-x: auto; margin-top: 1.25rem; }
+    table { border-collapse: collapse; width: 100%; min-width: 30rem; }
+    th, td { padding: .5rem .65rem; border-bottom: 1px solid var(--border); text-align: left; }
+    caption { text-align: left; padding: .5rem 0; font-weight: 600; }
+    @media (max-width: 36rem) { .detail-list div { grid-template-columns: 1fr; gap: .1rem; } }
+  `,
+})
+export class PlanningDetailDialog {
+  readonly data = inject<PlanningDetailDialogData>(MAT_DIALOG_DATA);
+
+  sourceText(source: string): string {
+    return source === 'aemet' ? 'AEMET' : source === 'fallback' ? 'Fallback (última previsión válida)' : 'Simulación local';
+  }
+
+  dateText(value: string | null | undefined): string {
+    if (!value) return 'no disponible';
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(value) ? new Date(`${value}T12:00:00`) : new Date(value);
+    return date.toLocaleDateString('es-ES', { day: '2-digit', month: 'short', year: 'numeric' });
+  }
+
+  dateTime(value: string | null | undefined): string {
+    if (!value) return 'no disponible';
+    return new Date(value).toLocaleString('es-ES', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+  }
+
+  forecastRange(points: HourlyForecastPointDto[]): string {
+    if (!points.length) return 'no disponible';
+    return `${this.dateTime(points[0].timestamp)}–${this.dateTime(points[points.length - 1].timestamp)}`;
+  }
+
+  temperatures(forecast: NonNullable<PlanningDto['forecast']>): string {
+    const minimum = forecast.minimum_temperature_c === null ? 'no disponible' : `${forecast.minimum_temperature_c} °C`;
+    const maximum = forecast.maximum_temperature_c === null ? 'no disponible' : `${forecast.maximum_temperature_c} °C`;
+    return `media ${forecast.average_temperature_c} °C · mínima ${minimum} · máxima ${maximum}`;
+  }
+}
 
 @Component({
   selector: 'dtc-planning',
@@ -15,6 +117,8 @@ import { type Explained, UNREACHABLE, explain } from '../core/errors';
 })
 export class Planning implements AfterViewInit, OnDestroy {
   private readonly api = inject(Api);
+  private readonly dialog = inject(MatDialog);
+  private readonly injector = inject(Injector);
   readonly snapshot = signal<PlanningDto | null>(null);
   readonly failure = signal<Explained | null>(null);
   readonly loading = signal(true);
@@ -35,7 +139,7 @@ export class Planning implements AfterViewInit, OnDestroy {
   }
 
   ngAfterViewInit(): void {
-    this.renderCharts();
+    this.scheduleChartRender();
   }
 
   ngOnDestroy(): void {
@@ -49,7 +153,7 @@ export class Planning implements AfterViewInit, OnDestroy {
         this.draftConstraints.set((planning.constraints ?? []).map((item) => ({ heater_id: item.heater_id, target_charge: item.target_charge, at_time: item.at_time, weekdays: item.weekdays })));
         this.failure.set(null);
         this.loading.set(false);
-        queueMicrotask(() => this.renderCharts());
+        this.scheduleChartRender();
       },
       error: (error: unknown) => {
         this.loading.set(false);
@@ -88,15 +192,55 @@ export class Planning implements AfterViewInit, OnDestroy {
   }
 
   sourceText(source: string): string {
-    return source === 'aemet' ? 'AEMET' : source === 'fallback' ? 'fallback' : 'simulado';
+    return source === 'aemet' ? 'AEMET' : source === 'fallback' ? 'Fallback (última previsión válida)' : 'Simulación local';
   }
 
   slotLabel(slot: PlanningSlotDto): string {
-    return `${this.dateTime(slot.start)}–${this.dateTime(slot.end)}`;
+    return this.dateTime(slot.start);
   }
 
-  dateTime(value: string): string {
-    return new Date(value).toLocaleString([], { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  dateTime(value: string | null | undefined): string {
+    if (!value) return 'no disponible';
+    return new Date(value).toLocaleString('es-ES', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+  }
+
+  dateText(value: string | null | undefined): string {
+    if (!value) return 'no disponible';
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(value) ? new Date(`${value}T12:00:00`) : new Date(value);
+    return date.toLocaleDateString('es-ES', { day: '2-digit', month: 'short', year: 'numeric' });
+  }
+
+  forecastRange(points: HourlyForecastPointDto[]): string {
+    if (!points.length) return 'no disponible';
+    return `${this.dateTime(points[0].timestamp)}–${this.dateTime(points[points.length - 1].timestamp)}`;
+  }
+
+  temperatures(forecast: NonNullable<PlanningDto['forecast']>): string {
+    const minimum = forecast.minimum_temperature_c === null ? 'no disponible' : `${forecast.minimum_temperature_c} °C`;
+    const maximum = forecast.maximum_temperature_c === null ? 'no disponible' : `${forecast.maximum_temperature_c} °C`;
+    return `media ${forecast.average_temperature_c} °C · mínima ${minimum} · máxima ${maximum}`;
+  }
+
+  openForecastDetails(): void {
+    const planning = this.snapshot();
+    if (planning) this.dialog.open(PlanningDetailDialog, { width: 'min(92vw, 72rem)', data: { kind: 'forecast', planning }, ariaLabel: 'Detalle de la previsión', ariaModal: true });
+  }
+
+  openPlanningDetails(): void {
+    const planning = this.snapshot();
+    if (planning) this.dialog.open(PlanningDetailDialog, { width: 'min(92vw, 72rem)', data: { kind: 'planning', planning }, ariaLabel: 'Detalle de la planificación', ariaModal: true });
+  }
+
+  intervalLabels(labels: string[]): string[] {
+    return labels.map((label, index) => index % 5 === 0 ? label : '');
+  }
+
+  intervalTooltipLabel(labels: string[], index: number): string {
+    return labels[index] ?? '';
+  }
+
+  forecastTemperatures(points: HourlyForecastPointDto[]): number[] {
+    return points.map((point) => point.temperature_c);
   }
 
   time(value: string): string {
@@ -135,19 +279,21 @@ export class Planning implements AfterViewInit, OnDestroy {
     try {
       if (data.forecast?.hourly_points.length && this.forecastCanvas) {
         const points = data.forecast.hourly_points;
+        const fullLabels = points.map((point) => this.dateTime(point.timestamp));
         this.charts.push(new Chart(this.forecastCanvas.nativeElement, {
           type: 'line',
-          data: { labels: points.map((point) => this.dateTime(point.timestamp)), datasets: [{ label: 'Temperatura exterior (°C)', data: points.map((point) => point.temperature_c), borderColor: '#2457a6', backgroundColor: '#2457a622', tension: 0.25, spanGaps: false }] },
-          options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: true } } },
+          data: { labels: this.intervalLabels(fullLabels), datasets: [{ label: 'Temperatura exterior (°C)', data: this.forecastTemperatures(points), borderColor: '#2457a6', backgroundColor: '#2457a622', tension: 0.25, spanGaps: false }] },
+          options: this.chartOptions<'line'>(fullLabels),
         }));
       }
       if (!data.plan || !timeline.length || !this.temperatureCanvas || !this.heaterCanvas || !this.aggregateCanvas || !this.cumulativeCanvas) return;
-      const labels = timeline.map((slot) => this.slotLabel(slot));
+      const fullLabels = timeline.map((slot) => this.slotLabel(slot));
+      const labels = this.intervalLabels(fullLabels);
       const colors = ['#2457a6', '#d46b28', '#3b8c68', '#8a4f9e', '#9b7a21'];
       this.charts.push(new Chart(this.temperatureCanvas.nativeElement, {
         type: 'line',
         data: { labels, datasets: [{ label: 'Temperatura exterior (°C)', data: timeline.map((slot) => slot.temperature_c), borderColor: colors[0], backgroundColor: '#2457a622', tension: 0.25, spanGaps: false }] },
-        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: true } } },
+        options: this.chartOptions<'line'>(fullLabels),
       }));
 
       this.charts.push(new Chart(this.heaterCanvas.nativeElement, {
@@ -157,19 +303,19 @@ export class Planning implements AfterViewInit, OnDestroy {
           data: timeline.map((slot) => slot.heater_ids.includes(heater.id) ? heater.power_w : 0),
           backgroundColor: `${colors[index % colors.length]}cc`,
         })) },
-        options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, title: { display: true, text: 'W' } } } },
+        options: this.chartOptions<'bar'>(fullLabels, 'W'),
       }));
 
       this.charts.push(new Chart(this.aggregateCanvas.nativeElement, {
-        type: 'bar',
-        data: { labels, datasets: [{ label: 'Potencia agregada (W)', data: timeline.map((slot) => slot.total_power_w), backgroundColor: '#2457a6cc' }, { label: 'Límite configurado (W)', data: timeline.map(() => data.max_total_power_w), type: 'line', borderColor: '#b33a3a', pointRadius: 0 }] },
-        options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, title: { display: true, text: 'W' } } } },
+        type: 'line',
+        data: { labels, datasets: [{ label: 'Potencia agregada (W)', data: timeline.map((slot) => slot.total_power_w), borderColor: '#2457a6', backgroundColor: '#2457a688', tension: 0.15 }, { label: 'Límite configurado (W)', data: timeline.map(() => data.max_total_power_w), borderColor: '#b33a3a', pointRadius: 0 }] },
+        options: this.chartOptions<'line'>(fullLabels, 'W'),
       }));
 
-      const cumulativeLabels = ['Inicio', ...timeline.map((slot) => this.dateTime(slot.end))];
+      const cumulativeFullLabels = ['Inicio', ...timeline.map((slot) => this.dateTime(slot.end))];
       this.charts.push(new Chart(this.cumulativeCanvas.nativeElement, {
         type: 'line',
-        data: { labels: cumulativeLabels, datasets: data.heaters.map((heater, index) => ({
+        data: { labels: this.intervalLabels(cumulativeFullLabels), datasets: data.heaters.map((heater, index) => ({
           label: `${heater.name} (min)`,
           data: [0, ...timeline.map((_slot, slotIndex) => this.cumulativeMinutes(data, heater.id, slotIndex))],
           borderColor: colors[index % colors.length],
@@ -177,7 +323,7 @@ export class Planning implements AfterViewInit, OnDestroy {
           stepped: true,
           tension: 0,
         })) },
-        options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, title: { display: true, text: 'Minutos de carga acumulada' } } } },
+        options: this.chartOptions<'line'>(cumulativeFullLabels, 'Minutos de carga acumulada'),
       }));
     } catch {
       // Canvas is unavailable in some browsers/test environments. The table is
@@ -189,6 +335,39 @@ export class Planning implements AfterViewInit, OnDestroy {
   private destroyCharts(): void {
     for (const chart of this.charts) chart.destroy();
     this.charts = [];
+  }
+
+  private chartRenderScheduled = false;
+
+  private scheduleChartRender(): void {
+    if (this.chartRenderScheduled) return;
+    this.chartRenderScheduled = true;
+    afterNextRender(() => {
+      this.chartRenderScheduled = false;
+      this.renderCharts();
+    }, { injector: this.injector });
+  }
+
+  private chartOptions<T extends 'line' | 'bar'>(fullLabels: string[], yAxisTitle?: string): ChartOptions<T> {
+    const options = {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: true },
+        tooltip: {
+          callbacks: {
+            title: (items: TooltipItem<T>[]) => this.intervalTooltipLabel(fullLabels, items[0]?.dataIndex ?? 0),
+            label: (context: TooltipItem<T>) => `${(context.dataset as unknown as { label?: string }).label ?? 'Valor'}: ${context.formattedValue}`,
+          },
+        },
+      },
+      scales: {
+        x: { ticks: { callback: (_value: string | number, index: number) => this.intervalLabels(fullLabels)[index] ?? '' } },
+        y: { beginAtZero: true, ...(yAxisTitle ? { title: { display: true, text: yAxisTitle } } : {}) },
+      },
+    } as unknown as ChartOptions<T>;
+    return options;
   }
 
   private describe(error: unknown): Explained {

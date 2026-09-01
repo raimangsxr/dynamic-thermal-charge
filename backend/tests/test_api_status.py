@@ -146,6 +146,65 @@ def test_planning_endpoint_returns_hourly_series_and_all_intervals(
     assert body["max_total_power_w"] == config.site.max_total_power_w
 
 
+def test_planning_endpoint_prefers_the_newest_stored_forecast_over_plan_forecast(
+    client, initialised_store, recorder
+):
+    from sqlalchemy import update
+
+    from dynamic_thermal_charge.persistence.schema import forecast as forecast_table
+
+    config, revision = initialised_store.repository.current()
+    older_points = (
+        HourlyForecastPoint(API_NOW, 8.0),
+        HourlyForecastPoint(API_NOW + timedelta(hours=1), 8.0),
+    )
+    older_ref = recorder.record_forecast(
+        OutdoorForecast(
+            date=API_NOW.date(), average_temperature_c=8.0,
+            minimum_temperature_c=8.0, maximum_temperature_c=8.0,
+            source="simulated", hourly_points=older_points,
+        )
+    )
+    assert older_ref is not None
+    plan = ChargeScheduler().build(
+        config.site, config.heaters, WINDOW_START,
+        requested_charge_minutes={heater.id: 0 for heater in config.heaters},
+        hourly_points=older_points,
+        fallback_temperature_c=8.0,
+    )
+    recorder.record_plan(plan, older_ref, revision)
+
+    newer_points = (
+        HourlyForecastPoint(API_NOW, 2.0),
+        HourlyForecastPoint(API_NOW + timedelta(hours=1), 14.0),
+    )
+    newer_ref = recorder.record_forecast(
+        OutdoorForecast(
+            date=API_NOW.date(), average_temperature_c=7.0,
+            minimum_temperature_c=2.0, maximum_temperature_c=14.0,
+            source="aemet", hourly_points=newer_points,
+        )
+    )
+    assert newer_ref is not None
+    application_engine = initialised_store.application_engine or initialised_store.engine
+    with application_engine.begin() as connection:
+        connection.execute(
+            update(forecast_table)
+            .where(forecast_table.c.id == older_ref.id)
+            .values(retrieved_at=API_NOW - timedelta(hours=2))
+        )
+        connection.execute(
+            update(forecast_table)
+            .where(forecast_table.c.id == newer_ref.id)
+            .values(retrieved_at=API_NOW - timedelta(hours=1))
+        )
+
+    body = client.get("/api/v1/planning", headers=AUTH).json()
+
+    assert body["forecast"]["source"] == "aemet"
+    assert [point["temperature_c"] for point in body["forecast"]["hourly_points"]] == [2.0, 14.0]
+
+
 def test_planning_endpoint_explicitly_reports_absence(client, heartbeat):
     heartbeat.publish(API_NOW, degraded=False)
     body = client.get("/api/v1/planning", headers=AUTH).json()
