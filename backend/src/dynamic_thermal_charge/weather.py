@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 import json
 import logging
 import math
-from typing import Any, Callable, Mapping, Protocol
+from typing import Any, Callable, Mapping, Protocol, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
@@ -274,6 +274,21 @@ def weather_config_from_system(settings: WeatherSystemSettings) -> WeatherConfig
     )
 
 
+def future_forecast_points(
+    points: Sequence[HourlyForecastPoint],
+    at: datetime,
+) -> tuple[HourlyForecastPoint, ...]:
+    """Keep hourly forecast points from the current hour onward.
+
+    AEMET marks the start of each one-hour interval. Aligning ``at`` to the
+    hour boundary keeps the in-progress hour visible in charts and planning.
+    """
+    if at.tzinfo is None:
+        raise ValueError("reference time requires a timezone")
+    start = at.replace(minute=0, second=0, microsecond=0)
+    return tuple(point for point in points if point.timestamp >= start)
+
+
 def build_weather_provider_from_system(
     settings: WeatherSystemSettings,
     *,
@@ -298,12 +313,20 @@ def _parse_aemet_forecast(
     try:
         municipality = payload[0]
         days = municipality["prediccion"]["dia"]
-        day = next(item for item in days if item["fecha"].startswith(forecast_date.isoformat()))
-    except (IndexError, KeyError, StopIteration, TypeError, ValueError) as exc:
+    except (IndexError, KeyError, TypeError, ValueError) as exc:
         raise WeatherProviderError(
             f"AEMET forecast has no valid temperatures for {forecast_date.isoformat()}"
         ) from exc
-    daily_temperature = day.get("temperatura")
+    day = next(
+        (
+            item
+            for item in days
+            if isinstance(item, dict)
+            and str(item.get("fecha", "")).startswith(forecast_date.isoformat())
+        ),
+        None,
+    )
+    daily_temperature = day.get("temperatura") if day is not None else None
     minimum: float | None = None
     maximum: float | None = None
     if isinstance(daily_temperature, dict):
@@ -317,9 +340,7 @@ def _parse_aemet_forecast(
     location_parts = [
         str(part) for part in (municipality_name, province) if part
     ]
-    hourly_points = _parse_aemet_hourly_points(
-        days, forecast_date, local_timezone
-    )
+    hourly_points = _parse_aemet_hourly_points(days, local_timezone)
     if hourly_points:
         temperatures = [
             point.temperature_c
@@ -350,7 +371,6 @@ def _parse_aemet_forecast(
 
 def _parse_aemet_hourly_points(
     days: Any,
-    forecast_date: date,
     local_timezone: timezone | ZoneInfo,
 ) -> tuple[HourlyForecastPoint, ...]:
     """Normalize AEMET's list-shaped hourly temperatures.
@@ -358,7 +378,7 @@ def _parse_aemet_hourly_points(
     AEMET has returned both numeric ``hora`` values and ranges such as
     ``"03-04"`` over time. Invalid entries are ignored, but a list that has no
     valid temperature is rejected by the caller rather than silently becoming
-    a zero-degree forecast.
+    a zero-degree forecast. Every day with hourly data in the payload is kept.
     """
     if not isinstance(days, list):
         return ()
@@ -392,8 +412,6 @@ def _parse_aemet_hourly_points(
             day_date = date.fromisoformat(raw_date)
         except ValueError:
             continue
-        if not forecast_date <= day_date < forecast_date + timedelta(days=2):
-            continue
         for item in items:
             if not isinstance(item, dict):
                 continue
@@ -411,9 +429,7 @@ def _parse_aemet_hourly_points(
             except (TypeError, ValueError):
                 continue
     if saw_hourly_payload and not points:
-        raise WeatherProviderError(
-            f"AEMET forecast has no valid hourly temperatures for {forecast_date.isoformat()}"
-        )
+        raise WeatherProviderError("AEMET forecast has no valid hourly temperatures")
     return tuple(sorted({(point.timestamp, point.temperature_c): point for point in points}.values(), key=lambda point: point.timestamp))
 
 

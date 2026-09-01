@@ -299,7 +299,7 @@ def _build_automatic_runtime_plan(
         heaters=config.heaters,
         telemetry=valid,
         constraints=constraints,
-        forecast=store.planning.latest_forecast(),
+        forecast=store.planning.latest_forecast(now),
         horizon_start=now,
         horizon_hours=int(planning_site["forecast_horizon_hours"]),
         slot_minutes=config.site.slot_minutes,

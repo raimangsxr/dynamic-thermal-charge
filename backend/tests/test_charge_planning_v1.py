@@ -69,6 +69,21 @@ def test_forecast_continuity_truncates_horizon_and_missing_or_fallback_is_invali
     assert MilpChargePlanner().build(PlanningInput(**{**request(points=points).__dict__, "forecast_automatic_eligible": False})).status == INVALID
 
 
+def test_planner_starts_at_first_available_forecast_hour_when_now_is_uncovered():
+    from dynamic_thermal_charge.charge_planning import _continuous_forecast_slots
+
+    start = datetime(2026, 1, 15, 22, 0, tzinfo=timezone.utc)
+    forecast_start = datetime(2026, 1, 16, 0, 0, tzinfo=timezone.utc)
+    points = tuple(
+        HourlyForecastPoint(forecast_start + timedelta(hours=index), 4)
+        for index in range(48)
+    )
+    starts = _continuous_forecast_slots(start, points, 48, 30)
+    assert starts
+    assert starts[0] == forecast_start
+    assert starts[-1] < start + timedelta(hours=48)
+
+
 def test_constraints_materialize_weekdays_at_boundaries_including_horizon_end():
     start = datetime(2026, 1, 16, 0, 0, tzinfo=timezone.utc)
     rule = ChargeConstraint("a", .5, time(2, 0), weekdays=(4,))
