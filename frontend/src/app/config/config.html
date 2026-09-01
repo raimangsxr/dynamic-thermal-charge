@@ -31,31 +31,44 @@
   }
 
   @if (config(); as data) {
-    <section class="surface configuration-section" aria-labelledby="installation-title">
-      <div class="section-heading"><div><p class="eyebrow">Parámetros</p><h2 id="installation-title">Instalación</h2></div></div>
-      @for (group of installationGroups; track group.title) {
-        <div class="field-group">
-          <h3>{{ group.title }}</h3>
-          <div class="fields">
-            @for (field of group.fields; track field) {
-              <div class="field" [attr.data-field]="field">
-                <span hidden>{{ register(field, null) }}</span>
-                <div class="field-column">
+    <section class="surface configuration-section installation-section" aria-labelledby="installation-title">
+      <div class="section-heading installation-heading">
+        <div>
+          <p class="eyebrow">Parámetros</p>
+          <h2 id="installation-title">Instalación</h2>
+        </div>
+        <button mat-flat-button color="primary" type="button" (click)="saveInstallation()" [disabled]="!dirty() || installationSaving()" data-testid="save-installation">
+          {{ installationSaving() ? 'Guardando…' : 'Guardar cambios' }}
+        </button>
+      </div>
+      <div class="installation-grid">
+        @for (group of installationGroups; track group.title) {
+          <div class="field-group installation-panel">
+            <h3>{{ group.title }}</h3>
+            <div class="installation-fields">
+              @for (field of group.fields; track field) {
+                <div class="installation-field" [attr.data-field]="field">
+                  <span hidden>{{ register(field, null) }}</span>
                   <div class="field-label-row">
                     <label [for]="field">{{ label(field) }}</label>
                     <dtc-param-help [field]="field" [label]="label(field)" />
                   </div>
-                  <mat-form-field appearance="outline" subscriptSizing="dynamic">
-                    <input matInput [id]="field" [ngModel]="pending()[key(field, null)] ?? asText(data, field)" (ngModelChange)="edit(field, null, $event)" [name]="field" />
-                  </mat-form-field>
+                  <input
+                    class="installation-input"
+                    [id]="field"
+                    [ngModel]="pending()[key(field, null)] ?? asText(data, field)"
+                    (ngModelChange)="edit(field, null, $event)"
+                    [name]="field"
+                  />
+                  @if (fieldErrors()[key(field, null)]; as error) {
+                    <p class="field-error" role="alert" [attr.data-error]="field">{{ error }}</p>
+                  }
                 </div>
-                @if (fieldErrors()[key(field, null)]; as error) { <p class="field-error" role="alert" [attr.data-error]="field">{{ error }}</p> }
-                <button mat-stroked-button type="button" (click)="submit(field, null)" [attr.data-save]="field">Guardar</button>
-              </div>
-            }
+              }
+            </div>
           </div>
-        </div>
-      }
+        }
+      </div>
     </section>
 
     <section class="surface configuration-section heaters-section" aria-labelledby="heaters-title">

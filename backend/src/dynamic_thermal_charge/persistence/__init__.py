@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Protocol
+from typing import Mapping, Protocol
 
 from ..models import AppConfig, Heater, IndoorReading
 
@@ -206,6 +206,13 @@ class ConfigRepository(Protocol):
         value: str,
     ) -> ConfigChange:
         """Apply one edit on top of ``revision``, atomically."""
+
+    def set_fields(
+        self,
+        revision: int,
+        values: Mapping[str, str],
+    ) -> list[ConfigChange]:
+        """Apply several installation edits in one revisioned write."""
 
     def add_heater(self, revision: int, heater: Heater) -> ConfigChange:
         """Add a heater, validating the whole resulting configuration."""

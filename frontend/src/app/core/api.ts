@@ -17,6 +17,7 @@ import type {
   AddHeaterRequest,
   UpdateHeaterRequest,
   ChangeDto,
+  ChangesDto,
   ConfigDto,
   ForecastHistoryDto,
   HeaterDto,
@@ -97,6 +98,10 @@ export class Api {
 
   setField(body: SetFieldRequest): Observable<ChangeDto> {
     return this.http.patch<ChangeDto>(`${BASE}/config`, body);
+  }
+
+  patchInstallation(revision: number, values: Record<string, string>): Observable<ChangesDto> {
+    return this.http.patch<ChangesDto>(`${BASE}/config/batch`, { revision, values });
   }
 
   setHeaterField(id: string, body: SetFieldRequest): Observable<ChangeDto> {

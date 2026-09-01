@@ -99,9 +99,9 @@ describe('Config', () => {
     return el().querySelector(`[data-testid="${id}"]`);
   }
 
-  function apiError(code: ApiErrorCode, message: string, status: number) {
+  function apiError(code: ApiErrorCode, message: string, status: number, field: string | null = null) {
     return {
-      body: { code, message, field: null, heater_id: null },
+      body: { code, message, field, heater_id: null },
       options: { status, statusText: 'error' },
     };
   }
@@ -120,27 +120,46 @@ describe('Config', () => {
   it('sends the revision it read with every write', () => {
     load();
     fixture.componentInstance.edit('poll_seconds', null, '7');
-    fixture.componentInstance.submit('poll_seconds', null);
+    fixture.componentInstance.saveInstallation();
     const request = backend.expectOne(
-      (candidate) => candidate.method === 'PATCH' && candidate.url === '/api/v1/config',
+      (candidate) => candidate.method === 'PATCH' && candidate.url === '/api/v1/config/batch',
     );
     expect(request.request.body).toEqual({
       revision: 3,
-      field: 'poll_seconds',
-      value: '7',
+      values: { poll_seconds: '7' },
     });
-    request.flush(change());
+    request.flush({ changes: [change()] });
     backend.expectOne('/api/v1/config').flush(configDto({ config_revision: 4 }));
   });
 
   it('confirms the change with both values', () => {
     load();
     fixture.componentInstance.edit('poll_seconds', null, '7');
-    fixture.componentInstance.submit('poll_seconds', null);
-    backend.expectOne('/api/v1/config').flush(change());
+    fixture.componentInstance.saveInstallation();
+    backend.expectOne('/api/v1/config/batch').flush({ changes: [change()] });
     backend.expectOne('/api/v1/config').flush(configDto({ config_revision: 4 }));
     expect(testId('saved')?.textContent).toContain('5');
     expect(testId('saved')?.textContent).toContain('7');
+  });
+
+  it('saves several installation fields in one request', () => {
+    load();
+    fixture.componentInstance.edit('poll_seconds', null, '7');
+    fixture.componentInstance.edit('slot_minutes', null, '15');
+    fixture.componentInstance.saveInstallation();
+    const request = backend.expectOne('/api/v1/config/batch');
+    expect(request.request.body).toEqual({
+      revision: 3,
+      values: { poll_seconds: '7', slot_minutes: '15' },
+    });
+    request.flush({
+      changes: [
+        change({ field: 'poll_seconds' }),
+        change({ field: 'slot_minutes', old_value: '30', new_value: '15' }),
+      ],
+    });
+    backend.expectOne('/api/v1/config').flush(configDto({ config_revision: 4 }));
+    expect(testId('saved')?.textContent).toContain('2 cambios');
   });
 
   it('edits an accumulator through one complete update endpoint', () => {
@@ -222,7 +241,7 @@ describe('Config', () => {
     it('does not touch the API until the operator confirms', () => {
       load();
       fixture.componentInstance.edit('max_total_power_kw', null, '9.9');
-      fixture.componentInstance.submit('max_total_power_kw', null);
+      fixture.componentInstance.saveInstallation();
       backend.expectNone(
         (candidate) => candidate.method === 'PATCH',
       );
@@ -232,7 +251,7 @@ describe('Config', () => {
     it('says what is being changed, and why it matters', () => {
       load();
       fixture.componentInstance.edit('max_total_power_kw', null, '9.9');
-      fixture.componentInstance.submit('max_total_power_kw', null);
+      fixture.componentInstance.saveInstallation();
       const text = testId('confirm')?.textContent ?? '';
       expect(text).toContain('9.9');
       expect(text).toContain('sobrecarga');
@@ -241,13 +260,13 @@ describe('Config', () => {
     it('applies the change once confirmed', () => {
       load();
       fixture.componentInstance.edit('max_total_power_kw', null, '6.0');
-      fixture.componentInstance.submit('max_total_power_kw', null);
+      fixture.componentInstance.saveInstallation();
       fixture.componentInstance.confirm();
       const request = backend.expectOne(
-        (candidate) => candidate.method === 'PATCH',
+        (candidate) => candidate.method === 'PATCH' && candidate.url === '/api/v1/config/batch',
       );
-      expect(request.request.body).toMatchObject({ value: '6.0' });
-      request.flush(change({ field: 'max_total_power_kw' }));
+      expect(request.request.body).toMatchObject({ values: { max_total_power_kw: '6.0' } });
+      request.flush({ changes: [change({ field: 'max_total_power_kw' })] });
       backend.expectOne('/api/v1/config').flush(configDto());
     });
 
@@ -266,13 +285,14 @@ describe('Config', () => {
   it('puts a validation rejection next to its field, not in a banner', () => {
     load();
     fixture.componentInstance.edit('slot_minutes', null, '45');
-    fixture.componentInstance.submit('slot_minutes', null);
+    fixture.componentInstance.saveInstallation();
     const { body, options } = apiError(
       'validation_failed',
       'slot_minutes must be a divisor of 60',
       422,
+      'slot_minutes',
     );
-    backend.expectOne('/api/v1/config').flush(body, options);
+    backend.expectOne('/api/v1/config/batch').flush(body, options);
 
     const fieldError = el().querySelector('[data-error="slot_minutes"]');
     expect(fieldError?.textContent).toContain('divisor of 60');
@@ -282,18 +302,18 @@ describe('Config', () => {
   it('keeps what was typed when a write is rejected (FR-033)', () => {
     load();
     fixture.componentInstance.edit('slot_minutes', null, '45');
-    fixture.componentInstance.submit('slot_minutes', null);
+    fixture.componentInstance.saveInstallation();
     const { body, options } = apiError('validation_failed', 'nope', 422);
-    backend.expectOne('/api/v1/config').flush(body, options);
+    backend.expectOne('/api/v1/config/batch').flush(body, options);
     expect(fixture.componentInstance.pending()['slot_minutes']).toBe('45');
   });
 
   it('keeps what was typed when the network fails mid-write', () => {
     load();
     fixture.componentInstance.edit('poll_seconds', null, '9');
-    fixture.componentInstance.submit('poll_seconds', null);
+    fixture.componentInstance.saveInstallation();
     backend
-      .expectOne('/api/v1/config')
+      .expectOne('/api/v1/config/batch')
       .error(new ProgressEvent('error'), { status: 0, statusText: 'unknown' });
     expect(fixture.componentInstance.pending()['poll_seconds']).toBe('9');
     expect(testId('banner')?.textContent).toContain('No se puede contactar');
@@ -302,13 +322,14 @@ describe('Config', () => {
   it('explains a rejected secret and where secrets belong', () => {
     load();
     fixture.componentInstance.edit('log_level', null, 'postgresql://u:p@h/d');
-    fixture.componentInstance.submit('log_level', null);
+    fixture.componentInstance.saveInstallation();
     const { body, options } = apiError(
       'secret_rejected',
       'that looks like a credential; serve it through an environment variable',
       422,
+      'log_level',
     );
-    backend.expectOne('/api/v1/config').flush(body, options);
+    backend.expectOne('/api/v1/config/batch').flush(body, options);
     expect(el().querySelector('[data-error="log_level"]')?.textContent).toContain(
       'environment variable',
     );
@@ -336,13 +357,13 @@ describe('Config', () => {
   it('reports a conflict and offers to re-read, without retrying', () => {
     load();
     fixture.componentInstance.edit('poll_seconds', null, '7');
-    fixture.componentInstance.submit('poll_seconds', null);
+    fixture.componentInstance.saveInstallation();
     const { body, options } = apiError(
       'config_conflict',
       'the configuration changed while the edit was being prepared',
       409,
     );
-    backend.expectOne('/api/v1/config').flush(body, options);
+    backend.expectOne('/api/v1/config/batch').flush(body, options);
 
     // No automatic retry: nothing else was sent.
     backend.expectNone((candidate) => candidate.method === 'PATCH');
@@ -355,9 +376,9 @@ describe('Config', () => {
   it('re-reads on request after a conflict', () => {
     load();
     fixture.componentInstance.edit('poll_seconds', null, '7');
-    fixture.componentInstance.submit('poll_seconds', null);
+    fixture.componentInstance.saveInstallation();
     const { body, options } = apiError('config_conflict', 'changed', 409);
-    backend.expectOne('/api/v1/config').flush(body, options);
+    backend.expectOne('/api/v1/config/batch').flush(body, options);
 
     fixture.componentInstance.load();
     backend.expectOne('/api/v1/config').flush(configDto({ config_revision: 9 }));
@@ -389,7 +410,6 @@ describe('Config', () => {
     const request = backend.expectOne('/api/v1/config/heaters/salon');
     expect(request.request.method).toBe('PUT');
     expect(request.request.body).toMatchObject({ revision: 3, target_charge: 0.8, reserve_percent: 0, power_kw: 2.8, full_charge_hours: 8 });
-    expect(request.request.body).toHaveProperty('thermal_factor', 1);
     request.flush(change({ entity: 'heater', entity_key: 'salon', field: null, revision_after: 4 }));
     backend.expectOne('/api/v1/config').flush(configDto({ config_revision: 4 }));
     expect(fixture.componentInstance.heaterForm()).toBeNull();

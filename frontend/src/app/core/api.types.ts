@@ -288,6 +288,10 @@ export interface ChangeDto {
   revision_after: number;
 }
 
+export interface ChangesDto {
+  changes: ChangeDto[];
+}
+
 /* --------------------------------------------------------------------------
  * History
  * -------------------------------------------------------------------------- */

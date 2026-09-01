@@ -473,6 +473,53 @@ class SqlConfigRepository:
         )
         return change
 
+    def set_fields(
+        self,
+        revision: int,
+        values: Mapping[str, str],
+    ) -> list[ConfigChange]:
+        if not values:
+            raise ConfigValidationError(
+                "at least one installation field is required", field="values"
+            )
+        for field, value in values.items():
+            _reject_secrets(field, value, None)
+        with transaction(self._engine, self._location) as connection:
+            _, current_revision = self._read(connection)
+            self._require_revision(current_revision, revision)
+            installation_id = self._locked_installation_id(connection)
+            self._require_relay_test_free(connection, installation_id)
+
+            changes: list[ConfigChange] = []
+            for field, value in values.items():
+                old, new = self._update_installation(
+                    connection, installation_id, field, value
+                )
+                changes.append(
+                    ConfigChange(
+                        entity="installation",
+                        entity_key=None,
+                        field=field,
+                        old_value=None if old is None else str(old),
+                        new_value=None if new is None else str(new),
+                        action="set",
+                        revision_before=revision,
+                        revision_after=revision + 1,
+                    )
+                )
+            self._commit_revisions(connection, installation_id, revision, changes)
+            self._read(connection)
+        for change in changes:
+            logger.info(
+                "Configuration installation.%s changed from %s to %s (revision %d -> %d)",
+                change.field,
+                change.old_value,
+                change.new_value,
+                change.revision_before,
+                change.revision_after,
+            )
+        return changes
+
     def add_heater(self, revision: int, heater: Heater) -> ConfigChange:
         with transaction(self._engine, self._location) as connection:
             config, current_revision = self._read(connection)
@@ -700,6 +747,17 @@ class SqlConfigRepository:
         revision: int,
         change: ConfigChange,
     ) -> None:
+        self._commit_revisions(connection, installation_id, revision, [change])
+
+    def _commit_revisions(
+        self,
+        connection: Connection,
+        installation_id: int,
+        revision: int,
+        changes: list[ConfigChange],
+    ) -> None:
+        if not changes:
+            raise ValueError("at least one change is required")
         now = to_utc(self._clock())
         # The WHERE clause on revision is the optimistic lock: zero affected rows
         # means someone else committed first.
@@ -716,20 +774,21 @@ class SqlConfigRepository:
                 "another process committed a configuration change first; "
                 "re-read the configuration and try again"
             )
-        connection.execute(
-            insert(config_change).values(
-                installation_id=installation_id,
-                revision_before=change.revision_before,
-                revision_after=change.revision_after,
-                entity=change.entity,
-                entity_key=change.entity_key,
-                field=change.field,
-                old_value=change.old_value,
-                new_value=change.new_value,
-                action=change.action,
-                occurred_at=now,
+        for change in changes:
+            connection.execute(
+                insert(config_change).values(
+                    installation_id=installation_id,
+                    revision_before=change.revision_before,
+                    revision_after=change.revision_after,
+                    entity=change.entity,
+                    entity_key=change.entity_key,
+                    field=change.field,
+                    old_value=change.old_value,
+                    new_value=change.new_value,
+                    action=change.action,
+                    occurred_at=now,
+                )
             )
-        )
 
     def _heater_ids(self, connection: Connection, installation_id: int) -> list[str]:
         return [

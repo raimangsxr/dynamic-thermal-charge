@@ -140,6 +140,29 @@ def test_every_edit_is_recorded_with_its_revisions(initialised_store):
     assert row["occurred_at"] is not None
 
 
+def test_several_installation_fields_share_one_revision(initialised_store):
+    repository = initialised_store.repository
+    _, revision = repository.current()
+    changes = repository.set_fields(
+        revision, {"poll_seconds": "9", "slot_minutes": "15", "retention_days": "180"}
+    )
+    assert len(changes) == 3
+    assert all(change.revision_after == revision + 1 for change in changes)
+    config, new_revision = repository.current()
+    assert new_revision == revision + 1
+    assert config.runtime.poll_seconds == 9
+    assert config.site.slot_minutes == 15
+    assert config.retention_days == 180
+    with initialised_store.engine.connect() as connection:
+        rows = connection.execute(select(config_change)).mappings().all()
+    assert len(rows) == 3
+    assert {row["field"] for row in rows} == {
+        "poll_seconds",
+        "slot_minutes",
+        "retention_days",
+    }
+
+
 # --------------------------------------------------------------------------- #
 # Adding and removing heaters (FR-033)
 # --------------------------------------------------------------------------- #

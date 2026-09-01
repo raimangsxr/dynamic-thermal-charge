@@ -22,6 +22,14 @@ def _patch(client, field, value, revision=None, heater=None):
     )
 
 
+def _patch_batch(client, values, revision=None):
+    if revision is None:
+        revision = _config(client)["config_revision"]
+    return client.patch(
+        "/api/v1/config/batch", headers=AUTH, json={"revision": revision, "values": values}
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Reading (FR-021, FR-022)
 # --------------------------------------------------------------------------- #
@@ -132,6 +140,26 @@ def test_an_installation_field_changes(client):
     assert body["new_value"] == "6000", "the audit trail mixed kW and W"
     assert body["revision_before"] == 1 and body["revision_after"] == 2
     assert _config(client)["max_total_power_kw"] == 6.0
+
+
+def test_several_installation_fields_change_in_one_revision(client):
+    response = _patch_batch(
+        client, {"poll_seconds": "11", "slot_minutes": "15", "retention_days": "180"}
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert len(body["changes"]) == 3
+    assert {change["field"] for change in body["changes"]} == {
+        "poll_seconds",
+        "slot_minutes",
+        "retention_days",
+    }
+    assert all(change["revision_after"] == 2 for change in body["changes"])
+    updated = _config(client)
+    assert updated["config_revision"] == 2
+    assert updated["poll_seconds"] == 11.0
+    assert updated["slot_minutes"] == 15
+    assert updated["retention_days"] == 180
 
 
 def test_a_heater_field_changes_only_that_heater(client):
