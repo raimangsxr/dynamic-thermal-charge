@@ -84,14 +84,36 @@ class WeatherSystemSettings:
     provider: str = "simulated"
     municipality_code: str | None = None
     timeout_seconds: float = 10.0
+    simulated_average_temperature_c: float = 8.0
+    simulated_minimum_temperature_c: float = 3.0
+    fallback_average_temperature_c: float = 8.0
+    fallback_minimum_temperature_c: float = 3.0
+    retry_minutes: int = 15
+    refresh_minutes: int = 180
 
     def __post_init__(self) -> None:
         if self.provider not in {"simulated", "aemet"}:
             raise ValueError("weather.provider must be simulated or aemet")
+        if self.municipality_code is not None and (
+            len(self.municipality_code) != 5 or not self.municipality_code.isdigit()
+        ):
+            raise ValueError("weather.municipality_code must contain 5 digits")
         if self.provider == "aemet" and not self.municipality_code:
             raise ValueError("weather.municipality_code is required for AEMET")
         if self.timeout_seconds <= 0:
             raise ValueError("weather.timeout_seconds must be positive")
+        if self.simulated_minimum_temperature_c > self.simulated_average_temperature_c:
+            raise ValueError(
+                "weather simulated minimum temperature cannot exceed average temperature"
+            )
+        if self.fallback_minimum_temperature_c > self.fallback_average_temperature_c:
+            raise ValueError(
+                "weather fallback minimum temperature cannot exceed average temperature"
+            )
+        if self.retry_minutes <= 0:
+            raise ValueError("weather.retry_minutes must be positive")
+        if self.refresh_minutes <= 0:
+            raise ValueError("weather.refresh_minutes must be positive")
 
 
 @dataclass(frozen=True)
@@ -209,6 +231,12 @@ ACTIVATION_POLICIES: dict[str, ActivationPolicy] = {
     "weather.provider": ActivationPolicy.NEXT_CYCLE,
     "weather.municipality_code": ActivationPolicy.NEXT_CYCLE,
     "weather.timeout_seconds": ActivationPolicy.NEXT_CYCLE,
+    "weather.simulated_average_temperature_c": ActivationPolicy.NEXT_CYCLE,
+    "weather.simulated_minimum_temperature_c": ActivationPolicy.NEXT_CYCLE,
+    "weather.fallback_average_temperature_c": ActivationPolicy.NEXT_CYCLE,
+    "weather.fallback_minimum_temperature_c": ActivationPolicy.NEXT_CYCLE,
+    "weather.retry_minutes": ActivationPolicy.NEXT_CYCLE,
+    "weather.refresh_minutes": ActivationPolicy.NEXT_CYCLE,
     "output.driver": ActivationPolicy.RESTART,
     "logging.level": ActivationPolicy.HOT,
     "logging.max_events": ActivationPolicy.HOT,

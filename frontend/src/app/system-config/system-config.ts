@@ -6,14 +6,39 @@ import { forkJoin } from 'rxjs';
 import { Api } from '../core/api';
 import type { SecretEditDto, SystemConfigurationDto, SystemSection, TopologyDto } from '../core/api.types';
 
-interface FieldDefinition { name: string; type: 'text' | 'number' | 'boolean'; }
+interface Option { value: string; label: string; }
+interface FieldDefinition { name: string; type: 'text' | 'number' | 'boolean' | 'select'; options?: readonly Option[]; }
+interface FieldGroup { title: string; fields: FieldDefinition[]; }
+const WEATHER_PROVIDERS = [
+  { value: 'aemet', label: 'AEMET' },
+  { value: 'simulated', label: 'Simulado' },
+] as const;
+const DATABASE_DRIVERS = [
+  { value: 'sqlite', label: 'SQLite' },
+  { value: 'postgresql', label: 'PostgreSQL' },
+] as const;
+const OUTPUT_DRIVERS = [
+  { value: 'simulated', label: 'Simulada' },
+  { value: 'gpio', label: 'GPIO' },
+] as const;
+const LOG_LEVELS = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'].map((value) => ({ value, label: value }));
 const FIELDS: Record<SystemSection, FieldDefinition[]> = {
-  database: [{ name: 'driver', type: 'text' }, { name: 'host', type: 'text' }, { name: 'port', type: 'number' }, { name: 'database', type: 'text' }, { name: 'tls', type: 'boolean' }, { name: 'trusted_no_tls', type: 'boolean' }],
+  database: [{ name: 'driver', type: 'select', options: DATABASE_DRIVERS }, { name: 'host', type: 'text' }, { name: 'port', type: 'number' }, { name: 'database', type: 'text' }, { name: 'tls', type: 'boolean' }, { name: 'trusted_no_tls', type: 'boolean' }],
   api: [{ name: 'host', type: 'text' }, { name: 'port', type: 'number' }, { name: 'cors_origins', type: 'text' }, { name: 'stale_seconds', type: 'number' }],
   mqtt: [{ name: 'enabled', type: 'boolean' }, { name: 'host', type: 'text' }, { name: 'port', type: 'number' }, { name: 'tls', type: 'boolean' }, { name: 'prefix', type: 'text' }, { name: 'discovery_prefix', type: 'text' }, { name: 'publish_seconds', type: 'number' }],
-  weather: [{ name: 'provider', type: 'text' }, { name: 'municipality_code', type: 'text' }, { name: 'timeout_seconds', type: 'number' }],
-  output: [{ name: 'driver', type: 'text' }],
-  logging: [{ name: 'level', type: 'text' }, { name: 'max_events', type: 'number' }],
+  weather: [
+    { name: 'provider', type: 'select', options: WEATHER_PROVIDERS },
+    { name: 'municipality_code', type: 'text' },
+    { name: 'timeout_seconds', type: 'number' },
+    { name: 'simulated_average_temperature_c', type: 'number' },
+    { name: 'simulated_minimum_temperature_c', type: 'number' },
+    { name: 'fallback_average_temperature_c', type: 'number' },
+    { name: 'fallback_minimum_temperature_c', type: 'number' },
+    { name: 'retry_minutes', type: 'number' },
+    { name: 'refresh_minutes', type: 'number' },
+  ],
+  output: [{ name: 'driver', type: 'select', options: OUTPUT_DRIVERS }],
+  logging: [{ name: 'level', type: 'select', options: LOG_LEVELS }, { name: 'max_events', type: 'number' }],
   operations: [{ name: 'controller_poll_seconds', type: 'number' }, { name: 'heartbeat_stale_multiplier', type: 'number' }, { name: 'relay_test_lease_seconds', type: 'number' }, { name: 'relay_test_state_poll_seconds', type: 'number' }, { name: 'relay_test_lease_renew_seconds', type: 'number' }, { name: 'retention_days', type: 'number' }, { name: 'fallback_max_age_minutes', type: 'number' }],
 };
 const SECRETS: Partial<Record<SystemSection, string[]>> = {
@@ -38,6 +63,15 @@ export class SystemConfig {
 
   constructor() { this.load(); }
   fields(): FieldDefinition[] { return FIELDS[this.selected()]; }
+  groups(): FieldGroup[] {
+    const fields = this.fields();
+    if (this.selected() !== 'weather') return [{ title: 'Parámetros', fields }];
+    return [
+      { title: 'Proveedor y ubicación', fields: fields.slice(0, 3) },
+      { title: 'Temperaturas simuladas y fallback', fields: fields.slice(3, 7) },
+      { title: 'Política de actualización', fields: fields.slice(7) },
+    ];
+  }
   secrets(): string[] { return SECRETS[this.selected()] ?? []; }
   writable(): boolean { return this.topology()?.administrative_writes_allowed === true; }
 

@@ -129,6 +129,34 @@ def _apply_system_environment(repository, environment, functional) -> None:
                 if functional.weather is not None and functional.weather.aemet is not None
                 else 10.0
             ),
+            "simulated_average_temperature_c": (
+                functional.weather.simulated.average_temperature_c
+                if functional.weather is not None and functional.weather.simulated is not None
+                else 8.0
+            ),
+            "simulated_minimum_temperature_c": (
+                functional.weather.simulated.minimum_temperature_c
+                if functional.weather is not None and functional.weather.simulated is not None
+                else 3.0
+            ),
+            "fallback_average_temperature_c": (
+                functional.weather.fallback.average_temperature_c
+                if functional.weather is not None and functional.weather.fallback is not None
+                else 8.0
+            ),
+            "fallback_minimum_temperature_c": (
+                functional.weather.fallback.minimum_temperature_c
+                if functional.weather is not None and functional.weather.fallback is not None
+                else 3.0
+            ),
+            "retry_minutes": (
+                functional.weather.watchdog.retry_minutes
+                if functional.weather is not None else 15
+            ),
+            "refresh_minutes": (
+                functional.weather.watchdog.refresh_minutes
+                if functional.weather is not None else 180
+            ),
         },
         "logging": {
             "level": functional.logging.level,

@@ -137,21 +137,25 @@ def check_configuration() -> None:
 def run_controller() -> None:
     from .logging_config import configure_logging
     from .runtime import _run_controller
-    from .weather import build_weather_provider
+    from .weather import build_weather_provider_from_system, weather_config_from_system
 
     store = _configured_store()
     config, revision = store.repository.current()
     system_snapshot = store.system_configuration.current()
     system = system_snapshot.configuration
     configure_logging(system.logging.level)
-    provider = build_weather_provider(
-        config.weather,
-        api_key=(system_snapshot.secrets["aemet_api_key"].value
-                 if "aemet_api_key" in system_snapshot.secrets else None),
+    aemet_api_key = (
+        system_snapshot.secrets["aemet_api_key"].value
+        if "aemet_api_key" in system_snapshot.secrets else None
+    )
+    provider = build_weather_provider_from_system(
+        system.weather,
+        api_key=aemet_api_key,
         timezone_name=(
             config.schedule.timezone if config.schedule is not None else "UTC"
         ),
-    ) if config.weather is not None else None
+    )
+    config = replace(config, weather=weather_config_from_system(system.weather))
     if config.weather is None or provider is None:
         raise RuntimeError("controller requires weather configuration")
     _run_controller(store, config, revision, provider, system.output.driver, system)

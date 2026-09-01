@@ -185,20 +185,6 @@ HEATER_FIELDS: dict[str, tuple[str, str, Callable[[str, str], Any]]] = {
     ),
 }
 
-WEATHER_FIELDS: dict[str, tuple[str, Callable[[str, str], Any]]] = {
-    "provider": ("provider", lambda raw, field: raw),
-    "municipality_code": ("aemet_municipality_code", lambda raw, field: raw),
-    "api_key_env": ("aemet_api_key_env", lambda raw, field: raw),
-    "timeout_seconds": ("aemet_timeout_seconds", _parse_float),
-    "simulated_average_temperature_c": ("simulated_average_temperature_c", _parse_float),
-    "simulated_minimum_temperature_c": ("simulated_minimum_temperature_c", _parse_float),
-    "fallback_average_temperature_c": ("fallback_average_temperature_c", _parse_float),
-    "fallback_minimum_temperature_c": ("fallback_minimum_temperature_c", _parse_float),
-    "retry_minutes": ("watchdog_retry_minutes", _parse_int),
-    "refresh_minutes": ("watchdog_refresh_minutes", _parse_int),
-}
-
-
 class SqlConfigRepository:
     def __init__(
         self,
@@ -438,8 +424,6 @@ class SqlConfigRepository:
                 old, new = self._update_installation(
                     connection, installation_id, field, value
                 )
-            elif entity == "weather":
-                old, new = self._update_weather(connection, installation_id, field, value)
             elif entity == "heater":
                 if entity_key is None:
                     raise ConfigValidationError(
@@ -451,7 +435,7 @@ class SqlConfigRepository:
             else:
                 raise ConfigValidationError(
                     f"unknown entity {entity!r}; admissible entities: installation, "
-                    "weather, heater",
+                    "heater",
                     field=field,
                 )
 
@@ -674,34 +658,6 @@ class SqlConfigRepository:
         )
         return old, parsed
 
-
-    def _update_weather(
-        self, connection: Connection, installation_id: int, field: str, value: str
-    ) -> tuple[Any, Any]:
-        if field not in WEATHER_FIELDS:
-            raise ConfigValidationError(
-                f"unknown weather field {field!r}; admissible fields: "
-                f"{', '.join(sorted(WEATHER_FIELDS))}",
-                field=field,
-            )
-        column, parser = WEATHER_FIELDS[field]
-        parsed = parser(value, field)
-        row = connection.execute(
-            select(weather_table.c.id, weather_table.c[column]).where(
-                weather_table.c.installation_id == installation_id
-            )
-        ).first()
-        if row is None:
-            raise ConfigValidationError(
-                "this installation has no weather configuration to edit", field=field
-            )
-        connection.execute(
-            update(weather_table)
-            .where(weather_table.c.id == row[0])
-            .values(**{column: parsed})
-        )
-        return row[1], parsed
-
     def _update_heater(
         self,
         connection: Connection,
@@ -848,7 +804,6 @@ class SqlIndoorReadingRepository:
 __all__ = [
     "HEATER_FIELDS",
     "INSTALLATION_FIELDS",
-    "WEATHER_FIELDS",
     "SqlConfigRepository",
     "SqlIndoorReadingRepository",
 ]

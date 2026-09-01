@@ -47,6 +47,12 @@ inicialización ni instalar Python, Node o servicios systemd en la Raspberry.
 El frontend se publica en el puerto `80`. La API solo se expone dentro de la
 red Docker y el panel la consume mediante nginx.
 
+La configuración de previsión se administra exclusivamente en `Sistema →
+weather`: allí se guardan proveedor, municipio AEMET, temperaturas simuladas y
+de fallback, timeout y política de actualización. La clave AEMET se reemplaza
+como secreto gestionado y la API solo informa si está configurada; nunca
+devuelve su valor.
+
 El panel autenticado incluye la sección `Planificación`, que consulta el plan
 aceptado por el controlador en `GET /api/v1/planning` y permite editar constraints
 recurrentes. `POST /api/v1/planning/preview` calcula una vista previa sin tocar el

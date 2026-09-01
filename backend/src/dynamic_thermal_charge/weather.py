@@ -12,7 +12,8 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
-from .models import AemetConfig, SimulatedForecastConfig, WeatherConfig
+from .models import AemetConfig, SimulatedForecastConfig, WeatherConfig, WeatherWatchdogConfig
+from .system_settings import WeatherSystemSettings
 
 
 logger = logging.getLogger(__name__)
@@ -235,6 +236,53 @@ def build_weather_provider(
     return FallbackWeatherProvider(
         primary,
         SimulatedWeatherProvider(config.fallback, timezone_name),
+    )
+
+
+def weather_config_from_system(settings: WeatherSystemSettings) -> WeatherConfig:
+    """Build the functional weather configuration from canonical system settings.
+
+    The AEMET key is deliberately not part of this object. The system
+    repository owns the secret and callers inject it only into the provider.
+    """
+    aemet = None
+    if settings.provider == "aemet":
+        aemet = AemetConfig(
+            municipality_code=settings.municipality_code or "",
+            api_key_env="AEMET_API_KEY",
+            timeout_seconds=settings.timeout_seconds,
+        )
+    return WeatherConfig(
+        provider=settings.provider,
+        simulated=SimulatedForecastConfig(
+            average_temperature_c=settings.simulated_average_temperature_c,
+            minimum_temperature_c=settings.simulated_minimum_temperature_c,
+        ),
+        aemet=aemet,
+        fallback=SimulatedForecastConfig(
+            average_temperature_c=settings.fallback_average_temperature_c,
+            minimum_temperature_c=settings.fallback_minimum_temperature_c,
+        ),
+        watchdog=WeatherWatchdogConfig(
+            retry_minutes=settings.retry_minutes,
+            refresh_minutes=settings.refresh_minutes,
+        ),
+    )
+
+
+def build_weather_provider_from_system(
+    settings: WeatherSystemSettings,
+    *,
+    api_key: str | None = None,
+    http_get: HttpGet | None = None,
+    timezone_name: str = "UTC",
+) -> WeatherProvider:
+    """Compose the provider from canonical settings and its managed secret."""
+    return build_weather_provider(
+        weather_config_from_system(settings),
+        api_key=api_key,
+        http_get=http_get,
+        timezone_name=timezone_name,
     )
 
 
