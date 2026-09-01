@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Request
 
 from ...persistence.bootstrap import Store
 from ...persistence.history import SqlStatusReader
-from ...charge_planning import DeterministicChargeOptimizer, PlanningInput
+from ...charge_planning import DeterministicChargeOptimizer, PlanningInput, resolve_planning_telemetry
 from ...models import ChargeConstraint, ChargeTelemetry
 from ...persistence import ConfigValidationError
 from ..dependencies import usable_store
@@ -31,6 +31,7 @@ from ..schemas import (
     PlanningPreviewRequest,
     PlanningPreviewResponse,
     HeaterChargeConfigRequest,
+    PlanningSiteConfigRequest,
 )
 
 
@@ -70,13 +71,35 @@ def get_planning(
     if snapshot is None:
         automatic = store.planning.active_plan()
         if automatic is not None:
+            power_by_id = {heater.id: heater.power_w for heater in config.heaters}
+            assigned: dict[tuple[datetime, datetime], list[str]] = {}
+            stored_temperatures: dict[tuple[datetime, datetime], tuple[float | None, bool]] = {}
+            soc_percent_by_slot: dict[tuple[datetime, datetime], dict[str, float]] = {}
+            for item in automatic["slots"]:
+                key = (item["start"], item["end"])
+                assigned[key] = item["heater_ids"]
+                stored_temperatures[key] = (item["outdoor_temperature_c"], False)
+                soc_percent_by_slot[key] = item["stored_charge_percent"]
+            slot_delta = timedelta(minutes=automatic["slot_minutes"])
+            horizon_start = automatic["horizon_start"]
+            horizon_end = horizon_start + timedelta(hours=48)
             automatic_plan = PlanningPlanView(
                 window_start=automatic["horizon_start"],
                 window_end=automatic["horizon_end"],
                 slot_minutes=automatic["slot_minutes"],
                 installation_revision=_revision,
                 created_at=automatic["created_at"],
-                slots=[PlanningSlotView(start=item["start"], end=item["end"], heater_ids=item["heater_ids"], total_power_w=item["power_w"], temperature_c=item["outdoor_temperature_c"], temperature_interpolated=False) for item in automatic["slots"]],
+                slots=[
+                    PlanningSlotView(
+                        start=item["start"],
+                        end=item["end"],
+                        heater_ids=item["heater_ids"],
+                        total_power_w=item["power_w"],
+                        temperature_c=item["outdoor_temperature_c"],
+                        temperature_interpolated=False,
+                    )
+                    for item in automatic["slots"]
+                ],
             )
             response = PlanningResponse(
                 observed_at=observed_at,
@@ -88,9 +111,19 @@ def get_planning(
                 forecast_last_error=cycle_status.get("forecast_last_error"),
                 forecast_next_run_at=cycle_status.get("forecast_next_run_at"),
                 plan=automatic_plan,
-                horizon_start=automatic["horizon_start"],
-                horizon_end=automatic["horizon_end"],
-                timeline=[PlanningTimelineSlotView(start=item["start"], end=item["end"], heater_ids=item["heater_ids"], total_power_w=item["power_w"], temperature_c=item["outdoor_temperature_c"], temperature_interpolated=False, charge_minutes_by_heater={key: config.site.slot_minutes if key in item["heater_ids"] else 0 for key in (heater.id for heater in config.heaters)}) for item in automatic["slots"]],
+                horizon_start=horizon_start,
+                horizon_end=horizon_end,
+                timeline=_build_timeline(
+                    config.heaters,
+                    power_by_id,
+                    assigned,
+                    stored_temperatures,
+                    latest_forecast,
+                    horizon_start,
+                    horizon_end,
+                    slot_delta,
+                    soc_percent_by_slot,
+                ),
             )
             return _enrich(response, store, observed_at)
         response = PlanningResponse(
@@ -155,6 +188,7 @@ def get_planning(
         horizon_start,
         horizon_end,
         slot_delta,
+        None,
     )
 
     response = PlanningResponse(
@@ -202,12 +236,21 @@ def activate_planning(
     plan = _build_automatic_plan(store, app_request.app.state.clock(), constraints, site)
     if plan.input_token != request.token:
         raise ConfigValidationError("the preview inputs changed; recalculate before activating")
-    blocking = [item for item in plan.deficits if item.reason == "power_limit_or_capacity" and item.deficit_percent > 0]
-    if blocking:
-        raise ConfigValidationError("the constraints cannot be satisfied within the configured power/capacity; resolve the conflict before activating", field="constraints")
+    if plan.status == "INVALID":
+        raise ConfigValidationError("the plan is invalid and cannot be activated", field="planning")
     new_revision = store.planning.replace_constraints(constraints, request.expected_revision)
     store.planning.save_plan(plan, configuration_revision=store.repository.current()[1], constraints_revision=new_revision, reason="activated", active=True)
     return _preview_response(plan, constraints)
+
+
+@router.patch("/planning/config", responses=ERROR_RESPONSES)
+def update_planning_config(
+    payload: PlanningSiteConfigRequest,
+    store: Store = Depends(usable_store),
+) -> dict[str, int | float]:
+    values = payload.model_dump(exclude={"expected_revision"})
+    store.planning.update_site(values, payload.expected_revision)
+    return store.planning.site()
 
 
 @router.patch("/planning/heaters/{heater_id}", response_model=PlanningResponse, responses=ERROR_RESPONSES)
@@ -279,34 +322,59 @@ def _parse_constraints(items: list[ChargeConstraintRequest]) -> tuple[ChargeCons
     return tuple(result)
 
 
-def _build_automatic_plan(store: Store, observed_at: datetime, constraints: tuple[ChargeConstraint, ...], site: dict[str, int]):
+def _build_automatic_plan(store: Store, observed_at: datetime, constraints: tuple[ChargeConstraint, ...], site: dict[str, int | float]):
     config, _revision = store.repository.current()
     known_heaters = {heater.id for heater in config.heaters}
     for constraint in constraints:
         if constraint.heater_id not in known_heaters:
             raise ConfigValidationError("heater does not exist", field="heater_id", heater_id=constraint.heater_id)
     timezone_name = config.schedule.timezone if config.schedule is not None else "UTC"
+    mqtt = (
+        store.system_configuration.current().configuration.mqtt
+        if store.system_configuration is not None
+        else None
+    )
+    persisted = (
+        {}
+        if mqtt is not None and not mqtt.enabled
+        else store.planning.telemetry()
+    )
     request = PlanningInput(
         heaters=config.heaters,
-        telemetry=store.planning.telemetry(),
+        telemetry=resolve_planning_telemetry(
+            config.heaters,
+            persisted,
+            observed_at,
+            mqtt=mqtt,
+        ),
         constraints=constraints,
         forecast=store.planning.latest_forecast(),
         horizon_start=observed_at,
-        horizon_hours=site["forecast_horizon_hours"],
+        horizon_hours=int(site["forecast_horizon_hours"]),
         slot_minutes=config.site.slot_minutes,
-        max_total_power_w=config.site.max_total_power_w,
+        max_total_power_w=int(site["contracted_power_w"]),
+        max_heating_power_w=int(site["max_heating_power_w"]),
+        design_indoor_temperature_c=float(site["design_indoor_temperature_c"]),
+        design_outdoor_temperature_c=float(site["design_outdoor_temperature_c"]),
+        feedback_horizon_hours=float(site["feedback_horizon_hours"]),
+        forecast_automatic_eligible=(store.planning.latest_forecast_automatic_eligible() if hasattr(store.planning, "latest_forecast_automatic_eligible") else True),
+        generated_at=observed_at,
         timezone_name=timezone_name,
     )
     return DeterministicChargeOptimizer().build(request)
 
 
 def _preview_response(plan, constraints) -> PlanningPreviewResponse:
+    violations = [PlanningDeficitView(**item.__dict__, target_charge_percent=item.target_charge_percent, projected_charge_percent=item.projected_charge_percent, deficit_percent=item.deficit_percent) for item in plan.violations]
     return PlanningPreviewResponse(
         token=plan.input_token, status=plan.status, score=list(plan.score),
         horizon_start=plan.horizon_start, horizon_end=plan.horizon_end,
         slot_minutes=plan.slot_minutes,
-        slots=[{"start": item.start, "end": item.end, "heater_ids": list(item.heater_ids), "power_w": item.power_w, "stored_charge_percent": item.stored_charge_percent, "required_charge_percent": item.required_charge_percent, "outdoor_temperature_c": item.outdoor_temperature_c} for item in plan.slots],
-        deficits=[PlanningDeficitView(**item.__dict__) for item in plan.deficits],
+        slots=[{"start": item.start, "end": item.end, "heater_ids": list(item.heater_ids), "power_w": item.power_w, "stored_charge_percent": item.stored_charge_percent, "initial_soc_percent": item.initial_soc_percent, "demand_kwh": item.demand_kwh, "heater_power_w": item.heater_power_w, "required_charge_percent": item.required_charge_percent, "outdoor_temperature_c": item.outdoor_temperature_c} for item in plan.slots],
+        deficits=violations,
+        violations=violations,
+        explanations=[item.__dict__ for item in plan.explanations],
+        demand=[item.__dict__ for item in plan.demand],
         constraints=[ChargeConstraintView(id=item.id, heater_id=item.heater_id, target_charge=item.target_charge, at_time=item.at.strftime("%H:%M"), weekdays=list(item.weekdays)) for item in constraints],
     )
 
@@ -320,16 +388,17 @@ def _build_timeline(
     horizon_start: datetime,
     horizon_end: datetime,
     slot_delta: timedelta,
+    soc_percent_by_slot: dict[tuple[datetime, datetime], dict[str, float]] | None = None,
 ) -> list[PlanningTimelineSlotView]:
-    """Project the accepted plan and thermal reserve across exactly 48 hours.
+    """Project the accepted plan across exactly 48 hours.
 
-    The reserve is represented as equivalent minutes of full charge. It starts
-    at zero at the horizon boundary, gains charge while a stored plan assigns a
-    heater, and loses reserve outside charge windows according to its configured
-    thermal loss and the forecast delta from the target temperature.
+    When SOC projections are available from an automatic plan, each slot reports
+    equivalent full-charge minutes derived from the planned end-of-slot SOC.
+  Otherwise legacy scheduler plans accumulate equivalent minutes only while a
+    heater is assigned to charge.
     """
     heater_by_id = {heater.id: heater for heater in heaters}
-    reserve_minutes = {heater.id: 0.0 for heater in heaters}
+    charge_minutes = {heater.id: 0.0 for heater in heaters}
     timeline: list[PlanningTimelineSlotView] = []
     cursor = horizon_start
     while cursor < horizon_end:
@@ -339,25 +408,17 @@ def _build_timeline(
         temperature, interpolated = stored_temperatures.get(
             key, _temperature_for_interval(forecast, cursor, end)
         )
-        duration_hours = (end - cursor).total_seconds() / 3600
-        for heater in heaters:
-            profile = heater.thermal
-            if profile is not None and temperature is not None:
-                delta_c = max(profile.target_temperature_c - temperature, 0.0)
-                design_delta_c = max(
-                    profile.target_temperature_c - profile.design_outdoor_temperature_c,
-                    0.0001,
-                )
-                loss_fraction = (
-                    profile.thermal_loss_c_per_hour
-                    * duration_hours
-                    * delta_c
-                    / design_delta_c
-                )
-                reserve_minutes[heater.id] *= max(0.0, 1.0 - loss_fraction)
-            if heater.id in heater_ids:
-                reserve_minutes[heater.id] += (end - cursor).total_seconds() / 60
-            reserve_minutes[heater.id] = max(0.0, reserve_minutes[heater.id])
+        slot_minutes = (end - cursor).total_seconds() / 60
+        if soc_percent_by_slot is not None:
+            projected = soc_percent_by_slot.get(key)
+            if projected is not None:
+                for heater in heaters:
+                    soc = projected.get(heater.id, 0.0)
+                    charge_minutes[heater.id] = soc / 100 * heater.full_charge_minutes
+        else:
+            for heater in heaters:
+                if heater.id in heater_ids:
+                    charge_minutes[heater.id] += slot_minutes
 
         timeline.append(
             PlanningTimelineSlotView(
@@ -368,7 +429,7 @@ def _build_timeline(
                 temperature_c=temperature,
                 temperature_interpolated=interpolated,
                 charge_minutes_by_heater={
-                    heater_id: round(reserve_minutes[heater_id], 2)
+                    heater_id: round(charge_minutes[heater_id], 2)
                     for heater_id in heater_by_id
                 },
             )

@@ -173,7 +173,7 @@ describe('Planning', () => {
     expect(request.request.body.constraints).toEqual([
       { heater_id: 'salon', target_charge: 0.25, at_time: '07:00', weekdays: [0, 1, 2, 3, 4, 5, 6] },
     ]);
-    request.flush({ token: 'preview', status: 'feasible', score: [], horizon_start: PLANNING.horizon_start!, horizon_end: PLANNING.horizon_end!, slot_minutes: 30, slots: [], deficits: [], constraints: [] });
+    request.flush({ token: 'preview', status: 'FEASIBLE', score: [], horizon_start: PLANNING.horizon_start!, horizon_end: PLANNING.horizon_end!, slot_minutes: 30, slots: [], deficits: [], violations: [], explanations: [], demand: [], constraints: [] });
   });
 
   it('uses the received hourly temperatures and exposes sparse labels with complete tooltips', () => {

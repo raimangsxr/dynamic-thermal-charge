@@ -166,23 +166,10 @@ HEATER_FIELDS: dict[str, tuple[str, str, Callable[[str, str], Any]]] = {
     "enabled": ("heater", "enabled", _parse_bool),
     "indoor_topic": ("heater", "indoor_topic", _parse_optional_str),
     "reserve_percent": ("charge", "reserve_percent", _parse_float),
+    "demand_factor": ("charge", "demand_factor", _parse_float),
     "output_type": ("output", "kind", lambda raw, field: raw),
     "pin": ("output", "pin", _parse_optional_int),
     "active_high": ("output", "active_high", _parse_bool),
-    "target_temperature_c": ("thermal", "target_temperature_c", _parse_float),
-    "design_outdoor_temperature_c": (
-        "thermal",
-        "design_outdoor_temperature_c",
-        _parse_float,
-    ),
-    "thermal_factor": ("thermal", "thermal_factor", _parse_float),
-    "min_charge": ("thermal", "min_charge", _parse_float),
-    "max_charge": ("thermal", "max_charge", _parse_float),
-    "thermal_loss_c_per_hour": (
-        "thermal",
-        "thermal_loss_c_per_hour",
-        _parse_float,
-    ),
 }
 
 class SqlConfigRepository:
@@ -261,6 +248,7 @@ class SqlConfigRepository:
                         target_temperature_topic=charge_rows.get(item.id, {}).get("target_temperature_topic"),
                         stored_charge_topic=charge_rows.get(item.id, {}).get("stored_charge_topic"),
                         reserve_percent=float(charge_rows.get(item.id, {}).get("reserve_percent", 0.0)),
+                        demand_factor=float(charge_rows.get(item.id, {}).get("demand_factor", 1.0)),
                         thermal=(
                             None if item.thermal is None else replace(
                                 item.thermal,
@@ -386,6 +374,7 @@ class SqlConfigRepository:
                     target_temperature_topic=heater.target_temperature_topic,
                     stored_charge_topic=heater.stored_charge_topic,
                     reserve_percent=heater.reserve_percent,
+                    demand_factor=heater.demand_factor,
                     room_inertia_hours=8 if heater.thermal is None else heater.thermal.room_inertia_hours,
                     outdoor_loss_per_hour=0.08 if heater.thermal is None else heater.thermal.outdoor_loss_per_hour,
                     emission_c_per_hour=1 if heater.thermal is None else heater.thermal.emission_c_per_hour,
@@ -572,6 +561,7 @@ class SqlConfigRepository:
                     "target_temperature_topic": heater.target_temperature_topic,
                     "stored_charge_topic": heater.stored_charge_topic,
                     "reserve_percent": heater.reserve_percent,
+                    "demand_factor": heater.demand_factor,
                 }
                 charge_updated = connection.execute(
                     update(heater_charge_config)

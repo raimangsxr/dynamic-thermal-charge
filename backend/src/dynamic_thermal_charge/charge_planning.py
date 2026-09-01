@@ -1,9 +1,4 @@
-"""Pure deterministic automatic charge planning.
-
-The planner deliberately knows nothing about SQLAlchemy, MQTT, HTTP or output
-drivers.  A plan is a value object and can therefore be previewed, persisted and
-replayed with exactly the same inputs.
-"""
+"""Pure rolling-horizon demand estimation and charge optimisation."""
 
 from __future__ import annotations
 
@@ -11,12 +6,108 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
-import math
 from typing import Mapping, Sequence
 from zoneinfo import ZoneInfo
 
 from .models import ChargeConstraint, ChargeTelemetry, Heater
+from .system_settings import MqttSystemSettings
 from .weather import HourlyForecastPoint
+
+FEASIBLE = "FEASIBLE"
+DEGRADED = "DEGRADED"
+INVALID = "INVALID"
+
+
+def resolve_planning_telemetry(
+    heaters: Sequence[Heater],
+    persisted: Mapping[str, ChargeTelemetry],
+    observed_at: datetime,
+    *,
+    mqtt: MqttSystemSettings | None = None,
+    max_age_seconds: float = 900,
+) -> dict[str, ChargeTelemetry]:
+    """Return the telemetry snapshot automatic planning should use."""
+    if mqtt is not None and not mqtt.enabled:
+        return {
+            heater.id: ChargeTelemetry(
+                heater_id=heater.id,
+                temperature_c=mqtt.fixed_temperature_c,
+                target_temperature_c=mqtt.fixed_target_temperature_c,
+                stored_charge_percent=mqtt.fixed_stored_charge_percent,
+                temperature_received_at=observed_at,
+                target_received_at=observed_at,
+                stored_charge_received_at=observed_at,
+            )
+            for heater in heaters
+            if heater.enabled
+        }
+    valid: dict[str, ChargeTelemetry] = {}
+    for heater in heaters:
+        if not heater.enabled:
+            continue
+        value = persisted.get(heater.id)
+        if value is None:
+            continue
+        stamps = (
+            value.temperature_received_at,
+            value.target_received_at,
+            value.stored_charge_received_at,
+        )
+        if all(
+            item is not None and (observed_at - item).total_seconds() <= max_age_seconds
+            for item in stamps
+        ):
+            valid[heater.id] = value
+    return valid
+
+
+@dataclass(frozen=True)
+class DemandEstimate:
+    heater_id: str
+    start: datetime
+    end: datetime
+    outdoor_temperature_c: float
+    target_temperature_c: float
+    feedback_temperature_c: float
+    degree_hours: float
+    thermal_coefficient: float
+    demand_factor: float
+    reserve_percent: float
+    demand_kwh: float
+
+
+@dataclass(frozen=True)
+class MaterializedConstraint:
+    requirement_id: int | None
+    heater_id: str
+    at: datetime
+    minimum_soc_percent: float
+    priority: int
+
+
+@dataclass(frozen=True)
+class PlanningViolation:
+    heater_id: str | None
+    requirement: str
+    achievable_value: float | None
+    shortfall: float | None
+    at: datetime | None
+    reason: str
+
+    @property
+    def target_charge_percent(self) -> float:
+        return float((self.achievable_value or 0) + (self.shortfall or 0))
+
+    @property
+    def projected_charge_percent(self) -> float:
+        return float(self.achievable_value or 0)
+
+    @property
+    def deficit_percent(self) -> float:
+        return float(self.shortfall or 0)
+
+
+PlanningDeficit = PlanningViolation
 
 
 @dataclass(frozen=True)
@@ -29,15 +120,20 @@ class AutomaticPlanSlot:
     required_charge_percent: dict[str, float]
     outdoor_temperature_c: float | None = None
     indoor_temperature_c: dict[str, float] | None = None
+    initial_soc_percent: dict[str, float] | None = None
+    demand_kwh: dict[str, float] | None = None
+    heater_power_w: dict[str, int] | None = None
 
 
 @dataclass(frozen=True)
-class PlanningDeficit:
+class HeaterExplanation:
     heater_id: str
-    target_charge_percent: float
-    projected_charge_percent: float
-    deficit_percent: float
-    reason: str
+    actual_soc_percent: float
+    total_demand_kwh: float
+    demand_factor: float
+    reserve_percent: float
+    next_constraint_at: datetime | None
+    charge_periods: tuple[tuple[datetime, datetime], ...]
 
 
 @dataclass(frozen=True)
@@ -46,10 +142,17 @@ class AutomaticPlan:
     horizon_end: datetime
     slot_minutes: int
     slots: tuple[AutomaticPlanSlot, ...]
-    deficits: tuple[PlanningDeficit, ...]
+    deficits: tuple[PlanningViolation, ...]
     status: str
     score: tuple[float, ...]
     input_token: str
+    generated_at: datetime | None = None
+    explanations: tuple[HeaterExplanation, ...] = ()
+    demand: tuple[DemandEstimate, ...] = ()
+
+    @property
+    def violations(self) -> tuple[PlanningViolation, ...]:
+        return self.deficits
 
 
 @dataclass(frozen=True)
@@ -63,114 +166,230 @@ class PlanningInput:
     slot_minutes: int = 30
     max_total_power_w: int = 5200
     timezone_name: str = "UTC"
+    design_indoor_temperature_c: float = 21.0
+    design_outdoor_temperature_c: float = 0.0
+    feedback_horizon_hours: float = 6.0
+    max_heating_power_w: int | None = None
+    forecast_automatic_eligible: bool = True
+    generated_at: datetime | None = None
     exploration_limit: int = 100_000
 
 
-class DeterministicChargeOptimizer:
-    """Schedule latest possible compatible slots, with deterministic fallback."""
+class DegreeHoursDemandEstimator:
+    """Deterministic ``degree_hours_v1`` estimator."""
+
+    name = "degree_hours_v1"
+
+    def estimate(
+        self,
+        heaters: Sequence[Heater],
+        telemetry: Mapping[str, ChargeTelemetry],
+        forecast: Sequence[HourlyForecastPoint],
+        starts: Sequence[datetime],
+        slot_minutes: int,
+        *,
+        design_indoor_temperature_c: float,
+        design_outdoor_temperature_c: float,
+        feedback_horizon_hours: float,
+    ) -> tuple[DemandEstimate, ...]:
+        design_delta = design_indoor_temperature_c - design_outdoor_temperature_c
+        if design_delta <= 0:
+            raise ValueError("design indoor temperature must exceed design outdoor temperature")
+        if feedback_horizon_hours <= 0:
+            raise ValueError("feedback_horizon_hours must be positive")
+        hours = slot_minutes / 60
+        estimates: list[DemandEstimate] = []
+        for heater in sorted((item for item in heaters if item.enabled), key=lambda item: item.id):
+            state = telemetry.get(heater.id)
+            if not _telemetry_usable(state):
+                raise ValueError(f"missing required telemetry for heater {heater.id}")
+            assert state is not None
+            coefficient = heater.capacity_kwh / (24 * design_delta)
+            actual = float(state.temperature_c)
+            target = float(state.target_temperature_c)
+            for index, start in enumerate(starts):
+                outdoor = _weather_at(start, forecast)
+                if outdoor is None:
+                    raise ValueError(f"missing continuous forecast at {start.isoformat()}")
+                elapsed = (start - starts[0]).total_seconds() / 3600
+                feedback_weight = max(0.0, 1.0 - elapsed / feedback_horizon_hours)
+                feedback = (target - actual) * feedback_weight
+                delta = max(0.0, target - outdoor + feedback)
+                degree_hours = delta * hours
+                demand = coefficient * degree_hours * heater.demand_factor
+                demand *= 1 + heater.reserve_percent / 100
+                estimates.append(DemandEstimate(
+                    heater.id, start, start + timedelta(minutes=slot_minutes), outdoor,
+                    target, feedback, degree_hours, coefficient, heater.demand_factor,
+                    heater.reserve_percent, max(0.0, demand),
+                ))
+        return tuple(estimates)
+
+
+def materialize_constraints(
+    constraints: Sequence[ChargeConstraint], heaters: Sequence[Heater],
+    horizon_start: datetime, horizon_end: datetime, slot_minutes: int,
+    timezone_name: str,
+) -> tuple[MaterializedConstraint, ...]:
+    zone = ZoneInfo(timezone_name)
+    priorities = {item.id: item.priority for item in heaters}
+    boundaries: list[datetime] = []
+    cursor = horizon_start
+    while cursor <= horizon_end:
+        boundaries.append(cursor)
+        cursor += timedelta(minutes=slot_minutes)
+    result: list[MaterializedConstraint] = []
+    for rule in constraints:
+        if rule.heater_id not in priorities:
+            raise ValueError(f"unknown heater in constraint: {rule.heater_id}")
+        if rule.at.minute % slot_minutes:
+            raise ValueError("constraint time must align with the configured slot")
+        for boundary in boundaries:
+            local = boundary.astimezone(zone)
+            if local.weekday() in rule.weekdays and local.time().replace(tzinfo=None) == rule.at:
+                result.append(MaterializedConstraint(rule.id, rule.heater_id, boundary, rule.target_charge * 100, priorities[rule.heater_id]))
+    return tuple(sorted(result, key=lambda item: (item.at, -item.priority, item.heater_id, item.requirement_id or 0)))
+
+
+class MilpChargePlanner:
+    """Lexicographic ON/OFF planner using PuLP and single-threaded CBC."""
 
     def build(self, request: PlanningInput) -> AutomaticPlan:
-        _validate_input(request)
-        horizon_start = _align(request.horizon_start, request.slot_minutes)
-        horizon_end = horizon_start + timedelta(hours=request.horizon_hours)
-        count = math.ceil((horizon_end - horizon_start).total_seconds() / 60 / request.slot_minutes)
-        slots = [
-            horizon_start + timedelta(minutes=index * request.slot_minutes)
-            for index in range(count)
-        ]
-        enabled = tuple(
-            heater for heater in request.heaters
-            if heater.enabled and _telemetry_usable(request.telemetry.get(heater.id))
-        )
-        telemetry_health = {
-            heater.id: request.telemetry.get(heater.id) for heater in request.heaters
-        }
-        required = {heater.id: _required_percent(heater, request, slots, horizon_end) for heater in enabled}
-        current = {
-            heater.id: float(request.telemetry[heater.id].stored_charge_percent or 0.0)
-            for heater in enabled
-        }
-        selected: dict[int, list[str]] = {index: [] for index in range(count)}
-        explored = 0
-        # Work backwards: later charging loses less stored heat and is the final
-        # tie-breaker required by the design.  The capacity check is per slot.
-        for heater in sorted(enabled, key=lambda item: (-item.priority, item.id)):
-            target = required[heater.id]
-            charge_needed = max(0.0, target - current[heater.id])
-            rate = 100.0 * request.slot_minutes / heater.full_charge_minutes
-            for index in reversed(range(count)):
-                if charge_needed <= 1e-9:
-                    break
-                if not _constraint_allows(heater.id, slots[index], request.constraints, request.timezone_name):
-                    continue
-                if sum(next(h.power_w for h in enabled if h.id == hid) for hid in selected[index]) + heater.power_w > request.max_total_power_w:
-                    continue
-                selected[index].append(heater.id)
-                charge_needed -= rate
-                explored += 1
-                if explored > request.exploration_limit:
-                    break
-            if explored > request.exploration_limit:
-                break
+        generated_at = request.generated_at or request.horizon_start
+        try:
+            _validate_input(request)
+            horizon_start = _ceil_align(request.horizon_start, request.slot_minutes)
+        except (ValueError, ArithmeticError) as exc:
+            return _invalid_plan(request, request.horizon_start, (), str(exc), "invalid_configuration", generated_at)
+        starts = _continuous_forecast_slots(horizon_start, request.forecast, request.horizon_hours, request.slot_minutes)
+        if not starts or not request.forecast_automatic_eligible:
+            reason = "forecast_not_eligible" if not request.forecast_automatic_eligible else "missing_aemet_coverage"
+            return _invalid_plan(request, horizon_start, starts, reason, reason, generated_at)
+        horizon_end = starts[-1] + timedelta(minutes=request.slot_minutes)
+        missing = [item.id for item in request.heaters if item.enabled and not _telemetry_usable(request.telemetry.get(item.id))]
+        if missing:
+            return _invalid_plan(request, horizon_start, starts, f"missing required MQTT state: {', '.join(sorted(missing))}", "missing_required_state", generated_at, missing)
+        try:
+            demand = DegreeHoursDemandEstimator().estimate(
+                request.heaters, request.telemetry, request.forecast, starts, request.slot_minutes,
+                design_indoor_temperature_c=request.design_indoor_temperature_c,
+                design_outdoor_temperature_c=request.design_outdoor_temperature_c,
+                feedback_horizon_hours=request.feedback_horizon_hours,
+            )
+            materialized = materialize_constraints(request.constraints, request.heaters, horizon_start, horizon_end, request.slot_minutes, request.timezone_name)
+            return self._solve(request, starts, demand, materialized, generated_at)
+        except (ValueError, ArithmeticError) as exc:
+            return _invalid_plan(request, horizon_start, starts, str(exc), "invalid_configuration", generated_at)
 
+    def _solve(self, request: PlanningInput, starts: Sequence[datetime], demand: Sequence[DemandEstimate], constraints: Sequence[MaterializedConstraint], generated_at: datetime) -> AutomaticPlan:
+        try:
+            import pulp
+        except ImportError:
+            return _invalid_plan(request, starts[0], starts, "PuLP is unavailable", "solver_unavailable", generated_at)
+        heaters = tuple(sorted((item for item in request.heaters if item.enabled), key=lambda item: item.id))
+        slot_hours = request.slot_minutes / 60
+        limit_w = request.max_heating_power_w or request.max_total_power_w
+        oversized = tuple(item for item in heaters if item.power_w > limit_w)
+        demand_by_key = {(item.heater_id, item.start): item.demand_kwh for item in demand}
+        boundary_index = {start: index for index, start in enumerate(starts)}
+        boundary_index[starts[-1] + timedelta(minutes=request.slot_minutes)] = len(starts)
+        model = pulp.LpProblem("dynamic_thermal_charge", pulp.LpMinimize)
+        on = {(h.id, i): pulp.LpVariable(f"on_{h.id}_{i:03d}", cat="Binary") for h in heaters for i in range(len(starts))}
+        energy = {(h.id, i): pulp.LpVariable(f"energy_{h.id}_{i:03d}", lowBound=0, upBound=h.capacity_kwh) for h in heaters for i in range(len(starts) + 1)}
+        unmet = {(h.id, i): pulp.LpVariable(f"unmet_{h.id}_{i:03d}", lowBound=0, upBound=demand_by_key[(h.id, starts[i])]) for h in heaters for i in range(len(starts))}
+        c_short = {index: pulp.LpVariable(f"constraint_shortfall_{index:03d}", lowBound=0) for index in range(len(constraints))}
+        for h in heaters:
+            model += energy[(h.id, 0)] == h.capacity_kwh * float(request.telemetry[h.id].stored_charge_percent) / 100
+            for i, start in enumerate(starts):
+                model += energy[(h.id, i + 1)] == energy[(h.id, i)] + h.charge_power_kw * slot_hours * on[(h.id, i)] - demand_by_key[(h.id, start)] + unmet[(h.id, i)]
+        for i in range(len(starts)):
+            model += pulp.lpSum(h.power_w * on[(h.id, i)] for h in heaters) <= limit_w
+        for h in oversized:
+            for i in range(len(starts)):
+                model += on[(h.id, i)] == 0
+        for index, rule in enumerate(constraints):
+            model += energy[(rule.heater_id, boundary_index[rule.at])] + c_short[index] >= _heater(heaters, rule.heater_id).capacity_kwh * rule.minimum_soc_percent / 100
+        solver = _cbc_solver(pulp)
+        score: list[float] = []
+        phases = []
+        for priority in sorted({item.priority for item in constraints}, reverse=True):
+            phases.append(pulp.lpSum(c_short[i] for i, item in enumerate(constraints) if item.priority == priority))
+        for priority in sorted({item.priority for item in heaters}, reverse=True):
+            phases.append(pulp.lpSum(unmet[(h.id, i)] for h in heaters if h.priority == priority for i in range(len(starts))))
+        total_charge = pulp.lpSum(h.charge_power_kw * slot_hours * on[(h.id, i)] for h in heaters for i in range(len(starts)))
+        phases.extend((
+            total_charge,
+            pulp.lpSum((len(starts) - i) * h.charge_power_kw * slot_hours * on[(h.id, i)] for h in heaters for i in range(len(starts))),
+            pulp.lpSum((heater_index + 1) * (i + 1) * on[(h.id, i)] for heater_index, h in enumerate(heaters) for i in range(len(starts))),
+        ))
+        for phase_index, objective in enumerate(phases):
+            model.setObjective(objective)
+            status = model.solve(solver)
+            if status != pulp.LpStatusOptimal:
+                return _invalid_plan(request, starts[0], starts, f"solver status {pulp.LpStatus[status]}", "solver_failure", generated_at)
+            optimum = float(pulp.value(objective) or 0.0)
+            score.append(optimum)
+            if phase_index < len(phases) - 1:
+                model += objective <= optimum + 1e-7
+        violations: list[PlanningViolation] = []
+        for h in oversized:
+            violations.append(PlanningViolation(h.id, "individual_power_limit", 0.0, h.power_w - limit_w, starts[0], "heater_power_exceeds_global_limit"))
+        for index, rule in enumerate(constraints):
+            short_kwh = float(c_short[index].value() or 0.0)
+            if short_kwh > 1e-6:
+                h = _heater(heaters, rule.heater_id)
+                achieved = float(energy[(h.id, boundary_index[rule.at])].value() or 0.0) / h.capacity_kwh * 100
+                violations.append(PlanningViolation(h.id, "minimum_soc", achieved, short_kwh / h.capacity_kwh * 100, rule.at, "insufficient_capacity_or_power"))
+        for h in heaters:
+            for i, start in enumerate(starts):
+                short = float(unmet[(h.id, i)].value() or 0.0)
+                if short > 1e-6:
+                    served = demand_by_key[(h.id, start)] - short
+                    violations.append(PlanningViolation(h.id, "forecast_demand_kwh", served, short, start, "insufficient_stored_energy_or_power"))
         plan_slots: list[AutomaticPlanSlot] = []
-        projected = {heater.id: current[heater.id] for heater in enabled}
-        projected_indoor = {
-            heater.id: float(request.telemetry[heater.id].temperature_c or 0.0)
-            for heater in enabled
-        }
-        deficits: list[PlanningDeficit] = []
-        for index, start in enumerate(slots):
-            end = start + timedelta(minutes=request.slot_minutes)
-            outdoor = _weather_at(start, request.forecast)
-            for heater in enabled:
-                projected[heater.id], projected_indoor[heater.id] = _project_state(
-                    heater,
-                    projected[heater.id],
-                    projected_indoor[heater.id],
-                    float(request.telemetry[heater.id].target_temperature_c or 0.0),
-                    start,
-                    end,
-                    outdoor,
-                    heater.id in selected[index],
-                )
+        for i, start in enumerate(starts):
+            active = tuple(h.id for h in heaters if float(on[(h.id, i)].value() or 0) > .5)
             plan_slots.append(AutomaticPlanSlot(
-                start=start, end=end, heater_ids=tuple(sorted(selected[index])),
-                power_w=sum(next(h.power_w for h in enabled if h.id == hid) for hid in selected[index]),
-                stored_charge_percent={key: round(value, 3) for key, value in projected.items()},
-                required_charge_percent={key: round(value, 3) for key, value in required.items()},
-                outdoor_temperature_c=outdoor,
-                indoor_temperature_c={key: round(value, 3) for key, value in projected_indoor.items()},
+                start, start + timedelta(minutes=request.slot_minutes), active,
+                sum(_heater(heaters, heater_id).power_w for heater_id in active),
+                {h.id: round(float(energy[(h.id, i + 1)].value() or 0) / h.capacity_kwh * 100, 6) for h in heaters},
+                {h.id: round(demand_by_key[(h.id, start)] / h.capacity_kwh * 100, 6) for h in heaters},
+                _weather_at(start, request.forecast),
+                {h.id: float(request.telemetry[h.id].temperature_c) for h in heaters},
+                {h.id: round(float(energy[(h.id, i)].value() or 0) / h.capacity_kwh * 100, 6) for h in heaters},
+                {h.id: round(demand_by_key[(h.id, start)], 9) for h in heaters},
+                {h.id: (h.power_w if h.id in active else 0) for h in heaters},
             ))
-
-        for heater in request.heaters:
-            telemetry = telemetry_health.get(heater.id)
-            if not _telemetry_usable(telemetry):
-                deficits.append(PlanningDeficit(heater.id, 0.0, 0.0, 0.0, "telemetry_stale"))
-                continue
-            target = required.get(heater.id, 0.0)
-            final = projected.get(heater.id, float(telemetry.stored_charge_percent or 0.0))
-            if final + 1e-6 < target:
-                deficits.append(PlanningDeficit(heater.id, target, final, round(target - final, 3), "power_limit_or_capacity"))
-        status = "best_effort" if explored > request.exploration_limit else ("deficit" if deficits else "feasible")
-        score = (float(sum(item.deficit_percent for item in deficits)), float(sum(len(slot.heater_ids) for slot in plan_slots)), float(sum(slot.power_w for slot in plan_slots)), float(sum(len(slot.heater_ids) * (count - index) for index, slot in enumerate(plan_slots))))
+        explanations = tuple(HeaterExplanation(
+            h.id, float(request.telemetry[h.id].stored_charge_percent),
+            sum(item.demand_kwh for item in demand if item.heater_id == h.id),
+            h.demand_factor, h.reserve_percent,
+            next((item.at for item in constraints if item.heater_id == h.id), None),
+            tuple((slot.start, slot.end) for slot in plan_slots if h.id in slot.heater_ids),
+        ) for h in heaters)
         return AutomaticPlan(
-            horizon_start=horizon_start, horizon_end=horizon_end,
-            slot_minutes=request.slot_minutes, slots=tuple(plan_slots),
-            deficits=tuple(deficits), status=status, score=score,
-            input_token=input_token(request),
+            starts[0], starts[-1] + timedelta(minutes=request.slot_minutes), request.slot_minutes,
+            tuple(plan_slots), tuple(violations), DEGRADED if violations else FEASIBLE,
+            tuple(score), input_token(request), generated_at, explanations, tuple(demand),
         )
+
+
+class DeterministicChargeOptimizer(MilpChargePlanner):
+    """Compatibility name for the V1 MILP planner."""
 
 
 def input_token(request: PlanningInput) -> str:
     payload = {
-        "heaters": [(h.id, h.power_w, h.full_charge_minutes, h.enabled, h.reserve_percent) for h in request.heaters],
+        "heaters": [(h.id, h.power_w, h.full_charge_minutes, h.enabled, h.priority, h.demand_factor, h.reserve_percent) for h in request.heaters],
         "telemetry": {key: _json_telemetry(value) for key, value in sorted(request.telemetry.items())},
         "constraints": [(c.id, c.heater_id, c.target_charge, c.at.isoformat(), c.weekdays) for c in request.constraints],
         "forecast": [(point.timestamp.isoformat(), point.temperature_c, point.interpolated) for point in request.forecast],
         "horizon_start": request.horizon_start.astimezone(timezone.utc).isoformat(),
         "horizon_hours": request.horizon_hours, "slot_minutes": request.slot_minutes,
-        "max_total_power_w": request.max_total_power_w, "timezone_name": request.timezone_name,
+        "max_total_power_w": request.max_total_power_w, "max_heating_power_w": request.max_heating_power_w,
+        "timezone_name": request.timezone_name, "design_indoor_temperature_c": request.design_indoor_temperature_c,
+        "design_outdoor_temperature_c": request.design_outdoor_temperature_c, "feedback_horizon_hours": request.feedback_horizon_hours,
+        "forecast_automatic_eligible": request.forecast_automatic_eligible,
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
@@ -182,76 +401,72 @@ def _json_telemetry(value: ChargeTelemetry) -> dict[str, object]:
 def _validate_input(request: PlanningInput) -> None:
     if request.horizon_start.tzinfo is None:
         raise ValueError("horizon_start requires a timezone")
-    if request.slot_minutes not in (5, 10, 15, 20, 30, 60):
-        raise ValueError("slot_minutes must be one of 5, 10, 15, 20, 30 or 60")
-    if request.horizon_hours <= 0 or request.max_total_power_w <= 0:
-        raise ValueError("horizon_hours and max_total_power_w must be positive")
+    if request.slot_minutes <= 0 or request.slot_minutes > 60 or 60 % request.slot_minutes:
+        raise ValueError("slot_minutes must be a positive divisor of one hour")
+    if request.horizon_hours <= 0 or request.horizon_hours > 48:
+        raise ValueError("horizon_hours must be between 1 and 48")
+    if request.max_total_power_w <= 0 or (request.max_heating_power_w is not None and request.max_heating_power_w <= 0):
+        raise ValueError("power limits must be positive")
+    if request.design_indoor_temperature_c <= request.design_outdoor_temperature_c:
+        raise ValueError("design indoor temperature must exceed design outdoor temperature")
+    if request.feedback_horizon_hours <= 0:
+        raise ValueError("feedback_horizon_hours must be positive")
     ZoneInfo(request.timezone_name)
 
 
-def _align(value: datetime, minutes: int) -> datetime:
-    return value.replace(second=0, microsecond=0, minute=(value.minute // minutes) * minutes)
+def _ceil_align(value: datetime, minutes: int) -> datetime:
+    floor = value.replace(second=0, microsecond=0, minute=(value.minute // minutes) * minutes)
+    return floor if value == floor else floor + timedelta(minutes=minutes)
+
+
+def _continuous_forecast_slots(start: datetime, forecast: Sequence[HourlyForecastPoint], horizon_hours: int, slot_minutes: int) -> tuple[datetime, ...]:
+    result = []
+    cursor = start
+    configured_end = start + timedelta(hours=horizon_hours)
+    while cursor < configured_end and _weather_at(cursor, forecast) is not None:
+        result.append(cursor)
+        cursor += timedelta(minutes=slot_minutes)
+    return tuple(result)
 
 
 def _telemetry_usable(value: ChargeTelemetry | None) -> bool:
-    return value is not None and all(
-        item is not None
-        for item in (
-            value.temperature_c,
-            value.target_temperature_c,
-            value.stored_charge_percent,
-        )
-    )
-
-
-def _required_percent(heater: Heater, request: PlanningInput, slots: Sequence[datetime], horizon_end: datetime) -> float:
-    relevant = [constraint.target_charge * 100.0 for constraint in request.constraints if constraint.heater_id == heater.id and _constraint_in_horizon(constraint, slots, request.timezone_name)]
-    target = max(relevant, default=float(heater.target_charge) * 100.0)
-    return target + heater.reserve_percent
-
-
-def _constraint_in_horizon(constraint: ChargeConstraint, slots: Sequence[datetime], timezone_name: str) -> bool:
-    zone = ZoneInfo(timezone_name)
-    return any(slot.astimezone(zone).weekday() in constraint.weekdays and slot.astimezone(zone).time().replace(second=0, microsecond=0) >= constraint.at for slot in slots)
-
-
-def _constraint_allows(heater_id: str, slot: datetime, constraints: Sequence[ChargeConstraint], timezone_name: str) -> bool:
-    # Constraints are result deadlines, not operating windows. Charging is valid
-    # at every slot; deadlines are represented by the required result, not by a
-    # forbidden operating window.
-    return True
+    return value is not None and all(item is not None for item in (value.temperature_c, value.target_temperature_c, value.stored_charge_percent))
 
 
 def _weather_at(at: datetime, points: Sequence[HourlyForecastPoint]) -> float | None:
-    matching = [point.temperature_c for point in points if point.timestamp <= at < point.timestamp + timedelta(hours=1)]
-    return sum(matching) / len(matching) if matching else None
+    matches = [point.temperature_c for point in points if point.timestamp <= at < point.timestamp + timedelta(hours=1)]
+    return float(matches[-1]) if matches else None
 
 
-def _project_state(
-    heater: Heater,
-    value: float,
-    indoor: float,
-    target: float,
-    start: datetime,
-    end: datetime,
-    outdoor: float | None,
-    charging: bool,
-) -> tuple[float, float]:
-    profile = heater.thermal
-    hours = (end - start).total_seconds() / 3600
-    if profile is not None and outdoor is not None:
-        # First project the room towards the forecast exterior temperature.
-        indoor += (outdoor - indoor) * profile.outdoor_loss_per_hour * hours
-        delta = max(target - indoor, 0.0)
-        design_delta = max(target - profile.design_outdoor_temperature_c, 0.1)
-        value *= max(0.0, 1.0 - profile.thermal_loss_c_per_hour * hours * delta / design_delta)
-    if charging:
-        value += 100.0 * hours * 60 / heater.full_charge_minutes
-        if profile is not None:
-            indoor += profile.emission_c_per_hour * hours
-    # The planner tracks equivalent full-charge progress.  It may exceed the
-    # physical 100% marker when the configured reserve represents extra time.
-    return max(0.0, value), indoor
+def _heater(heaters: Sequence[Heater], heater_id: str) -> Heater:
+    return next(item for item in heaters if item.id == heater_id)
 
 
-__all__ = ["AutomaticPlan", "AutomaticPlanSlot", "DeterministicChargeOptimizer", "PlanningDeficit", "PlanningInput", "input_token"]
+def _cbc_solver(pulp):
+    import shutil
+    if shutil.which("cbc"):
+        return pulp.COIN_CMD(msg=False, threads=1, options=["randomSeed 0"])
+    return pulp.PULP_CBC_CMD(msg=False, threads=1, options=["randomSeed 0"])
+
+
+def _invalid_plan(request: PlanningInput, start: datetime, starts: Sequence[datetime], detail: str, reason: str, generated_at: datetime, heater_ids: Sequence[str] = ()) -> AutomaticPlan:
+    usable_starts = tuple(starts) or (start,)
+    enabled = tuple(sorted((item for item in request.heaters if item.enabled), key=lambda item: item.id))
+    violations = tuple(PlanningViolation(heater_id, "safe_planning_input", None, None, start, reason) for heater_id in heater_ids) or (PlanningViolation(None, "safe_planning_input", None, None, start, f"{reason}: {detail}"),)
+    slots = tuple(AutomaticPlanSlot(
+        at, at + timedelta(minutes=request.slot_minutes), (), 0,
+        {h.id: float(request.telemetry[h.id].stored_charge_percent or 0) if h.id in request.telemetry else 0.0 for h in enabled},
+        {h.id: 0.0 for h in enabled}, _weather_at(at, request.forecast), None,
+        {h.id: float(request.telemetry[h.id].stored_charge_percent or 0) if h.id in request.telemetry else 0.0 for h in enabled},
+        {h.id: 0.0 for h in enabled}, {h.id: 0 for h in enabled},
+    ) for at in usable_starts)
+    return AutomaticPlan(start, usable_starts[-1] + timedelta(minutes=request.slot_minutes), request.slot_minutes, slots, violations, INVALID, (), input_token(request), generated_at)
+
+
+__all__ = [
+    "AutomaticPlan", "AutomaticPlanSlot", "DEGRADED", "DemandEstimate",
+    "DegreeHoursDemandEstimator", "DeterministicChargeOptimizer", "FEASIBLE",
+    "HeaterExplanation", "INVALID", "MaterializedConstraint", "MilpChargePlanner",
+    "PlanningDeficit", "PlanningInput", "PlanningViolation", "input_token",
+    "materialize_constraints", "resolve_planning_telemetry",
+]

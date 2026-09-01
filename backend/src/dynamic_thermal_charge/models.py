@@ -69,6 +69,7 @@ class Heater:
     target_temperature_topic: str | None = None
     stored_charge_topic: str | None = None
     reserve_percent: float = 0.0
+    demand_factor: float = 1.0
 
     def __post_init__(self) -> None:
         if not self.id:
@@ -90,8 +91,22 @@ class Heater:
             value = getattr(self, field_name)
             if value is not None:
                 object.__setattr__(self, field_name, value.strip() or None)
-        if not 0 <= self.reserve_percent <= 100:
-            raise ValueError(f"heater {self.id}: reserve_percent must be between 0 and 100")
+        if self.reserve_percent < 0:
+            raise ValueError(f"heater {self.id}: reserve_percent must be non-negative")
+        if not math.isfinite(self.demand_factor) or self.demand_factor <= 0:
+            raise ValueError(f"heater {self.id}: demand_factor must be positive")
+
+    @property
+    def charge_power_kw(self) -> float:
+        return self.power_w / 1000
+
+    @property
+    def full_charge_time_hours(self) -> float:
+        return self.full_charge_minutes / 60
+
+    @property
+    def capacity_kwh(self) -> float:
+        return self.charge_power_kw * self.full_charge_time_hours
 
     @property
     def requested_charge_minutes(self) -> int:
@@ -112,6 +127,10 @@ class SiteConfig:
     replan_minutes: int = 30
     forecast_horizon_hours: int = 48
     aemet_query_hour: int = 12
+    max_heating_power_w: int | None = None
+    design_indoor_temperature_c: float = 21.0
+    design_outdoor_temperature_c: float = 0.0
+    feedback_horizon_hours: float = 6.0
 
     def __post_init__(self) -> None:
         if self.max_total_power_w <= 0:
@@ -136,6 +155,20 @@ class SiteConfig:
             raise ValueError("forecast_horizon_hours must be positive")
         if not 0 <= self.aemet_query_hour <= 23:
             raise ValueError("aemet_query_hour must be between 0 and 23")
+        if self.max_heating_power_w is not None and self.max_heating_power_w <= 0:
+            raise ValueError("max_heating_power_w must be positive")
+        if self.design_indoor_temperature_c <= self.design_outdoor_temperature_c:
+            raise ValueError("design indoor temperature must exceed design outdoor temperature")
+        if self.feedback_horizon_hours <= 0:
+            raise ValueError("feedback_horizon_hours must be positive")
+
+    @property
+    def contracted_power_kw(self) -> float:
+        return self.max_total_power_w / 1000
+
+    @property
+    def max_heating_power_kw(self) -> float:
+        return (self.max_heating_power_w or self.max_total_power_w) / 1000
 
 
 @dataclass(frozen=True)

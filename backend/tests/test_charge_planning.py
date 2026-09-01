@@ -1,6 +1,8 @@
 from datetime import datetime, time, timedelta, timezone
 
-from dynamic_thermal_charge.charge_planning import DeterministicChargeOptimizer, PlanningInput
+import pytest
+
+from dynamic_thermal_charge.charge_planning import DegreeHoursDemandEstimator, DeterministicChargeOptimizer, PlanningInput
 from dynamic_thermal_charge.models import ChargeConstraint, ChargeTelemetry, Heater, OutputConfig, ThermalProfile
 from dynamic_thermal_charge import runtime
 from dynamic_thermal_charge.persistence.seed import example_installation
@@ -35,20 +37,23 @@ def test_optimizer_keeps_each_accumulator_independent_and_never_exceeds_limit():
     assert all("b" not in slot.heater_ids for slot in result.slots)
 
 
-def test_optimizer_plans_reserve_as_equivalent_time_beyond_full_charge():
+def test_degree_hours_applies_multiplicative_reserve_without_exceeding_capacity():
     start = datetime(2026, 1, 16, 0, 0, tzinfo=timezone.utc)
     heater = Heater(
         **{**_heater("a", reserve=25).__dict__, "full_charge_minutes": 480}
     )
-    result = DeterministicChargeOptimizer().build(PlanningInput(
-        heaters=(heater,), telemetry={"a": _telemetry("a", 0)}, constraints=(),
-        forecast=(HourlyForecastPoint(start, 5),), horizon_start=start,
-        horizon_hours=10, slot_minutes=30, max_total_power_w=2400,
-    ))
+    baseline = Heater(**{**heater.__dict__, "reserve_percent": 0})
+    common = dict(
+        telemetry={"a": _telemetry("a", 0)},
+        forecast=(HourlyForecastPoint(start, 5),), starts=(start,), slot_minutes=30,
+        design_indoor_temperature_c=21, design_outdoor_temperature_c=0,
+        feedback_horizon_hours=6,
+    )
+    estimator = DegreeHoursDemandEstimator()
+    plain = estimator.estimate((baseline,), **common)[0]
+    reserved = estimator.estimate((heater,), **common)[0]
 
-    assert sum("a" in slot.heater_ids for slot in result.slots) == 20
-    assert result.deficits == ()
-    assert result.slots[-1].required_charge_percent["a"] == 125.0
+    assert reserved.demand_kwh == pytest.approx(plain.demand_kwh * 1.25)
 
 
 def test_aemet_cycle_has_initial_attempt_and_exactly_five_hourly_retries():
@@ -68,20 +73,21 @@ def test_aemet_cycle_has_initial_attempt_and_exactly_five_hourly_retries():
     assert state.next_retry_at is None
 
 
-def test_thermal_projection_uses_target_delta_and_emission():
+def test_degree_hours_uses_nominal_coefficient_and_linear_feedback():
     start = datetime(2026, 1, 16, 0, 0, tzinfo=timezone.utc)
-    heater = _heater("room")
-    heater = Heater(
-        **{**heater.__dict__, "thermal": ThermalProfile(21, -2, thermal_loss_c_per_hour=0.5, emission_c_per_hour=2.0)}
+    heater = Heater(**{**_heater("room", reserve=0).__dict__, "power_w": 3000, "full_charge_minutes": 480})
+    telemetry = ChargeTelemetry("room", 19, 21, 50, start, start, start)
+    estimates = DegreeHoursDemandEstimator().estimate(
+        (heater,), {"room": telemetry},
+        (HourlyForecastPoint(start, 0), HourlyForecastPoint(start + timedelta(hours=1), 0)),
+        (start, start + timedelta(hours=1)), 60,
+        design_indoor_temperature_c=21, design_outdoor_temperature_c=0,
+        feedback_horizon_hours=2,
     )
-    result = DeterministicChargeOptimizer().build(PlanningInput(
-        heaters=(heater,), telemetry={"room": _telemetry("room", 50)}, constraints=(),
-        forecast=(HourlyForecastPoint(start, -2),), horizon_start=start,
-        horizon_hours=1, slot_minutes=30, max_total_power_w=2400,
-    ))
-    assert result.slots[0].indoor_temperature_c is not None
-    assert result.slots[0].indoor_temperature_c["room"] > 20
-    assert result.slots[0].stored_charge_percent["room"] > 50
+    assert estimates[0].thermal_coefficient == pytest.approx(24 / (24 * 21))
+    assert estimates[0].feedback_temperature_c == 2
+    assert estimates[1].feedback_temperature_c == 1
+    assert estimates[0].demand_kwh == pytest.approx(23 / 21)
 
 
 def test_disabled_mqtt_supplies_valid_global_telemetry_to_automatic_planning(monkeypatch):

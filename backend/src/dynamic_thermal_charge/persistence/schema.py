@@ -240,10 +240,19 @@ charge_planning_site = Table(
     Column("replan_minutes", Integer, nullable=False, server_default="30"),
     Column("forecast_horizon_hours", Integer, nullable=False, server_default="48"),
     Column("aemet_query_hour", Integer, nullable=False, server_default="12"),
+    Column("contracted_power_w", Integer, nullable=False, server_default="5200"),
+    Column("max_heating_power_w", Integer, nullable=False, server_default="5200"),
+    Column("design_indoor_temperature_c", Float, nullable=False, server_default="21"),
+    Column("design_outdoor_temperature_c", Float, nullable=False, server_default="0"),
+    Column("feedback_horizon_hours", Float, nullable=False, server_default="6"),
     CheckConstraint("replan_minutes > 0", name="ck_charge_site_replan"),
     CheckConstraint("revision >= 1", name="ck_charge_site_revision"),
     CheckConstraint("forecast_horizon_hours > 0", name="ck_charge_site_horizon"),
     CheckConstraint("aemet_query_hour >= 0 AND aemet_query_hour <= 23", name="ck_charge_site_query_hour"),
+    CheckConstraint("contracted_power_w > 0", name="ck_charge_site_contracted_power"),
+    CheckConstraint("max_heating_power_w > 0", name="ck_charge_site_heating_power"),
+    CheckConstraint("design_indoor_temperature_c > design_outdoor_temperature_c", name="ck_charge_site_design_temperatures"),
+    CheckConstraint("feedback_horizon_hours > 0", name="ck_charge_site_feedback_horizon"),
 )
 
 charge_constraint = Table(
@@ -272,10 +281,12 @@ heater_charge_config = Table(
     Column("target_temperature_topic", String(512), nullable=True),
     Column("stored_charge_topic", String(512), nullable=True),
     Column("reserve_percent", Float, nullable=False, server_default="0"),
+    Column("demand_factor", Float, nullable=False, server_default="1"),
     Column("room_inertia_hours", Float, nullable=False, server_default="8"),
     Column("outdoor_loss_per_hour", Float, nullable=False, server_default="0.08"),
     Column("emission_c_per_hour", Float, nullable=False, server_default="1"),
-    CheckConstraint("reserve_percent >= 0 AND reserve_percent <= 100", name="ck_heater_charge_reserve"),
+    CheckConstraint("reserve_percent >= 0", name="ck_heater_charge_reserve"),
+    CheckConstraint("demand_factor > 0", name="ck_heater_charge_demand_factor"),
     CheckConstraint("room_inertia_hours > 0", name="ck_heater_charge_inertia"),
     CheckConstraint("outdoor_loss_per_hour >= 0 AND outdoor_loss_per_hour <= 1", name="ck_heater_charge_loss"),
     CheckConstraint("emission_c_per_hour >= 0", name="ck_heater_charge_emission"),
@@ -340,7 +351,7 @@ automatic_plan = Table(
     Column("active", Boolean, nullable=False, server_default="0"),
     Column("created_at", DateTime, nullable=False),
     CheckConstraint("horizon_end > horizon_start", name="ck_automatic_plan_horizon"),
-    CheckConstraint("status IN ('feasible', 'deficit', 'best_effort', 'preview')", name="ck_automatic_plan_status"),
+    CheckConstraint("status IN ('FEASIBLE', 'DEGRADED', 'INVALID', 'feasible', 'deficit', 'best_effort', 'preview')", name="ck_automatic_plan_status"),
     Index("ix_automatic_plan_installation_created", "installation_id", "created_at"),
 )
 
@@ -356,6 +367,9 @@ automatic_plan_slot = Table(
     Column("stored_charge_json", Text, nullable=False),
     Column("required_charge_json", Text, nullable=False),
     Column("outdoor_temperature_c", Float, nullable=True),
+    Column("initial_soc_json", Text, nullable=False, server_default="{}"),
+    Column("demand_json", Text, nullable=False, server_default="{}"),
+    Column("heater_power_json", Text, nullable=False, server_default="{}"),
     UniqueConstraint("plan_id", "slot_start", name="uq_automatic_plan_slot"),
 )
 

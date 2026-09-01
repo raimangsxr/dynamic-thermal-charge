@@ -133,9 +133,9 @@ export interface PlanningDto {
 
 export interface ChargeConstraintDto { id: number | null; heater_id: string; target_charge: number; at_time: string; weekdays: number[]; enabled: boolean; }
 export interface ChargeTelemetryDto { heater_id: string; temperature_c: number | null; target_temperature_c: number | null; stored_charge_percent: number | null; temperature_received_at: string | null; target_received_at: string | null; stored_charge_received_at: string | null; state: 'ready' | 'telemetry_stale'; missing_fields: string[]; oldest_age_seconds: number | null; }
-export interface PlanningDeficitDto { heater_id: string; target_charge_percent: number; projected_charge_percent: number; deficit_percent: number; reason: string; }
+export interface PlanningDeficitDto { heater_id: string | null; requirement: string; achievable_value: number | null; shortfall: number | null; at: string | null; reason: string; target_charge_percent: number; projected_charge_percent: number; deficit_percent: number; }
 export interface PlanningConstraintRequest { heater_id: string; target_charge: number; at_time: string; weekdays: number[]; }
-export interface PlanningPreviewDto { token: string; status: string; score: number[]; horizon_start: string; horizon_end: string; slot_minutes: number; slots: Array<Record<string, unknown>>; deficits: PlanningDeficitDto[]; constraints: ChargeConstraintDto[]; }
+export interface PlanningPreviewDto { token: string; status: 'FEASIBLE' | 'DEGRADED' | 'INVALID'; score: number[]; horizon_start: string; horizon_end: string; slot_minutes: number; slots: Array<Record<string, unknown>>; deficits: PlanningDeficitDto[]; violations: PlanningDeficitDto[]; explanations: Array<Record<string, unknown>>; demand: Array<Record<string, unknown>>; constraints: ChargeConstraintDto[]; }
 export interface AutomaticPlanAuditItem { id: number; plan_id: number | null; event: string; reason: string; details: Record<string, unknown>; occurred_at: string; }
 export interface AutomaticPlanAuditPage { items: AutomaticPlanAuditItem[]; }
 
@@ -175,18 +175,6 @@ export interface OutputDto {
   active_high: boolean;
 }
 
-export interface ThermalDto {
-  target_temperature_c: number;
-  design_outdoor_temperature_c: number;
-  thermal_factor: number;
-  min_charge: number;
-  max_charge: number;
-  thermal_loss_c_per_hour: number;
-  room_inertia_hours?: number;
-  outdoor_loss_per_hour?: number;
-  emission_c_per_hour?: number;
-}
-
 export interface HeaterDto {
   id: string;
   name: string;
@@ -195,6 +183,7 @@ export interface HeaterDto {
   full_charge_hours: number;
   target_charge: number;
   reserve_percent: number;
+  demand_factor: number;
   priority: number;
   enabled: boolean;
   indoor_topic: string | null;
@@ -202,7 +191,6 @@ export interface HeaterDto {
   target_temperature_topic: string | null;
   stored_charge_topic: string | null;
   output: OutputDto;
-  thermal: ThermalDto | null;
 }
 
 export interface ScheduleDto {
@@ -245,6 +233,7 @@ export interface AddHeaterRequest {
   model?: string;
   target_charge?: number;
   reserve_percent?: number;
+  demand_factor?: number;
   priority?: number;
   enabled?: boolean;
   indoor_topic?: string | null;
@@ -254,12 +243,6 @@ export interface AddHeaterRequest {
   output?: 'simulated' | 'gpio';
   pin?: number | null;
   active_high?: boolean;
-  target_temperature_c?: number | null;
-  design_outdoor_temperature_c?: number | null;
-  thermal_factor?: number;
-  min_charge?: number;
-  max_charge?: number;
-  thermal_loss_c_per_hour?: number;
 }
 
 export interface UpdateHeaterRequest {
@@ -270,6 +253,7 @@ export interface UpdateHeaterRequest {
   full_charge_hours: number;
   target_charge: number;
   reserve_percent: number;
+  demand_factor: number;
   priority: number;
   enabled: boolean;
   indoor_topic: string | null;
@@ -279,12 +263,6 @@ export interface UpdateHeaterRequest {
   output: 'simulated' | 'gpio';
   pin: number | null;
   active_high: boolean;
-  target_temperature_c: number | null;
-  design_outdoor_temperature_c: number | null;
-  thermal_factor: number;
-  min_charge: number;
-  max_charge: number;
-  thermal_loss_c_per_hour: number;
 }
 
 export interface ChangeDto {

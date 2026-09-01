@@ -74,7 +74,23 @@
       }
       <div class="constraint-actions"><button type="button" (click)="recalculate()">Recalcular vista previa</button><button type="button" class="secondary" (click)="refresh()">Descartar</button><button type="button" [disabled]="!preview()" (click)="activate()">Guardar y activar</button></div>
       @if (actionMessage()) { <p role="status">{{ actionMessage() }}</p> } @if (actionError()) { <p class="error" role="alert">{{ actionError() }}</p> }
-      @if (preview(); as candidate) { <div class="preview" role="status"><strong>Preview: {{ candidate.status }}</strong> · {{ candidate.slots.length }} intervalos · puntuación {{ candidate.score.join(' / ') }} @if (candidate.deficits.length) { <span class="warning"> · Déficits detectados: {{ candidate.deficits.length }}</span> }</div> }
+      @if (preview(); as candidate) {
+        <div class="preview" role="status">
+          <strong>Preview: {{ candidate.status }}</strong>
+          · {{ candidate.slots.length }} intervalos
+          · puntuación {{ candidate.score.join(' / ') }}
+          @if (candidate.deficits.length) {
+            <span class="warning"> · Déficits detectados: {{ candidate.deficits.length }}</span>
+          }
+          @if (candidate.status === 'INVALID') {
+            <ul class="preview-reasons">
+              @for (item of candidate.deficits; track $index) {
+                <li>{{ deficitExplanation(item) }}</li>
+              }
+            </ul>
+          }
+        </div>
+      }
     </section>
     @if (!data.forecast) {
       <p class="empty" data-testid="planning-no-forecast">Sin previsión utilizable; las temperaturas no se rellenan con ceros.</p>
@@ -109,7 +125,7 @@
       </section>
       <section class="visualization card" data-testid="cumulative-card" aria-labelledby="cumulative-title">
         <h2 id="cumulative-title">Carga acumulada por acumulador</h2>
-        <p class="hint">La reserva parte de cero, aumenta durante la carga y desciende sin carga según la pérdida térmica configurada y el delta entre objetivo y previsión.</p>
+        <p class="hint">Minutos equivalentes de carga completa según el SOC planificado al final de cada intervalo.</p>
         <div class="chart-wrap"><canvas #cumulativeChart aria-label="Gráfico de minutos de carga acumulados por acumulador"></canvas></div>
       </section>
 

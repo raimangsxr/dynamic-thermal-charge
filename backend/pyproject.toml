@@ -9,9 +9,9 @@ description = "Configurable storage-heater charge scheduler for Raspberry Pi"
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }
-# No runtime dependencies: configuration lives in a database, reached through
-# the optional "db" extra, and the scheduler needs nothing but the stdlib.
-dependencies = []
+# PuLP is pure Python. Production installs CBC from Debian so ARMv7 never
+# depends on a platform-specific Python wheel.
+dependencies = ["PuLP>=2.8,<4"]
 
 [project.optional-dependencies]
 # Persistence. Kept optional so the scheduler and the thermal model stay

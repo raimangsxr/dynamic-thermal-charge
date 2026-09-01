@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime, timedelta
 import logging
+import math
 import signal
 import time
 from typing import Callable, Iterator
@@ -18,7 +19,7 @@ from zoneinfo import ZoneInfo
 from .controller import ChargeController
 from .drivers import OutputDriver, RecordingOutputDriver, SimulatedOutputDriver
 from .gpio_driver import GpioOutputDriver
-from .charge_planning import DeterministicChargeOptimizer, PlanningInput
+from .charge_planning import DeterministicChargeOptimizer, PlanningInput, resolve_planning_telemetry
 from .models import AppConfig, ChargeTelemetry
 from .persistence import ConfigStoreError
 from .persistence.active_plan import SqlActivePlanRepository
@@ -186,11 +187,11 @@ def _run_controller(
                             configuration_revision=live_revision,
                             constraints_revision=planning_site["revision"],
                             reason="periodic",
-                            active=True,
+                            active=automatic[0].status != "INVALID",
                         )
                         return PlanRefresh(
                             plan=automatic[1],
-                            next_refresh_seconds=planning_site["replan_minutes"] * 60,
+                            next_refresh_seconds=_seconds_to_next_slot(now, live_config.site.slot_minutes),
                             plan_ref=None,
                             installation_revision=live_revision,
                         )
@@ -281,33 +282,18 @@ def _build_automatic_runtime_plan(
     mqtt: MqttSystemSettings | None = None,
 ):
     """Build the controller-facing schedule from the automatic plan value."""
-    if mqtt is not None and not mqtt.enabled:
-        valid = {
-            heater.id: ChargeTelemetry(
-                heater_id=heater.id,
-                temperature_c=mqtt.fixed_temperature_c,
-                target_temperature_c=mqtt.fixed_target_temperature_c,
-                stored_charge_percent=mqtt.fixed_stored_charge_percent,
-                temperature_received_at=now,
-                target_received_at=now,
-                stored_charge_received_at=now,
-            )
-            for heater in config.heaters
-        }
-    else:
-        telemetry = store.planning.telemetry()
-        valid = {}
-        for heater_id, value in telemetry.items():
-            stamps = (
-                value.temperature_received_at,
-                value.target_received_at,
-                value.stored_charge_received_at,
-            )
-            if all(
-                item is not None and (now - item).total_seconds() <= 900
-                for item in stamps
-            ):
-                valid[heater_id] = value
+    mqtt_settings = mqtt if mqtt is not None else _live_mqtt_settings(store, None)
+    persisted = (
+        {}
+        if mqtt_settings is not None and not mqtt_settings.enabled
+        else store.planning.telemetry()
+    )
+    valid = resolve_planning_telemetry(
+        config.heaters,
+        persisted,
+        now,
+        mqtt=mqtt_settings,
+    )
     timezone_name = config.schedule.timezone if config.schedule is not None else "UTC"
     request = PlanningInput(
         heaters=config.heaters,
@@ -315,9 +301,15 @@ def _build_automatic_runtime_plan(
         constraints=constraints,
         forecast=store.planning.latest_forecast(),
         horizon_start=now,
-        horizon_hours=planning_site["forecast_horizon_hours"],
+        horizon_hours=int(planning_site["forecast_horizon_hours"]),
         slot_minutes=config.site.slot_minutes,
-        max_total_power_w=config.site.max_total_power_w,
+        max_total_power_w=int(planning_site.get("contracted_power_w", config.site.max_total_power_w)),
+        max_heating_power_w=int(planning_site.get("max_heating_power_w", config.site.max_heating_power_w or config.site.max_total_power_w)),
+        design_indoor_temperature_c=float(planning_site.get("design_indoor_temperature_c", config.site.design_indoor_temperature_c)),
+        design_outdoor_temperature_c=float(planning_site.get("design_outdoor_temperature_c", config.site.design_outdoor_temperature_c)),
+        feedback_horizon_hours=float(planning_site.get("feedback_horizon_hours", config.site.feedback_horizon_hours)),
+        forecast_automatic_eligible=(store.planning.latest_forecast_automatic_eligible() if hasattr(store.planning, "latest_forecast_automatic_eligible") else True),
+        generated_at=now,
         timezone_name=timezone_name,
     )
     plan = DeterministicChargeOptimizer().build(request)
@@ -328,6 +320,12 @@ def _build_automatic_runtime_plan(
     allocated = {heater.id: sum(config.site.slot_minutes for slot in plan.slots if heater.id in slot.heater_ids) for heater in config.heaters}
     unmet = {item.heater_id: round(item.deficit_percent * config.heaters[[h.id for h in config.heaters].index(item.heater_id)].full_charge_minutes / 100) for item in plan.deficits if item.deficit_percent > 0}
     return plan, ScheduleResult(legacy_slots, allocated, unmet)
+
+
+def _seconds_to_next_slot(now: datetime, slot_minutes: int) -> int:
+    floor = now.replace(second=0, microsecond=0, minute=(now.minute // slot_minutes) * slot_minutes)
+    boundary = floor + timedelta(minutes=slot_minutes)
+    return max(1, math.ceil((boundary - now).total_seconds()))
 
 
 def _record_forecast_cycle(

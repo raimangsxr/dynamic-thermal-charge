@@ -59,25 +59,25 @@ fijos globales de esa sección (temperatura, temperatura objetivo, carga
 almacenada y temperatura interior); al habilitarlo vuelve a exigir telemetría
 recibida por MQTT.
 
-El panel autenticado incluye la sección `Planificación`, que consulta el plan
-aceptado por el controlador en `GET /api/v1/planning` y permite editar constraints
-recurrentes. `POST /api/v1/planning/preview` calcula una vista previa sin tocar el
-controlador; `POST /api/v1/planning/activate` valida el token de inputs y guarda
-constraints y plan conjuntamente. La telemetría MQTT de cada acumulador se
-valida por separado y una muestra incompleta o de más de 15 minutos se marca como
-caducada y deja ese acumulador fuera del plan.
+La sección `Planificación` consulta el plan aceptado en `GET /api/v1/planning`
+y permite editar constraints recurrentes. `POST /api/v1/planning/preview` calcula
+una vista previa sin tocar el controlador; `POST /api/v1/planning/activate`
+valida el token de inputs y guarda constraints y plan conjuntamente. La
+telemetría MQTT de cada acumulador se valida por separado y una muestra
+incompleta o de más de 15 minutos se marca como caducada y deja ese acumulador
+fuera del plan.
 
 Las constraints se editan como porcentajes de 0 a 100 en el panel y se envían a
-la API como fracciones de 0 a 1. La reserva de cada acumulador es un porcentaje
-de tiempo equivalente adicional: por ejemplo, 8 horas de carga completa con un
-25% de reserva requieren 10 horas equivalentes. La edición completa de un
-acumulador se guarda con una única petición `PUT /api/v1/config/heaters/{id}`.
+la API como fracciones de 0 a 1. La reserva de cada acumulador es un
+porcentaje multiplicativo sobre la demanda estimada (no puntos extra de SOC).
+`demand_factor` escala la demanda degree-hours y la configuración global define
+potencia contratada, diseño 21/0 °C y horizonte de feedback. La edición completa
+de un acumulador se guarda con una única petición `PUT /api/v1/config/heaters/{id}`.
 
 El histórico de decisiones está disponible en `GET /api/v1/history/planning-audit`
-y conserva el motivo, el estado y los déficits de cada preview o activación.
-La misma vista proyecta 48 horas completas; la carga acumulada de cada
-acumulador se expresa en minutos equivalentes y desciende según `Pérdida
-térmica (°C/h)`, configurable en el perfil térmico de cada acumulador.
+y conserva el motivo, el estado y las violaciones de cada preview o activación.
+La misma vista proyecta 48 horas completas; los minutos equivalentes de cada
+acumulador reflejan el SOC planificado al final de cada intervalo.
 
 Para actualizaciones automatizadas, `deploy/reconcile.sh` lee `deploy/release`,
 descarga las imágenes y aplica la versión indicada. El cronjob se instala con:

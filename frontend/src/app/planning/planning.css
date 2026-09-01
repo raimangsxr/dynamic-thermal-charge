@@ -17,7 +17,12 @@ button { border: 0; border-radius: .45rem; background: var(--primary); color: #f
 .constraint-row { display: grid; grid-template-columns: auto minmax(8rem, 1fr) auto 6rem auto 6rem minmax(11rem, 1fr) auto; align-items: center; gap: .5rem; padding: .75rem 0; border-top: 1px solid var(--border); }
 .constraint-row input, .constraint-row select { width: 100%; box-sizing: border-box; padding: .45rem; }
 fieldset { border: 0; padding: 0; display: flex; gap: .25rem; flex-wrap: wrap; } fieldset label { white-space: nowrap; } fieldset input { width: auto; }
-.secondary { background: var(--muted); } .constraint-actions { justify-content: flex-start; margin-top: .75rem; } .constraint-actions button:disabled { opacity: .5; cursor: not-allowed; } .preview { margin-top: .75rem; padding: .65rem; border-left: 4px solid var(--primary); } .warning, .error { color: var(--danger); }
+.preview-reasons { margin: .5rem 0 0; padding-left: 1.2rem; color: var(--danger); }
+.secondary { background: var(--muted); }
+.constraint-actions { justify-content: flex-start; margin-top: .75rem; }
+.constraint-actions button:disabled { opacity: .5; cursor: not-allowed; }
+.preview { margin-top: .75rem; padding: .65rem; border-left: 4px solid var(--primary); }
+.warning, .error { color: var(--danger); }
 .window { color: var(--muted); font-size: .9rem; }
 .hint { color: var(--muted); font-size: .9rem; margin: 0 0 .5rem; }
 .chart-wrap { position: relative; height: 16rem; padding: .5rem; background: var(--surface); border: 1px solid var(--border); border-radius: .5rem; }

@@ -44,7 +44,7 @@ class SqlPlanningRepository:
         self._configuration_location = configuration_location
         self._application_location = application_location
 
-    def site(self) -> dict[str, int]:
+    def site(self) -> dict[str, int | float]:
         with store_errors(self._configuration_location):
             with self._configuration.connect() as connection:
                 row = connection.execute(
@@ -53,8 +53,10 @@ class SqlPlanningRepository:
                     )
                 ).mappings().first()
         if row is None:
-            return {"revision": 1, "replan_minutes": 30, "forecast_horizon_hours": 48, "aemet_query_hour": 12}
-        return {key: int(row[key]) for key in ("revision", "replan_minutes", "forecast_horizon_hours", "aemet_query_hour")}
+            return {"revision": 1, "replan_minutes": 30, "forecast_horizon_hours": 48, "aemet_query_hour": 12, "contracted_power_w": 5200, "max_heating_power_w": 5200, "design_indoor_temperature_c": 21.0, "design_outdoor_temperature_c": 0.0, "feedback_horizon_hours": 6.0}
+        integers = ("revision", "replan_minutes", "forecast_horizon_hours", "aemet_query_hour", "contracted_power_w", "max_heating_power_w")
+        floats = ("design_indoor_temperature_c", "design_outdoor_temperature_c", "feedback_horizon_hours")
+        return {**{key: int(row[key]) for key in integers}, **{key: float(row[key]) for key in floats}}
 
     def heater_charge_config(self) -> dict[str, dict[str, Any]]:
         from .schema import heater_charge_config
@@ -65,9 +67,11 @@ class SqlPlanningRepository:
 
     def update_heater_charge_config(self, heater_id: str, values: Mapping[str, Any]) -> None:
         from .schema import heater_charge_config
-        allowed = {key: values[key] for key in ("temperature_topic", "target_temperature_topic", "stored_charge_topic", "reserve_percent", "room_inertia_hours", "outdoor_loss_per_hour", "emission_c_per_hour") if key in values}
-        if "reserve_percent" in allowed and not 0 <= float(allowed["reserve_percent"]) <= 100:
-            raise ConfigValidationError("reserve_percent must be between 0 and 100", field="reserve_percent", heater_id=heater_id)
+        allowed = {key: values[key] for key in ("temperature_topic", "target_temperature_topic", "stored_charge_topic", "reserve_percent", "demand_factor") if key in values}
+        if "reserve_percent" in allowed and float(allowed["reserve_percent"]) < 0:
+            raise ConfigValidationError("reserve_percent must be non-negative", field="reserve_percent", heater_id=heater_id)
+        if "demand_factor" in allowed and float(allowed["demand_factor"]) <= 0:
+            raise ConfigValidationError("demand_factor must be positive", field="demand_factor", heater_id=heater_id)
         with transaction(self._configuration, self._configuration_location) as connection:
             existing = connection.execute(select(heater_charge_config).where((heater_charge_config.c.installation_id == self._installation_id) & (heater_charge_config.c.heater_id == heater_id))).first()
             if existing is None:
@@ -75,11 +79,22 @@ class SqlPlanningRepository:
             else:
                 connection.execute(update(heater_charge_config).where((heater_charge_config.c.installation_id == self._installation_id) & (heater_charge_config.c.heater_id == heater_id)).values(**allowed))
 
-    def update_site(self, values: Mapping[str, int], expected_revision: int) -> int:
+    def update_site(self, values: Mapping[str, int | float], expected_revision: int) -> int:
         current = self.site()
         if current["revision"] != expected_revision:
             raise ConfigConflictError("planning configuration changed; recalculate before saving")
-        allowed = {key: int(value) for key, value in values.items() if key in {"replan_minutes", "forecast_horizon_hours", "aemet_query_hour"}}
+        integer_fields = {"replan_minutes", "forecast_horizon_hours", "aemet_query_hour", "contracted_power_w", "max_heating_power_w"}
+        float_fields = {"design_indoor_temperature_c", "design_outdoor_temperature_c", "feedback_horizon_hours"}
+        allowed = {key: (int(value) if key in integer_fields else float(value)) for key, value in values.items() if key in integer_fields | float_fields}
+        combined = {**current, **allowed}
+        if not 0 < int(combined["forecast_horizon_hours"]) <= 48:
+            raise ConfigValidationError("forecast_horizon_hours must be between 1 and 48", field="forecast_horizon_hours")
+        if int(combined["contracted_power_w"]) <= 0 or int(combined["max_heating_power_w"]) <= 0:
+            raise ConfigValidationError("power limits must be positive", field="contracted_power_w")
+        if float(combined["design_indoor_temperature_c"]) <= float(combined["design_outdoor_temperature_c"]):
+            raise ConfigValidationError("design indoor temperature must exceed design outdoor temperature", field="design_indoor_temperature_c")
+        if float(combined["feedback_horizon_hours"]) <= 0:
+            raise ConfigValidationError("feedback_horizon_hours must be positive", field="feedback_horizon_hours")
         next_revision = expected_revision + 1
         with transaction(self._configuration, self._configuration_location) as connection:
             existing = connection.execute(select(charge_planning_site).where(charge_planning_site.c.installation_id == self._installation_id)).first()
@@ -158,13 +173,22 @@ class SqlPlanningRepository:
 
     def save_plan(self, plan: AutomaticPlan, *, configuration_revision: int, constraints_revision: int, reason: str, active: bool) -> int:
         now = datetime.now(timezone.utc)
+        active = active and plan.status != "INVALID"
+        stored_status = {"FEASIBLE": "feasible", "DEGRADED": "deficit", "INVALID": "preview"}.get(plan.status, plan.status)
+        violations = [_json_ready(item.__dict__) for item in plan.violations]
+        inputs = {
+            "input_token": plan.input_token,
+            "generated_at": None if plan.generated_at is None else plan.generated_at.isoformat(),
+            "demand": [_json_ready(item.__dict__) for item in plan.demand],
+            "explanations": [_json_ready(item.__dict__) for item in plan.explanations],
+        }
         with transaction(self._application, self._application_location) as connection:
             if active:
                 connection.execute(update(automatic_plan).where((automatic_plan.c.installation_id == self._installation_id) & automatic_plan.c.active.is_(True)).values(active=False))
-            plan_id = int(connection.execute(insert(automatic_plan).values(installation_id=self._installation_id, configuration_revision=configuration_revision, constraints_revision=constraints_revision, horizon_start=to_utc(plan.horizon_start), horizon_end=to_utc(plan.horizon_end), slot_minutes=plan.slot_minutes, status=plan.status, reason=reason, input_token=plan.input_token, score_json=json.dumps(plan.score), deficits_json=json.dumps([item.__dict__ for item in plan.deficits]), inputs_json=json.dumps({"input_token": plan.input_token}), active=active, created_at=to_utc(now))).inserted_primary_key[0])
+            plan_id = int(connection.execute(insert(automatic_plan).values(installation_id=self._installation_id, configuration_revision=configuration_revision, constraints_revision=constraints_revision, horizon_start=to_utc(plan.horizon_start), horizon_end=to_utc(plan.horizon_end), slot_minutes=plan.slot_minutes, status=stored_status, reason=reason, input_token=plan.input_token, score_json=json.dumps(plan.score), deficits_json=json.dumps(violations), inputs_json=json.dumps(inputs), active=active, created_at=to_utc(now))).inserted_primary_key[0])
             for slot in plan.slots:
-                connection.execute(insert(automatic_plan_slot).values(plan_id=plan_id, slot_start=to_utc(slot.start), slot_end=to_utc(slot.end), heater_ids_json=json.dumps(slot.heater_ids), power_w=slot.power_w, stored_charge_json=json.dumps(slot.stored_charge_percent), required_charge_json=json.dumps(slot.required_charge_percent), outdoor_temperature_c=slot.outdoor_temperature_c))
-            connection.execute(insert(plan_audit).values(installation_id=self._installation_id, plan_id=plan_id, event="activated" if active else "preview", reason=reason, details_json=json.dumps({"status": plan.status, "deficits": [item.__dict__ for item in plan.deficits]}), occurred_at=to_utc(now)))
+                connection.execute(insert(automatic_plan_slot).values(plan_id=plan_id, slot_start=to_utc(slot.start), slot_end=to_utc(slot.end), heater_ids_json=json.dumps(slot.heater_ids), power_w=slot.power_w, stored_charge_json=json.dumps(slot.stored_charge_percent), required_charge_json=json.dumps(slot.required_charge_percent), outdoor_temperature_c=slot.outdoor_temperature_c, initial_soc_json=json.dumps(slot.initial_soc_percent or {}), demand_json=json.dumps(slot.demand_kwh or {}), heater_power_json=json.dumps(slot.heater_power_w or {})))
+            connection.execute(insert(plan_audit).values(installation_id=self._installation_id, plan_id=plan_id, event="activated" if active else "preview", reason=reason, details_json=json.dumps({"status": plan.status, "violations": violations}), occurred_at=to_utc(now)))
         return plan_id
 
     def active_plan(self) -> dict[str, Any] | None:
@@ -174,7 +198,9 @@ class SqlPlanningRepository:
                 if row is None:
                     return None
                 slots = connection.execute(select(automatic_plan_slot).where(automatic_plan_slot.c.plan_id == row["id"]).order_by(automatic_plan_slot.c.slot_start)).mappings().all()
-        return {"id": int(row["id"]), "horizon_start": from_utc(row["horizon_start"]), "horizon_end": from_utc(row["horizon_end"]), "slot_minutes": int(row["slot_minutes"]), "status": row["status"], "reason": row["reason"], "input_token": row["input_token"], "created_at": from_utc(row["created_at"]), "deficits": json.loads(row["deficits_json"]), "slots": [{"start": from_utc(item["slot_start"]), "end": from_utc(item["slot_end"]), "heater_ids": json.loads(item["heater_ids_json"]), "power_w": int(item["power_w"]), "stored_charge_percent": json.loads(item["stored_charge_json"]), "required_charge_percent": json.loads(item["required_charge_json"]), "outdoor_temperature_c": item["outdoor_temperature_c"]} for item in slots]}
+        inputs = json.loads(row["inputs_json"])
+        status = {"feasible": "FEASIBLE", "deficit": "DEGRADED", "best_effort": "DEGRADED", "preview": "INVALID"}.get(row["status"], row["status"])
+        return {"id": int(row["id"]), "horizon_start": from_utc(row["horizon_start"]), "horizon_end": from_utc(row["horizon_end"]), "slot_minutes": int(row["slot_minutes"]), "status": status, "reason": row["reason"], "input_token": row["input_token"], "created_at": from_utc(row["created_at"]), "deficits": json.loads(row["deficits_json"]), "violations": json.loads(row["deficits_json"]), "demand": inputs.get("demand", []), "explanations": inputs.get("explanations", []), "slots": [{"start": from_utc(item["slot_start"]), "end": from_utc(item["slot_end"]), "heater_ids": json.loads(item["heater_ids_json"]), "power_w": int(item["power_w"]), "stored_charge_percent": json.loads(item["stored_charge_json"]), "required_charge_percent": json.loads(item["required_charge_json"]), "initial_soc_percent": json.loads(item["initial_soc_json"]), "demand_kwh": json.loads(item["demand_json"]), "heater_power_w": json.loads(item["heater_power_json"]), "outdoor_temperature_c": item["outdoor_temperature_c"]} for item in slots]}
 
     def latest_forecast(self) -> tuple[HourlyForecastPoint, ...]:
         from .schema import forecast, forecast_hour
@@ -185,6 +211,13 @@ class SqlPlanningRepository:
                     return ()
                 rows = connection.execute(select(forecast_hour).where(forecast_hour.c.forecast_id == forecast_id).order_by(forecast_hour.c.observed_at)).mappings().all()
         return tuple(HourlyForecastPoint(from_utc(row["observed_at"]), float(row["temperature_c"]), bool(row["interpolated"])) for row in rows)
+
+    def latest_forecast_automatic_eligible(self) -> bool:
+        from .schema import forecast
+        with store_errors(self._application_location):
+            with self._application.connect() as connection:
+                source = connection.execute(select(forecast.c.source).where(forecast.c.installation_id == self._installation_id).order_by(forecast.c.retrieved_at.desc()).limit(1)).scalar()
+        return source == "aemet"
 
     def forecast_cycle(self, local_date: date, scheduled_at: datetime) -> ForecastCycleState:
         from .schema import forecast_cycle
@@ -284,6 +317,18 @@ class SqlPlanningRepository:
 
 def _float_or_none(value: Any) -> float | None:
     return None if value is None else float(value)
+
+
+def _json_ready(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, tuple):
+        return [_json_ready(item) for item in value]
+    if isinstance(value, list):
+        return [_json_ready(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _json_ready(item) for key, item in value.items()}
+    return value
 
 
 __all__ = ["SqlPlanningRepository"]

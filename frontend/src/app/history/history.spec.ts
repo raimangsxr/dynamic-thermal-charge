@@ -75,6 +75,7 @@ const CONFIG: ConfigDto = {
       full_charge_hours: 8,
       target_charge: 1,
       reserve_percent: 0,
+      demand_factor: 1,
       priority: 90,
       enabled: true,
       indoor_topic: null,
@@ -82,7 +83,6 @@ const CONFIG: ConfigDto = {
       target_temperature_topic: null,
       stored_charge_topic: null,
       output: { kind: 'gpio', pin: 17, active_high: false },
-      thermal: null,
     },
   ],
 };
