@@ -60,3 +60,16 @@ def test_fallback_and_recovery_are_logged_once_per_transition(caplog):
     tracker.select(_config(), readings, NOW)
     assert caplog.text.count("using thermal fallback") == 1
     assert caplog.text.count("recovered indoor temperature") == 1
+
+
+def test_disabled_mqtt_uses_one_global_indoor_value_for_every_enabled_heater():
+    config = example_installation()
+    tracker = runtime._IndoorFallbackTracker()
+    readings = Readings({"salon": IndoorReading("salon", 7.0, NOW)})
+    assert tracker.select(
+        config,
+        readings,
+        NOW,
+        fixed_temperature_c=19.5,
+    ) == {heater.id: 19.5 for heater in config.heaters if heater.enabled}
+    assert readings.calls == 0

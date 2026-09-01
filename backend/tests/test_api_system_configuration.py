@@ -80,6 +80,36 @@ def test_system_sections_are_allow_listed_revisioned_and_secret_free(client):
     assert conflict.status_code == 409
 
 
+def test_mqtt_fixed_values_are_readable_writable_and_not_exposed_elsewhere(client):
+    snapshot = client.get("/api/v1/system/configuration", headers=AUTH).json()
+    values = {
+        "fixed_temperature_c": 19.5,
+        "fixed_target_temperature_c": 22,
+        "fixed_stored_charge_percent": 65,
+        "fixed_indoor_temperature_c": 18,
+    }
+    response = client.patch(
+        "/api/v1/system/configuration/mqtt",
+        headers=AUTH,
+        json={"expected_revision": snapshot["revision"], "values": values},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert {name: body["sections"]["mqtt"][name] for name in values} == values
+    assert all(name not in body["sections"]["weather"] for name in values)
+    assert all(name not in body["sections"]["api"] for name in values)
+
+    invalid = client.patch(
+        "/api/v1/system/configuration/mqtt",
+        headers=AUTH,
+        json={
+            "expected_revision": body["revision"],
+            "values": {"fixed_stored_charge_percent": 101},
+        },
+    )
+    assert invalid.status_code == 422
+
+
 def test_weather_system_section_round_trips_all_fields_and_secret(client):
     snapshot = client.get("/api/v1/system/configuration", headers=AUTH).json()
     response = client.patch(

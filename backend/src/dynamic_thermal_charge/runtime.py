@@ -24,6 +24,7 @@ from .persistence import ConfigStoreError
 from .persistence.active_plan import SqlActivePlanRepository
 from .scheduler import ChargeScheduler, ScheduleResult, ScheduleSlot
 from .service import ControllerService, PlanRefresh
+from .system_settings import MqttSystemSettings
 from .thermal import ThermalDemandEngine, select_indoor_temperatures
 from .watchdog import ForecastWatchdog
 from .weather import OutdoorForecast, WeatherProvider
@@ -167,11 +168,17 @@ def _run_controller(
                 # Re-read the configuration each refresh so an edit takes effect
                 # on the next recalculation, never mid-plan (FR-039).
                 live_config, live_revision = store.repository.current()
+                live_mqtt = _live_mqtt_settings(store, None if system is None else system.mqtt)
                 planning_site = store.planning.site()
                 automatic_constraints = store.planning.constraints()
                 if automatic_constraints or store.planning.active_plan() is not None:
                     automatic = _build_automatic_runtime_plan(
-                        store, live_config, now, automatic_constraints, planning_site
+                        store,
+                        live_config,
+                        now,
+                        automatic_constraints,
+                        planning_site,
+                        mqtt=live_mqtt,
                     )
                     if automatic is not None:
                         store.planning.save_plan(
@@ -217,7 +224,14 @@ def _run_controller(
                     forecast_ref=forecast_ref,
                 )
                 indoor_temperatures = indoor_fallback.select(
-                    live_config, store.indoor_readings, now
+                    live_config,
+                    store.indoor_readings,
+                    now,
+                    fixed_temperature_c=(
+                        None
+                        if live_mqtt is None or live_mqtt.enabled
+                        else live_mqtt.fixed_indoor_temperature_c
+                    ),
                 )
                 plan = _build_plan(
                     live_config,
@@ -258,15 +272,42 @@ def _run_controller(
 
 
 def _build_automatic_runtime_plan(
-    store, config: AppConfig, now: datetime, constraints, planning_site: dict[str, int]
+    store,
+    config: AppConfig,
+    now: datetime,
+    constraints,
+    planning_site: dict[str, int],
+    *,
+    mqtt: MqttSystemSettings | None = None,
 ):
     """Build the controller-facing schedule from the automatic plan value."""
-    telemetry = store.planning.telemetry()
-    valid: dict[str, ChargeTelemetry] = {}
-    for heater_id, value in telemetry.items():
-        stamps = (value.temperature_received_at, value.target_received_at, value.stored_charge_received_at)
-        if all(item is not None and (now - item).total_seconds() <= 900 for item in stamps):
-            valid[heater_id] = value
+    if mqtt is not None and not mqtt.enabled:
+        valid = {
+            heater.id: ChargeTelemetry(
+                heater_id=heater.id,
+                temperature_c=mqtt.fixed_temperature_c,
+                target_temperature_c=mqtt.fixed_target_temperature_c,
+                stored_charge_percent=mqtt.fixed_stored_charge_percent,
+                temperature_received_at=now,
+                target_received_at=now,
+                stored_charge_received_at=now,
+            )
+            for heater in config.heaters
+        }
+    else:
+        telemetry = store.planning.telemetry()
+        valid = {}
+        for heater_id, value in telemetry.items():
+            stamps = (
+                value.temperature_received_at,
+                value.target_received_at,
+                value.stored_charge_received_at,
+            )
+            if all(
+                item is not None and (now - item).total_seconds() <= 900
+                for item in stamps
+            ):
+                valid[heater_id] = value
     timezone_name = config.schedule.timezone if config.schedule is not None else "UTC"
     request = PlanningInput(
         heaters=config.heaters,
@@ -331,7 +372,22 @@ class _IndoorFallbackTracker:
         self._fallback: set[str] = set()
         self._store_unavailable = False
 
-    def select(self, config: AppConfig, repository, at: datetime) -> dict[str, float]:
+    def select(
+        self,
+        config: AppConfig,
+        repository,
+        at: datetime,
+        *,
+        fixed_temperature_c: float | None = None,
+    ) -> dict[str, float]:
+        if fixed_temperature_c is not None:
+            self._fallback = set()
+            self._store_unavailable = False
+            return {
+                heater.id: fixed_temperature_c
+                for heater in config.heaters
+                if heater.enabled
+            }
         try:
             readings = repository.read_all()
         except ConfigStoreError as exc:
@@ -366,6 +422,15 @@ class _IndoorFallbackTracker:
             logger.info("Heater %s recovered indoor temperature", heater_id)
         self._fallback = current
         return selection.temperatures
+
+
+def _live_mqtt_settings(
+    store,
+    fallback: MqttSystemSettings | None,
+) -> MqttSystemSettings | None:
+    if store.system_configuration is None:
+        return fallback
+    return store.system_configuration.current().configuration.mqtt
 
 
 def _build_output_driver(config: AppConfig, driver_name: str) -> OutputDriver:

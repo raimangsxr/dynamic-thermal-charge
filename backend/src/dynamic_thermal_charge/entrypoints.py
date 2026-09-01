@@ -181,69 +181,76 @@ def run_mqtt() -> None:
     from .mqtt.commands import CommandProcessor
     from .mqtt.indoor import ChargeTelemetryMessageProcessor, IndoorMessageProcessor
     from .mqtt.publisher import MqttPublisher, StoreSnapshotReader
-    from .mqtt.service import MqttService
+    from .mqtt.service import MqttService, MqttSupervisor
     from .mqtt.settings import settings_from_repository
     from .mqtt.topics import TopicLayout
     from .persistence.heartbeat import read_heartbeat
     from .persistence.history import SqlStatusReader
 
     store = _configured_store()
-    settings = settings_from_repository(store.system_configuration)
     if store.context is not None:
         store.context.publish_process_revision("mqtt")
-    installation_id = store.repository.installation_id()
-    topics = TopicLayout(settings.prefix, settings.discovery_prefix)
-    application_engine = store.application_engine or store.engine
-    status_reader = SqlStatusReader(application_engine, installation_id, store.location)
-    snapshots = StoreSnapshotReader(
-        config_repository=store.repository,
-        schema_gate=store.gate,
-        heartbeat_reader=lambda: read_heartbeat(application_engine, installation_id, store.location),
-        status_reader=status_reader,
-        clock=lambda: datetime.now(timezone.utc),
-    )
-    transport = PahoMqttClient(settings)
-    publisher = MqttPublisher(
-        transport,
-        topics,
-        snapshots,
-        discovery=lambda: snapshots.discovery(topics, store.repository.installation_name()),
-        subscriptions=lambda: snapshots.subscriptions(topics),
-    )
-    commands = CommandProcessor(store.repository, topics, republish=publisher.republish_heater)
-    indoor = IndoorMessageProcessor(
-        store.repository,
-        store.indoor_readings,
-        clock=lambda: datetime.now(timezone.utc),
-    )
-    charge_telemetry = ChargeTelemetryMessageProcessor(
-        store.repository,
-        store.planning,
-        clock=lambda: datetime.now(timezone.utc),
-    )
+    def build_service() -> MqttService:
+        # Do not instantiate the optional Paho client until the persisted
+        # configuration has explicitly enabled MQTT. The supervisor invokes
+        # this factory after an in-place enable transition.
+        settings = settings_from_repository(store.system_configuration)
+        installation_id = store.repository.installation_id()
+        topics = TopicLayout(settings.prefix, settings.discovery_prefix)
+        application_engine = store.application_engine or store.engine
+        status_reader = SqlStatusReader(application_engine, installation_id, store.location)
+        snapshots = StoreSnapshotReader(
+            config_repository=store.repository,
+            schema_gate=store.gate,
+            heartbeat_reader=lambda: read_heartbeat(application_engine, installation_id, store.location),
+            status_reader=status_reader,
+            clock=lambda: datetime.now(timezone.utc),
+        )
+        transport = PahoMqttClient(settings)
+        publisher = MqttPublisher(
+            transport,
+            topics,
+            snapshots,
+            discovery=lambda: snapshots.discovery(topics, store.repository.installation_name()),
+            subscriptions=lambda: snapshots.subscriptions(topics),
+        )
+        commands = CommandProcessor(store.repository, topics, republish=publisher.republish_heater)
+        indoor = IndoorMessageProcessor(
+            store.repository,
+            store.indoor_readings,
+            clock=lambda: datetime.now(timezone.utc),
+        )
+        charge_telemetry = ChargeTelemetryMessageProcessor(
+            store.repository,
+            store.planning,
+            clock=lambda: datetime.now(timezone.utc),
+        )
 
-    def handle_telemetry(message):
-        # Preserve the legacy indoor-temperature path while accepting the new
-        # three-topic contract. Each processor ignores topics it does not own.
-        indoor.handle(message)
-        charge_telemetry.handle(message)
-    service = MqttService(
-        transport,
-        topics,
-        host=settings.host,
-        port=settings.port,
-        publisher=publisher,
-        publish_seconds=settings.publish_seconds,
-        command_handler=commands.handle,
-        indoor_handler=handle_telemetry,
-    )
+        def handle_telemetry(message):
+            # Preserve the legacy indoor-temperature path while accepting the
+            # new three-topic contract. Each processor ignores topics it does
+            # not own.
+            indoor.handle(message)
+            charge_telemetry.handle(message)
+
+        return MqttService(
+            transport,
+            topics,
+            host=settings.host,
+            port=settings.port,
+            publisher=publisher,
+            publish_seconds=settings.publish_seconds,
+            command_handler=commands.handle,
+            indoor_handler=handle_telemetry,
+        )
+
+    supervisor = MqttSupervisor(store.system_configuration, build_service)
     try:
-        service.start()
-        service.run()
+        supervisor.run()
     except KeyboardInterrupt:
         logger.info("MQTT publisher stopped")
     finally:
-        service.stop()
+        supervisor.stop()
 
 
 __all__ = [

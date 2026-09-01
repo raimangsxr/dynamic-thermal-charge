@@ -51,6 +51,37 @@ describe('SystemConfig', () => {
     expect(fixture.componentInstance.secretValues()).toEqual({});
   });
 
+  it('renders and saves the four global MQTT fixed values as active when disabled', () => {
+    const fixture = TestBed.createComponent(SystemConfig); fixture.detectChanges();
+    backend.expectOne('/api/v1/system/configuration').flush(configuration);
+    backend.expectOne('/api/v1/system/topology').flush(topology); fixture.detectChanges();
+    fixture.componentInstance.choose('mqtt');
+    fixture.detectChanges();
+
+    for (const field of [
+      'fixed_temperature_c',
+      'fixed_target_temperature_c',
+      'fixed_stored_charge_percent',
+      'fixed_indoor_temperature_c',
+    ]) {
+      expect((fixture.nativeElement as HTMLElement).querySelector(`#${field}`)).not.toBeNull();
+    }
+    expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="mqtt-fixed-active"]')).not.toBeNull();
+
+    fixture.componentInstance.edit('fixed_temperature_c', '19.5');
+    fixture.componentInstance.edit('fixed_target_temperature_c', '22');
+    fixture.componentInstance.edit('fixed_stored_charge_percent', '65');
+    fixture.componentInstance.edit('fixed_indoor_temperature_c', '18');
+    fixture.componentInstance.save();
+    const request = backend.expectOne('/api/v1/system/configuration/mqtt');
+    expect(request.request.body.values).toEqual({
+      fixed_temperature_c: 19.5,
+      fixed_target_temperature_c: 22,
+      fixed_stored_charge_percent: 65,
+      fixed_indoor_temperature_c: 18,
+    });
+  });
+
   it('disables mutations in fallback mode', () => {
     const fixture = TestBed.createComponent(SystemConfig); fixture.detectChanges();
     backend.expectOne('/api/v1/system/configuration').flush(configuration);

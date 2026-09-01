@@ -61,6 +61,10 @@ def test_typed_defaults_and_cross_field_validation():
     assert config.api == ApiSystemSettings()
     assert config.mqtt == MqttSystemSettings()
     assert config.operations == OperationsSystemSettings()
+    assert config.mqtt.fixed_temperature_c == 20.0
+    assert config.mqtt.fixed_target_temperature_c == 21.0
+    assert config.mqtt.fixed_stored_charge_percent == 50.0
+    assert config.mqtt.fixed_indoor_temperature_c == 20.0
     with pytest.raises(ValueError, match="host and database"):
         DatabaseSettings(driver="postgresql")
     with pytest.raises(ValueError, match="trusted-network"):
@@ -75,6 +79,48 @@ def test_typed_defaults_and_cross_field_validation():
         OperationsSystemSettings(
             relay_test_lease_seconds=10, relay_test_lease_renew_seconds=10
         )
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("fixed_temperature_c", -50.1),
+        ("fixed_target_temperature_c", 80.1),
+        ("fixed_indoor_temperature_c", float("nan")),
+        ("fixed_stored_charge_percent", -0.1),
+        ("fixed_stored_charge_percent", 100.1),
+    ],
+)
+def test_mqtt_fixed_values_use_telemetry_safety_bounds(field, value):
+    with pytest.raises(ValueError):
+        MqttSystemSettings(**{field: value})
+
+
+def test_mqtt_fixed_values_round_trip_in_the_mqtt_section(system_repository):
+    repository, _engines = system_repository
+    revision = repository.update_section(
+        "mqtt",
+        {
+            "fixed_temperature_c": 19.5,
+            "fixed_target_temperature_c": 22.0,
+            "fixed_stored_charge_percent": 65.0,
+            "fixed_indoor_temperature_c": 18.0,
+        },
+        expected_revision=1,
+        actor="admin",
+    )
+    snapshot = repository.current()
+    assert revision == 2
+    assert snapshot.configuration.mqtt.fixed_temperature_c == 19.5
+    assert snapshot.configuration.mqtt.fixed_target_temperature_c == 22.0
+    assert snapshot.configuration.mqtt.fixed_stored_charge_percent == 65.0
+    assert snapshot.configuration.mqtt.fixed_indoor_temperature_c == 18.0
+    assert set(snapshot.configuration.documents()["mqtt"]) >= {
+        "fixed_temperature_c",
+        "fixed_target_temperature_c",
+        "fixed_stored_charge_percent",
+        "fixed_indoor_temperature_c",
+    }
 
 
 def test_initialise_is_idempotent_and_round_trips_typed_documents(system_repository):

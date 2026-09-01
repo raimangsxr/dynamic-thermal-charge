@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, fields
 from enum import Enum
+import math
 from typing import Any, Mapping, TypeVar
 
 
@@ -67,6 +68,10 @@ class MqttSystemSettings:
     prefix: str = "dtc"
     discovery_prefix: str = "homeassistant"
     publish_seconds: float = 15.0
+    fixed_temperature_c: float = 20.0
+    fixed_target_temperature_c: float = 21.0
+    fixed_stored_charge_percent: float = 50.0
+    fixed_indoor_temperature_c: float = 20.0
 
     def __post_init__(self) -> None:
         if self.enabled and not self.host:
@@ -77,6 +82,20 @@ class MqttSystemSettings:
             raise ValueError("MQTT prefixes cannot be empty")
         if self.publish_seconds <= 0:
             raise ValueError("mqtt.publish_seconds must be positive")
+        for name, value in (
+            ("fixed_temperature_c", self.fixed_temperature_c),
+            ("fixed_target_temperature_c", self.fixed_target_temperature_c),
+            ("fixed_indoor_temperature_c", self.fixed_indoor_temperature_c),
+        ):
+            if not math.isfinite(value) or not -50 <= value <= 80:
+                raise ValueError(f"mqtt.{name} must be between -50 and 80")
+        if (
+            not math.isfinite(self.fixed_stored_charge_percent)
+            or not 0 <= self.fixed_stored_charge_percent <= 100
+        ):
+            raise ValueError(
+                "mqtt.fixed_stored_charge_percent must be between 0 and 100"
+            )
 
 
 @dataclass(frozen=True)
@@ -228,6 +247,10 @@ ACTIVATION_POLICIES: dict[str, ActivationPolicy] = {
     "mqtt.prefix": ActivationPolicy.HOT,
     "mqtt.discovery_prefix": ActivationPolicy.HOT,
     "mqtt.publish_seconds": ActivationPolicy.HOT,
+    "mqtt.fixed_temperature_c": ActivationPolicy.NEXT_CYCLE,
+    "mqtt.fixed_target_temperature_c": ActivationPolicy.NEXT_CYCLE,
+    "mqtt.fixed_stored_charge_percent": ActivationPolicy.NEXT_CYCLE,
+    "mqtt.fixed_indoor_temperature_c": ActivationPolicy.NEXT_CYCLE,
     "weather.provider": ActivationPolicy.NEXT_CYCLE,
     "weather.municipality_code": ActivationPolicy.NEXT_CYCLE,
     "weather.timeout_seconds": ActivationPolicy.NEXT_CYCLE,

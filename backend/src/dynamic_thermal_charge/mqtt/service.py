@@ -6,7 +6,7 @@ import logging
 import time
 from collections import deque
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from . import MqttClient, MqttError
 from . import IncomingMessage
@@ -57,25 +57,43 @@ class MqttService:
         self._client.loop_start()
 
     def stop(self) -> None:
-        for topic in (self._topics.state_available, self._topics.availability):
-            try:
-                self._client.publish(topic, "offline", qos=1, retain=True)
-            except MqttError:
-                logger.warning("Could not publish clean MQTT shutdown on %s", topic)
+        if self._connected:
+            for topic in (self._topics.state_available, self._topics.availability):
+                try:
+                    self._client.publish(topic, "offline", qos=1, retain=True)
+                except MqttError:
+                    logger.warning("Could not publish clean MQTT shutdown on %s", topic)
         try:
             self._client.disconnect()
         finally:
             self._client.loop_stop()
+            self._connected = False
+
+    @property
+    def connected(self) -> bool:
+        return self._connected
+
+    @property
+    def publish_seconds(self) -> float:
+        return self._publish_seconds
+
+    def process_cycle(self, *, publish: bool = True) -> None:
+        """Process queued network events and optionally publish one snapshot."""
+        connection_refreshed = self.process_events()
+        if (
+            publish
+            and self._publisher is not None
+            and self._connected
+            and not connection_refreshed
+        ):
+            self._publisher.refresh(force_discovery=False)
+            self._sync_subscriptions()
 
     def run(self, *, max_cycles: int | None = None) -> None:
         cycles = 0
         while max_cycles is None or cycles < max_cycles:
             self._clock()
-            connection_refreshed = self.process_events()
-            if self._publisher is not None and self._connected:
-                if not connection_refreshed:
-                    self._publisher.refresh(force_discovery=False)
-                    self._sync_subscriptions()
+            self.process_cycle()
             cycles += 1
             if max_cycles is not None and cycles >= max_cycles:
                 break
@@ -139,4 +157,62 @@ class MqttService:
         self._messages.append(message)
 
 
-__all__ = ["MqttService"]
+class MqttSupervisor:
+    """Keep the MQTT integration lifecycle aligned with persisted settings."""
+
+    def __init__(
+        self,
+        configuration_repository,
+        service_factory: Callable[[], MqttService],
+        *,
+        poll_seconds: float = 1.0,
+        wait: Callable[[float], None] = time.sleep,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
+        self._configuration_repository = configuration_repository
+        self._service_factory = service_factory
+        self._poll_seconds = poll_seconds
+        self._wait = wait
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
+        self._service: MqttService | None = None
+        self._next_publish_at: datetime | None = None
+
+    @property
+    def service(self) -> MqttService | None:
+        return self._service
+
+    def run(self, *, max_cycles: int | None = None) -> None:
+        cycles = 0
+        while max_cycles is None or cycles < max_cycles:
+            now = self._clock()
+            enabled = self._configuration_repository.current().configuration.mqtt.enabled
+            if enabled:
+                if self._service is None:
+                    service = self._service_factory()
+                    service.start()
+                    self._service = service
+                    self._next_publish_at = now
+                due = self._next_publish_at is None or now >= self._next_publish_at
+                self._service.process_cycle(publish=due)
+                if due:
+                    self._next_publish_at = now + timedelta(
+                        seconds=self._service.publish_seconds
+                    )
+            elif self._service is not None:
+                self._service.stop()
+                self._service = None
+                self._next_publish_at = None
+
+            cycles += 1
+            if max_cycles is not None and cycles >= max_cycles:
+                break
+            self._wait(self._poll_seconds)
+
+    def stop(self) -> None:
+        if self._service is not None:
+            self._service.stop()
+            self._service = None
+            self._next_publish_at = None
+
+
+__all__ = ["MqttService", "MqttSupervisor"]

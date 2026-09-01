@@ -25,7 +25,16 @@ const LOG_LEVELS = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'].map((value)
 const FIELDS: Record<SystemSection, FieldDefinition[]> = {
   database: [{ name: 'driver', type: 'select', options: DATABASE_DRIVERS }, { name: 'host', type: 'text' }, { name: 'port', type: 'number' }, { name: 'database', type: 'text' }, { name: 'tls', type: 'boolean' }, { name: 'trusted_no_tls', type: 'boolean' }],
   api: [{ name: 'host', type: 'text' }, { name: 'port', type: 'number' }, { name: 'cors_origins', type: 'text' }, { name: 'stale_seconds', type: 'number' }],
-  mqtt: [{ name: 'enabled', type: 'boolean' }, { name: 'host', type: 'text' }, { name: 'port', type: 'number' }, { name: 'tls', type: 'boolean' }, { name: 'prefix', type: 'text' }, { name: 'discovery_prefix', type: 'text' }, { name: 'publish_seconds', type: 'number' }],
+  mqtt: [
+    { name: 'enabled', type: 'boolean' }, { name: 'host', type: 'text' },
+    { name: 'port', type: 'number' }, { name: 'tls', type: 'boolean' },
+    { name: 'prefix', type: 'text' }, { name: 'discovery_prefix', type: 'text' },
+    { name: 'publish_seconds', type: 'number' },
+    { name: 'fixed_temperature_c', type: 'number' },
+    { name: 'fixed_target_temperature_c', type: 'number' },
+    { name: 'fixed_stored_charge_percent', type: 'number' },
+    { name: 'fixed_indoor_temperature_c', type: 'number' },
+  ],
   weather: [
     { name: 'provider', type: 'select', options: WEATHER_PROVIDERS },
     { name: 'municipality_code', type: 'text' },
@@ -68,6 +77,12 @@ export class SystemConfig {
   fields(): FieldDefinition[] { return FIELDS[this.selected()]; }
   groups(): FieldGroup[] {
     const fields = this.fields();
+    if (this.selected() === 'mqtt') {
+      return [
+        { title: 'Conexión MQTT', fields: fields.slice(0, 7) },
+        { title: 'Valores fijos de prueba', fields: fields.slice(7) },
+      ];
+    }
     if (this.selected() !== 'weather') return [{ title: 'Parámetros', fields }];
     return [
       { title: 'Proveedor y ubicación', fields: fields.slice(0, 3) },
@@ -77,6 +92,7 @@ export class SystemConfig {
   }
   secrets(): string[] { return SECRETS[this.selected()] ?? []; }
   writable(): boolean { return this.topology()?.administrative_writes_allowed === true; }
+  mqttEnabled(): boolean { return this.value('enabled') === true || this.value('enabled') === 'true'; }
 
   load(): void {
     forkJoin({ configuration: this.api.systemConfiguration(), topology: this.api.topology() }).subscribe({
