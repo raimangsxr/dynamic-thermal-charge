@@ -102,7 +102,7 @@ def test_disabled_mqtt_supplies_valid_global_telemetry_to_automatic_planning(mon
             self.telemetry_called = True
             return {}
 
-        def latest_forecast(self):
+        def latest_forecast(self, at=None):
             return ()
 
     planning = Planning()
@@ -147,7 +147,7 @@ def test_enabled_mqtt_automatic_planning_uses_only_persisted_telemetry(monkeypat
         def telemetry(self):
             return {"salon": source}
 
-        def latest_forecast(self):
+        def latest_forecast(self, at=None):
             return ()
 
     planning = Planning()
