@@ -60,6 +60,9 @@ export class SystemConfig {
   readonly error = signal('');
   readonly confirming = signal(false);
   readonly operation = signal('');
+  readonly weatherRefreshLoading = signal(false);
+  readonly weatherRefreshMessage = signal('');
+  readonly weatherRefreshError = signal('');
 
   constructor() { this.load(); }
   fields(): FieldDefinition[] { return FIELDS[this.selected()]; }
@@ -108,6 +111,37 @@ export class SystemConfig {
     this.api.migrateDatabase(topology.locator_revision, this.databaseCandidate()).subscribe({
       next: (operation) => this.operation.set(`Migración ${operation.status}: ${operation.phase}`),
       error: () => { this.operation.set(''); this.error.set('La migración no se pudo completar; el backend activo no ha cambiado.'); },
+    });
+  }
+  refreshWeather(): void {
+    if (this.weatherRefreshLoading() || !this.writable()) return;
+    this.weatherRefreshLoading.set(true);
+    this.weatherRefreshMessage.set('Consultando AEMET…');
+    this.weatherRefreshError.set('');
+    this.api.refreshWeather().subscribe({
+      next: (result) => {
+        this.weatherRefreshLoading.set(false);
+        this.weatherRefreshMessage.set('Consulta AEMET completada correctamente.');
+        this.configuration.update((current) => current ? ({
+          ...current,
+          sections: {
+            ...current.sections,
+            weather: {
+              ...current.sections.weather,
+              forecast_status: result.forecast_status,
+              forecast_last_attempt_at: result.forecast_last_attempt_at,
+              forecast_last_error: result.forecast_last_error,
+              forecast_next_run_at: result.forecast_next_run_at,
+            },
+          },
+        }) : current);
+      },
+      error: (error: unknown) => {
+        this.weatherRefreshLoading.set(false);
+        this.weatherRefreshMessage.set('');
+        const body = error instanceof HttpErrorResponse ? error.error as { message?: unknown } : null;
+        this.weatherRefreshError.set(typeof body?.message === 'string' ? body.message : 'No se pudo consultar AEMET.');
+      },
     });
   }
   save(): void {

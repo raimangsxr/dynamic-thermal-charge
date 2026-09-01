@@ -311,9 +311,13 @@ forecast_cycle = Table(
     Column("last_error", String(512), nullable=True),
     Column("last_forecast_id", Integer, ForeignKey("forecast.id", ondelete="SET NULL"), nullable=True),
     Column("stale", Boolean, nullable=False, server_default="0"),
+    Column("last_attempt_at", DateTime, nullable=True),
+    Column("last_result", String(16), nullable=True),
+    Column("next_run_at", DateTime, nullable=True),
     Column("updated_at", DateTime, nullable=False),
     UniqueConstraint("installation_id", "local_date", name="uq_forecast_cycle_day"),
     CheckConstraint("attempt >= 0 AND attempt <= 6", name="ck_forecast_cycle_attempt"),
+    CheckConstraint("last_result IS NULL OR last_result IN ('success', 'error')", name="ck_forecast_cycle_result"),
 )
 
 automatic_plan = Table(

@@ -190,6 +190,19 @@ class PlanningResponse(BaseModel):
     deficits: list["PlanningDeficitView"] = Field(default_factory=list)
     preview_token: str | None = None
     constraints_revision: int = 1
+    forecast_status: str | None = None
+    forecast_last_attempt_at: datetime | None = None
+    forecast_last_error: str | None = None
+    forecast_next_run_at: datetime | None = None
+
+
+class WeatherRefreshResponse(BaseModel):
+    status: str
+    forecast_status: str
+    forecast_last_attempt_at: datetime
+    forecast_last_error: str | None = None
+    forecast_next_run_at: datetime | None = None
+    forecast: PlanningForecastView | None = None
 
 
 class ChargeConstraintView(BaseModel):
@@ -584,6 +597,7 @@ __all__ = [
     "PlanSummary",
     "PlanningForecastView",
     "PlanningResponse",
+    "WeatherRefreshResponse",
     "PlanningPlanView",
     "PlanningSlotView",
     "PlanningHeaterView",

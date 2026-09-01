@@ -7,6 +7,7 @@ Each public entrypoint is called by the deployment directly.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import datetime, timedelta
 import logging
 import signal
@@ -191,7 +192,30 @@ def _run_controller(
                     if live_config.schedule is not None
                     else now
                 )
-                cycle = watchdog.poll(start.date())
+                try:
+                    cycle = watchdog.poll(start.date())
+                except Exception as exc:
+                    _record_forecast_cycle(
+                        store,
+                        local_date=start.date(),
+                        scheduled_at=now,
+                        attempted_at=now,
+                        result="error",
+                        error=_safe_forecast_error(exc),
+                        next_run_at=now + timedelta(minutes=config.weather.watchdog.retry_minutes),
+                    )
+                    raise
+                forecast_ref = history.record_forecast(cycle.forecast)
+                _record_forecast_cycle(
+                    store,
+                    local_date=start.date(),
+                    scheduled_at=now,
+                    attempted_at=now,
+                    result="success",
+                    error=None,
+                    next_run_at=now + timedelta(seconds=cycle.next_poll_seconds),
+                    forecast_ref=forecast_ref,
+                )
                 indoor_temperatures = indoor_fallback.select(
                     live_config, store.indoor_readings, now
                 )
@@ -201,7 +225,6 @@ def _run_controller(
                     cycle.forecast,
                     indoor_temperatures=indoor_temperatures,
                 )
-                forecast_ref = history.record_forecast(cycle.forecast)
                 if store.context is not None:
                     # The fallback snapshot is refreshed only after the plan
                     # and its source forecast have been accepted by canonical
@@ -264,6 +287,41 @@ def _build_automatic_runtime_plan(
     allocated = {heater.id: sum(config.site.slot_minutes for slot in plan.slots if heater.id in slot.heater_ids) for heater in config.heaters}
     unmet = {item.heater_id: round(item.deficit_percent * config.heaters[[h.id for h in config.heaters].index(item.heater_id)].full_charge_minutes / 100) for item in plan.deficits if item.deficit_percent > 0}
     return plan, ScheduleResult(legacy_slots, allocated, unmet)
+
+
+def _record_forecast_cycle(
+    store,
+    *,
+    local_date,
+    scheduled_at: datetime,
+    attempted_at: datetime,
+    result: str,
+    error: str | None,
+    next_run_at: datetime,
+    forecast_ref=None,
+) -> None:
+    """Best-effort durable observability for an automatic provider attempt."""
+    try:
+        planning = store.planning
+        current = planning.forecast_cycle(local_date, scheduled_at)
+        state = replace(
+            current,
+            last_attempt_at=attempted_at,
+            last_result=result,
+            last_error=error,
+            stale=result == "error",
+            next_retry_at=(next_run_at if result == "error" else None),
+            next_run_at=next_run_at,
+            attempt=(current.attempt + 1 if result == "error" else 0),
+        )
+        planning.save_forecast_cycle(state, forecast_ref)
+    except Exception:
+        # Forecast observability is subordinate to keeping the controller alive.
+        logger.error("Could not persist forecast cycle state", exc_info=True)
+
+
+def _safe_forecast_error(error: BaseException) -> str:
+    return f"{error.__class__.__name__}: no se pudo obtener el forecast meteorológico"
 
 
 class _IndoorFallbackTracker:

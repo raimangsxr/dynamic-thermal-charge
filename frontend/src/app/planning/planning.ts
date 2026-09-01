@@ -24,6 +24,7 @@ export class Planning implements AfterViewInit, OnDestroy {
   readonly actionError = signal('');
 
   @ViewChild('temperatureChart') private temperatureCanvas?: ElementRef<HTMLCanvasElement>;
+  @ViewChild('forecastChart') private forecastCanvas?: ElementRef<HTMLCanvasElement>;
   @ViewChild('heaterChart') private heaterCanvas?: ElementRef<HTMLCanvasElement>;
   @ViewChild('aggregateChart') private aggregateCanvas?: ElementRef<HTMLCanvasElement>;
   @ViewChild('cumulativeChart') private cumulativeCanvas?: ElementRef<HTMLCanvasElement>;
@@ -129,9 +130,18 @@ export class Planning implements AfterViewInit, OnDestroy {
   private renderCharts(): void {
     const data = this.snapshot();
     const timeline = data?.timeline ?? [];
-    if (!data?.plan || !timeline.length || !this.temperatureCanvas || !this.heaterCanvas || !this.aggregateCanvas || !this.cumulativeCanvas) return;
+    if (!data) return;
     this.destroyCharts();
     try {
+      if (data.forecast?.hourly_points.length && this.forecastCanvas) {
+        const points = data.forecast.hourly_points;
+        this.charts.push(new Chart(this.forecastCanvas.nativeElement, {
+          type: 'line',
+          data: { labels: points.map((point) => this.dateTime(point.timestamp)), datasets: [{ label: 'Temperatura exterior (°C)', data: points.map((point) => point.temperature_c), borderColor: '#2457a6', backgroundColor: '#2457a622', tension: 0.25, spanGaps: false }] },
+          options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: true } } },
+        }));
+      }
+      if (!data.plan || !timeline.length || !this.temperatureCanvas || !this.heaterCanvas || !this.aggregateCanvas || !this.cumulativeCanvas) return;
       const labels = timeline.map((slot) => this.slotLabel(slot));
       const colors = ['#2457a6', '#d46b28', '#3b8c68', '#8a4f9e', '#9b7a21'];
       this.charts.push(new Chart(this.temperatureCanvas.nativeElement, {

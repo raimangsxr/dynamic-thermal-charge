@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlalchemy import MetaData, Table, inspect, select
+from sqlalchemy import MetaData, Table, inspect, select, text, update
 from sqlalchemy.engine import Engine
 
 from .schema import (
@@ -18,7 +18,7 @@ from . import SchemaStatus, SchemaVersionError
 
 
 CONFIGURATION_SCHEMA_REVISION = 1
-APPLICATION_SCHEMA_REVISION = 1
+APPLICATION_SCHEMA_REVISION = 2
 POSTGRES_CONFIGURATION_SCHEMA = "dtc_config"
 POSTGRES_APPLICATION_SCHEMA = "dtc_app"
 
@@ -125,7 +125,22 @@ def _upgrade(
 ) -> int:
     existing = set(inspect(engine).get_table_names())
     if version_table.name in existing:
-        revision = _require(engine, version_table, expected, label)
+        revision = _stored_revision(engine, version_table, label)
+        if revision > expected:
+            raise BootstrapIncompatibleError(
+                f"{label} schema revision {revision} is newer than supported {expected}"
+            )
+        if revision < expected:
+            if label != "application":
+                raise BootstrapIncompatibleError(
+                    f"{label} schema revision {revision} has no registered upgrade path"
+                )
+            _upgrade_application_schema(engine, revision, expected)
+            with engine.begin() as connection:
+                connection.execute(
+                    update(version_table).where(version_table.c.id == 1).values(revision=expected)
+                )
+            revision = expected
         metadata.create_all(engine)
         return revision
     if existing:
@@ -141,17 +156,43 @@ def _upgrade(
 def _require(engine: Engine, table: Table, expected: int, label: str) -> int:
     if table.name not in inspect(engine).get_table_names():
         raise BootstrapCorruptError(f"{label} schema revision is missing")
-    with engine.connect() as connection:
-        revisions = connection.execute(select(table.c.revision)).scalars().all()
-    if len(revisions) != 1:
-        raise BootstrapCorruptError(f"{label} schema revision is ambiguous")
-    revision = int(revisions[0])
+    revision = _stored_revision(engine, table, label)
     if revision != expected:
         direction = "newer" if revision > expected else "older"
         raise BootstrapIncompatibleError(
             f"{label} schema revision {revision} is {direction} than supported {expected}"
         )
     return revision
+
+
+def _stored_revision(engine: Engine, table: Table, label: str) -> int:
+    with engine.connect() as connection:
+        revisions = connection.execute(select(table.c.revision)).scalars().all()
+    if len(revisions) != 1:
+        raise BootstrapCorruptError(f"{label} schema revision is ambiguous")
+    return int(revisions[0])
+
+
+def _upgrade_application_schema(engine: Engine, revision: int, expected: int) -> None:
+    """Apply the small, portable application-schema upgrades in order."""
+    if revision == 1 and expected >= 2:
+        columns = {
+            column["name"] for column in inspect(engine).get_columns("forecast_cycle")
+        }
+        additions = (
+            ("last_attempt_at", "DATETIME"),
+            ("last_result", "VARCHAR(16)"),
+            ("next_run_at", "DATETIME"),
+        )
+        with engine.begin() as connection:
+            for name, definition in additions:
+                if name not in columns:
+                    connection.execute(text(f"ALTER TABLE forecast_cycle ADD COLUMN {name} {definition}"))
+        revision = 2
+    if revision != expected:
+        raise BootstrapIncompatibleError(
+            f"application schema revision {revision} has no registered upgrade path to {expected}"
+        )
 
 
 __all__ = [

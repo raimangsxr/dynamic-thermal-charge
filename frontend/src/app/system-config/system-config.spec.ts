@@ -88,4 +88,26 @@ describe('SystemConfig', () => {
     });
     expect(request.request.body.secrets.aemet_api_key).toEqual({ action: 'replace', value: 'secret-key' });
   });
+
+  it('runs a manual AEMET refresh and prevents duplicate clicks while pending', () => {
+    const fixture = TestBed.createComponent(SystemConfig); fixture.detectChanges();
+    backend.expectOne('/api/v1/system/configuration').flush(configuration);
+    backend.expectOne('/api/v1/system/topology').flush(topology); fixture.detectChanges();
+    fixture.componentInstance.choose('weather');
+    fixture.componentInstance.edit('provider', 'aemet');
+    fixture.detectChanges();
+    fixture.componentInstance.refreshWeather();
+    expect(fixture.componentInstance.weatherRefreshLoading()).toBe(true);
+    const request = backend.expectOne('/api/v1/system/weather/refresh');
+    fixture.componentInstance.refreshWeather();
+    expect(backend.match('/api/v1/system/weather/refresh')).toHaveLength(0);
+    request.flush({
+      status: 'success', forecast_status: 'success',
+      forecast_last_attempt_at: '2026-01-16T01:00:00Z',
+      forecast_last_error: null, forecast_next_run_at: '2026-01-16T04:00:00Z', forecast: null,
+    });
+    fixture.detectChanges();
+    expect(fixture.componentInstance.weatherRefreshLoading()).toBe(false);
+    expect((fixture.nativeElement as HTMLElement).textContent).toContain('completada correctamente');
+  });
 });

@@ -31,6 +31,7 @@ import type {
   RelayTestStartDto, RelayTestViewDto,
   DatabaseCandidateDto, MigrationDto, OnboardingStatusDto, SecretEditDto,
   SystemConfigurationDto, SystemSection, TopologyDto, ConnectionTestDto,
+  WeatherRefreshDto,
 } from './api.types';
 
 const BASE = '/api/v1';
@@ -145,6 +146,7 @@ export class Api {
   }
   testMqtt(): Observable<ConnectionTestDto> { return this.http.post<ConnectionTestDto>(`${BASE}/system/tests/mqtt`, {}); }
   testWeather(): Observable<ConnectionTestDto> { return this.http.post<ConnectionTestDto>(`${BASE}/system/tests/weather`, {}); }
+  refreshWeather(): Observable<WeatherRefreshDto> { return this.http.post<WeatherRefreshDto>(`${BASE}/system/weather/refresh`, {}); }
   migrateDatabase(expectedLocatorRevision: number, candidate: DatabaseCandidateDto): Observable<MigrationDto> {
     return this.http.post<MigrationDto>(`${BASE}/system/migrations`, {
       expected_locator_revision: expectedLocatorRevision, confirmed: true, destination: candidate,

@@ -11,6 +11,9 @@ input, select { padding: .55rem; border: 1px solid var(--border); border-radius:
 small { color: var(--muted); }
 .secret { display: grid; grid-template-columns: 2fr 1fr 2fr; gap: .6rem; margin: .6rem 0; align-items: center; }
 .save { margin-top: 1rem; padding: .65rem 1rem; background: var(--primary); color: white; }
+.weather-status { margin-top: 1.5rem; padding: 1rem; background: var(--surface); border: 1px solid var(--border); border-radius: .5rem; }
+.weather-status h2 { margin-top: 0; }
+.weather-status button { padding: .65rem 1rem; }
 .error { color: var(--danger); }.success { color: #176b35; }
 .dialog { position: fixed; inset: 50% auto auto 50%; transform: translate(-50%, -50%); max-width: 34rem; background: white; border: 2px solid var(--warning); border-radius: .6rem; padding: 1.2rem; box-shadow: 0 1rem 3rem #0005; z-index: 30; }
 .dialog button { padding: .6rem; margin-right: .5rem; }

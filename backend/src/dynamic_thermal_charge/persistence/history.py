@@ -652,6 +652,50 @@ class SqlStatusReader:
             ),
         }
 
+    def latest_forecast(self) -> dict | None:
+        """Return the newest stored forecast, including its hourly points."""
+        from .engine import store_errors
+
+        with store_errors(self._location):
+            with self._engine.connect() as connection:
+                forecast_row = (
+                    connection.execute(
+                        select(forecast_table)
+                        .where(forecast_table.c.installation_id == self._installation_id)
+                        .order_by(forecast_table.c.retrieved_at.desc(), forecast_table.c.id.desc())
+                        .limit(1)
+                    )
+                    .mappings()
+                    .first()
+                )
+                if forecast_row is None:
+                    return None
+                forecast_hours = (
+                    connection.execute(
+                        select(forecast_hour)
+                        .where(forecast_hour.c.forecast_id == forecast_row["id"])
+                        .order_by(forecast_hour.c.observed_at)
+                    )
+                    .mappings()
+                    .all()
+                )
+        return {
+            "date": forecast_row["forecast_date"],
+            "source": str(forecast_row["source"]),
+            "average_temperature_c": float(forecast_row["average_temperature_c"]),
+            "minimum_temperature_c": forecast_row["minimum_temperature_c"],
+            "maximum_temperature_c": forecast_row["maximum_temperature_c"],
+            "municipality": forecast_row["municipality"],
+            "hourly_points": [
+                {
+                    "timestamp": from_utc(row["observed_at"]),
+                    "temperature_c": float(row["temperature_c"]),
+                    "interpolated": bool(row["interpolated"]),
+                }
+                for row in forecast_hours
+            ],
+        }
+
     def planning(self, at: datetime) -> dict | None:
         """Return the active plan or, outside a window, the next future plan."""
         return self.plan_in_progress(at, include_next=True)

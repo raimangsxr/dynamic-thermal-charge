@@ -110,6 +110,10 @@ class ForecastCycleState:
     last_error: str | None = None
     stale: bool = False
     completed: bool = False
+    last_attempt_at: datetime | None = None
+    last_result: str | None = None
+    next_run_at: datetime | None = None
+    last_forecast_id: int | None = None
 
 
 class DailyAemetCycle:
@@ -176,7 +180,7 @@ class AemetWeatherProvider:
             {"api_key": self._api_key, "Accept": "application/json"},
             self._config.timeout_seconds,
         )
-        if not isinstance(envelope, dict) or envelope.get("estado") != 200:
+        if not isinstance(envelope, dict) or str(envelope.get("estado")) not in {"1", "200"}:
             description = (
                 envelope.get("descripcion", "invalid response")
                 if isinstance(envelope, dict)
@@ -367,14 +371,20 @@ def _parse_aemet_hourly_points(
         if isinstance(raw_temperatures, list):
             items = raw_temperatures
             saw_hourly_payload = True
-        elif isinstance(raw_temperatures, dict) and not {
-            "minima", "maxima"
-        }.intersection(raw_temperatures):
-            items = [
-                {"hora": hour, "value": value}
-                for hour, value in raw_temperatures.items()
-            ]
-            saw_hourly_payload = True
+        elif isinstance(raw_temperatures, dict):
+            # AEMET has used both a direct mapping and the daily-summary shape
+            # ``{minima, maxima, dato: [...]}`` for hourly temperatures.
+            if isinstance(raw_temperatures.get("dato"), list):
+                items = raw_temperatures["dato"]
+                saw_hourly_payload = True
+            elif not {"minima", "maxima"}.intersection(raw_temperatures):
+                items = [
+                    {"hora": hour, "value": value}
+                    for hour, value in raw_temperatures.items()
+                ]
+                saw_hourly_payload = True
+            else:
+                items = []
         else:
             continue
         raw_date = str(day.get("fecha", ""))[:10]
@@ -388,7 +398,7 @@ def _parse_aemet_hourly_points(
             if not isinstance(item, dict):
                 continue
             raw_value = item.get("value", item.get("valor", item.get("temperature")))
-            raw_hour = item.get("hora", item.get("hour"))
+            raw_hour = item.get("hora", item.get("hour", item.get("periodo")))
             try:
                 temperature = float(raw_value)
                 hour = int(str(raw_hour).split("-")[0].strip())
