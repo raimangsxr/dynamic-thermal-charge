@@ -17,8 +17,8 @@ from .topology import BootstrapCorruptError, BootstrapIncompatibleError
 from . import SchemaStatus, SchemaVersionError
 
 
-CONFIGURATION_SCHEMA_REVISION = 1
-APPLICATION_SCHEMA_REVISION = 2
+CONFIGURATION_SCHEMA_REVISION = 2
+APPLICATION_SCHEMA_REVISION = 3
 POSTGRES_CONFIGURATION_SCHEMA = "dtc_config"
 POSTGRES_APPLICATION_SCHEMA = "dtc_app"
 
@@ -131,11 +131,10 @@ def _upgrade(
                 f"{label} schema revision {revision} is newer than supported {expected}"
             )
         if revision < expected:
-            if label != "application":
-                raise BootstrapIncompatibleError(
-                    f"{label} schema revision {revision} has no registered upgrade path"
-                )
-            _upgrade_application_schema(engine, revision, expected)
+            if label == "application":
+                _upgrade_application_schema(engine, revision, expected)
+            else:
+                _upgrade_configuration_schema(engine, revision, expected)
             with engine.begin() as connection:
                 connection.execute(
                     update(version_table).where(version_table.c.id == 1).values(revision=expected)
@@ -189,9 +188,53 @@ def _upgrade_application_schema(engine: Engine, revision: int, expected: int) ->
                 if name not in columns:
                     connection.execute(text(f"ALTER TABLE forecast_cycle ADD COLUMN {name} {definition}"))
         revision = 2
+    if revision == 2 and expected >= 3:
+        columns = {column["name"] for column in inspect(engine).get_columns("automatic_plan_slot")}
+        with engine.begin() as connection:
+            for name in ("initial_soc_json", "demand_json", "heater_power_json"):
+                if name not in columns:
+                    connection.execute(text(f"ALTER TABLE automatic_plan_slot ADD COLUMN {name} TEXT NOT NULL DEFAULT '{{}}'"))
+        revision = 3
     if revision != expected:
         raise BootstrapIncompatibleError(
             f"application schema revision {revision} has no registered upgrade path to {expected}"
+        )
+
+
+def _upgrade_configuration_schema(engine: Engine, revision: int, expected: int) -> None:
+    if revision == 1 and expected >= 2:
+        site_columns = {column["name"] for column in inspect(engine).get_columns("charge_planning_site")}
+        heater_columns = {column["name"] for column in inspect(engine).get_columns("heater_charge_config")}
+        additions = (
+            ("contracted_power_w", "INTEGER NOT NULL DEFAULT 5200"),
+            ("max_heating_power_w", "INTEGER NOT NULL DEFAULT 5200"),
+            ("design_indoor_temperature_c", "FLOAT NOT NULL DEFAULT 21"),
+            ("design_outdoor_temperature_c", "FLOAT NOT NULL DEFAULT 0"),
+            ("feedback_horizon_hours", "FLOAT NOT NULL DEFAULT 6"),
+        )
+        with engine.begin() as connection:
+            for name, definition in additions:
+                if name not in site_columns:
+                    connection.execute(text(f"ALTER TABLE charge_planning_site ADD COLUMN {name} {definition}"))
+            if "demand_factor" not in heater_columns:
+                connection.execute(text("ALTER TABLE heater_charge_config ADD COLUMN demand_factor FLOAT NOT NULL DEFAULT 1"))
+            connection.execute(text(
+                "UPDATE charge_planning_site SET "
+                "contracted_power_w = (SELECT max_total_power_w FROM installation WHERE installation.id = charge_planning_site.installation_id), "
+                "max_heating_power_w = (SELECT max_total_power_w FROM installation WHERE installation.id = charge_planning_site.installation_id)"
+            ))
+            connection.execute(text(
+                "UPDATE heater_charge_config SET demand_factor = COALESCE(("
+                "SELECT thermal_profile.thermal_factor FROM thermal_profile "
+                "JOIN heater ON heater.id = thermal_profile.heater_id "
+                "WHERE heater.heater_id = heater_charge_config.heater_id "
+                "AND heater.installation_id = heater_charge_config.installation_id"
+                "), 1)"
+            ))
+        revision = 2
+    if revision != expected:
+        raise BootstrapIncompatibleError(
+            f"configuration schema revision {revision} has no registered upgrade path to {expected}"
         )
 
 

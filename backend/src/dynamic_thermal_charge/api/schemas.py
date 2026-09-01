@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, time
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 # --------------------------------------------------------------------------- #
@@ -228,11 +228,15 @@ class ChargeTelemetryView(BaseModel):
 
 
 class PlanningDeficitView(BaseModel):
-    heater_id: str
-    target_charge_percent: float
-    projected_charge_percent: float
-    deficit_percent: float
+    heater_id: str | None = None
+    requirement: str = ""
+    achievable_value: float | None = None
+    shortfall: float | None = None
+    at: datetime | None = None
     reason: str
+    target_charge_percent: float = 0.0
+    projected_charge_percent: float = 0.0
+    deficit_percent: float = 0.0
 
 
 class ChargeConstraintRequest(BaseModel):
@@ -256,6 +260,9 @@ class PlanningPreviewResponse(BaseModel):
     slot_minutes: int
     slots: list[dict]
     deficits: list[PlanningDeficitView] = Field(default_factory=list)
+    violations: list[PlanningDeficitView] = Field(default_factory=list)
+    explanations: list[dict] = Field(default_factory=list)
+    demand: list[dict] = Field(default_factory=list)
     constraints: list[ChargeConstraintView] = Field(default_factory=list)
 
 
@@ -282,7 +289,26 @@ class HeaterChargeConfigRequest(BaseModel):
     temperature_topic: str | None = None
     target_temperature_topic: str | None = None
     stored_charge_topic: str | None = None
-    reserve_percent: float = Field(ge=0, le=100)
+    reserve_percent: float = Field(ge=0)
+    demand_factor: float = Field(gt=0, default=1.0)
+
+
+class PlanningSiteConfigRequest(BaseModel):
+    expected_revision: int
+    replan_minutes: int = Field(gt=0)
+    forecast_horizon_hours: int = Field(gt=0, le=48)
+    aemet_query_hour: int = Field(ge=0, le=23)
+    contracted_power_w: int = Field(gt=0)
+    max_heating_power_w: int = Field(gt=0)
+    design_indoor_temperature_c: float
+    design_outdoor_temperature_c: float
+    feedback_horizon_hours: float = Field(gt=0)
+
+    @model_validator(mode="after")
+    def validate_design_temperatures(self):
+        if self.design_indoor_temperature_c <= self.design_outdoor_temperature_c:
+            raise ValueError("design indoor temperature must exceed design outdoor temperature")
+        return self
 
 
 class ControllerLogEvent(BaseModel):
@@ -304,18 +330,6 @@ class ControllerLogPage(BaseModel):
 # Configuration
 # --------------------------------------------------------------------------- #
 
-class ThermalProfileView(BaseModel):
-    target_temperature_c: float
-    design_outdoor_temperature_c: float
-    thermal_factor: float
-    min_charge: float
-    max_charge: float
-    thermal_loss_c_per_hour: float
-    room_inertia_hours: float = 8.0
-    outdoor_loss_per_hour: float = 0.08
-    emission_c_per_hour: float = 1.0
-
-
 class OutputView(BaseModel):
     kind: str
     pin: int | None = None
@@ -336,8 +350,8 @@ class HeaterResponse(BaseModel):
     target_temperature_topic: str | None = None
     stored_charge_topic: str | None = None
     reserve_percent: float = 0.0
+    demand_factor: float = 1.0
     output: OutputView
-    thermal: ThermalProfileView | None = None
 
 
 class ScheduleView(BaseModel):
@@ -375,6 +389,7 @@ class SetFieldRequest(BaseModel):
 
 
 class AddHeaterRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     revision: int
     id: str
     power_kw: float
@@ -388,19 +403,15 @@ class AddHeaterRequest(BaseModel):
     temperature_topic: str | None = None
     target_temperature_topic: str | None = None
     stored_charge_topic: str | None = None
-    reserve_percent: float = Field(ge=0, le=100, default=0.0)
+    reserve_percent: float = Field(ge=0, default=0.0)
+    demand_factor: float = Field(gt=0, default=1.0)
     output: str = "simulated"
     pin: int | None = None
     active_high: bool = True
-    target_temperature_c: float | None = None
-    design_outdoor_temperature_c: float | None = None
-    thermal_factor: float = 1.0
-    min_charge: float = 0.0
-    max_charge: float = 1.0
-    thermal_loss_c_per_hour: float = 0.0
 
 
 class UpdateHeaterRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     revision: int
     name: str
     model: str | None = None
@@ -413,16 +424,11 @@ class UpdateHeaterRequest(BaseModel):
     temperature_topic: str | None = None
     target_temperature_topic: str | None = None
     stored_charge_topic: str | None = None
-    reserve_percent: float = Field(ge=0, le=100)
+    reserve_percent: float = Field(ge=0)
+    demand_factor: float = Field(gt=0, default=1.0)
     output: str = "simulated"
     pin: int | None = None
     active_high: bool = True
-    target_temperature_c: float | None = None
-    design_outdoor_temperature_c: float | None = None
-    thermal_factor: float = 1.0
-    min_charge: float = 0.0
-    max_charge: float = 1.0
-    thermal_loss_c_per_hour: float = 0.0
 
 
 class ChangeResponse(BaseModel):

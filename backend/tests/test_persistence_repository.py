@@ -97,14 +97,15 @@ def test_a_heater_field_changes_only_that_heater(initialised_store):
             assert changed[heater.id] == heater, "an unrelated heater changed"
 
 
-def test_a_thermal_field_changes_only_that_profile(initialised_store):
+def test_a_charge_field_changes_only_that_heater(initialised_store):
     repository = initialised_store.repository
-    _, revision = repository.current()
-    repository.set_field(revision, "heater", "salon", "target_temperature_c", "22.5")
-    config, _ = repository.current()
-    profiles = {heater.id: heater.thermal for heater in config.heaters}
-    assert profiles["salon"].target_temperature_c == 22.5
-    assert profiles["entrada"].target_temperature_c == 18.0
+    before, revision = repository.current()
+    repository.set_field(revision, "heater", "salon", "demand_factor", "1.25")
+    after, _ = repository.current()
+    changed = {heater.id: heater for heater in after.heaters}
+    unchanged = {heater.id: heater for heater in before.heaters}
+    assert changed["salon"].demand_factor == 1.25
+    assert changed["entrada"].demand_factor == unchanged["entrada"].demand_factor
 
 
 def test_disabling_a_heater_keeps_it_in_the_configuration(initialised_store):

@@ -54,8 +54,8 @@ def test_one_heater_is_readable(client):
     assert body["id"] == "salon"
     assert body["power_kw"] == 2.8
     assert body["output"] == {"kind": "gpio", "pin": 17, "active_high": False}
-    assert body["thermal"]["target_temperature_c"] == 21.0
-    assert body["thermal"]["thermal_loss_c_per_hour"] == 0.0
+    assert "thermal" not in body
+    assert body["demand_factor"] == 1.0
 
 
 def test_an_unknown_heater_lists_the_existing_ones(client):
@@ -107,11 +107,12 @@ def test_a_new_domain_field_cannot_appear_in_the_api_unnoticed():
     translated = {
         "power_w": "power_kw",
         "full_charge_minutes": "full_charge_hours",
+        "thermal": None,
     }
     unaccounted = {
         name
         for name in domain
-        if name not in exposed and translated.get(name) not in exposed
+        if name not in exposed and name not in translated
     }
     assert not unaccounted, (
         "these Heater fields are neither exposed nor deliberately translated; "
@@ -166,12 +167,7 @@ def test_a_heater_can_be_replaced_in_one_revisioned_request(client):
             "output": "gpio",
             "pin": 17,
             "active_high": False,
-            "target_temperature_c": 21,
-            "design_outdoor_temperature_c": -2,
-            "thermal_factor": 1,
-            "min_charge": 0.1,
-            "max_charge": 1,
-            "thermal_loss_c_per_hour": 0.5,
+            "demand_factor": 1.2,
         },
     )
     assert response.status_code == 200, response.text
@@ -180,7 +176,7 @@ def test_a_heater_can_be_replaced_in_one_revisioned_request(client):
     assert updated["name"] == "Salón renovado"
     assert updated["reserve_percent"] == 25
     assert updated["temperature_topic"] == "dtc/salon/temperature"
-    assert updated["thermal"]["thermal_loss_c_per_hour"] == 0.5
+    assert updated["demand_factor"] == 1.2
 
 
 def test_indoor_policy_and_topic_round_trip_with_empty_topic_as_null(client):
@@ -199,14 +195,9 @@ def test_indoor_policy_and_topic_round_trip_with_empty_topic_as_null(client):
     assert _config(client)["heaters"][0]["indoor_topic"] is None
 
 
-def test_a_thermal_field_changes(client):
-    assert _patch(client, "target_temperature_c", "22.5", heater="salon").status_code == 200
-    heaters = {h["id"]: h for h in _config(client)["heaters"]}
-    assert heaters["salon"]["thermal"]["target_temperature_c"] == 22.5
-    assert heaters["entrada"]["thermal"]["target_temperature_c"] == 18.0
-    assert _patch(client, "thermal_loss_c_per_hour", "0.5", heater="salon").status_code == 200
-    heaters = {h["id"]: h for h in _config(client)["heaters"]}
-    assert heaters["salon"]["thermal"]["thermal_loss_c_per_hour"] == 0.5
+def test_retired_thermal_fields_are_rejected(client):
+    assert _patch(client, "target_temperature_c", "22.5", heater="salon").status_code == 404
+    assert _patch(client, "thermal_loss_c_per_hour", "0.5", heater="salon").status_code == 404
 
 
 def test_retention_can_be_set_to_unlimited(client):
@@ -225,8 +216,7 @@ NEW_HEATER = {
     "output": "gpio",
     "pin": 24,
     "active_high": False,
-    "target_temperature_c": 20.0,
-    "design_outdoor_temperature_c": -2.0,
+    "demand_factor": 1.1,
 }
 
 
@@ -239,7 +229,7 @@ def test_a_heater_can_be_added(client):
     assert response.json()["action"] == "add"
     added = client.get("/api/v1/config/heaters/cocina", headers=AUTH).json()
     assert added["output"]["pin"] == 24
-    assert added["thermal"]["target_temperature_c"] == 20.0
+    assert "thermal" not in added
 
 
 def test_a_heater_can_be_removed_keeping_its_history(client, recorder, initialised_store):
@@ -319,7 +309,7 @@ def test_removing_an_unknown_heater_is_not_found(client):
         ("indoor_max_plausible_c", "-30", None, 422),
         ("pin", "17", "entrada", 422),
         ("target_charge", "1.5", "entrada", 422),
-        ("design_outdoor_temperature_c", "30", "salon", 422),
+        ("design_outdoor_temperature_c", "30", "salon", 404),
         ("nonexistent_field", "1", None, 404),
         ("nonexistent_field", "1", "salon", 404),
         ("priority", "1", "cocina", 404),

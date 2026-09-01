@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query, status
 
-from ...models import Heater, OutputConfig, ThermalProfile
+from ...models import Heater, OutputConfig
 from ...persistence import ConfigChange, ConfigValidationError
 from ...persistence.bootstrap import Store
 from ...persistence.gate import EXPECTED_REVISION
@@ -26,7 +26,6 @@ from ..schemas import (
     OutputView,
     ScheduleView,
     SetFieldRequest,
-    ThermalProfileView,
     UpdateHeaterRequest,
 )
 
@@ -49,25 +48,11 @@ def _heater_view(heater: Heater) -> HeaterResponse:
         target_temperature_topic=heater.target_temperature_topic,
         stored_charge_topic=heater.stored_charge_topic,
         reserve_percent=heater.reserve_percent,
+        demand_factor=heater.demand_factor,
         output=OutputView(
             kind=heater.output.kind,
             pin=heater.output.pin,
             active_high=heater.output.active_high,
-        ),
-        thermal=(
-            None
-            if heater.thermal is None
-            else ThermalProfileView(
-                target_temperature_c=heater.thermal.target_temperature_c,
-                design_outdoor_temperature_c=heater.thermal.design_outdoor_temperature_c,
-                thermal_factor=heater.thermal.thermal_factor,
-                min_charge=heater.thermal.min_charge,
-                max_charge=heater.thermal.max_charge,
-                thermal_loss_c_per_hour=heater.thermal.thermal_loss_c_per_hour,
-                room_inertia_hours=heater.thermal.room_inertia_hours,
-                outdoor_loss_per_hour=heater.thermal.outdoor_loss_per_hour,
-                emission_c_per_hour=heater.thermal.emission_c_per_hour,
-            )
         ),
     )
 
@@ -237,32 +222,7 @@ def update_heater(
     if current is None:
         raise not_found(f"heater {heater_id!r} does not exist", field="heater_id")
 
-    thermal_fields = (
-        payload.target_temperature_c,
-        payload.design_outdoor_temperature_c,
-    )
-    if any(value is not None for value in thermal_fields):
-        if any(value is None for value in thermal_fields):
-            raise ConfigValidationError(
-                "a thermal profile needs both target_temperature_c and "
-                "design_outdoor_temperature_c",
-                field="target_temperature_c",
-                heater_id=heater_id,
-            )
-        previous = current.thermal
-        thermal = ThermalProfile(
-            target_temperature_c=payload.target_temperature_c,
-            design_outdoor_temperature_c=payload.design_outdoor_temperature_c,
-            thermal_factor=payload.thermal_factor,
-            min_charge=payload.min_charge,
-            max_charge=payload.max_charge,
-            thermal_loss_c_per_hour=payload.thermal_loss_c_per_hour,
-            room_inertia_hours=(8 if previous is None else previous.room_inertia_hours),
-            outdoor_loss_per_hour=(0.08 if previous is None else previous.outdoor_loss_per_hour),
-            emission_c_per_hour=(1 if previous is None else previous.emission_c_per_hour),
-        )
-    else:
-        thermal = None
+    thermal = current.thermal
 
     try:
         heater = Heater(
@@ -279,6 +239,7 @@ def update_heater(
             target_temperature_topic=payload.target_temperature_topic,
             stored_charge_topic=payload.stored_charge_topic,
             reserve_percent=payload.reserve_percent,
+            demand_factor=payload.demand_factor,
             output=OutputConfig(
                 kind=payload.output, pin=payload.pin, active_high=payload.active_high
             ),
@@ -304,28 +265,6 @@ def post_heater(
     payload: AddHeaterRequest, store: Store = Depends(usable_store)
 ) -> ChangeResponse:
     thermal = None
-    if (
-        payload.target_temperature_c is not None
-        or payload.design_outdoor_temperature_c is not None
-    ):
-        if (
-            payload.target_temperature_c is None
-            or payload.design_outdoor_temperature_c is None
-        ):
-            raise ConfigValidationError(
-                "a thermal profile needs both target_temperature_c and "
-                "design_outdoor_temperature_c",
-                field="target_temperature_c",
-                heater_id=payload.id,
-            )
-        thermal = ThermalProfile(
-            target_temperature_c=payload.target_temperature_c,
-            design_outdoor_temperature_c=payload.design_outdoor_temperature_c,
-            thermal_factor=payload.thermal_factor,
-            min_charge=payload.min_charge,
-            max_charge=payload.max_charge,
-            thermal_loss_c_per_hour=payload.thermal_loss_c_per_hour,
-        )
     heater = Heater(
         id=payload.id,
         name=payload.name or payload.id,
@@ -340,6 +279,7 @@ def post_heater(
         target_temperature_topic=payload.target_temperature_topic,
         stored_charge_topic=payload.stored_charge_topic,
         reserve_percent=payload.reserve_percent,
+        demand_factor=payload.demand_factor,
         thermal=thermal,
         output=OutputConfig(
             kind=payload.output, pin=payload.pin, active_high=payload.active_high

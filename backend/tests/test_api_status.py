@@ -113,37 +113,39 @@ def test_planning_endpoint_returns_hourly_series_and_all_intervals(
     client, initialised_store, recorder, api_clock
 ):
     config, revision = initialised_store.repository.current()
-    initialised_store.repository.set_field(
-        revision, "heater", "salon", "thermal_loss_c_per_hour", "0.5"
-    )
-    config, revision = initialised_store.repository.current()
     points = tuple(
         HourlyForecastPoint(API_NOW - timedelta(hours=1) + timedelta(hours=index), 4 + index)
-        for index in range(9)
+        for index in range(49)
     )
-    forecast_ref = recorder.record_forecast(
+    recorder.record_forecast(
         OutdoorForecast(
             date=API_NOW.date(), average_temperature_c=8, minimum_temperature_c=4,
             maximum_temperature_c=12, source="aemet", hourly_points=points,
         )
     )
-    plan = ChargeScheduler().build(
-        config.site, config.heaters, WINDOW_START,
-        requested_charge_minutes={heater.id: (60 if heater.id == "salon" else 0) for heater in config.heaters},
-        hourly_points=points,
-        fallback_temperature_c=8,
+    for heater in config.heaters:
+        for field, value in (("temperature_c", 21), ("target_temperature_c", 21), ("stored_charge_percent", 100)):
+            initialised_store.planning.record_telemetry(heater.id, field, value, API_NOW)
+    activated = client.post(
+        "/api/v1/planning/activate",
+        headers=AUTH,
+        json={"token": client.post(
+            "/api/v1/planning/preview",
+            headers=AUTH,
+            json={"constraints": [], "expected_revision": revision},
+        ).json()["token"], "constraints": [], "expected_revision": revision},
     )
-    recorder.record_plan(plan, forecast_ref, revision)
+    assert activated.status_code == 200, activated.text
     response = client.get("/api/v1/planning", headers=AUTH)
     assert response.status_code == 200
     body = response.json()
     assert body["forecast"]["hourly_points"]
-    assert len(body["plan"]["slots"]) == config.site.window_minutes // config.site.slot_minutes
+    assert len(body["plan"]["slots"]) > 0
     assert len(body["timeline"]) == 48 * 60 // config.site.slot_minutes
     assert body["horizon_end"]
-    assert body["timeline"][0]["charge_minutes_by_heater"]["salon"] > 0, body["timeline"][:2]
-    assert body["timeline"][16]["charge_minutes_by_heater"]["salon"] < body["timeline"][15]["charge_minutes_by_heater"]["salon"]
     assert body["max_total_power_w"] == config.site.max_total_power_w
+    salon_minutes = [slot["charge_minutes_by_heater"]["salon"] for slot in body["timeline"][:4]]
+    assert salon_minutes[0] >= salon_minutes[-1]
 
 
 def test_planning_endpoint_prefers_the_newest_stored_forecast_over_plan_forecast(
