@@ -53,6 +53,12 @@ de fallback, timeout y política de actualización. La clave AEMET se reemplaza
 como secreto gestionado y la API solo informa si está configurada; nunca
 devuelve su valor.
 
+La sección `Sistema → mqtt` permite desactivar el broker para instalaciones de
+prueba. Mientras MQTT está deshabilitado, el controlador usa los cuatro valores
+fijos globales de esa sección (temperatura, temperatura objetivo, carga
+almacenada y temperatura interior); al habilitarlo vuelve a exigir telemetría
+recibida por MQTT.
+
 El panel autenticado incluye la sección `Planificación`, que consulta el plan
 aceptado por el controlador en `GET /api/v1/planning` y permite editar constraints
 recurrentes. `POST /api/v1/planning/preview` calcula una vista previa sin tocar el

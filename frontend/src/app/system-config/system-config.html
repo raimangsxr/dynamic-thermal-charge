@@ -18,6 +18,13 @@
         @for (group of groups(); track group.title) {
           <div class="field-group">
             <h2>{{ group.title }}</h2>
+            @if (selected() === 'mqtt' && group.title === 'Valores fijos de prueba') {
+              @if (mqttEnabled()) {
+                <p>Estos valores se conservan para la próxima prueba, pero no están activos mientras MQTT está habilitado.</p>
+              } @else {
+                <p role="status" data-testid="mqtt-fixed-active">MQTT está deshabilitado: estos valores globales están activos para todos los acumuladores y se usan en la planificación.</p>
+              }
+            }
             <div class="fields">
               @for (field of group.fields; track field.name) {
                 <label [for]="field.name">{{ field.name }} <small>{{ data.activation[selected() + '.' + field.name] }}</small></label>
