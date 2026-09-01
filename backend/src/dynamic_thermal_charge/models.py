@@ -231,12 +231,9 @@ class LoggingConfig:
 
 @dataclass(frozen=True)
 class RuntimeConfig:
-    state_file: str = "/var/lib/dynamic-thermal-charge/active-plan.json"
     poll_seconds: float = 5.0
 
     def __post_init__(self) -> None:
-        if not self.state_file:
-            raise ValueError("runtime state_file cannot be empty")
         if self.poll_seconds <= 0:
             raise ValueError("runtime poll_seconds must be positive")
 

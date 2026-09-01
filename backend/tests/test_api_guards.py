@@ -164,7 +164,17 @@ from dynamic_thermal_charge.controller import ChargeController
 from dynamic_thermal_charge.drivers import SimulatedOutputDriver
 from dynamic_thermal_charge.scheduler import ScheduleResult, ScheduleSlot
 from dynamic_thermal_charge.service import ControllerService, PlanRefresh
-from dynamic_thermal_charge.state import PlanStore
+
+class MemoryActivePlanStore:
+    def __init__(self):
+        self.plan = None
+
+    def save(self, plan, *, installation_revision=0, forecast_ref=None):
+        self.plan = plan
+        return None
+
+    def load(self):
+        return self.plan
 
 start = datetime(2026, 1, 16, tzinfo=timezone.utc)
 slots = tuple(
@@ -181,7 +191,7 @@ driver = SimulatedOutputDriver()
 now = [start + timedelta(minutes=5)]
 service = ControllerService(
     controller=ChargeController(("salon",), driver),
-    store=PlanStore(r"{tmp_path}/plan.json"),
+    store=MemoryActivePlanStore(),
     refresh_plan=lambda _n: PlanRefresh(plan=plan, next_refresh_seconds=3600),
     poll_seconds=1,
     error_retry_seconds=60,

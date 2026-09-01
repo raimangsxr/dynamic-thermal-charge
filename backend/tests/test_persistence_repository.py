@@ -285,34 +285,23 @@ def test_removing_a_heater_that_does_not_exist_is_refused(initialised_store):
 # FR-038: a value that looks like a secret is refused
 # --------------------------------------------------------------------------- #
 
-@pytest.mark.parametrize(
-    "value",
-    [
-        "postgresql+pg8000://dtc:secret@host/dtc",
-        "sqlite:////var/lib/dtc/dtc.db",
-        "host=db password=hunter2",
-        "dtc:hunter2@db.example.com",
-        "https://user:token@example.com/hook",
-    ],
-)
-def test_a_value_that_looks_like_a_credential_is_refused(initialised_store, value):
+def test_state_file_is_no_longer_an_editable_configuration_field(initialised_store):
     before = _snapshot(initialised_store)
     _, revision = initialised_store.repository.current()
-    with pytest.raises(SecretRejectedError) as error:
+    with pytest.raises(ConfigValidationError) as error:
         initialised_store.repository.set_field(
-            revision, "installation", None, "state_file", value
+            revision, "installation", None, "state_file", "/var/lib/dtc/plan.json"
         )
-    assert "environment variable" in str(error.value)
+    assert "unknown installation field" in str(error.value)
     assert _snapshot(initialised_store) == before
 
 
 def test_an_ordinary_path_is_not_mistaken_for_a_secret(initialised_store):
     _, revision = initialised_store.repository.current()
-    initialised_store.repository.set_field(
-        revision, "installation", None, "state_file", "/var/lib/dtc/active-plan.json"
-    )
-    config, _ = initialised_store.repository.current()
-    assert config.runtime.state_file == "/var/lib/dtc/active-plan.json"
+    with pytest.raises(ConfigValidationError):
+        initialised_store.repository.set_field(
+            revision, "installation", None, "state_file", "/var/lib/dtc/active-plan.json"
+        )
 
 
 # --------------------------------------------------------------------------- #

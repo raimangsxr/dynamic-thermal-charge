@@ -71,7 +71,6 @@ def _installation_row(now: datetime) -> dict:
         "slot_minutes": 30,
         "window_minutes": 480,
         "log_level": "INFO",
-        "state_file": "/tmp/plan.json",
         "poll_seconds": 5.0,
         "retention_days": 365,
         "created_at": now,

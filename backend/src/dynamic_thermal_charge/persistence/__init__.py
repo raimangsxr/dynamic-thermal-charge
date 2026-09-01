@@ -230,6 +230,20 @@ class PlanningRepository(Protocol):
     def constraints(self, *, enabled_only: bool = True) -> tuple[object, ...]: ...
 
 
+class ActivePlanRepository(Protocol):
+    """Durable store for the plan the controller has accepted."""
+
+    def save(
+        self,
+        plan: object,
+        *,
+        installation_revision: int = 0,
+        forecast_ref: ForecastRef | None = None,
+    ) -> PlanRef: ...
+
+    def load(self) -> object | None: ...
+
+
 class HistoryRecorder(Protocol):
     """Append-only audit trail.
 
@@ -286,6 +300,7 @@ class SchemaGate(Protocol):
 
 __all__ = [
     "ConfigChange",
+    "ActivePlanRepository",
     "Heartbeat",
     "HeartbeatPublisher",
     "HistoryPage",

@@ -4,7 +4,18 @@ from dynamic_thermal_charge.controller import ChargeController
 from dynamic_thermal_charge.drivers import SimulatedOutputDriver
 from dynamic_thermal_charge.scheduler import ScheduleResult, ScheduleSlot
 from dynamic_thermal_charge.service import ControllerService, PlanRefresh
-from dynamic_thermal_charge.state import PlanStore
+
+
+class MemoryActivePlanStore:
+    def __init__(self, plan=None):
+        self.plan = plan
+
+    def save(self, plan, *, installation_revision=0, forecast_ref=None):
+        self.plan = plan
+        return None
+
+    def load(self):
+        return self.plan
 
 
 def service_plan(start):
@@ -27,7 +38,7 @@ def test_service_persists_plan_and_executes_slots(tmp_path) -> None:
     start = datetime(2026, 1, 1)
     times = iter((start, start, start + timedelta(minutes=30), start + timedelta(minutes=30)))
     driver = SimulatedOutputDriver()
-    store = PlanStore(tmp_path / "plan.json")
+    store = MemoryActivePlanStore()
     service = ControllerService(
         controller=ChargeController(("a", "b"), driver),
         store=store,
@@ -55,7 +66,7 @@ def test_service_keeps_outputs_off_without_any_valid_plan(tmp_path, caplog) -> N
 
     service = ControllerService(
         controller=ChargeController(("a",), driver),
-        store=PlanStore(tmp_path / "missing.json"),
+        store=MemoryActivePlanStore(),
         refresh_plan=fail,
         poll_seconds=1,
         error_retry_seconds=60,

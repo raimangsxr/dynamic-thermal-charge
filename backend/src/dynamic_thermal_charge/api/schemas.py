@@ -344,7 +344,6 @@ class ConfigResponse(BaseModel):
     indoor_min_plausible_c: float
     indoor_max_plausible_c: float
     log_level: str
-    state_file: str
     poll_seconds: float
     retention_days: int | None
     schedule: ScheduleView | None = None

@@ -280,7 +280,6 @@ def config_from_rows(
         logging_config = LoggingConfig(level=str(installation_row["log_level"]))
     with _domain_error("runtime"):
         runtime = RuntimeConfig(
-            state_file=str(installation_row["state_file"]),
             poll_seconds=float(installation_row["poll_seconds"]),
         )
     retention = installation_row.get("retention_days")
@@ -317,7 +316,6 @@ def installation_params(config: AppConfig, name: str, now: datetime) -> dict[str
         "end_time": None if schedule is None else format_time(schedule.end_time),
         "weekdays": None if schedule is None else format_weekdays(schedule.weekdays),
         "log_level": config.logging.level,
-        "state_file": config.runtime.state_file,
         "poll_seconds": config.runtime.poll_seconds,
         "retention_days": config.retention_days,
         "indoor_max_age_minutes": config.site.indoor_max_age_minutes,

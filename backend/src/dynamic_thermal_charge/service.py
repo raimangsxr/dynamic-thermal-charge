@@ -26,14 +26,15 @@ from typing import Callable
 
 from .controller import ChargeController
 from .persistence import (
+    ActivePlanRepository,
     ConfigStoreError,
     ConfigStoreUnavailableError,
+    ForecastRef,
     HeartbeatPublisher,
     HistoryRecorder,
     PlanRef,
 )
 from .scheduler import ScheduleResult
-from .state import PlanStore
 
 
 logger = logging.getLogger(__name__)
@@ -44,13 +45,15 @@ class PlanRefresh:
     plan: ScheduleResult
     next_refresh_seconds: int
     plan_ref: PlanRef | None = None
+    installation_revision: int = 0
+    forecast_ref: ForecastRef | None = None
 
 
 class ControllerService:
     def __init__(
         self,
         controller: ChargeController,
-        store: PlanStore,
+        store: ActivePlanRepository,
         refresh_plan: Callable[[datetime], PlanRefresh],
         poll_seconds: float,
         error_retry_seconds: int,
@@ -79,7 +82,11 @@ class ControllerService:
         now = self._clock()
         try:
             self._controller.initialize(now)
-            plan = self._store.load()
+            try:
+                plan = self._store.load()
+            except ConfigStoreUnavailableError as exc:
+                self._enter_degraded(exc)
+                plan = None
             next_refresh = now
             cycles = 0
             while max_cycles is None or cycles < max_cycles:
@@ -105,6 +112,11 @@ class ControllerService:
     ) -> tuple[ScheduleResult | None, datetime]:
         try:
             refreshed = self._refresh_plan(now)
+            persisted_ref = self._store.save(
+                refreshed.plan,
+                installation_revision=refreshed.installation_revision,
+                forecast_ref=refreshed.forecast_ref,
+            )
         except ConfigStoreUnavailableError as exc:
             self._enter_degraded(exc)
             self._warn_if_planless(plan)
@@ -131,8 +143,7 @@ class ControllerService:
             return plan, now + timedelta(seconds=self._error_retry_seconds)
 
         self._leave_degraded()
-        self._current_plan_ref = refreshed.plan_ref
-        self._store.save(refreshed.plan)
+        self._current_plan_ref = persisted_ref or refreshed.plan_ref
         self._prune_history(now)
         return (
             refreshed.plan,
@@ -190,3 +201,7 @@ class ControllerService:
     @property
     def refresh_abandoned(self) -> bool:
         return self._refresh_abandoned
+
+    @property
+    def current_plan_ref(self) -> PlanRef | None:
+        return self._current_plan_ref

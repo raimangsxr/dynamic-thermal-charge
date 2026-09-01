@@ -16,7 +16,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping
 
-from sqlalchemy import delete, insert, inspect, select, update
+from sqlalchemy import MetaData, Table, delete, insert, inspect, select, update
 from sqlalchemy.engine import Connection, Engine
 
 from ..config import validate_config
@@ -147,7 +147,6 @@ INSTALLATION_FIELDS: dict[str, tuple[str, Callable[[str, str], Any]]] = {
     "end_time": ("end_time", lambda raw, field: format_time(parse_time(raw, field))),
     "weekdays": ("weekdays", lambda raw, field: format_weekdays(parse_weekdays(raw, field))),
     "log_level": ("log_level", lambda raw, field: raw.upper()),
-    "state_file": ("state_file", lambda raw, field: raw),
     "poll_seconds": ("poll_seconds", _parse_float),
     "retention_days": ("retention_days", _parse_optional_int),
     "indoor_max_age_minutes": ("indoor_max_age_minutes", _parse_int),
@@ -319,12 +318,29 @@ class SqlConfigRepository:
             if connection.execute(select(installation_table.c.id).limit(1)).first():
                 logger.info("Configuration already present; seeding skipped")
                 return False
+            installation_values = installation_params(config, name, now)
+            # A database pinned before 0009 still has the obsolete NOT NULL
+            # column. Populate it only long enough for that legacy database to
+            # migrate; current schemas never create or read this value.
+            legacy_state_file = "state_file" in {
+                column["name"]
+                for column in inspect(connection).get_columns(installation_table.name)
+            }
+            if legacy_state_file:
+                installation_values["state_file"] = "legacy-unused"
+                legacy_installation = Table(
+                    installation_table.name,
+                    MetaData(),
+                    autoload_with=connection,
+                )
+            else:
+                legacy_installation = installation_table
             installation_id = connection.execute(
-                insert(installation_table).values(
+                insert(legacy_installation).values(
                     **self._compatible_params(
                         connection,
                         installation_table.name,
-                        installation_params(config, name, now),
+                        installation_values,
                     )
                 )
             ).inserted_primary_key[0]
