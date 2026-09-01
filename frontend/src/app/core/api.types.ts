@@ -119,7 +119,21 @@ export interface PlanningDto {
   horizon_end: string | null;
   timeline: PlanningTimelineSlotDto[];
   absence_reason: string | null;
+  constraints?: ChargeConstraintDto[];
+  telemetry?: ChargeTelemetryDto[];
+  plan_status?: string | null;
+  deficits?: PlanningDeficitDto[];
+  preview_token?: string | null;
+  constraints_revision?: number;
 }
+
+export interface ChargeConstraintDto { id: number | null; heater_id: string; target_charge: number; at_time: string; weekdays: number[]; enabled: boolean; }
+export interface ChargeTelemetryDto { heater_id: string; temperature_c: number | null; target_temperature_c: number | null; stored_charge_percent: number | null; temperature_received_at: string | null; target_received_at: string | null; stored_charge_received_at: string | null; state: 'ready' | 'telemetry_stale'; missing_fields: string[]; oldest_age_seconds: number | null; }
+export interface PlanningDeficitDto { heater_id: string; target_charge_percent: number; projected_charge_percent: number; deficit_percent: number; reason: string; }
+export interface PlanningConstraintRequest { heater_id: string; target_charge: number; at_time: string; weekdays: number[]; }
+export interface PlanningPreviewDto { token: string; status: string; score: number[]; horizon_start: string; horizon_end: string; slot_minutes: number; slots: Array<Record<string, unknown>>; deficits: PlanningDeficitDto[]; constraints: ChargeConstraintDto[]; }
+export interface AutomaticPlanAuditItem { id: number; plan_id: number | null; event: string; reason: string; details: Record<string, unknown>; occurred_at: string; }
+export interface AutomaticPlanAuditPage { items: AutomaticPlanAuditItem[]; }
 
 export interface AllocationDto {
   heater_id: string;
@@ -138,6 +152,9 @@ export interface StatusDto {
   plan: PlanDto | null;
   forecast: ForecastDto | null;
   allocations: AllocationDto[];
+  telemetry?: ChargeTelemetryDto[];
+  plan_status?: string | null;
+  deficits?: PlanningDeficitDto[];
 }
 
 export type ControllerLogLevel = 'DEBUG' | 'INFO' | 'WARNING' | 'ERROR' | 'CRITICAL';
@@ -161,6 +178,9 @@ export interface ThermalDto {
   min_charge: number;
   max_charge: number;
   thermal_loss_c_per_hour: number;
+  room_inertia_hours?: number;
+  outdoor_loss_per_hour?: number;
+  emission_c_per_hour?: number;
 }
 
 export interface HeaterDto {

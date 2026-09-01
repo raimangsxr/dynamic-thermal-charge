@@ -1,13 +1,15 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { AfterViewInit, Component, ElementRef, OnDestroy, ViewChild, inject, signal } from '@angular/core';
+import { FormsModule } from '@angular/forms';
 import { Chart } from 'chart.js/auto';
 
 import { Api } from '../core/api';
-import type { ApiErrorDto, PlanningDto, PlanningSlotDto } from '../core/api.types';
+import type { ApiErrorDto, PlanningConstraintRequest, PlanningDto, PlanningPreviewDto, PlanningSlotDto } from '../core/api.types';
 import { type Explained, UNREACHABLE, explain } from '../core/errors';
 
 @Component({
   selector: 'dtc-planning',
+  imports: [FormsModule],
   templateUrl: './planning.html',
   styleUrl: './planning.css',
 })
@@ -16,6 +18,10 @@ export class Planning implements AfterViewInit, OnDestroy {
   readonly snapshot = signal<PlanningDto | null>(null);
   readonly failure = signal<Explained | null>(null);
   readonly loading = signal(true);
+  readonly draftConstraints = signal<PlanningConstraintRequest[]>([]);
+  readonly preview = signal<PlanningPreviewDto | null>(null);
+  readonly actionMessage = signal('');
+  readonly actionError = signal('');
 
   @ViewChild('temperatureChart') private temperatureCanvas?: ElementRef<HTMLCanvasElement>;
   @ViewChild('heaterChart') private heaterCanvas?: ElementRef<HTMLCanvasElement>;
@@ -39,6 +45,7 @@ export class Planning implements AfterViewInit, OnDestroy {
     this.api.planning().subscribe({
       next: (planning) => {
         this.snapshot.set(planning);
+        this.draftConstraints.set((planning.constraints ?? []).map((item) => ({ heater_id: item.heater_id, target_charge: item.target_charge, at_time: item.at_time, weekdays: item.weekdays })));
         this.failure.set(null);
         this.loading.set(false);
         queueMicrotask(() => this.renderCharts());
@@ -47,6 +54,35 @@ export class Planning implements AfterViewInit, OnDestroy {
         this.loading.set(false);
         this.failure.set(this.describe(error));
       },
+    });
+  }
+
+  addConstraint(heaterId = ''): void { this.draftConstraints.update((items) => [...items, { heater_id: heaterId || this.snapshot()?.heaters[0]?.id || '', target_charge: 1, at_time: '07:00', weekdays: [0, 1, 2, 3, 4, 5, 6] }]); }
+  removeConstraint(index: number): void { this.draftConstraints.update((items) => items.filter((_item, itemIndex) => itemIndex !== index)); }
+  editConstraint(index: number, field: keyof PlanningConstraintRequest, value: unknown): void {
+    this.draftConstraints.update((items) => items.map((item, itemIndex) => itemIndex === index ? { ...item, [field]: field === 'target_charge' ? Number(value) : value } as PlanningConstraintRequest : item));
+  }
+  toggleDay(index: number, day: number): void {
+    this.draftConstraints.update((items) => items.map((item, itemIndex) => {
+      if (itemIndex !== index) return item;
+      const weekdays = item.weekdays.includes(day) ? item.weekdays.filter((value) => value !== day) : [...item.weekdays, day].sort((a, b) => a - b);
+      return { ...item, weekdays };
+    }));
+  }
+  recalculate(): void {
+    this.actionError.set(''); this.actionMessage.set('Calculando vista previa…');
+    this.api.planningPreview(this.draftConstraints(), this.snapshot()?.constraints_revision).subscribe({
+      next: (value) => { this.preview.set(value); this.actionMessage.set('Vista previa calculada. Todavía no modifica el plan activo.'); },
+      error: () => { this.actionMessage.set(''); this.actionError.set('No se pudo calcular la vista previa. Revisa las constraints y la telemetría.'); },
+    });
+  }
+  activate(): void {
+    const preview = this.preview(); const revision = this.snapshot()?.constraints_revision;
+    if (!preview || revision === undefined) return;
+    this.actionError.set(''); this.actionMessage.set('Guardando y activando…');
+    this.api.planningActivate(preview.token, this.draftConstraints(), revision).subscribe({
+      next: () => { this.actionMessage.set('Constraints y plan activados.'); this.preview.set(null); this.refresh(); },
+      error: () => { this.actionMessage.set(''); this.actionError.set('Los datos cambiaron o el plan ya no es válido. Calcula una nueva vista previa.'); },
     });
   }
 

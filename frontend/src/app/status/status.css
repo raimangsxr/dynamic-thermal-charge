@@ -20,4 +20,5 @@ h2 { margin: 1.5rem 0 0.5rem; font-size: 1.1rem; }
 .warn { border-color: #7a4a00; background: #fdf7ee; }
 .alert { border-color: #a00; background: #fdf0f0; }
 .empty { color: #555; font-style: italic; }
+.table-scroll { overflow-x: auto; } table { width: 100%; border-collapse: collapse; background: #fff; } th, td { padding: .55rem; border-bottom: 1px solid #ddd; text-align: left; } .stale { color: #8a2e00; background: #fff6ef; } .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
 .revision, .source, .place { color: #555; font-size: 0.9em; }

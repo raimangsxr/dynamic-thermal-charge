@@ -8,6 +8,8 @@
             data-tab="forecasts">Previsiones</button>
     <button type="button" [class.active]="tab() === 'transitions'" (click)="select('transitions')"
             data-tab="transitions">Transiciones</button>
+    <button type="button" [class.active]="tab() === 'planning'" (click)="select('planning')"
+            data-tab="planning">Decisiones de planificación</button>
   </nav>
 
   <form class="filters" (submit)="$event.preventDefault(); load()">
@@ -36,6 +38,7 @@
   @if (empty()) {
     <p class="empty" data-testid="empty">No hay registros en ese rango.</p>
   }
+  @if (planningEmpty()) { <p class="empty">No hay decisiones de planificación en ese rango.</p> }
 
   <div class="table-scroll">
     @switch (tab()) {
@@ -95,6 +98,11 @@
             }
           </tbody>
         </table>
+      }
+      @case ('planning') {
+        <table data-table="planning"><thead><tr><th>Instante</th><th>Evento</th><th>Motivo</th><th>Detalle</th></tr></thead><tbody>
+          @for (item of planningAudit()?.items ?? []; track item.id) { <tr><td>{{ instant(item.occurred_at) }}</td><td>{{ item.event }}</td><td>{{ item.reason }}</td><td><code>{{ item.details | json }}</code></td></tr> }
+        </tbody></table>
       }
     }
   </div>

@@ -49,6 +49,17 @@ class StorageGeneration:
     retired: bool = False
     closed: bool = False
 
+    @property
+    def planning(self):
+        from .planning import SqlPlanningRepository
+        return SqlPlanningRepository(
+            self.engines.configuration,
+            self.engines.application,
+            self.configuration.installation_id(),
+            self.engines.configuration_location,
+            self.engines.application_location,
+        )
+
     def close(self) -> None:
         if self.closed:
             return

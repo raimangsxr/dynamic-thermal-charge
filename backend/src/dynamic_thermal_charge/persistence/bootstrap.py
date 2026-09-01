@@ -40,6 +40,17 @@ class Store:
     system_configuration: object | None = None
     applied_revisions: object | None = None
 
+    @property
+    def planning(self):
+        from .planning import SqlPlanningRepository
+        return SqlPlanningRepository(
+            self.configuration_engine or self.engine,
+            self.application_engine or self.engine,
+            self.repository.installation_id(),
+            self.location,
+            self.location,
+        )
+
 
 @dataclass(frozen=True)
 class InitReport:

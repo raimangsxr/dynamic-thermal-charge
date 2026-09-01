@@ -48,8 +48,15 @@ El frontend se publica en el puerto `80`. La API solo se expone dentro de la
 red Docker y el panel la consume mediante nginx.
 
 El panel autenticado incluye la sección `Planificación`, que consulta el plan
-aceptado por el controlador en `GET /api/v1/planning` y muestra la previsión
-horaria, las asignaciones y cualquier déficit sin recalcular desde el navegador.
+aceptado por el controlador en `GET /api/v1/planning` y permite editar constraints
+recurrentes. `POST /api/v1/planning/preview` calcula una vista previa sin tocar el
+controlador; `POST /api/v1/planning/activate` valida el token de inputs y guarda
+constraints y plan conjuntamente. La telemetría MQTT de cada acumulador se
+valida por separado y una muestra incompleta o de más de 15 minutos se marca como
+caducada y deja ese acumulador fuera del plan.
+
+El histórico de decisiones está disponible en `GET /api/v1/history/planning-audit`
+y conserva el motivo, el estado y los déficits de cada preview o activación.
 La misma vista proyecta 48 horas completas; la carga acumulada de cada
 acumulador se expresa en minutos equivalentes y desciende según `Pérdida
 térmica (°C/h)`, configurable en el perfil térmico de cada acumulador.

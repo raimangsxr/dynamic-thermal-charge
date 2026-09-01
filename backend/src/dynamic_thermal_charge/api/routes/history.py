@@ -24,6 +24,8 @@ from ..schemas import (
     PruneResponse,
     RelayTestHistoryPage,
     TransitionPage,
+    AutomaticPlanAuditPage,
+    AutomaticPlanAuditItem,
 )
 
 
@@ -147,6 +149,17 @@ def get_transitions(
         has_more=page.has_more,
         next_cursor=page.next_cursor,
     )
+
+
+@router.get("/history/planning-audit", response_model=AutomaticPlanAuditPage, responses=READ_RESPONSES, summary="Automatic planning explanations")
+def get_planning_audit(
+    since: datetime | None = Query(default=None, alias="from"),
+    until: datetime | None = Query(default=None, alias="to"),
+    limit: int = Query(default=100, ge=1, le=500),
+    store: Store = Depends(usable_store),
+) -> AutomaticPlanAuditPage:
+    _check_range(since, until)
+    return AutomaticPlanAuditPage(items=[AutomaticPlanAuditItem(**item) for item in store.planning.audit(since, until, limit)])
 
 
 @router.get(
