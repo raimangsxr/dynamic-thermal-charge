@@ -95,7 +95,10 @@ class Heater:
 
     @property
     def requested_charge_minutes(self) -> int:
-        return round(self.full_charge_minutes * self.target_charge)
+        return round(
+            self.full_charge_minutes
+            * (self.target_charge + self.reserve_percent / 100)
+        )
 
 
 @dataclass(frozen=True)

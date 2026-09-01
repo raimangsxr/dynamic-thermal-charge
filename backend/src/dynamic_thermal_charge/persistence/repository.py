@@ -165,6 +165,7 @@ HEATER_FIELDS: dict[str, tuple[str, str, Callable[[str, str], Any]]] = {
     "priority": ("heater", "priority", _parse_int),
     "enabled": ("heater", "enabled", _parse_bool),
     "indoor_topic": ("heater", "indoor_topic", _parse_optional_str),
+    "reserve_percent": ("charge", "reserve_percent", _parse_float),
     "output_type": ("output", "kind", lambda raw, field: raw),
     "pin": ("output", "pin", _parse_optional_int),
     "active_high": ("output", "active_high", _parse_bool),
@@ -522,6 +523,105 @@ class SqlConfigRepository:
         logger.info("Added heater %s", heater.id)
         return change
 
+    def update_heater(self, revision: int, heater: Heater) -> ConfigChange:
+        """Replace every editable part of one heater in one revisioned write."""
+        with transaction(self._engine, self._location) as connection:
+            config, current_revision = self._read(connection)
+            self._require_revision(current_revision, revision)
+            existing = next(
+                (item for item in config.heaters if item.id == heater.id), None
+            )
+            if existing is None:
+                raise ConfigValidationError(
+                    f"heater {heater.id!r} does not exist; existing heaters: "
+                    f"{', '.join(item.id for item in config.heaters) or 'none'}",
+                    field="heater_id",
+                    heater_id=heater.id,
+                )
+            installation_id = self._locked_installation_id(connection)
+            self._require_relay_test_free(connection, installation_id)
+            heater_key = connection.execute(
+                select(heater_table.c.id).where(
+                    (heater_table.c.installation_id == installation_id)
+                    & (heater_table.c.heater_id == heater.id)
+                )
+            ).scalar_one()
+            connection.execute(
+                update(heater_table)
+                .where(heater_table.c.id == heater_key)
+                .values(**{
+                    key: value
+                    for key, value in heater_params(
+                        heater, installation_id, 0
+                    ).items()
+                    if key not in {"installation_id", "heater_id", "position"}
+                })
+            )
+            connection.execute(
+                update(output_table)
+                .where(output_table.c.heater_id == heater_key)
+                .values(**{
+                    key: value
+                    for key, value in output_params(heater, int(heater_key)).items()
+                    if key != "heater_id"
+                })
+            )
+            if inspect(connection).has_table(heater_charge_config.name):
+                charge_values = {
+                    "temperature_topic": heater.temperature_topic or heater.indoor_topic,
+                    "target_temperature_topic": heater.target_temperature_topic,
+                    "stored_charge_topic": heater.stored_charge_topic,
+                    "reserve_percent": heater.reserve_percent,
+                }
+                charge_updated = connection.execute(
+                    update(heater_charge_config)
+                    .where(
+                        (heater_charge_config.c.installation_id == installation_id)
+                        & (heater_charge_config.c.heater_id == heater.id)
+                    )
+                    .values(**charge_values)
+                )
+                if charge_updated.rowcount != 1:
+                    connection.execute(
+                        insert(heater_charge_config).values(
+                            installation_id=installation_id,
+                            heater_id=heater.id,
+                            **charge_values,
+                            room_inertia_hours=(
+                                8 if heater.thermal is None else heater.thermal.room_inertia_hours
+                            ),
+                            outdoor_loss_per_hour=(
+                                0.08 if heater.thermal is None else heater.thermal.outdoor_loss_per_hour
+                            ),
+                            emission_c_per_hour=(
+                                1 if heater.thermal is None else heater.thermal.emission_c_per_hour
+                            ),
+                        )
+                    )
+            connection.execute(
+                delete(thermal_table).where(thermal_table.c.heater_id == heater_key)
+            )
+            if heater.thermal is not None:
+                connection.execute(
+                    insert(thermal_table).values(
+                        **thermal_params(heater.thermal, int(heater_key))
+                    )
+                )
+            change = ConfigChange(
+                entity="heater",
+                entity_key=heater.id,
+                field=None,
+                old_value=heater.id,
+                new_value=heater.id,
+                action="set",
+                revision_before=revision,
+                revision_after=revision + 1,
+            )
+            self._commit_revision(connection, installation_id, revision, change)
+            self._read(connection)
+        logger.info("Updated heater %s", heater.id)
+        return change
+
     def remove_heater(self, revision: int, heater_id: str) -> ConfigChange:
         with transaction(self._engine, self._location) as connection:
             _, current_revision = self._read(connection)
@@ -707,11 +807,14 @@ class SqlConfigRepository:
             "heater": heater_table,
             "output": output_table,
             "thermal": thermal_table,
+            "charge": heater_charge_config,
         }[table_name]
         key_column = table.c.id if table_name == "heater" else table.c.heater_id
         key_value = heater_key
         row = connection.execute(
-            select(table.c[column]).where(key_column == key_value)
+            select(table.c[column]).where(
+                key_column == (heater_id if table_name == "charge" else key_value)
+            )
         ).first()
         if row is None:
             raise ConfigValidationError(
@@ -721,7 +824,9 @@ class SqlConfigRepository:
                 heater_id=heater_id,
             )
         connection.execute(
-            update(table).where(key_column == key_value).values(**{column: parsed})
+            update(table)
+            .where(key_column == (heater_id if table_name == "charge" else key_value))
+            .values(**{column: parsed})
         )
         return row[0], parsed
 

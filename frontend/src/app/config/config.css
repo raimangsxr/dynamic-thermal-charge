@@ -26,6 +26,10 @@ h3 { margin: 0; color: var(--ink); font-size: 1rem; }
 .heater-card { min-width: 0; }
 .heater-card mat-card-content { padding-top: 1rem; }
 .heater-card mat-card-actions { flex-wrap: wrap; }
+.heater-summary { display: flex; flex-wrap: wrap; gap: 1rem 2rem; margin: 0; }
+.heater-summary div { display: grid; gap: .15rem; }
+.heater-summary dt { color: var(--muted); font-size: .8rem; }
+.heater-summary dd { margin: 0; font-weight: 650; }
 .heater-form { margin-top: 1.25rem; padding: 1rem; border: 1px solid var(--primary); border-radius: .75rem; background: color-mix(in srgb, var(--primary) 4%, var(--surface)); }
 .form-heading { margin-bottom: 1rem; }
 .form-heading p { margin: .3rem 0 0; color: var(--muted); font-size: .9rem; }

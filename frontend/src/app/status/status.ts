@@ -65,6 +65,20 @@ export class Status {
     ),
   );
 
+  readonly charging = computed(() => this.heaters().filter((item) => item.state.kind === 'on'));
+  readonly resting = computed(() => this.heaters().filter((item) => item.state.kind === 'off'));
+  readonly telemetryReady = computed(() => (this.snapshot()?.telemetry ?? []).filter((item) => item.state === 'ready').length);
+  readonly telemetryTotal = computed(() => this.snapshot()?.telemetry?.length ?? 0);
+
+  planStatus(status: string | null | undefined): string {
+    switch (status) {
+      case 'feasible': return 'Cumplido';
+      case 'deficit': return 'Con déficit';
+      case 'best_effort': return 'Mejor esfuerzo';
+      default: return status ?? 'Sin evaluación';
+    }
+  }
+
   private readonly poller = new Poller(() => this.refresh());
 
   constructor() {

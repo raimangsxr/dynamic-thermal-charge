@@ -385,6 +385,35 @@ class AddHeaterRequest(BaseModel):
     priority: int = 0
     enabled: bool = True
     indoor_topic: str | None = None
+    temperature_topic: str | None = None
+    target_temperature_topic: str | None = None
+    stored_charge_topic: str | None = None
+    reserve_percent: float = Field(ge=0, le=100, default=0.0)
+    output: str = "simulated"
+    pin: int | None = None
+    active_high: bool = True
+    target_temperature_c: float | None = None
+    design_outdoor_temperature_c: float | None = None
+    thermal_factor: float = 1.0
+    min_charge: float = 0.0
+    max_charge: float = 1.0
+    thermal_loss_c_per_hour: float = 0.0
+
+
+class UpdateHeaterRequest(BaseModel):
+    revision: int
+    name: str
+    model: str | None = None
+    power_kw: float = Field(gt=0)
+    full_charge_hours: float = Field(gt=0)
+    target_charge: float = Field(ge=0, le=1)
+    priority: int = 0
+    enabled: bool = True
+    indoor_topic: str | None = None
+    temperature_topic: str | None = None
+    target_temperature_topic: str | None = None
+    stored_charge_topic: str | None = None
+    reserve_percent: float = Field(ge=0, le=100)
     output: str = "simulated"
     pin: int | None = None
     active_high: bool = True
@@ -606,6 +635,7 @@ __all__ = [
     "PruneResponse",
     "RelayTestHistoryPage",
     "SetFieldRequest",
+    "UpdateHeaterRequest",
     "StatusResponse",
     "TransitionPage",
 ]

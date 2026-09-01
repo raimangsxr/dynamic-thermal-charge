@@ -67,12 +67,16 @@
             <mat-form-field appearance="outline"><mat-label>Modelo</mat-label><input matInput name="model" [ngModel]="form.model" (ngModelChange)="updateHeaterForm('model', $event)" /></mat-form-field>
             <mat-form-field appearance="outline"><mat-label>Potencia (kW)</mat-label><input matInput type="number" step="0.1" name="power_kw" [ngModel]="form.power_kw" (ngModelChange)="updateHeaterForm('power_kw', $event)" required /></mat-form-field>
             <mat-form-field appearance="outline"><mat-label>Carga completa (horas)</mat-label><input matInput type="number" step="0.1" name="full_charge_hours" [ngModel]="form.full_charge_hours" (ngModelChange)="updateHeaterForm('full_charge_hours', $event)" required /></mat-form-field>
-            <mat-form-field appearance="outline"><mat-label>Carga objetivo (0–1)</mat-label><input matInput type="number" step="0.01" name="target_charge" [ngModel]="form.target_charge" (ngModelChange)="updateHeaterForm('target_charge', $event)" /></mat-form-field>
+            <mat-form-field appearance="outline"><mat-label>Carga objetivo (0–1)</mat-label><input matInput type="number" min="0" max="1" step="0.01" name="target_charge" [ngModel]="form.target_charge" (ngModelChange)="updateHeaterForm('target_charge', $event)" /></mat-form-field>
+            <mat-form-field appearance="outline"><mat-label>Reserva equivalente (%)</mat-label><input matInput type="number" min="0" max="100" step="1" name="reserve_percent" [ngModel]="form.reserve_percent" (ngModelChange)="updateHeaterForm('reserve_percent', $event)" /><mat-hint>Tiempo adicional respecto a carga completa</mat-hint></mat-form-field>
             <mat-form-field appearance="outline"><mat-label>Prioridad</mat-label><input matInput type="number" name="priority" [ngModel]="form.priority" (ngModelChange)="updateHeaterForm('priority', $event)" /></mat-form-field>
             <mat-form-field appearance="outline"><mat-label>Salida</mat-label><mat-select name="output" [ngModel]="form.output" (ngModelChange)="updateHeaterForm('output', $event)"><mat-option value="simulated">Simulada</mat-option><mat-option value="gpio">GPIO</mat-option></mat-select></mat-form-field>
             <mat-form-field appearance="outline"><mat-label>Pin BCM</mat-label><input matInput type="number" name="pin" [ngModel]="form.pin" (ngModelChange)="updateHeaterForm('pin', $event)" /></mat-form-field>
             <mat-form-field appearance="outline"><mat-label>Nivel activo</mat-label><mat-select name="active_high" [ngModel]="form.active_high" (ngModelChange)="updateHeaterForm('active_high', $event)"><mat-option [value]="true">Alto</mat-option><mat-option [value]="false">Bajo</mat-option></mat-select></mat-form-field>
             <mat-form-field appearance="outline"><mat-label>Tópico interior</mat-label><input matInput name="indoor_topic" [ngModel]="form.indoor_topic" (ngModelChange)="updateHeaterForm('indoor_topic', $event)" /></mat-form-field>
+            <mat-form-field appearance="outline"><mat-label>Tópico de temperatura</mat-label><input matInput name="temperature_topic" [ngModel]="form.temperature_topic" (ngModelChange)="updateHeaterForm('temperature_topic', $event)" /></mat-form-field>
+            <mat-form-field appearance="outline"><mat-label>Tópico de objetivo</mat-label><input matInput name="target_temperature_topic" [ngModel]="form.target_temperature_topic" (ngModelChange)="updateHeaterForm('target_temperature_topic', $event)" /></mat-form-field>
+            <mat-form-field appearance="outline"><mat-label>Tópico de carga almacenada</mat-label><input matInput name="stored_charge_topic" [ngModel]="form.stored_charge_topic" (ngModelChange)="updateHeaterForm('stored_charge_topic', $event)" /></mat-form-field>
             <mat-form-field appearance="outline"><mat-label>Estado</mat-label><mat-select name="enabled" [ngModel]="form.enabled" (ngModelChange)="updateHeaterForm('enabled', $event)"><mat-option [value]="true">Activo</mat-option><mat-option [value]="false">Desactivado</mat-option></mat-select></mat-form-field>
           </div>
           <details class="thermal-details"><summary>Perfil térmico opcional</summary><div class="fields form-grid">
@@ -93,15 +97,7 @@
           <mat-card class="heater-card" [attr.data-heater]="heater.id">
             <mat-card-header><mat-card-title>{{ heater.name }}</mat-card-title><mat-card-subtitle>{{ heater.id }} · {{ heater.power_kw }} kW · {{ heater.output.kind === 'gpio' ? 'GPIO' : 'Simulada' }}</mat-card-subtitle></mat-card-header>
             <mat-card-content>
-              <div class="heater-fields">
-                @for (field of ['target_charge', 'priority', 'pin', 'active_high', 'indoor_topic']; track field) {
-                  <div class="field" [attr.data-field]="heater.id + '.' + field">
-                    <mat-form-field appearance="outline"><mat-label>{{ label(field) }}{{ register(field, heater.id) }}</mat-label><input matInput [id]="heater.id + '-' + field" [ngModel]="pending()[key(field, heater.id)] ?? heaterText(heater, field)" (ngModelChange)="edit(field, heater.id, $event)" [name]="heater.id + '-' + field" /></mat-form-field>
-                    @if (fieldErrors()[key(field, heater.id)]; as error) { <p class="field-error" role="alert" [attr.data-error]="heater.id + '.' + field">{{ error }}</p> }
-                    <button mat-stroked-button type="button" (click)="submit(field, heater.id)" [attr.data-save]="heater.id + '.' + field">Guardar</button>
-                  </div>
-                }
-              </div>
+              <dl class="heater-summary"><div><dt>Carga objetivo</dt><dd>{{ heater.target_charge * 100 }}%</dd></div><div><dt>Reserva</dt><dd>{{ heater.reserve_percent }}%</dd></div><div><dt>Prioridad</dt><dd>{{ heater.priority }}</dd></div></dl>
             </mat-card-content>
             <mat-card-actions align="end"><button mat-button type="button" (click)="openEditHeater(heater)" [attr.data-edit-heater]="heater.id"><mat-icon aria-hidden="true">edit</mat-icon> Editar acumulador</button><button mat-button color="warn" type="button" (click)="requestRemoveHeater(heater)" [attr.data-delete-heater]="heater.id"><mat-icon aria-hidden="true">delete</mat-icon> Eliminar</button></mat-card-actions>
           </mat-card>

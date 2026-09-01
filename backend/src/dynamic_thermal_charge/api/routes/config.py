@@ -27,6 +27,7 @@ from ..schemas import (
     ScheduleView,
     SetFieldRequest,
     ThermalProfileView,
+    UpdateHeaterRequest,
 )
 
 
@@ -220,6 +221,78 @@ def patch_heater(
     return _change_view(change)
 
 
+@router.put(
+    "/config/heaters/{heater_id}",
+    response_model=ChangeResponse,
+    responses=ERROR_RESPONSES,
+    summary="Replace all editable fields of a storage heater",
+)
+def update_heater(
+    heater_id: str,
+    payload: UpdateHeaterRequest,
+    store: Store = Depends(usable_store),
+) -> ChangeResponse:
+    config, _revision = store.repository.current()
+    current = next((heater for heater in config.heaters if heater.id == heater_id), None)
+    if current is None:
+        raise not_found(f"heater {heater_id!r} does not exist", field="heater_id")
+
+    thermal_fields = (
+        payload.target_temperature_c,
+        payload.design_outdoor_temperature_c,
+    )
+    if any(value is not None for value in thermal_fields):
+        if any(value is None for value in thermal_fields):
+            raise ConfigValidationError(
+                "a thermal profile needs both target_temperature_c and "
+                "design_outdoor_temperature_c",
+                field="target_temperature_c",
+                heater_id=heater_id,
+            )
+        previous = current.thermal
+        thermal = ThermalProfile(
+            target_temperature_c=payload.target_temperature_c,
+            design_outdoor_temperature_c=payload.design_outdoor_temperature_c,
+            thermal_factor=payload.thermal_factor,
+            min_charge=payload.min_charge,
+            max_charge=payload.max_charge,
+            thermal_loss_c_per_hour=payload.thermal_loss_c_per_hour,
+            room_inertia_hours=(8 if previous is None else previous.room_inertia_hours),
+            outdoor_loss_per_hour=(0.08 if previous is None else previous.outdoor_loss_per_hour),
+            emission_c_per_hour=(1 if previous is None else previous.emission_c_per_hour),
+        )
+    else:
+        thermal = None
+
+    try:
+        heater = Heater(
+            id=heater_id,
+            name=payload.name,
+            model=payload.model,
+            power_w=round(payload.power_kw * 1000),
+            full_charge_minutes=round(payload.full_charge_hours * 60),
+            target_charge=payload.target_charge,
+            priority=payload.priority,
+            enabled=payload.enabled,
+            indoor_topic=payload.indoor_topic,
+            temperature_topic=payload.temperature_topic,
+            target_temperature_topic=payload.target_temperature_topic,
+            stored_charge_topic=payload.stored_charge_topic,
+            reserve_percent=payload.reserve_percent,
+            output=OutputConfig(
+                kind=payload.output, pin=payload.pin, active_high=payload.active_high
+            ),
+            thermal=thermal,
+        )
+        change = store.repository.update_heater(payload.revision, heater)
+    except ConfigValidationError:
+        raise
+    except (TypeError, ValueError) as exc:
+        raise ConfigValidationError(str(exc), field="heater_id", heater_id=heater_id) from exc
+    store.context.refresh_fallback()
+    return _change_view(change)
+
+
 @router.post(
     "/config/heaters",
     response_model=ChangeResponse,
@@ -263,6 +336,10 @@ def post_heater(
         priority=payload.priority,
         enabled=payload.enabled,
         indoor_topic=payload.indoor_topic,
+        temperature_topic=payload.temperature_topic,
+        target_temperature_topic=payload.target_temperature_topic,
+        stored_charge_topic=payload.stored_charge_topic,
+        reserve_percent=payload.reserve_percent,
         thermal=thermal,
         output=OutputConfig(
             kind=payload.output, pin=payload.pin, active_high=payload.active_high

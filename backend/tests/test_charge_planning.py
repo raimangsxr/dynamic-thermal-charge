@@ -8,11 +8,11 @@ from dynamic_thermal_charge.system_settings import MqttSystemSettings
 from dynamic_thermal_charge.weather import DailyAemetCycle, HourlyForecastPoint
 
 
-def _heater(heater_id: str, power: int = 2400) -> Heater:
+def _heater(heater_id: str, power: int = 2400, reserve: float = 10) -> Heater:
     return Heater(
         id=heater_id, name=heater_id, power_w=power, full_charge_minutes=120,
         target_charge=1, priority=1, output=OutputConfig(),
-        thermal=ThermalProfile(21, -2), reserve_percent=10,
+        thermal=ThermalProfile(21, -2), reserve_percent=reserve,
     )
 
 
@@ -24,7 +24,7 @@ def _telemetry(heater_id: str, charge: float) -> ChargeTelemetry:
 def test_optimizer_keeps_each_accumulator_independent_and_never_exceeds_limit():
     start = datetime(2026, 1, 16, 0, 0, tzinfo=timezone.utc)
     result = DeterministicChargeOptimizer().build(PlanningInput(
-        heaters=(_heater("a"), _heater("b")),
+        heaters=(_heater("a"), _heater("b", reserve=0)),
         telemetry={"a": _telemetry("a", 0), "b": _telemetry("b", 100)},
         constraints=(ChargeConstraint("a", .5, time(1, 0)),),
         forecast=(HourlyForecastPoint(start, 5),), horizon_start=start,
@@ -33,6 +33,22 @@ def test_optimizer_keeps_each_accumulator_independent_and_never_exceeds_limit():
     assert all(slot.power_w <= 2400 for slot in result.slots)
     assert any("a" in slot.heater_ids for slot in result.slots)
     assert all("b" not in slot.heater_ids for slot in result.slots)
+
+
+def test_optimizer_plans_reserve_as_equivalent_time_beyond_full_charge():
+    start = datetime(2026, 1, 16, 0, 0, tzinfo=timezone.utc)
+    heater = Heater(
+        **{**_heater("a", reserve=25).__dict__, "full_charge_minutes": 480}
+    )
+    result = DeterministicChargeOptimizer().build(PlanningInput(
+        heaters=(heater,), telemetry={"a": _telemetry("a", 0)}, constraints=(),
+        forecast=(HourlyForecastPoint(start, 5),), horizon_start=start,
+        horizon_hours=10, slot_minutes=30, max_total_power_w=2400,
+    ))
+
+    assert sum("a" in slot.heater_ids for slot in result.slots) == 20
+    assert result.deficits == ()
+    assert result.slots[-1].required_charge_percent["a"] == 125.0
 
 
 def test_aemet_cycle_has_initial_attempt_and_exactly_five_hourly_retries():
