@@ -1,24 +1,16 @@
-/* Usable on a phone: one column, no horizontal scrolling of the page. */
-.status { max-width: 60rem; margin: 0 auto; padding: 1rem; }
-header { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: baseline; }
-h1 { margin: 0; }
-h2 { margin: 1.5rem 0 0.5rem; font-size: 1.1rem; }
-.observed { color: #555; margin: 0; }
-.figure { font-size: 1.6rem; font-weight: 700; margin: 0; }
-.figure .of, .figure .percent { font-size: 0.6em; font-weight: 400; color: #555; }
-.unavailable { color: #7a4a00; font-style: italic; }
-.heaters { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.5rem; }
-.heaters li {
-  display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: baseline;
-  padding: 0.6rem; border: 1px solid #ddd; border-radius: 4px;
-}
-.heaters .name { font-weight: 600; min-width: 8rem; }
-.heaters li.disabled { opacity: 0.7; }
-.tag { font-size: 0.8rem; padding: 0.1rem 0.4rem; background: #eee; border-radius: 3px; }
-.banner { padding: 0.75rem 1rem; border-left: 4px solid; margin: 1rem 0; }
-.banner ul { margin: 0.35rem 0; padding-left: 1.2rem; }
-.warn { border-color: #7a4a00; background: #fdf7ee; }
-.alert { border-color: #a00; background: #fdf0f0; }
-.empty { color: #555; font-style: italic; }
-.table-scroll { overflow-x: auto; } table { width: 100%; border-collapse: collapse; background: #fff; } th, td { padding: .55rem; border-bottom: 1px solid #ddd; text-align: left; } .stale { color: #8a2e00; background: #fff6ef; } .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
-.revision, .source, .place { color: #555; font-size: 0.9em; }
+.status { max-width: 76rem; margin: 0 auto; padding: 1.25rem; }
+.page-header, .section-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: .75rem 1rem; }
+.page-header { margin-bottom: 1rem; } h1, h2 { margin: 0; } h2 { font-size: 1.15rem; }
+.eyebrow, .card-label { margin: 0 0 .25rem; color: var(--primary); font-size: .75rem; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
+.observed, .muted, .revision, .source, .place { color: var(--muted); } .observed { margin: 0; }
+.dashboard-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .85rem; margin: 1rem 0; }
+.metric-card, .panel { padding: 1rem; border: 1px solid var(--border); border-radius: .7rem; background: var(--surface); }
+.metric-card { min-height: 7rem; } .figure { margin: .5rem 0 0; font-size: 1.8rem; font-weight: 750; } .metric { margin: .5rem 0 .2rem; font-size: 1.35rem; font-weight: 700; }
+.metric span { font-variant-numeric: tabular-nums; } .power .muted, .metric-card .muted { margin: .2rem 0 0; } .unavailable, .warning-text, .warning { color: #7a4a00; }
+.panel { margin-top: 1rem; } .section-heading .muted { margin: 0; } .heaters { list-style: none; padding: 0; margin: 1rem 0 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: .6rem; }
+.heaters li { display: flex; flex-wrap: wrap; gap: .5rem .8rem; align-items: baseline; padding: .75rem; border: 1px solid var(--border); border-radius: .5rem; } .heaters .name { flex: 1 1 7rem; font-weight: 650; } .heaters li.disabled { opacity: .7; }
+.tag, .status-chip { padding: .15rem .45rem; border-radius: 999px; background: #edf0f2; font-size: .8rem; } .status-chip { background: #e7f4eb; color: #176b35; }
+.banner { padding: .75rem 1rem; border-left: 4px solid; margin: 1rem 0; } .banner p { margin: .35rem 0 0; } .banner ul { margin: .35rem 0; padding-left: 1.2rem; } .warn { border-color: #7a4a00; background: #fdf7ee; } .alert { border-color: #a00; background: #fdf0f0; }
+.table-scroll { overflow-x: auto; } table { width: 100%; border-collapse: collapse; background: #fff; } th, td { padding: .55rem; border-bottom: 1px solid var(--border); text-align: left; } .stale { color: #8a2e00; background: #fff6ef; } .empty { color: var(--muted); font-style: italic; } .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
+@media (max-width: 60rem) { .dashboard-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 38rem) { .status { padding: .9rem; } .dashboard-grid { grid-template-columns: 1fr; } .metric-card { min-height: auto; } }

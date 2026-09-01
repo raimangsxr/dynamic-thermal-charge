@@ -357,10 +357,7 @@ def _build_timeline(
                 reserve_minutes[heater.id] *= max(0.0, 1.0 - loss_fraction)
             if heater.id in heater_ids:
                 reserve_minutes[heater.id] += (end - cursor).total_seconds() / 60
-            reserve_minutes[heater.id] = min(
-                heater.full_charge_minutes,
-                max(0.0, reserve_minutes[heater.id]),
-            )
+            reserve_minutes[heater.id] = max(0.0, reserve_minutes[heater.id])
 
         timeline.append(
             PlanningTimelineSlotView(

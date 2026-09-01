@@ -194,9 +194,13 @@ export interface HeaterDto {
   power_kw: number;
   full_charge_hours: number;
   target_charge: number;
+  reserve_percent: number;
   priority: number;
   enabled: boolean;
   indoor_topic: string | null;
+  temperature_topic: string | null;
+  target_temperature_topic: string | null;
+  stored_charge_topic: string | null;
   output: OutputDto;
   thermal: ThermalDto | null;
 }
@@ -240,9 +244,13 @@ export interface AddHeaterRequest {
   name?: string;
   model?: string;
   target_charge?: number;
+  reserve_percent?: number;
   priority?: number;
   enabled?: boolean;
   indoor_topic?: string | null;
+  temperature_topic?: string | null;
+  target_temperature_topic?: string | null;
+  stored_charge_topic?: string | null;
   output?: 'simulated' | 'gpio';
   pin?: number | null;
   active_high?: boolean;
@@ -252,6 +260,31 @@ export interface AddHeaterRequest {
   min_charge?: number;
   max_charge?: number;
   thermal_loss_c_per_hour?: number;
+}
+
+export interface UpdateHeaterRequest {
+  revision: number;
+  name: string;
+  model: string | null;
+  power_kw: number;
+  full_charge_hours: number;
+  target_charge: number;
+  reserve_percent: number;
+  priority: number;
+  enabled: boolean;
+  indoor_topic: string | null;
+  temperature_topic: string | null;
+  target_temperature_topic: string | null;
+  stored_charge_topic: string | null;
+  output: 'simulated' | 'gpio';
+  pin: number | null;
+  active_high: boolean;
+  target_temperature_c: number | null;
+  design_outdoor_temperature_c: number | null;
+  thermal_factor: number;
+  min_charge: number;
+  max_charge: number;
+  thermal_loss_c_per_hour: number;
 }
 
 export interface ChangeDto {

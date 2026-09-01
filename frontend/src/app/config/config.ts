@@ -20,7 +20,7 @@ import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
 
 import { Api } from '../core/api';
-import type { AddHeaterRequest, ApiErrorDto, ChangeDto, ConfigDto } from '../core/api.types';
+import type { AddHeaterRequest, ApiErrorDto, ChangeDto, ConfigDto, UpdateHeaterRequest } from '../core/api.types';
 import { type Explained, UNREACHABLE, explain, messageFor } from '../core/errors';
 import { confirmationText, needsConfirmation } from './electrical-fields';
 
@@ -39,9 +39,13 @@ export interface HeaterForm {
   power_kw: string;
   full_charge_hours: string;
   target_charge: string;
+  reserve_percent: string;
   priority: string;
   enabled: boolean;
   indoor_topic: string;
+  temperature_topic: string;
+  target_temperature_topic: string;
+  stored_charge_topic: string;
   output: 'simulated' | 'gpio';
   pin: string;
   active_high: boolean;
@@ -54,8 +58,9 @@ export interface HeaterForm {
 }
 
 const HEATER_EDIT_FIELDS = [
-  'name', 'model', 'power_kw', 'full_charge_hours', 'target_charge', 'priority',
-  'enabled', 'indoor_topic', 'output_type', 'pin', 'active_high',
+  'name', 'model', 'power_kw', 'full_charge_hours', 'target_charge', 'reserve_percent', 'priority',
+  'enabled', 'indoor_topic', 'temperature_topic', 'target_temperature_topic', 'stored_charge_topic',
+  'output_type', 'pin', 'active_high',
   'target_temperature_c', 'design_outdoor_temperature_c', 'thermal_factor',
   'min_charge', 'max_charge', 'thermal_loss_c_per_hour',
 ] as const;
@@ -141,6 +146,10 @@ export class Config {
       log_level: 'Nivel de registro', indoor_max_age_minutes: 'Antigüedad máxima interior (min)',
       indoor_min_plausible_c: 'Temperatura interior mínima (°C)', indoor_max_plausible_c: 'Temperatura interior máxima (°C)',
       thermal_loss_c_per_hour: 'Pérdida térmica (°C/h)',
+      reserve_percent: 'Reserva equivalente (%)',
+      temperature_topic: 'Tópico de temperatura',
+      target_temperature_topic: 'Tópico de objetivo',
+      stored_charge_topic: 'Tópico de carga almacenada',
     };
     return labels[field] ?? field;
   }
@@ -169,7 +178,7 @@ export class Config {
     this.confirming.set(null);
     if (edit === null) return;
     if (edit.formEdits) {
-      this.applyHeaterEdits(edit.heaterId!, edit.formEdits);
+      this.applyHeaterEdits(edit.heaterId!);
     } else {
       this.apply(edit);
     }
@@ -207,7 +216,7 @@ export class Config {
   openAddHeater(): void {
     this.heaterFormMode.set('add');
     this.heaterFormError.set('');
-    this.heaterForm.set({ id: '', name: '', model: '', power_kw: '1', full_charge_hours: '8', target_charge: '1', priority: '0', enabled: true, indoor_topic: '', output: 'simulated', pin: '', active_high: true, target_temperature_c: '', design_outdoor_temperature_c: '', thermal_factor: '1', min_charge: '0', max_charge: '1', thermal_loss_c_per_hour: '0' });
+    this.heaterForm.set({ id: '', name: '', model: '', power_kw: '1', full_charge_hours: '8', target_charge: '1', reserve_percent: '0', priority: '0', enabled: true, indoor_topic: '', temperature_topic: '', target_temperature_topic: '', stored_charge_topic: '', output: 'simulated', pin: '', active_high: true, target_temperature_c: '', design_outdoor_temperature_c: '', thermal_factor: '1', min_charge: '0', max_charge: '1', thermal_loss_c_per_hour: '0' });
   }
 
   openEditHeater(heater: ConfigDto['heaters'][number]): void {
@@ -215,7 +224,8 @@ export class Config {
     this.heaterFormError.set('');
     this.heaterForm.set({
       id: heater.id, name: heater.name, model: heater.model ?? '', power_kw: String(heater.power_kw), full_charge_hours: String(heater.full_charge_hours),
-      target_charge: String(heater.target_charge), priority: String(heater.priority), enabled: heater.enabled, indoor_topic: heater.indoor_topic ?? '',
+      target_charge: String(heater.target_charge), reserve_percent: String(heater.reserve_percent), priority: String(heater.priority), enabled: heater.enabled, indoor_topic: heater.indoor_topic ?? '',
+      temperature_topic: heater.temperature_topic ?? '', target_temperature_topic: heater.target_temperature_topic ?? '', stored_charge_topic: heater.stored_charge_topic ?? '',
       output: heater.output.kind, pin: heater.output.pin === null ? '' : String(heater.output.pin), active_high: heater.output.active_high,
       target_temperature_c: heater.thermal ? String(heater.thermal.target_temperature_c) : '', design_outdoor_temperature_c: heater.thermal ? String(heater.thermal.design_outdoor_temperature_c) : '',
       thermal_factor: heater.thermal ? String(heater.thermal.thermal_factor) : '', min_charge: heater.thermal ? String(heater.thermal.min_charge) : '', max_charge: heater.thermal ? String(heater.thermal.max_charge) : '', thermal_loss_c_per_hour: heater.thermal ? String(heater.thermal.thermal_loss_c_per_hour) : '',
@@ -246,8 +256,8 @@ export class Config {
     if (this.heaterFormMode() === 'add') {
       const payload: AddHeaterRequest = {
         revision: snapshot.config_revision, id: form.id.trim(), name: form.name.trim() || undefined, model: form.model.trim() || undefined,
-        power_kw: Number(form.power_kw), full_charge_hours: Number(form.full_charge_hours), target_charge: Number(form.target_charge), priority: Number(form.priority),
-        enabled: form.enabled, indoor_topic: form.indoor_topic.trim() || null, output: form.output, pin: form.pin.trim() ? Number(form.pin) : null, active_high: form.active_high,
+        power_kw: Number(form.power_kw), full_charge_hours: Number(form.full_charge_hours), target_charge: Number(form.target_charge), reserve_percent: Number(form.reserve_percent), priority: Number(form.priority),
+        enabled: form.enabled, indoor_topic: form.indoor_topic.trim() || null, temperature_topic: form.temperature_topic.trim() || null, target_temperature_topic: form.target_temperature_topic.trim() || null, stored_charge_topic: form.stored_charge_topic.trim() || null, output: form.output, pin: form.pin.trim() ? Number(form.pin) : null, active_high: form.active_high,
         target_temperature_c: thermalPart ? Number(form.target_temperature_c) : null, design_outdoor_temperature_c: thermalPart ? Number(form.design_outdoor_temperature_c) : null,
         thermal_factor: Number(form.thermal_factor), min_charge: Number(form.min_charge), max_charge: Number(form.max_charge), thermal_loss_c_per_hour: Number(form.thermal_loss_c_per_hour),
       };
@@ -264,7 +274,7 @@ export class Config {
       this.confirming.set({ field: sensitive.field, value: sensitive.value, heaterId: original.id, formEdits: edits });
       return;
     }
-    this.applyHeaterEdits(original.id, edits);
+    this.applyHeaterEdits(original.id);
   }
 
   requestRemoveHeater(heater: ConfigDto['heaters'][number]): void {
@@ -303,12 +313,29 @@ export class Config {
     });
   }
 
-  private applyHeaterEdits(heaterId: string, edits: readonly FormEdit[], index = 0, revision = this.config()?.config_revision): void {
-    if (index >= edits.length || revision === undefined) { this.heaterSaving.set(false); this.saved.set('Acumulador actualizado.'); this.cancelHeaterForm(); this.load(); return; }
-    const edit = edits[index];
-    this.api.setHeaterField(heaterId, { revision, field: edit.field, value: edit.value }).subscribe({
-      next: (change) => this.applyHeaterEdits(heaterId, edits, index + 1, change.revision_after),
-      error: (error: unknown) => { this.heaterSaving.set(false); this.reject(this.key(edit.field, heaterId), error); this.heaterFormError.set('No se pudo guardar el acumulador. Revisa el conflicto o los campos marcados.'); },
+  private applyHeaterEdits(heaterId: string): void {
+    const form = this.heaterForm();
+    const revision = this.config()?.config_revision;
+    if (!form || revision === undefined) return;
+    const payload: UpdateHeaterRequest = {
+      revision,
+      name: form.name.trim(), model: form.model.trim() || null,
+      power_kw: Number(form.power_kw), full_charge_hours: Number(form.full_charge_hours),
+      target_charge: Number(form.target_charge), reserve_percent: Number(form.reserve_percent), priority: Number(form.priority),
+      enabled: form.enabled, indoor_topic: form.indoor_topic.trim() || null,
+      temperature_topic: form.temperature_topic.trim() || null,
+      target_temperature_topic: form.target_temperature_topic.trim() || null,
+      stored_charge_topic: form.stored_charge_topic.trim() || null,
+      output: form.output, pin: form.pin.trim() ? Number(form.pin) : null, active_high: form.active_high,
+      target_temperature_c: form.target_temperature_c.trim() ? Number(form.target_temperature_c) : null,
+      design_outdoor_temperature_c: form.design_outdoor_temperature_c.trim() ? Number(form.design_outdoor_temperature_c) : null,
+      thermal_factor: Number(form.thermal_factor), min_charge: Number(form.min_charge), max_charge: Number(form.max_charge),
+      thermal_loss_c_per_hour: Number(form.thermal_loss_c_per_hour),
+    };
+    this.heaterSaving.set(true);
+    this.api.updateHeater(heaterId, payload).subscribe({
+      next: () => this.finishHeaterSave('Acumulador actualizado.'),
+      error: (error: unknown) => { this.heaterSaving.set(false); this.reject(this.key('form', heaterId), error); this.heaterFormError.set('No se pudo guardar el acumulador. El formulario conserva tus cambios.'); },
     });
   }
 

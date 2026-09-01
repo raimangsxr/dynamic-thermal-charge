@@ -67,6 +67,12 @@ constraints y plan conjuntamente. La telemetría MQTT de cada acumulador se
 valida por separado y una muestra incompleta o de más de 15 minutos se marca como
 caducada y deja ese acumulador fuera del plan.
 
+Las constraints se editan como porcentajes de 0 a 100 en el panel y se envían a
+la API como fracciones de 0 a 1. La reserva de cada acumulador es un porcentaje
+de tiempo equivalente adicional: por ejemplo, 8 horas de carga completa con un
+25% de reserva requieren 10 horas equivalentes. La edición completa de un
+acumulador se guarda con una única petición `PUT /api/v1/config/heaters/{id}`.
+
 El histórico de decisiones está disponible en `GET /api/v1/history/planning-audit`
 y conserva el motivo, el estado y los déficits de cada preview o activación.
 La misma vista proyecta 48 horas completas; la carga acumulada de cada

@@ -15,6 +15,10 @@ interface PlanningDetailDialogData {
   planning: PlanningDto;
 }
 
+interface ConstraintDraft extends Omit<PlanningConstraintRequest, 'target_charge'> {
+  target_charge: number;
+}
+
 @Component({
   selector: 'dtc-planning-detail-dialog',
   imports: [MatButtonModule, MatDialogModule],
@@ -122,7 +126,7 @@ export class Planning implements AfterViewInit, OnDestroy {
   readonly snapshot = signal<PlanningDto | null>(null);
   readonly failure = signal<Explained | null>(null);
   readonly loading = signal(true);
-  readonly draftConstraints = signal<PlanningConstraintRequest[]>([]);
+  readonly draftConstraints = signal<ConstraintDraft[]>([]);
   readonly preview = signal<PlanningPreviewDto | null>(null);
   readonly actionMessage = signal('');
   readonly actionError = signal('');
@@ -150,7 +154,7 @@ export class Planning implements AfterViewInit, OnDestroy {
     this.api.planning().subscribe({
       next: (planning) => {
         this.snapshot.set(planning);
-        this.draftConstraints.set((planning.constraints ?? []).map((item) => ({ heater_id: item.heater_id, target_charge: item.target_charge, at_time: item.at_time, weekdays: item.weekdays })));
+        this.draftConstraints.set((planning.constraints ?? []).map((item) => ({ heater_id: item.heater_id, target_charge: item.target_charge * 100, at_time: item.at_time, weekdays: item.weekdays })));
         this.failure.set(null);
         this.loading.set(false);
         this.scheduleChartRender();
@@ -162,10 +166,10 @@ export class Planning implements AfterViewInit, OnDestroy {
     });
   }
 
-  addConstraint(heaterId = ''): void { this.draftConstraints.update((items) => [...items, { heater_id: heaterId || this.snapshot()?.heaters[0]?.id || '', target_charge: 1, at_time: '07:00', weekdays: [0, 1, 2, 3, 4, 5, 6] }]); }
+  addConstraint(heaterId = ''): void { this.draftConstraints.update((items) => [...items, { heater_id: heaterId || this.snapshot()?.heaters[0]?.id || '', target_charge: 100, at_time: '07:00', weekdays: [0, 1, 2, 3, 4, 5, 6] }]); }
   removeConstraint(index: number): void { this.draftConstraints.update((items) => items.filter((_item, itemIndex) => itemIndex !== index)); }
-  editConstraint(index: number, field: keyof PlanningConstraintRequest, value: unknown): void {
-    this.draftConstraints.update((items) => items.map((item, itemIndex) => itemIndex === index ? { ...item, [field]: field === 'target_charge' ? Number(value) : value } as PlanningConstraintRequest : item));
+  editConstraint(index: number, field: keyof ConstraintDraft, value: unknown): void {
+    this.draftConstraints.update((items) => items.map((item, itemIndex) => itemIndex === index ? { ...item, [field]: field === 'target_charge' ? Number(value) : value } as ConstraintDraft : item));
   }
   toggleDay(index: number, day: number): void {
     this.draftConstraints.update((items) => items.map((item, itemIndex) => {
@@ -176,7 +180,7 @@ export class Planning implements AfterViewInit, OnDestroy {
   }
   recalculate(): void {
     this.actionError.set(''); this.actionMessage.set('Calculando vista previa…');
-    this.api.planningPreview(this.draftConstraints(), this.snapshot()?.constraints_revision).subscribe({
+    this.api.planningPreview(this.apiConstraints(), this.snapshot()?.constraints_revision).subscribe({
       next: (value) => { this.preview.set(value); this.actionMessage.set('Vista previa calculada. Todavía no modifica el plan activo.'); },
       error: () => { this.actionMessage.set(''); this.actionError.set('No se pudo calcular la vista previa. Revisa las constraints y la telemetría.'); },
     });
@@ -185,10 +189,14 @@ export class Planning implements AfterViewInit, OnDestroy {
     const preview = this.preview(); const revision = this.snapshot()?.constraints_revision;
     if (!preview || revision === undefined) return;
     this.actionError.set(''); this.actionMessage.set('Guardando y activando…');
-    this.api.planningActivate(preview.token, this.draftConstraints(), revision).subscribe({
+    this.api.planningActivate(preview.token, this.apiConstraints(), revision).subscribe({
       next: () => { this.actionMessage.set('Constraints y plan activados.'); this.preview.set(null); this.refresh(); },
       error: () => { this.actionMessage.set(''); this.actionError.set('Los datos cambiaron o el plan ya no es válido. Calcula una nueva vista previa.'); },
     });
+  }
+
+  private apiConstraints(): PlanningConstraintRequest[] {
+    return this.draftConstraints().map((item) => ({ ...item, target_charge: item.target_charge / 100 }));
   }
 
   sourceText(source: string): string {

@@ -40,9 +40,13 @@ function configDto(overrides: Partial<ConfigDto> = {}): ConfigDto {
         power_kw: 2.8,
         full_charge_hours: 8,
         target_charge: 1,
+        reserve_percent: 0,
         priority: 90,
         enabled: true,
         indoor_topic: null,
+        temperature_topic: null,
+        target_temperature_topic: null,
+        stored_charge_topic: null,
         output: { kind: 'gpio', pin: 17, active_high: false },
         thermal: {
           target_temperature_c: 21,
@@ -146,13 +150,15 @@ describe('Config', () => {
     expect(testId('saved')?.textContent).toContain('7');
   });
 
-  it('edits a heater field through the heater endpoint', () => {
+  it('edits an accumulator through one complete update endpoint', () => {
     load();
-    fixture.componentInstance.edit('target_charge', 'salon', '0.8');
-    fixture.componentInstance.submit('target_charge', 'salon');
+    expect(el().querySelector('[data-save="salon.target_charge"]')).toBeNull();
+    fixture.componentInstance.openEditHeater(fixture.componentInstance.config()!.heaters[0]);
+    fixture.componentInstance.updateHeaterForm('target_charge', '0.8');
+    fixture.componentInstance.saveHeater();
     const request = backend.expectOne('/api/v1/config/heaters/salon');
-    expect(request.request.method).toBe('PATCH');
-    expect(request.request.body).toMatchObject({ revision: 3, value: '0.8' });
+    expect(request.request.method).toBe('PUT');
+    expect(request.request.body).toMatchObject({ revision: 3, target_charge: 0.8 });
     request.flush(change({ entity: 'heater', entity_key: 'salon' }));
     backend.expectOne('/api/v1/config').flush(configDto());
   });
@@ -172,7 +178,9 @@ describe('Config', () => {
     ]) {
       expect(element.querySelector(`[data-field="${field}"]`)).not.toBeNull();
     }
-    const topic = element.querySelector<HTMLInputElement>('#salon-indoor_topic');
+    fixture.componentInstance.openEditHeater(fixture.componentInstance.config()!.heaters[0]);
+    fixture.detectChanges();
+    const topic = (fixture.nativeElement as HTMLElement).querySelector<HTMLInputElement>('[name="indoor_topic"]');
     expect(topic).not.toBeNull();
     expect(
       fixture.componentInstance.heaterText(
@@ -184,18 +192,18 @@ describe('Config', () => {
 
   it('sends an empty indoor topic and keeps it on rejection', () => {
     load(configDto({ heaters: [{ ...configDto().heaters[0], indoor_topic: 'ha/old' }] }));
-    fixture.componentInstance.edit('indoor_topic', 'salon', '');
-    fixture.componentInstance.submit('indoor_topic', 'salon');
+    fixture.componentInstance.openEditHeater(fixture.componentInstance.config()!.heaters[0]);
+    fixture.componentInstance.updateHeaterForm('indoor_topic', '');
+    fixture.componentInstance.saveHeater();
     const request = backend.expectOne('/api/v1/config/heaters/salon');
     expect(request.request.body).toMatchObject({
       revision: 3,
-      field: 'indoor_topic',
-      value: '',
+      indoor_topic: null,
     });
     const { body, options } = apiError('validation_failed', 'invalid topic', 422);
     request.flush(body, options);
-    expect(fixture.componentInstance.pending()['salon.indoor_topic']).toBe('');
-    expect(el().querySelector('[data-error="salon.indoor_topic"]')).not.toBeNull();
+    expect(fixture.componentInstance.heaterForm()).not.toBeNull();
+    expect(el().querySelector('[data-testid="heater-form-error"]')).not.toBeNull();
   });
 
   /* ------------------------------------------------- electrical confirmation */
@@ -386,8 +394,10 @@ describe('Config', () => {
     fixture.componentInstance.updateHeaterForm('target_charge', '0.8');
     fixture.componentInstance.saveHeater();
     const request = backend.expectOne('/api/v1/config/heaters/salon');
-    expect(request.request.body).toEqual({ revision: 3, field: 'target_charge', value: '0.8' });
-    request.flush(change({ entity: 'heater', entity_key: 'salon', field: 'target_charge', revision_after: 4 }));
+    expect(request.request.method).toBe('PUT');
+    expect(request.request.body).toMatchObject({ revision: 3, target_charge: 0.8, reserve_percent: 0, power_kw: 2.8, full_charge_hours: 8 });
+    expect(request.request.body).toHaveProperty('thermal_factor', 1);
+    request.flush(change({ entity: 'heater', entity_key: 'salon', field: null, revision_after: 4 }));
     backend.expectOne('/api/v1/config').flush(configDto({ config_revision: 4 }));
     expect(fixture.componentInstance.heaterForm()).toBeNull();
   });

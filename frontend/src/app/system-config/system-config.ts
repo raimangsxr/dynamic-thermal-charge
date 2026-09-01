@@ -78,10 +78,10 @@ export class SystemConfig {
   groups(): FieldGroup[] {
     const fields = this.fields();
     if (this.selected() === 'mqtt') {
-      return [
-        { title: 'Conexión MQTT', fields: fields.slice(0, 7) },
-        { title: 'Valores fijos de prueba', fields: fields.slice(7) },
-      ];
+      const enabled = fields[0];
+      return this.mqttEnabled()
+        ? [{ title: 'MQTT', fields: [enabled] }, { title: 'Conexión MQTT', fields: fields.slice(1, 7) }]
+        : [{ title: 'MQTT', fields: [enabled] }, { title: 'Valores fijos de prueba', fields: fields.slice(7) }];
     }
     if (this.selected() !== 'weather') return [{ title: 'Parámetros', fields }];
     return [
@@ -90,7 +90,10 @@ export class SystemConfig {
       { title: 'Política de actualización', fields: fields.slice(7) },
     ];
   }
-  secrets(): string[] { return SECRETS[this.selected()] ?? []; }
+  secrets(): string[] {
+    if (this.selected() === 'mqtt' && !this.mqttEnabled()) return [];
+    return SECRETS[this.selected()] ?? [];
+  }
   writable(): boolean { return this.topology()?.administrative_writes_allowed === true; }
   mqttEnabled(): boolean { return this.value('enabled') === true || this.value('enabled') === 'true'; }
 
@@ -164,7 +167,7 @@ export class SystemConfig {
     this.confirming.set(false); this.error.set('');
     const snapshot = this.configuration(); if (!snapshot || !this.writable()) return;
     const values: Record<string, unknown> = {};
-    for (const field of this.fields()) if (field.name in this.draft()) values[field.name] = this.coerce(field, this.draft()[field.name]);
+    for (const field of this.groups().flatMap((group) => group.fields)) if (field.name in this.draft()) values[field.name] = this.coerce(field, this.draft()[field.name]);
     const secrets: Record<string, SecretEditDto> = {};
     for (const name of this.secrets()) {
       const action = this.secretAction(name); secrets[name] = action === 'replace' ? { action, value: this.secretValues()[name] ?? '' } : { action };

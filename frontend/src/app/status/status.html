@@ -1,124 +1,59 @@
 <section class="status">
-  <header>
-    <h1>Estado</h1>
-    @if (snapshot()) {
-      <p class="observed">Consultado {{ instant(snapshot()!.observed_at) }}</p>
-    }
+  <header class="page-header">
+    <div><p class="eyebrow">Panel operativo</p><h1>Estado</h1></div>
+    @if (snapshot()) { <p class="observed">Consultado {{ instant(snapshot()!.observed_at) }}</p> }
   </header>
 
-  @if (loading() && !snapshot()) {
-    <p class="loading">Consultando…</p>
-  }
+  @if (loading() && !snapshot()) { <p class="loading">Consultando…</p> }
 
-  <!-- FR-030: the API is unreachable. The last snapshot stays, clearly marked. -->
   @if (failure()) {
     <div class="banner alert" role="alert" data-testid="failure">
-      <strong>{{ failure()!.title }}</strong>
-      <p>{{ failure()!.action }}</p>
-      @if (showingStaleSnapshot()) {
-        <p class="warning">
-          <strong>Lo que se muestra debajo ya no es actual.</strong>
-          Es la última información que se pudo leer.
-        </p>
-      }
+      <strong>{{ failure()!.title }}</strong><p>{{ failure()!.action }}</p>
+      @if (showingStaleSnapshot()) { <p class="warning"><strong>Lo que se muestra debajo ya no es actual.</strong> Es la última información que se pudo leer.</p> }
     </div>
   }
 
   @if (snapshot(); as data) {
     <dtc-controller-health [health]="data.controller" />
-
-    <!-- FR-010: no power figure without proof. Not even a zero. -->
-    <div class="power" data-testid="power">
-      @if (data.power) {
-        <h2>Potencia instantánea</h2>
-        <p class="figure">
-          {{ (data.power.instant_w / 1000).toFixed(1) }} kW
-          <span class="of">de {{ (data.power.limit_w / 1000).toFixed(1) }} kW</span>
-          <span class="percent">({{ data.power.percent_of_limit }} %)</span>
-        </p>
-      } @else {
-        <h2>Potencia instantánea</h2>
-        <p class="unavailable" data-testid="power-unavailable">
-          No se puede confirmar. No se muestra una cifra que nadie puede verificar.
-        </p>
-      }
+    <div class="dashboard-grid" aria-label="Indicadores operativos">
+      <section class="metric-card power" data-testid="power" aria-labelledby="power-title">
+        <p class="card-label" id="power-title">Potencia confirmada</p>
+        @if (data.power) { <p class="figure">{{ (data.power.instant_w / 1000).toFixed(1) }} kW</p><p class="muted">de {{ (data.power.limit_w / 1000).toFixed(1) }} kW · {{ data.power.percent_of_limit }} %</p> }
+        @else { <p class="unavailable" data-testid="power-unavailable">No se puede confirmar; no se muestra una cifra actual.</p> }
+      </section>
+      <section class="metric-card" aria-labelledby="activity-title">
+        <p class="card-label" id="activity-title">Actividad confirmada</p>
+        @if (data.controller.state_is_current) { <p class="metric"><span>{{ charging().length }}</span> cargando</p><p class="muted"><span>{{ resting().length }}</span> en reposo</p> }
+        @else { <p class="unavailable">Sin confirmar; no se muestra actividad actual.</p> }
+      </section>
+      <section class="metric-card" aria-labelledby="plan-status-title">
+        <p class="card-label" id="plan-status-title">Cumplimiento del plan</p><p class="metric" [class.warning-text]="unmet().length > 0">{{ planStatus(data.plan_status) }}</p>
+        @if (unmet().length > 0) { <p class="muted">{{ unmet().length }} acumulador(es) con déficit</p> } @else if (data.plan) { <p class="muted">Sin déficit detectado</p> } @else { <p class="muted">No hay plan en curso</p> }
+      </section>
+      <section class="metric-card" data-testid="telemetry-summary" aria-labelledby="telemetry-summary-title">
+        <p class="card-label" id="telemetry-summary-title">Telemetría disponible</p><p class="metric">{{ telemetryReady() }} / {{ telemetryTotal() }}</p><p class="muted">acumuladores con datos completos</p>
+      </section>
     </div>
 
-    <h2>Acumuladores</h2>
-    @if (heaters().length === 0) {
-      <p class="empty">La instalación no tiene ningún acumulador configurado.</p>
-    } @else {
-      <ul class="heaters">
-        @for (item of heaters(); track item.dto.id) {
-          <li [class.disabled]="!item.dto.enabled" [attr.data-heater]="item.dto.id">
-            <span class="name">{{ item.dto.name }}</span>
-            <span class="power">{{ (item.dto.power_w / 1000).toFixed(1) }} kW</span>
-            <dtc-output-indicator [state]="item.state" />
-            @if (!item.dto.enabled) {
-              <span class="tag">deshabilitado</span>
-            }
-          </li>
-        }
-      </ul>
-    }
+    <section class="panel" aria-labelledby="heaters-title">
+      <div class="section-heading"><div><p class="eyebrow">Equipos</p><h2 id="heaters-title">Acumuladores</h2></div><p class="muted">{{ charging().length }} cargando · {{ resting().length }} en reposo</p></div>
+      @if (heaters().length === 0) { <p class="empty">La instalación no tiene ningún acumulador configurado.</p> } @else {
+        <ul class="heaters">@for (item of heaters(); track item.dto.id) { <li [class.disabled]="!item.dto.enabled" [attr.data-heater]="item.dto.id"><span class="name">{{ item.dto.name }}</span><span class="power">{{ (item.dto.power_w / 1000).toFixed(1) }} kW</span><dtc-output-indicator [state]="item.state" /> @if (!item.dto.enabled) { <span class="tag">deshabilitado</span> }</li> }</ul>
+      }
+    </section>
 
-    @if (data.telemetry?.length) {
-      <section class="telemetry" aria-labelledby="telemetry-title">
-        <h2 id="telemetry-title">Telemetría de carga</h2>
-        <div class="table-scroll"><table><caption class="sr-only">Telemetría independiente por acumulador</caption><thead><tr><th>Acumulador</th><th>Temperatura</th><th>Objetivo</th><th>Carga almacenada</th><th>Estado</th></tr></thead><tbody>
-          @for (item of data.telemetry; track item.heater_id) { <tr [class.stale]="item.state === 'telemetry_stale'"><th scope="row">{{ item.heater_id }}</th><td>{{ item.temperature_c === null ? 'sin dato' : item.temperature_c + ' °C' }}</td><td>{{ item.target_temperature_c === null ? 'sin dato' : item.target_temperature_c + ' °C' }}</td><td>{{ item.stored_charge_percent === null ? 'sin dato' : item.stored_charge_percent + ' %' }}</td><td>@if (item.state === 'telemetry_stale') { <strong>Caducada o incompleta</strong> } @else { válida }</td></tr> }
-        </tbody></table></div>
-      </section>
-    }
+    @if (unmet().length > 0) { <div class="banner warn" data-testid="unmet"><strong>Carga solicitada sin atender</strong><ul>@for (allocation of unmet(); track allocation.heater_id) { <li>{{ allocation.heater_id }}: faltan {{ hours(allocation.unmet_minutes) }} h de {{ hours(allocation.requested_minutes) }} h solicitadas</li> }</ul><p>El plan no cabe en la ventana o en el límite de potencia.</p></div> }
 
-    <!-- FR-015: the deficit is prominent, not buried. -->
-    @if (unmet().length > 0) {
-      <div class="banner warn" data-testid="unmet">
-        <strong>Carga solicitada sin atender</strong>
-        <ul>
-          @for (allocation of unmet(); track allocation.heater_id) {
-            <li>
-              {{ allocation.heater_id }}:
-              faltan {{ hours(allocation.unmet_minutes) }} h
-              de {{ hours(allocation.requested_minutes) }} h solicitadas
-            </li>
-          }
-        </ul>
-        <p>El plan no cabe en la ventana o en el límite de potencia.</p>
-      </div>
-    }
+    <section class="panel" aria-labelledby="plan-title"><div class="section-heading"><h2 id="plan-title">Plan en curso</h2>@if (data.plan_status) { <span class="status-chip">{{ planStatus(data.plan_status) }}</span> }</div>
+      @if (data.plan; as plan) { <p data-testid="plan">{{ instant(plan.window_start) }} — {{ instant(plan.window_end) }}, intervalos de {{ plan.slot_minutes }} min <span class="revision">(configuración rev. {{ plan.installation_revision }})</span></p> } @else { <p class="empty" data-testid="no-plan">No hay ningún plan en curso ahora mismo.</p> }
+    </section>
 
-    <h2>Plan en curso</h2>
-    <!-- FR-014: no plan is said explicitly, not shown as zeros. -->
-    @if (data.plan; as plan) {
-      <p data-testid="plan">
-        {{ instant(plan.window_start) }} — {{ instant(plan.window_end) }},
-        intervalos de {{ plan.slot_minutes }} min
-        <span class="revision">(configuración rev. {{ plan.installation_revision }})</span>
-      </p>
-    } @else {
-      <p class="empty" data-testid="no-plan">
-        No hay ningún plan en curso ahora mismo.
-      </p>
-    }
+    <section class="panel" aria-labelledby="telemetry-title"><div class="section-heading"><h2 id="telemetry-title">Telemetría</h2><span class="muted">{{ telemetryReady() }} de {{ telemetryTotal() }} completa</span></div>
+      @if (data.telemetry?.length) { <div class="table-scroll"><table><caption class="sr-only">Telemetría independiente por acumulador</caption><thead><tr><th>Acumulador</th><th>Temperatura</th><th>Objetivo</th><th>Carga almacenada</th><th>Estado</th></tr></thead><tbody>@for (item of data.telemetry; track item.heater_id) { <tr [class.stale]="item.state === 'telemetry_stale'"><th scope="row">{{ item.heater_id }}</th><td>{{ item.temperature_c === null ? 'sin dato' : item.temperature_c + ' °C' }}</td><td>{{ item.target_temperature_c === null ? 'sin dato' : item.target_temperature_c + ' °C' }}</td><td>{{ item.stored_charge_percent === null ? 'sin dato' : item.stored_charge_percent + ' %' }}</td><td>@if (item.state === 'telemetry_stale') { <strong>Caducada o incompleta</strong> } @else { válida }</td></tr> }</tbody></table></div> } @else { <p class="empty">No hay telemetría recibida.</p> }
+    </section>
 
-    <h2>Previsión utilizada</h2>
-    @if (data.forecast; as forecast) {
-      <p data-testid="forecast">
-        {{ forecast.date }}: media {{ forecast.average_temperature_c }} °C
-        <span class="source" [attr.data-source]="forecast.source">
-          @switch (forecast.source) {
-            @case ('aemet') { origen: proveedor real }
-            @case ('fallback') { origen: valor de reserva }
-            @default { origen: simulado }
-          }
-        </span>
-        @if (forecast.municipality) {
-          <span class="place">{{ forecast.municipality }}</span>
-        }
-      </p>
-    } @else {
-      <p class="empty">Sin previsión asociada.</p>
-    }
+    <section class="panel" aria-labelledby="forecast-title"><div class="section-heading"><h2 id="forecast-title">Previsión</h2></div>
+      @if (data.forecast; as forecast) { <p data-testid="forecast">{{ forecast.date }}: media {{ forecast.average_temperature_c }} °C <span class="source" [attr.data-source]="forecast.source">@switch (forecast.source) { @case ('aemet') { origen: proveedor real } @case ('fallback') { origen: valor de reserva } @default { origen: simulado } }</span>@if (forecast.municipality) { <span class="place">{{ forecast.municipality }}</span> }</p> } @else { <p class="empty">Sin previsión asociada.</p> }
+    </section>
   }
 </section>

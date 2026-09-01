@@ -15,6 +15,7 @@ import type { Observable } from 'rxjs';
 
 import type {
   AddHeaterRequest,
+  UpdateHeaterRequest,
   ChangeDto,
   ConfigDto,
   ForecastHistoryDto,
@@ -88,6 +89,13 @@ export class Api {
 
   setHeaterField(id: string, body: SetFieldRequest): Observable<ChangeDto> {
     return this.http.patch<ChangeDto>(
+      `${BASE}/config/heaters/${encodeURIComponent(id)}`,
+      body,
+    );
+  }
+
+  updateHeater(id: string, body: UpdateHeaterRequest): Observable<ChangeDto> {
+    return this.http.put<ChangeDto>(
       `${BASE}/config/heaters/${encodeURIComponent(id)}`,
       body,
     );

@@ -163,6 +163,19 @@ describe('Planning', () => {
     expect(fixture.componentInstance.cumulativeMinutes(PLANNING, 'salon', 1)).toBe(20);
   });
 
+  it('renders constraint percentages and converts them back to the API fraction', () => {
+    fixture.componentInstance.draftConstraints.set([
+      { heater_id: 'salon', target_charge: 25, at_time: '07:00', weekdays: [0, 1, 2, 3, 4, 5, 6] },
+    ]);
+    fixture.componentInstance.snapshot.set({ ...PLANNING, constraints_revision: 4 });
+    fixture.componentInstance.recalculate();
+    const request = backend.expectOne('/api/v1/planning/preview');
+    expect(request.request.body.constraints).toEqual([
+      { heater_id: 'salon', target_charge: 0.25, at_time: '07:00', weekdays: [0, 1, 2, 3, 4, 5, 6] },
+    ]);
+    request.flush({ token: 'preview', status: 'feasible', score: [], horizon_start: PLANNING.horizon_start!, horizon_end: PLANNING.horizon_end!, slot_minutes: 30, slots: [], deficits: [], constraints: [] });
+  });
+
   it('uses the received hourly temperatures and exposes sparse labels with complete tooltips', () => {
     expect(fixture.componentInstance.forecastTemperatures(PLANNING.forecast!.hourly_points)).toEqual([3, 4]);
     const labels = Array.from({ length: 11 }, (_item, index) => `intervalo-${index}`);

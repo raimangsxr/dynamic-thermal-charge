@@ -207,7 +207,7 @@ def _telemetry_usable(value: ChargeTelemetry | None) -> bool:
 def _required_percent(heater: Heater, request: PlanningInput, slots: Sequence[datetime], horizon_end: datetime) -> float:
     relevant = [constraint.target_charge * 100.0 for constraint in request.constraints if constraint.heater_id == heater.id and _constraint_in_horizon(constraint, slots, request.timezone_name)]
     target = max(relevant, default=float(heater.target_charge) * 100.0)
-    return min(100.0, target + heater.reserve_percent)
+    return target + heater.reserve_percent
 
 
 def _constraint_in_horizon(constraint: ChargeConstraint, slots: Sequence[datetime], timezone_name: str) -> bool:
@@ -249,7 +249,9 @@ def _project_state(
         value += 100.0 * hours * 60 / heater.full_charge_minutes
         if profile is not None:
             indoor += profile.emission_c_per_hour * hours
-    return min(100.0, max(0.0, value)), indoor
+    # The planner tracks equivalent full-charge progress.  It may exceed the
+    # physical 100% marker when the configured reserve represents extra time.
+    return max(0.0, value), indoor
 
 
 __all__ = ["AutomaticPlan", "AutomaticPlanSlot", "DeterministicChargeOptimizer", "PlanningDeficit", "PlanningInput", "input_token"]

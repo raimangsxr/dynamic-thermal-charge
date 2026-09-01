@@ -144,6 +144,45 @@ def test_a_heater_field_changes_only_that_heater(client):
             assert after[heater_id] == heater, "an unrelated heater changed"
 
 
+def test_a_heater_can_be_replaced_in_one_revisioned_request(client):
+    revision = _config(client)["config_revision"]
+    response = client.put(
+        "/api/v1/config/heaters/salon",
+        headers=AUTH,
+        json={
+            "revision": revision,
+            "name": "Salón renovado",
+            "model": "nuevo",
+            "power_kw": 2.5,
+            "full_charge_hours": 8,
+            "target_charge": 0.8,
+            "reserve_percent": 25,
+            "priority": 99,
+            "enabled": True,
+            "indoor_topic": "ha/salon/temp",
+            "temperature_topic": "dtc/salon/temperature",
+            "target_temperature_topic": "dtc/salon/target",
+            "stored_charge_topic": "dtc/salon/charge",
+            "output": "gpio",
+            "pin": 17,
+            "active_high": False,
+            "target_temperature_c": 21,
+            "design_outdoor_temperature_c": -2,
+            "thermal_factor": 1,
+            "min_charge": 0.1,
+            "max_charge": 1,
+            "thermal_loss_c_per_hour": 0.5,
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["revision_after"] == revision + 1
+    updated = client.get("/api/v1/config/heaters/salon", headers=AUTH).json()
+    assert updated["name"] == "Salón renovado"
+    assert updated["reserve_percent"] == 25
+    assert updated["temperature_topic"] == "dtc/salon/temperature"
+    assert updated["thermal"]["thermal_loss_c_per_hour"] == 0.5
+
+
 def test_indoor_policy_and_topic_round_trip_with_empty_topic_as_null(client):
     for field, value, expected in (
         ("indoor_max_age_minutes", "45", 45),

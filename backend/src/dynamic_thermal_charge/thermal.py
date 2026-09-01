@@ -108,7 +108,8 @@ class ThermalDemandEngine:
                 max(profile.min_charge, adjusted_charge),
             )
             demands[heater.id] = round(
-                heater.full_charge_minutes * charge_fraction
+                heater.full_charge_minutes
+                * (charge_fraction + heater.reserve_percent / 100)
             )
             logger.debug(
                 "Heater %s thermal demand: raw=%.3f adjusted=%.3f bounded=%.3f minutes=%d",

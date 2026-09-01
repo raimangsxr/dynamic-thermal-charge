@@ -65,7 +65,7 @@
             @for (heater of data.heaters; track heater.id) { <option [value]="heater.id">{{ heater.name }}</option> }
           </select>
           <label [for]="'constraint-charge-' + index">Carga %</label>
-          <input [id]="'constraint-charge-' + index" type="number" min="0" max="1" step="0.05" [ngModel]="constraint.target_charge" (ngModelChange)="editConstraint(index, 'target_charge', $event)" />
+          <input [id]="'constraint-charge-' + index" type="number" min="0" max="100" step="1" [ngModel]="constraint.target_charge" (ngModelChange)="editConstraint(index, 'target_charge', $event)" />
           <label [for]="'constraint-time-' + index">Hora</label>
           <input [id]="'constraint-time-' + index" type="time" [ngModel]="constraint.at_time" (ngModelChange)="editConstraint(index, 'at_time', $event)" />
           <fieldset><legend>Días</legend>@for (day of [0,1,2,3,4,5,6]; track day) { <label><input type="checkbox" [checked]="constraint.weekdays.includes(day)" (change)="toggleDay(index, day)" />{{ ['L','M','X','J','V','S','D'][day] }}</label> }</fieldset>

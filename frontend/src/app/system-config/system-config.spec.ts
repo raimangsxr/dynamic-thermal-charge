@@ -39,6 +39,7 @@ describe('SystemConfig', () => {
     backend.expectOne('/api/v1/system/configuration').flush(configuration);
     backend.expectOne('/api/v1/system/topology').flush(topology); fixture.detectChanges();
     fixture.componentInstance.choose('mqtt');
+    fixture.componentInstance.edit('enabled', true);
     fixture.componentInstance.setSecretAction('mqtt_password', 'replace');
     fixture.componentInstance.setSecretValue('mqtt_password', 'sentinel-secret');
     fixture.componentInstance.save();
@@ -57,6 +58,9 @@ describe('SystemConfig', () => {
     backend.expectOne('/api/v1/system/topology').flush(topology); fixture.detectChanges();
     fixture.componentInstance.choose('mqtt');
     fixture.detectChanges();
+
+    expect((fixture.nativeElement as HTMLElement).querySelector('#host')).toBeNull();
+    expect((fixture.nativeElement as HTMLElement).querySelector('#mqtt_password-action')).toBeNull();
 
     for (const field of [
       'fixed_temperature_c',
@@ -80,6 +84,20 @@ describe('SystemConfig', () => {
       fixed_stored_charge_percent: 65,
       fixed_indoor_temperature_c: 18,
     });
+  });
+
+  it('shows only broker fields and credentials when MQTT is enabled', () => {
+    const fixture = TestBed.createComponent(SystemConfig); fixture.detectChanges();
+    backend.expectOne('/api/v1/system/configuration').flush({
+      ...configuration,
+      sections: { ...configuration.sections, mqtt: { ...configuration.sections.mqtt, enabled: true, host: 'broker.local' } },
+    });
+    backend.expectOne('/api/v1/system/topology').flush(topology); fixture.detectChanges();
+    fixture.componentInstance.choose('mqtt'); fixture.detectChanges();
+
+    expect((fixture.nativeElement as HTMLElement).querySelector('#host')).not.toBeNull();
+    expect((fixture.nativeElement as HTMLElement).querySelector('#fixed_temperature_c')).toBeNull();
+    expect((fixture.nativeElement as HTMLElement).querySelector('#mqtt_password-action')).not.toBeNull();
   });
 
   it('disables mutations in fallback mode', () => {
