@@ -262,9 +262,40 @@ def test_periodic_cycle_uses_default_fifteen_seconds_without_real_sleep(mqtt_cli
         publisher=Publisher(),
         wait=waits.append,
     )
+    service.start()
+    mqtt_client.connect_result()
     service.run(max_cycles=3)
-    assert refreshes == [False, False, False]
+    assert refreshes == [True, False, False]
     assert waits == [15, 15]
+
+
+def test_periodic_cycles_skip_publication_until_connection_is_accepted(mqtt_client):
+    refreshes = []
+
+    class Publisher:
+        def refresh(self, *, force_discovery=False):
+            refreshes.append(force_discovery)
+
+    service = MqttService(
+        mqtt_client,
+        TopicLayout(),
+        host="broker",
+        port=1883,
+        publisher=Publisher(),
+        wait=lambda _seconds: None,
+    )
+    service.start()
+
+    service.run(max_cycles=2)
+    assert refreshes == []
+
+    mqtt_client.connect_result()
+    service.run(max_cycles=1)
+    assert refreshes == [True]
+
+    mqtt_client.connect_result(accepted=False, reason="broker unavailable")
+    service.run(max_cycles=2)
+    assert refreshes == [True]
 
 
 def test_declared_command_and_indoor_topics_are_subscribed_after_discovery(mqtt_client):

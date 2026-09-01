@@ -44,6 +44,7 @@ class MqttService:
         self._indoor_handler = indoor_handler
         self._messages: deque[IncomingMessage] = deque()
         self._connections: deque[tuple[bool, str | None]] = deque()
+        self._connected = False
 
     def start(self) -> None:
         # MQTT records the will as part of CONNECT; ordering is semantic.
@@ -71,7 +72,7 @@ class MqttService:
         while max_cycles is None or cycles < max_cycles:
             self._clock()
             connection_refreshed = self.process_events()
-            if self._publisher is not None:
+            if self._publisher is not None and self._connected:
                 if not connection_refreshed:
                     self._publisher.refresh(force_discovery=False)
                     self._sync_subscriptions()
@@ -107,6 +108,7 @@ class MqttService:
 
     def _process_connection(self, accepted: bool, reason: str | None) -> bool:
         if accepted:
+            self._connected = True
             # A new network session has no subscriptions even if the previous
             # connection did; renew every declared topic after discovery.
             self._subscribed.clear()
@@ -117,6 +119,7 @@ class MqttService:
                 self._publisher.refresh(force_discovery=True)
                 self._sync_subscriptions()
             return True
+        self._connected = False
         logger.warning("MQTT connection unavailable: %s", reason or "unknown reason")
         return False
 
