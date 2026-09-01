@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 import logging
 
 import pytest
@@ -10,9 +10,11 @@ from dynamic_thermal_charge.models import (
 )
 from dynamic_thermal_charge.weather import (
     AemetWeatherProvider,
+    HourlyForecastPoint,
     WeatherProviderError,
     _decode_json,
     build_weather_provider,
+    future_forecast_points,
 )
 
 
@@ -155,6 +157,70 @@ def test_simulated_forecast_has_a_deterministic_48_hour_series() -> None:
     assert first.hourly_points == second.hourly_points
     assert len(first.hourly_points) == 48
     assert first.hourly_points[0].timestamp == datetime(2026, 1, 15, tzinfo=first.hourly_points[0].timestamp.tzinfo)
+
+
+def test_aemet_persists_all_hourly_days_in_payload() -> None:
+    payload = [{
+        "nombre": "Madrid",
+        "provincia": "Madrid",
+        "prediccion": {"dia": [
+            {"fecha": "2026-01-15T00:00:00", "temperatura": [{"hora": 22, "value": "6"}]},
+            {"fecha": "2026-01-16T00:00:00", "temperatura": [{"hora": 0, "value": "4"}]},
+            {"fecha": "2026-01-17T00:00:00", "temperatura": [{"hora": 0, "value": "2"}]},
+        ]},
+    }]
+    provider = AemetWeatherProvider(
+        AemetConfig(municipality_code="28079"),
+        api_key="secret-key",
+        http_get=lambda url, headers, timeout: {"estado": 200, "datos": "https://data.example/hourly.json"} if headers.get("api_key") else payload,
+    )
+
+    result = provider.forecast_for(date(2026, 1, 15))
+
+    assert [point.temperature_c for point in result.hourly_points] == [6, 4, 2]
+
+
+def test_aemet_accepts_hourly_payload_starting_on_next_day() -> None:
+    payload = [{
+        "nombre": "Madrid",
+        "provincia": "Madrid",
+        "prediccion": {"dia": [
+            {
+                "fecha": "2026-01-16T00:00:00",
+                "temperatura": [
+                    {"hora": 0, "value": "3"},
+                    {"hora": 1, "value": "5"},
+                ],
+            },
+            {"fecha": "2026-01-17T00:00:00", "temperatura": [{"hora": 0, "value": "1"}]},
+        ]},
+    }]
+    provider = AemetWeatherProvider(
+        AemetConfig(municipality_code="28079"),
+        api_key="secret-key",
+        http_get=lambda url, headers, timeout: {"estado": 200, "datos": "https://data.example/hourly.json"} if headers.get("api_key") else payload,
+    )
+
+    result = provider.forecast_for(date(2026, 1, 15))
+
+    assert [point.temperature_c for point in result.hourly_points] == [3, 5, 1]
+    assert result.average_temperature_c == pytest.approx(3)
+    assert result.minimum_temperature_c == 1
+    assert result.maximum_temperature_c == 5
+
+
+def test_future_forecast_points_drop_hours_before_current_hour() -> None:
+    now = datetime(2026, 9, 2, 22, 30, tzinfo=timezone.utc)
+    points = (
+        HourlyForecastPoint(datetime(2026, 9, 2, 20, tzinfo=timezone.utc), 10),
+        HourlyForecastPoint(datetime(2026, 9, 2, 21, tzinfo=timezone.utc), 11),
+        HourlyForecastPoint(datetime(2026, 9, 2, 22, tzinfo=timezone.utc), 12),
+        HourlyForecastPoint(datetime(2026, 9, 3, 0, tzinfo=timezone.utc), 8),
+    )
+
+    filtered = future_forecast_points(points, now)
+
+    assert [point.temperature_c for point in filtered] == [12, 8]
 
 
 def test_aemet_rejects_missing_forecast_day() -> None:

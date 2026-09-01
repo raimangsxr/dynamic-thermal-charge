@@ -20,6 +20,7 @@ from sqlalchemy import and_, delete, func, insert, or_, select
 from sqlalchemy.engine import Engine
 
 from . import ForecastRef, HistoryPage, PlanRef, PruneReport
+from ..weather import HourlyForecastPoint, future_forecast_points
 from .mapping import from_utc, to_utc
 from .schema import (
     RETAINED_TABLES,
@@ -642,17 +643,27 @@ class SqlStatusReader:
                     "municipality": forecast_row["municipality"],
                     "hourly_points": [
                         {
-                            "timestamp": from_utc(row["observed_at"]),
-                            "temperature_c": float(row["temperature_c"]),
-                            "interpolated": bool(row["interpolated"]),
+                            "timestamp": point.timestamp,
+                            "temperature_c": point.temperature_c,
+                            "interpolated": point.interpolated,
                         }
-                        for row in forecast_hours
+                        for point in future_forecast_points(
+                            tuple(
+                                HourlyForecastPoint(
+                                    from_utc(row["observed_at"]),
+                                    float(row["temperature_c"]),
+                                    bool(row["interpolated"]),
+                                )
+                                for row in forecast_hours
+                            ),
+                            at,
+                        )
                     ],
                 }
             ),
         }
 
-    def latest_forecast(self) -> dict | None:
+    def latest_forecast(self, at: datetime | None = None) -> dict | None:
         """Return the newest stored forecast, including its hourly points."""
         from .engine import store_errors
 
@@ -679,6 +690,15 @@ class SqlStatusReader:
                     .mappings()
                     .all()
                 )
+        points = tuple(
+            HourlyForecastPoint(
+                from_utc(row["observed_at"]),
+                float(row["temperature_c"]),
+                bool(row["interpolated"]),
+            )
+            for row in forecast_hours
+        )
+        filtered = future_forecast_points(points, at) if at is not None else points
         return {
             "date": forecast_row["forecast_date"],
             "source": str(forecast_row["source"]),
@@ -688,11 +708,11 @@ class SqlStatusReader:
             "municipality": forecast_row["municipality"],
             "hourly_points": [
                 {
-                    "timestamp": from_utc(row["observed_at"]),
-                    "temperature_c": float(row["temperature_c"]),
-                    "interpolated": bool(row["interpolated"]),
+                    "timestamp": point.timestamp,
+                    "temperature_c": point.temperature_c,
+                    "interpolated": point.interpolated,
                 }
-                for row in forecast_hours
+                for point in filtered
             ],
         }
 

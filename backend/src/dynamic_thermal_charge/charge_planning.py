@@ -276,7 +276,7 @@ class MilpChargePlanner:
                 design_outdoor_temperature_c=request.design_outdoor_temperature_c,
                 feedback_horizon_hours=request.feedback_horizon_hours,
             )
-            materialized = materialize_constraints(request.constraints, request.heaters, horizon_start, horizon_end, request.slot_minutes, request.timezone_name)
+            materialized = materialize_constraints(request.constraints, request.heaters, starts[0], horizon_end, request.slot_minutes, request.timezone_name)
             return self._solve(request, starts, demand, materialized, generated_at)
         except (ValueError, ArithmeticError) as exc:
             return _invalid_plan(request, horizon_start, starts, str(exc), "invalid_configuration", generated_at)
@@ -420,13 +420,29 @@ def _ceil_align(value: datetime, minutes: int) -> datetime:
 
 
 def _continuous_forecast_slots(start: datetime, forecast: Sequence[HourlyForecastPoint], horizon_hours: int, slot_minutes: int) -> tuple[datetime, ...]:
+    if not forecast:
+        return ()
+    effective_start = _effective_forecast_start(start, forecast, slot_minutes)
     result = []
-    cursor = start
+    cursor = effective_start
     configured_end = start + timedelta(hours=horizon_hours)
     while cursor < configured_end and _weather_at(cursor, forecast) is not None:
         result.append(cursor)
         cursor += timedelta(minutes=slot_minutes)
     return tuple(result)
+
+
+def _effective_forecast_start(
+    start: datetime,
+    forecast: Sequence[HourlyForecastPoint],
+    slot_minutes: int,
+) -> datetime:
+    aligned = _ceil_align(start, slot_minutes)
+    if _weather_at(aligned, forecast) is not None:
+        return aligned
+    first_forecast = min(point.timestamp for point in forecast)
+    candidate = _ceil_align(max(aligned, first_forecast), slot_minutes)
+    return candidate if _weather_at(candidate, forecast) is not None else aligned
 
 
 def _telemetry_usable(value: ChargeTelemetry | None) -> bool:

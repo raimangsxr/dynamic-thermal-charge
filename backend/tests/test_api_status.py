@@ -148,6 +148,104 @@ def test_planning_endpoint_returns_hourly_series_and_all_intervals(
     assert salon_minutes[0] >= salon_minutes[-1]
 
 
+def test_planning_endpoint_excludes_past_forecast_hours(
+    client, initialised_store, recorder, api_clock
+):
+    now = datetime(2026, 9, 2, 22, 0, tzinfo=timezone.utc)
+    api_clock.now = now
+    points = (
+        HourlyForecastPoint(datetime(2026, 9, 2, 20, tzinfo=timezone.utc), 10),
+        HourlyForecastPoint(datetime(2026, 9, 2, 21, tzinfo=timezone.utc), 11),
+        HourlyForecastPoint(datetime(2026, 9, 2, 22, tzinfo=timezone.utc), 12),
+        HourlyForecastPoint(datetime(2026, 9, 3, 0, tzinfo=timezone.utc), 8),
+    )
+    recorder.record_forecast(
+        OutdoorForecast(
+            date=now.date(),
+            average_temperature_c=10,
+            minimum_temperature_c=8,
+            maximum_temperature_c=12,
+            source="aemet",
+            hourly_points=points,
+        )
+    )
+    response = client.get("/api/v1/planning", headers=AUTH)
+
+    assert response.status_code == 200
+    assert [point["temperature_c"] for point in response.json()["forecast"]["hourly_points"]] == [12, 8]
+
+
+def test_planning_endpoint_prefers_automatic_plan_slot_minutes_over_legacy_plan(
+    client, initialised_store, recorder
+):
+    from dynamic_thermal_charge.charge_planning import AutomaticPlan, AutomaticPlanSlot, FEASIBLE
+
+    config, revision = initialised_store.repository.current()
+    heater_id = config.heaters[0].id
+    legacy_points = (
+        HourlyForecastPoint(API_NOW, 8.0),
+        HourlyForecastPoint(API_NOW + timedelta(hours=1), 8.0),
+    )
+    legacy_ref = recorder.record_forecast(
+        OutdoorForecast(
+            date=API_NOW.date(),
+            average_temperature_c=8.0,
+            minimum_temperature_c=8.0,
+            maximum_temperature_c=8.0,
+            source="simulated",
+            hourly_points=legacy_points,
+        )
+    )
+    legacy_plan = ChargeScheduler().build(
+        config.site,
+        config.heaters,
+        WINDOW_START,
+        requested_charge_minutes={heater.id: 0 for heater in config.heaters},
+        hourly_points=legacy_points,
+        fallback_temperature_c=8.0,
+    )
+    recorder.record_plan(legacy_plan, legacy_ref, revision)
+
+    start = API_NOW
+    automatic = AutomaticPlan(
+        start,
+        start + timedelta(minutes=15),
+        15,
+        (
+            AutomaticPlanSlot(
+                start,
+                start + timedelta(minutes=15),
+                (heater_id,),
+                config.heaters[0].power_w,
+                {heater_id: 50.0},
+                {heater_id: 0.0},
+                outdoor_temperature_c=4.0,
+            ),
+        ),
+        (),
+        FEASIBLE,
+        (),
+        "automatic-slot-test",
+        start,
+    )
+    initialised_store.planning.save_plan(
+        automatic,
+        configuration_revision=revision,
+        constraints_revision=initialised_store.planning.site()["revision"],
+        reason="test",
+        active=True,
+    )
+
+    response = client.get("/api/v1/planning", headers=AUTH)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["plan"]["slot_minutes"] == 15
+    first_slot = body["plan"]["slots"][0]
+    slot_start = datetime.fromisoformat(first_slot["start"].replace("Z", "+00:00"))
+    slot_end = datetime.fromisoformat(first_slot["end"].replace("Z", "+00:00"))
+    assert (slot_end - slot_start).total_seconds() == 15 * 60
+
+
 def test_planning_endpoint_prefers_the_newest_stored_forecast_over_plan_forecast(
     client, initialised_store, recorder
 ):

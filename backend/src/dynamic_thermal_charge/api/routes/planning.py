@@ -55,9 +55,9 @@ def get_planning(
         store.repository.installation_id(),
         store.location,
     )
-    snapshot = reader.planning(observed_at)
-    latest_forecast = reader.latest_forecast()
+    latest_forecast = reader.latest_forecast(observed_at)
     cycle_status = store.planning.forecast_cycle_status() or {}
+    planning_site = store.planning.site()
     heaters = [
         PlanningHeaterView(
             id=heater.id,
@@ -68,64 +68,22 @@ def get_planning(
         )
         for heater in config.heaters
     ]
+    automatic = store.planning.active_plan()
+    if automatic is not None:
+        response = _automatic_planning_response(
+            automatic,
+            observed_at=observed_at,
+            config=config,
+            revision=_revision,
+            heaters=heaters,
+            latest_forecast=latest_forecast,
+            cycle_status=cycle_status,
+            horizon_hours=int(planning_site["forecast_horizon_hours"]),
+        )
+        return _enrich(response, store, observed_at)
+
+    snapshot = reader.planning(observed_at)
     if snapshot is None:
-        automatic = store.planning.active_plan()
-        if automatic is not None:
-            power_by_id = {heater.id: heater.power_w for heater in config.heaters}
-            assigned: dict[tuple[datetime, datetime], list[str]] = {}
-            stored_temperatures: dict[tuple[datetime, datetime], tuple[float | None, bool]] = {}
-            soc_percent_by_slot: dict[tuple[datetime, datetime], dict[str, float]] = {}
-            for item in automatic["slots"]:
-                key = (item["start"], item["end"])
-                assigned[key] = item["heater_ids"]
-                stored_temperatures[key] = (item["outdoor_temperature_c"], False)
-                soc_percent_by_slot[key] = item["stored_charge_percent"]
-            slot_delta = timedelta(minutes=automatic["slot_minutes"])
-            horizon_start = automatic["horizon_start"]
-            horizon_end = horizon_start + timedelta(hours=48)
-            automatic_plan = PlanningPlanView(
-                window_start=automatic["horizon_start"],
-                window_end=automatic["horizon_end"],
-                slot_minutes=automatic["slot_minutes"],
-                installation_revision=_revision,
-                created_at=automatic["created_at"],
-                slots=[
-                    PlanningSlotView(
-                        start=item["start"],
-                        end=item["end"],
-                        heater_ids=item["heater_ids"],
-                        total_power_w=item["power_w"],
-                        temperature_c=item["outdoor_temperature_c"],
-                        temperature_interpolated=False,
-                    )
-                    for item in automatic["slots"]
-                ],
-            )
-            response = PlanningResponse(
-                observed_at=observed_at,
-                max_total_power_w=config.site.max_total_power_w,
-                heaters=heaters,
-                forecast=_forecast_view(latest_forecast),
-                forecast_status=cycle_status.get("forecast_status"),
-                forecast_last_attempt_at=cycle_status.get("forecast_last_attempt_at"),
-                forecast_last_error=cycle_status.get("forecast_last_error"),
-                forecast_next_run_at=cycle_status.get("forecast_next_run_at"),
-                plan=automatic_plan,
-                horizon_start=horizon_start,
-                horizon_end=horizon_end,
-                timeline=_build_timeline(
-                    config.heaters,
-                    power_by_id,
-                    assigned,
-                    stored_temperatures,
-                    latest_forecast,
-                    horizon_start,
-                    horizon_end,
-                    slot_delta,
-                    soc_percent_by_slot,
-                ),
-            )
-            return _enrich(response, store, observed_at)
         response = PlanningResponse(
             observed_at=observed_at,
             max_total_power_w=config.site.max_total_power_w,
@@ -178,7 +136,7 @@ def get_planning(
         cursor = end
 
     horizon_start = plan_data["window_start"]
-    horizon_end = horizon_start + timedelta(hours=48)
+    horizon_end = horizon_start + timedelta(hours=int(planning_site["forecast_horizon_hours"]))
     timeline = _build_timeline(
         config.heaters,
         power_by_id,
@@ -269,6 +227,73 @@ def update_heater_planning(
     return get_planning(app_request, store)
 
 
+def _automatic_planning_response(
+    automatic: dict,
+    *,
+    observed_at: datetime,
+    config,
+    revision: int,
+    heaters: list[PlanningHeaterView],
+    latest_forecast,
+    cycle_status: dict,
+    horizon_hours: int,
+) -> PlanningResponse:
+    power_by_id = {heater.id: heater.power_w for heater in config.heaters}
+    assigned: dict[tuple[datetime, datetime], list[str]] = {}
+    stored_temperatures: dict[tuple[datetime, datetime], tuple[float | None, bool]] = {}
+    soc_percent_by_slot: dict[tuple[datetime, datetime], dict[str, float]] = {}
+    for item in automatic["slots"]:
+        key = (item["start"], item["end"])
+        assigned[key] = item["heater_ids"]
+        stored_temperatures[key] = (item["outdoor_temperature_c"], False)
+        soc_percent_by_slot[key] = item["stored_charge_percent"]
+    slot_delta = timedelta(minutes=automatic["slot_minutes"])
+    horizon_start = automatic["horizon_start"]
+    horizon_end = horizon_start + timedelta(hours=horizon_hours)
+    automatic_plan = PlanningPlanView(
+        window_start=automatic["horizon_start"],
+        window_end=automatic["horizon_end"],
+        slot_minutes=automatic["slot_minutes"],
+        installation_revision=revision,
+        created_at=automatic["created_at"],
+        slots=[
+            PlanningSlotView(
+                start=item["start"],
+                end=item["end"],
+                heater_ids=item["heater_ids"],
+                total_power_w=item["power_w"],
+                temperature_c=item["outdoor_temperature_c"],
+                temperature_interpolated=False,
+            )
+            for item in automatic["slots"]
+        ],
+    )
+    return PlanningResponse(
+        observed_at=observed_at,
+        max_total_power_w=config.site.max_total_power_w,
+        heaters=heaters,
+        forecast=_forecast_view(latest_forecast),
+        forecast_status=cycle_status.get("forecast_status"),
+        forecast_last_attempt_at=cycle_status.get("forecast_last_attempt_at"),
+        forecast_last_error=cycle_status.get("forecast_last_error"),
+        forecast_next_run_at=cycle_status.get("forecast_next_run_at"),
+        plan=automatic_plan,
+        horizon_start=horizon_start,
+        horizon_end=horizon_end,
+        timeline=_build_timeline(
+            config.heaters,
+            power_by_id,
+            assigned,
+            stored_temperatures,
+            latest_forecast,
+            horizon_start,
+            horizon_end,
+            slot_delta,
+            soc_percent_by_slot,
+        ),
+    )
+
+
 def _enrich(response: PlanningResponse, store: Store, observed_at: datetime) -> PlanningResponse:
     planning = store.planning
     telemetry = planning.telemetry()
@@ -348,7 +373,7 @@ def _build_automatic_plan(store: Store, observed_at: datetime, constraints: tupl
             mqtt=mqtt,
         ),
         constraints=constraints,
-        forecast=store.planning.latest_forecast(),
+        forecast=store.planning.latest_forecast(observed_at),
         horizon_start=observed_at,
         horizon_hours=int(site["forecast_horizon_hours"]),
         slot_minutes=config.site.slot_minutes,

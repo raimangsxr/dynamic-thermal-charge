@@ -17,7 +17,7 @@ from ...persistence.system_configuration import SecretAction, SecretMutation
 from ...persistence.locator import DatabaseDriver, DatabaseLocator
 from ...persistence.migration import MigrationCoordinator, MigrationInProgress
 from ...system_settings import ACTIVATION_POLICIES, ActivationPolicy
-from ...weather import AemetWeatherProvider, weather_config_from_system
+from ...weather import AemetWeatherProvider, future_forecast_points, weather_config_from_system
 from ...persistence.history import SqlHistoryRecorder
 from ..dependencies import usable_store
 from ..errors import ApiError
@@ -264,7 +264,7 @@ def refresh_weather(request: Request, store: Store = Depends(usable_store)) -> W
             forecast_last_attempt_at=now,
             forecast_last_error=None,
             forecast_next_run_at=next_run_at,
-            forecast=_forecast_response(forecast),
+            forecast=_forecast_response(forecast, now),
         )
     finally:
         lock.release()
@@ -330,7 +330,8 @@ def _safe_weather_error(error: BaseException, secret: str | None = None) -> str:
     return f"{error.__class__.__name__}: {detail[:480]}"
 
 
-def _forecast_response(forecast) -> dict[str, object]:
+def _forecast_response(forecast, at) -> dict[str, object]:
+    hourly_points = future_forecast_points(forecast.hourly_points, at)
     return {
         "date": forecast.date,
         "source": forecast.source,
@@ -344,7 +345,7 @@ def _forecast_response(forecast) -> dict[str, object]:
                 "temperature_c": point.temperature_c,
                 "interpolated": point.interpolated,
             }
-            for point in forecast.hourly_points
+            for point in hourly_points
         ],
     }
 

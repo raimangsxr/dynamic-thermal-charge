@@ -11,8 +11,7 @@ from sqlalchemy.engine import Engine
 
 from ..charge_planning import AutomaticPlan, AutomaticPlanSlot, PlanningDeficit
 from ..models import ChargeConstraint, ChargeTelemetry
-from ..weather import HourlyForecastPoint
-from ..weather import ForecastCycleState
+from ..weather import ForecastCycleState, HourlyForecastPoint, future_forecast_points
 from . import ConfigConflictError, ConfigValidationError, ForecastRef
 from .engine import store_errors, transaction
 from .mapping import from_utc, parse_time, parse_weekdays, to_utc
@@ -202,15 +201,28 @@ class SqlPlanningRepository:
         status = {"feasible": "FEASIBLE", "deficit": "DEGRADED", "best_effort": "DEGRADED", "preview": "INVALID"}.get(row["status"], row["status"])
         return {"id": int(row["id"]), "horizon_start": from_utc(row["horizon_start"]), "horizon_end": from_utc(row["horizon_end"]), "slot_minutes": int(row["slot_minutes"]), "status": status, "reason": row["reason"], "input_token": row["input_token"], "created_at": from_utc(row["created_at"]), "deficits": json.loads(row["deficits_json"]), "violations": json.loads(row["deficits_json"]), "demand": inputs.get("demand", []), "explanations": inputs.get("explanations", []), "slots": [{"start": from_utc(item["slot_start"]), "end": from_utc(item["slot_end"]), "heater_ids": json.loads(item["heater_ids_json"]), "power_w": int(item["power_w"]), "stored_charge_percent": json.loads(item["stored_charge_json"]), "required_charge_percent": json.loads(item["required_charge_json"]), "initial_soc_percent": json.loads(item["initial_soc_json"]), "demand_kwh": json.loads(item["demand_json"]), "heater_power_w": json.loads(item["heater_power_json"]), "outdoor_temperature_c": item["outdoor_temperature_c"]} for item in slots]}
 
-    def latest_forecast(self) -> tuple[HourlyForecastPoint, ...]:
+    def latest_forecast(
+        self, at: datetime | None = None
+    ) -> tuple[HourlyForecastPoint, ...]:
         from .schema import forecast, forecast_hour
+
         with store_errors(self._application_location):
             with self._application.connect() as connection:
                 forecast_id = connection.execute(select(forecast.c.id).where(forecast.c.installation_id == self._installation_id).order_by(forecast.c.retrieved_at.desc()).limit(1)).scalar()
                 if forecast_id is None:
                     return ()
                 rows = connection.execute(select(forecast_hour).where(forecast_hour.c.forecast_id == forecast_id).order_by(forecast_hour.c.observed_at)).mappings().all()
-        return tuple(HourlyForecastPoint(from_utc(row["observed_at"]), float(row["temperature_c"]), bool(row["interpolated"])) for row in rows)
+        points = tuple(
+            HourlyForecastPoint(
+                from_utc(row["observed_at"]),
+                float(row["temperature_c"]),
+                bool(row["interpolated"]),
+            )
+            for row in rows
+        )
+        if at is None:
+            return points
+        return future_forecast_points(points, at)
 
     def latest_forecast_automatic_eligible(self) -> bool:
         from .schema import forecast
