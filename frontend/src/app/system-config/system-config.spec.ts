@@ -3,7 +3,7 @@ import { HttpTestingController, provideHttpClientTesting } from '@angular/common
 import { TestBed } from '@angular/core/testing';
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import type { SystemConfigurationDto, TopologyDto } from '../core/api.types';
+import type { PlanningSiteConfigDto, SystemConfigurationDto, TopologyDto } from '../core/api.types';
 import { SystemConfig } from './system-config';
 
 const configuration: SystemConfigurationDto = {
@@ -25,6 +25,23 @@ const configuration: SystemConfigurationDto = {
   activation: { 'mqtt.enabled': 'hot', 'database.driver': 'restart' },
 };
 const topology: TopologyDto = { mode: 'normal', canonical_driver: 'sqlite', connected: true, configuration_revision: 3, fallback_captured_at: null, last_reconciled_at: null, pending_events: 0, administrative_writes_allowed: true };
+const planningConfig: PlanningSiteConfigDto = {
+  revision: 2,
+  replan_minutes: 30,
+  forecast_horizon_hours: 48,
+  aemet_query_hour: 12,
+  contracted_power_w: 5200,
+  max_heating_power_w: 5200,
+  design_indoor_temperature_c: 21,
+  design_outdoor_temperature_c: 0,
+  feedback_horizon_hours: 6,
+};
+
+function flushInitialLoads(backend: HttpTestingController): void {
+  backend.expectOne('/api/v1/system/configuration').flush(configuration);
+  backend.expectOne('/api/v1/system/topology').flush(topology);
+  backend.expectOne('/api/v1/planning/config').flush(planningConfig);
+}
 
 describe('SystemConfig', () => {
   let backend: HttpTestingController;
@@ -36,8 +53,7 @@ describe('SystemConfig', () => {
 
   it('sends the global revision and removes a new secret from the DOM after save', () => {
     const fixture = TestBed.createComponent(SystemConfig); fixture.detectChanges();
-    backend.expectOne('/api/v1/system/configuration').flush(configuration);
-    backend.expectOne('/api/v1/system/topology').flush(topology); fixture.detectChanges();
+    flushInitialLoads(backend); fixture.detectChanges();
     fixture.componentInstance.choose('mqtt');
     fixture.componentInstance.edit('enabled', true);
     fixture.componentInstance.setSecretAction('mqtt_password', 'replace');
@@ -54,8 +70,7 @@ describe('SystemConfig', () => {
 
   it('renders and saves the four global MQTT fixed values as active when disabled', () => {
     const fixture = TestBed.createComponent(SystemConfig); fixture.detectChanges();
-    backend.expectOne('/api/v1/system/configuration').flush(configuration);
-    backend.expectOne('/api/v1/system/topology').flush(topology); fixture.detectChanges();
+    flushInitialLoads(backend); fixture.detectChanges();
     fixture.componentInstance.choose('mqtt');
     fixture.detectChanges();
 
@@ -92,7 +107,9 @@ describe('SystemConfig', () => {
       ...configuration,
       sections: { ...configuration.sections, mqtt: { ...configuration.sections.mqtt, enabled: true, host: 'broker.local' } },
     });
-    backend.expectOne('/api/v1/system/topology').flush(topology); fixture.detectChanges();
+    backend.expectOne('/api/v1/system/topology').flush(topology);
+    backend.expectOne('/api/v1/planning/config').flush(planningConfig);
+    fixture.detectChanges();
     fixture.componentInstance.choose('mqtt'); fixture.detectChanges();
 
     expect((fixture.nativeElement as HTMLElement).querySelector('#host')).not.toBeNull();
@@ -104,6 +121,7 @@ describe('SystemConfig', () => {
     const fixture = TestBed.createComponent(SystemConfig); fixture.detectChanges();
     backend.expectOne('/api/v1/system/configuration').flush(configuration);
     backend.expectOne('/api/v1/system/topology').flush({ ...topology, mode: 'fallback', administrative_writes_allowed: false });
+    backend.expectOne('/api/v1/planning/config').flush(planningConfig);
     fixture.detectChanges();
     expect(fixture.componentInstance.writable()).toBe(false);
     expect((fixture.nativeElement as HTMLElement).textContent).toContain('eventos pendientes');
@@ -111,8 +129,7 @@ describe('SystemConfig', () => {
 
   it('renders the weather provider as a dropdown and sends every weather value plus the secret', () => {
     const fixture = TestBed.createComponent(SystemConfig); fixture.detectChanges();
-    backend.expectOne('/api/v1/system/configuration').flush(configuration);
-    backend.expectOne('/api/v1/system/topology').flush(topology); fixture.detectChanges();
+    flushInitialLoads(backend); fixture.detectChanges();
     fixture.componentInstance.choose('weather');
     fixture.detectChanges();
     expect((fixture.nativeElement as HTMLElement).querySelector('#provider')?.tagName).toBe('SELECT');
@@ -140,8 +157,7 @@ describe('SystemConfig', () => {
 
   it('runs a manual AEMET refresh and prevents duplicate clicks while pending', () => {
     const fixture = TestBed.createComponent(SystemConfig); fixture.detectChanges();
-    backend.expectOne('/api/v1/system/configuration').flush(configuration);
-    backend.expectOne('/api/v1/system/topology').flush(topology); fixture.detectChanges();
+    flushInitialLoads(backend); fixture.detectChanges();
     fixture.componentInstance.choose('weather');
     fixture.componentInstance.edit('provider', 'aemet');
     fixture.detectChanges();
@@ -158,5 +174,31 @@ describe('SystemConfig', () => {
     fixture.detectChanges();
     expect(fixture.componentInstance.weatherRefreshLoading()).toBe(false);
     expect((fixture.nativeElement as HTMLElement).textContent).toContain('completada correctamente');
+  });
+
+  it('loads and saves planning parameters through the planning config API', () => {
+    const fixture = TestBed.createComponent(SystemConfig); fixture.detectChanges();
+    flushInitialLoads(backend); fixture.detectChanges();
+    fixture.componentInstance.choose('planning');
+    fixture.detectChanges();
+    fixture.componentInstance.edit('forecast_horizon_hours', '36');
+    fixture.componentInstance.edit('design_indoor_temperature_c', '22');
+    fixture.componentInstance.save();
+    const request = backend.expectOne('/api/v1/planning/config');
+    expect(request.request.body).toEqual({
+      expected_revision: 2,
+      replan_minutes: 30,
+      forecast_horizon_hours: 36,
+      aemet_query_hour: 12,
+      contracted_power_w: 5200,
+      max_heating_power_w: 5200,
+      design_indoor_temperature_c: 22,
+      design_outdoor_temperature_c: 0,
+      feedback_horizon_hours: 6,
+    });
+    request.flush({ ...planningConfig, revision: 3, forecast_horizon_hours: 36, design_indoor_temperature_c: 22 });
+    fixture.detectChanges();
+    expect(fixture.componentInstance.planningConfig()?.revision).toBe(3);
+    expect((fixture.nativeElement as HTMLElement).textContent).toContain('Parámetros de planificación guardados.');
   });
 });

@@ -470,3 +470,35 @@ def test_the_api_answers_with_the_controller_absent(client):
     response = client.get("/api/v1/status", headers=AUTH)
     assert response.status_code == 200
     assert response.json()["controller"]["liveness"] == "never_seen"
+
+
+def test_planning_config_endpoint_returns_site_parameters(client):
+    response = client.get("/api/v1/planning/config", headers=AUTH)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["forecast_horizon_hours"] == 48
+    assert body["replan_minutes"] == 30
+    assert "revision" in body
+
+
+def test_planning_config_endpoint_updates_site_parameters(client):
+    current = client.get("/api/v1/planning/config", headers=AUTH).json()
+    response = client.patch(
+        "/api/v1/planning/config",
+        headers=AUTH,
+        json={
+            "expected_revision": current["revision"],
+            "replan_minutes": current["replan_minutes"],
+            "forecast_horizon_hours": 36,
+            "aemet_query_hour": current["aemet_query_hour"],
+            "contracted_power_w": current["contracted_power_w"],
+            "max_heating_power_w": current["max_heating_power_w"],
+            "design_indoor_temperature_c": current["design_indoor_temperature_c"],
+            "design_outdoor_temperature_c": current["design_outdoor_temperature_c"],
+            "feedback_horizon_hours": current["feedback_horizon_hours"],
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["forecast_horizon_hours"] == 36
+    assert body["revision"] == current["revision"] + 1

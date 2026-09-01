@@ -108,6 +108,18 @@ export interface PlanningHeaterDto {
   enabled: boolean;
 }
 
+export interface PlanningSiteConfigDto {
+  revision: number;
+  replan_minutes: number;
+  forecast_horizon_hours: number;
+  aemet_query_hour: number;
+  contracted_power_w: number;
+  max_heating_power_w: number;
+  design_indoor_temperature_c: number;
+  design_outdoor_temperature_c: number;
+  feedback_horizon_hours: number;
+}
+
 export interface PlanningDto {
   observed_at: string;
   max_total_power_w: number;

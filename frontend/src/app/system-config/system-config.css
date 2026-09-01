@@ -5,6 +5,7 @@ section { padding: 1.25rem; }
 .sections button { padding: .5rem .8rem; }
 .sections .active { background: var(--primary); color: white; }
 .fields { display: grid; grid-template-columns: minmax(12rem, 1fr) minmax(14rem, 2fr); gap: .75rem; align-items: center; max-width: 48rem; }
+.field-label-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.15rem 0.35rem; }
 .field-group + .field-group { margin-top: 1.5rem; }
 .field-group h2 { margin: 0 0 .75rem; font-size: 1rem; color: var(--muted); }
 input, select { padding: .55rem; border: 1px solid var(--border); border-radius: .4rem; width: 100%; }
