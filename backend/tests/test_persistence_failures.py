@@ -369,7 +369,18 @@ from dynamic_thermal_charge.persistence import (
 )
 from dynamic_thermal_charge.scheduler import ScheduleResult, ScheduleSlot
 from dynamic_thermal_charge.service import ControllerService, PlanRefresh
-from dynamic_thermal_charge.state import PlanStore
+
+
+class MemoryActivePlanStore:
+    def __init__(self, plan=None):
+        self.plan = plan
+
+    def save(self, plan, *, installation_revision=0, forecast_ref=None):
+        self.plan = plan
+        return None
+
+    def load(self):
+        return self.plan
 
 
 START = datetime(2026, 1, 16, 0, 0, tzinfo=timezone.utc)
@@ -399,7 +410,7 @@ def _service(
     controller = ChargeController(("salon", "entrada"), driver)
     service = ControllerService(
         controller=controller,
-        store=PlanStore(tmp_path / "active-plan.json"),
+        store=MemoryActivePlanStore(),
         refresh_plan=refresh,
         poll_seconds=1,
         error_retry_seconds=error_retry_seconds,
@@ -515,11 +526,8 @@ def test_a_non_transient_error_stops_refreshing_instead_of_retrying_for_ever(
 def test_a_full_disk_during_a_write_does_not_corrupt_the_plan_or_the_outputs(
     tmp_path, clock, wait, caplog
 ):
-    """T063: the store fills up; the persisted plan and output state stay sane."""
-    plan_file = tmp_path / "active-plan.json"
-    store = PlanStore(plan_file)
-    store.save(_plan())
-    good = plan_file.read_text(encoding="utf-8")
+    """T063: an unavailable database leaves the accepted plan usable."""
+    store = MemoryActivePlanStore(_plan())
 
     def refresh(now):
         raise ConfigStoreUnavailableError(
@@ -541,7 +549,6 @@ def test_a_full_disk_during_a_write_does_not_corrupt_the_plan_or_the_outputs(
     with caplog.at_level(logging.WARNING):
         service.run(max_cycles=3)
 
-    assert plan_file.read_text(encoding="utf-8") == good, "the persisted plan changed"
     assert store.load() is not None, "the persisted plan became unreadable"
     # The recovered plan was executed, and every output ended off.
     assert driver.changes[-1].enabled is False
@@ -565,7 +572,7 @@ def test_a_history_write_failure_does_not_interrupt_planning_or_switching(
     controller = ChargeController(("salon", "entrada"), recording)
     service = ControllerService(
         controller=controller,
-        store=PlanStore(tmp_path / "active-plan.json"),
+        store=MemoryActivePlanStore(),
         refresh_plan=refresh,
         poll_seconds=1,
         error_retry_seconds=900,

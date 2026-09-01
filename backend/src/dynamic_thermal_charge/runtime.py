@@ -19,10 +19,10 @@ from .drivers import OutputDriver, RecordingOutputDriver, SimulatedOutputDriver
 from .gpio_driver import GpioOutputDriver
 from .charge_planning import DeterministicChargeOptimizer, PlanningInput
 from .models import AppConfig, ChargeTelemetry
-from .persistence import ConfigStoreError, PlanRef
+from .persistence import ConfigStoreError
+from .persistence.active_plan import SqlActivePlanRepository
 from .scheduler import ChargeScheduler, ScheduleResult, ScheduleSlot
 from .service import ControllerService, PlanRefresh
-from .state import PlanStore
 from .thermal import ThermalDemandEngine, select_indoor_temperatures
 from .watchdog import ForecastWatchdog
 from .weather import OutdoorForecast, WeatherProvider
@@ -123,6 +123,9 @@ def _run_controller(
     installation_id = store.repository.installation_id()
     application_engine = store.application_engine or store.engine
     history = SqlHistoryRecorder(application_engine, installation_id, store.location)
+    active_plan = SqlActivePlanRepository(
+        application_engine, installation_id, store.location
+    )
     max_events = 1000 if system is None else system.logging.max_events
     web_log_handler = ControllerLogHandler(
         application_engine, installation_id, store.location, max_events=max_events
@@ -137,15 +140,15 @@ def _run_controller(
         driver_kind=driver_name,
         location=store.location,
     )
-    current_plan_ref: list[PlanRef | None] = [None]
     indoor_fallback = _IndoorFallbackTracker()
     driver: OutputDriver | None = None
+    service: ControllerService | None = None
     with _controlled_termination():
         try:
             driver = RecordingOutputDriver(
                 _build_output_driver(config, driver_name),
                 history,
-                plan_ref=lambda: current_plan_ref[0],
+                plan_ref=lambda: None if service is None else service.current_plan_ref,
             )
             controller = ChargeController(
                 tuple(heater.id for heater in config.heaters if heater.enabled),
@@ -181,6 +184,7 @@ def _run_controller(
                             plan=automatic[1],
                             next_refresh_seconds=planning_site["replan_minutes"] * 60,
                             plan_ref=None,
+                            installation_revision=live_revision,
                         )
                 start = (
                     live_config.schedule.active_or_next_start(now)
@@ -198,9 +202,6 @@ def _run_controller(
                     indoor_temperatures=indoor_temperatures,
                 )
                 forecast_ref = history.record_forecast(cycle.forecast)
-                current_plan_ref[0] = history.record_plan(
-                    plan, forecast_ref, live_revision
-                )
                 if store.context is not None:
                     # The fallback snapshot is refreshed only after the plan
                     # and its source forecast have been accepted by canonical
@@ -210,12 +211,14 @@ def _run_controller(
                 return PlanRefresh(
                     plan=plan,
                     next_refresh_seconds=cycle.next_poll_seconds,
-                    plan_ref=current_plan_ref[0],
+                    plan_ref=None,
+                    installation_revision=live_revision,
+                    forecast_ref=forecast_ref,
                 )
 
             service = ControllerService(
                 controller=controller,
-                store=PlanStore(config.runtime.state_file),
+                store=active_plan,
                 refresh_plan=refresh_plan,
                 poll_seconds=(config.runtime.poll_seconds if system is None else system.operations.controller_poll_seconds),
                 error_retry_seconds=config.weather.watchdog.retry_minutes * 60,

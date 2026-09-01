@@ -33,10 +33,9 @@ from ..models import (
 logger = logging.getLogger(__name__)
 
 SEED_INSTALLATION_NAME = "Instalación de ejemplo"
-DEFAULT_STATE_FILE = "/var/lib/dynamic-thermal-charge/active-plan.json"
 
 
-def example_installation(state_file: str = DEFAULT_STATE_FILE) -> AppConfig:
+def example_installation() -> AppConfig:
     """A complete, valid installation to start from."""
     return AppConfig(
         site=SiteConfig(
@@ -135,8 +134,8 @@ def example_installation(state_file: str = DEFAULT_STATE_FILE) -> AppConfig:
             ),
             watchdog=WeatherWatchdogConfig(retry_minutes=15, refresh_minutes=180),
         ),
-        runtime=RuntimeConfig(state_file=state_file, poll_seconds=5.0),
+        runtime=RuntimeConfig(poll_seconds=5.0),
     )
 
 
-__all__ = ["DEFAULT_STATE_FILE", "SEED_INSTALLATION_NAME", "example_installation"]
+__all__ = ["SEED_INSTALLATION_NAME", "example_installation"]

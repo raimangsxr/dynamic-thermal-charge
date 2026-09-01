@@ -84,7 +84,6 @@ installation = Table(
     # Ascending, comma-separated integers 0-6, Monday=0. Format is normative.
     Column("weekdays", String(32), nullable=True),
     Column("log_level", String(8), nullable=False, server_default="INFO"),
-    Column("state_file", String(512), nullable=False),
     Column("poll_seconds", Float, nullable=False, server_default="5"),
     # NULL means unlimited retention.
     Column("retention_days", Integer, nullable=True),

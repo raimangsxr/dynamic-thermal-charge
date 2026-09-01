@@ -29,7 +29,8 @@ def _patch(client, field, value, revision=None, heater=None):
 def test_the_whole_configuration_is_readable(client):
     body = _config(client)
     assert body["config_revision"] == 1
-    assert body["schema_revision"] == "0008_automatic_charge_planning"
+    assert body["schema_revision"] == "0009_remove_state_file"
+    assert "state_file" not in body
     assert body["max_total_power_kw"] == 5.2
     assert body["slot_minutes"] == 30
     assert body["retention_days"] == 365
@@ -318,14 +319,12 @@ def test_an_unknown_field_lists_the_admissible_ones(client):
 def test_a_value_that_looks_like_a_credential_is_refused(client, value):
     before = _config(client)
     response = _patch(client, "state_file", value)
-    assert response.status_code == 422
-    assert response.json()["code"] == "secret_rejected"
-    assert "environment variable" in response.json()["message"]
+    assert response.status_code == 404
     assert _config(client) == before
 
 
 def test_an_ordinary_path_is_not_mistaken_for_a_secret(client):
-    assert _patch(client, "state_file", "/var/lib/dtc/plan.json").status_code == 200
+    assert _patch(client, "state_file", "/var/lib/dtc/plan.json").status_code == 404
 
 
 # --------------------------------------------------------------------------- #

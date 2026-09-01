@@ -90,7 +90,6 @@ def _config_view(config, revision: int) -> ConfigResponse:
         indoor_min_plausible_c=config.site.indoor_min_plausible_c,
         indoor_max_plausible_c=config.site.indoor_max_plausible_c,
         log_level=config.logging.level,
-        state_file=config.runtime.state_file,
         poll_seconds=config.runtime.poll_seconds,
         retention_days=config.retention_days,
         schedule=schedule,
