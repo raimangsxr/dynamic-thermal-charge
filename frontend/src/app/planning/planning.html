@@ -1,4 +1,4 @@
-<section class="planning">
+<div class="planning">
   <header class="page-header">
     <div>
       <h1>Planificación</h1>
@@ -15,6 +15,47 @@
   }
 
   @if (snapshot(); as data) {
+    <div class="summary-grid" data-testid="planning-summaries">
+      <section class="summary-card" data-testid="forecast-summary" aria-labelledby="forecast-summary-title">
+        <div class="card-header">
+          <div><h2 id="forecast-summary-title">Previsión</h2><p class="hint">Estado de los datos meteorológicos usados por la planificación.</p></div>
+          <button type="button" class="secondary" (click)="openForecastDetails()" data-testid="forecast-detail-button">Ver detalle</button>
+        </div>
+        @if (data.forecast; as forecast) {
+          <dl class="summary-list">
+            <div><dt>Origen</dt><dd>{{ sourceText(forecast.source) }}</dd></div>
+            <div><dt>Fecha</dt><dd>{{ dateText(forecast.date) }}</dd></div>
+            <div><dt>Rango temporal</dt><dd>{{ forecastRange(forecast.hourly_points) }}</dd></div>
+            <div><dt>Registros horarios</dt><dd>{{ forecast.hourly_points.length }}</dd></div>
+            <div><dt>Temperaturas resumen</dt><dd>{{ temperatures(forecast) }}</dd></div>
+          </dl>
+        } @else {
+          <p class="empty">No hay previsión utilizable.</p>
+        }
+        <dl class="summary-list summary-list-compact">
+          <div><dt>Última consulta</dt><dd>{{ dateTime(data.forecast_last_attempt_at) }}</dd></div>
+          <div><dt>Próxima consulta</dt><dd>{{ dateTime(data.forecast_next_run_at) }}</dd></div>
+        </dl>
+      </section>
+
+      <section class="summary-card" data-testid="planning-summary" aria-labelledby="planning-summary-title">
+        <div class="card-header">
+          <div><h2 id="planning-summary-title">Planificación</h2><p class="hint">Plan aceptado por el controlador.</p></div>
+          <button type="button" class="secondary" (click)="openPlanningDetails()" data-testid="planning-detail-button">Ver detalle</button>
+        </div>
+        @if (data.plan; as plan) {
+          <dl class="summary-list">
+            <div><dt>Ventana</dt><dd>{{ dateTime(plan.window_start) }}–{{ dateTime(plan.window_end) }}</dd></div>
+            <div><dt>Horizonte</dt><dd>{{ dateTime(data.horizon_start) }}–{{ dateTime(data.horizon_end) }}</dd></div>
+            <div><dt>Intervalos</dt><dd>{{ plan.slots.length }} de {{ plan.slot_minutes }} minutos</dd></div>
+            <div><dt>Revisión de configuración</dt><dd>{{ plan.installation_revision }}</dd></div>
+          </dl>
+        } @else {
+          <p class="empty">No hay un plan actual ni próximo.</p>
+        }
+      </section>
+    </div>
+
     <section class="constraints" aria-labelledby="constraints-title">
       <div class="section-header"><div><h2 id="constraints-title">Constraints por acumulador</h2><p class="hint">Define el porcentaje deseado, la hora límite y los días. Se puede cargar en cualquier intervalo antes de cumplirlo.</p></div><button type="button" (click)="addConstraint()">Añadir constraint</button></div>
       @for (constraint of draftConstraints(); track $index; let index = $index) {
@@ -35,14 +76,7 @@
       @if (actionMessage()) { <p role="status">{{ actionMessage() }}</p> } @if (actionError()) { <p class="error" role="alert">{{ actionError() }}</p> }
       @if (preview(); as candidate) { <div class="preview" role="status"><strong>Preview: {{ candidate.status }}</strong> · {{ candidate.slots.length }} intervalos · puntuación {{ candidate.score.join(' / ') }} @if (candidate.deficits.length) { <span class="warning"> · Déficits detectados: {{ candidate.deficits.length }}</span> }</div> }
     </section>
-    @if (data.forecast; as forecast) {
-      <div class="metadata">
-        <span><strong>Origen:</strong> {{ sourceText(forecast.source) }}</span>
-        <span><strong>Fecha:</strong> {{ forecast.date }}</span>
-        <span><strong>Puntos:</strong> {{ forecast.hourly_points.length }}</span>
-        @if (data.plan) { <span><strong>Configuración rev.:</strong> {{ data.plan.installation_revision }}</span> }
-      </div>
-    } @else {
+    @if (!data.forecast) {
       <p class="empty" data-testid="planning-no-forecast">Sin previsión utilizable; las temperaturas no se rellenan con ceros.</p>
     }
 
@@ -50,7 +84,7 @@
       <p class="empty" data-testid="planning-empty">No hay un plan actual ni próximo. No se inventan intervalos.</p>
     } @else {
       <p class="window" data-testid="planning-window">
-        Ventana {{ data.plan.window_start }}–{{ data.plan.window_end }} · horizonte de 48 h {{ data.horizon_start }}–{{ data.horizon_end }} · configuración rev. {{ data.plan.installation_revision }}
+        Ventana {{ dateTime(data.plan.window_start) }}–{{ dateTime(data.plan.window_end) }} · horizonte {{ dateTime(data.horizon_start) }}–{{ dateTime(data.horizon_end) }} · configuración rev. {{ data.plan.installation_revision }}
       </p>
       @if (hasUnmet(data)) {
         <div class="banner warn" role="alert" data-testid="planning-deficit">
@@ -61,45 +95,33 @@
         </div>
       }
 
-      <section class="visualization" aria-labelledby="temperature-title">
+      <section class="visualization card" data-testid="temperature-card" aria-labelledby="temperature-title">
         <h2 id="temperature-title">Temperatura por intervalo</h2>
         <div class="chart-wrap"><canvas #temperatureChart aria-label="Gráfico de temperaturas horarias"></canvas></div>
       </section>
-      <section class="visualization" aria-labelledby="heater-title">
+      <section class="visualization card" data-testid="heater-card" aria-labelledby="heater-title">
         <h2 id="heater-title">Carga por acumulador</h2>
         <div class="chart-wrap"><canvas #heaterChart aria-label="Gráfico de carga por acumulador"></canvas></div>
       </section>
-      <section class="visualization" aria-labelledby="aggregate-title">
+      <section class="visualization card" data-testid="aggregate-card" aria-labelledby="aggregate-title">
         <h2 id="aggregate-title">Potencia agregada frente al límite</h2>
         <div class="chart-wrap"><canvas #aggregateChart aria-label="Gráfico de potencia agregada y límite"></canvas></div>
       </section>
-      <section class="visualization" aria-labelledby="cumulative-title">
+      <section class="visualization card" data-testid="cumulative-card" aria-labelledby="cumulative-title">
         <h2 id="cumulative-title">Carga acumulada por acumulador</h2>
         <p class="hint">La reserva parte de cero, aumenta durante la carga y desciende sin carga según la pérdida térmica configurada y el delta entre objetivo y previsión.</p>
         <div class="chart-wrap"><canvas #cumulativeChart aria-label="Gráfico de minutos de carga acumulados por acumulador"></canvas></div>
       </section>
 
-      <div class="table-scroll">
-        <table data-testid="planning-table">
-          <caption>Detalle accesible del plan {{ data.plan.window_start }}–{{ data.plan.window_end }}</caption>
-          <thead><tr><th>Intervalo</th><th>Temperatura</th><th>Acumuladores</th><th>Potencia</th><th>Carga acumulada</th></tr></thead>
-          <tbody>@for (slot of data.timeline; track slot.start; let slotIndex = $index) {
-            <tr><th scope="row">{{ slotLabel(slot) }}</th><td>{{ slot.temperature_c === null ? 'sin dato' : slot.temperature_c + ' °C' }}@if (slot.temperature_interpolated) { <small> (interpolado)</small> }</td><td>{{ slot.heater_ids.length ? slot.heater_ids.join(', ') : 'ninguno' }}</td><td>{{ slot.total_power_w }} W</td><td>{{ cumulativeLabel(data, slotIndex) }}</td></tr>
-          }</tbody>
-        </table>
-      </div>
     }
 
-    <section class="visualization forecast-visualization" aria-labelledby="forecast-title">
+    <section class="visualization card forecast-visualization" data-testid="forecast-chart-card" aria-labelledby="forecast-title">
       <h2 id="forecast-title">Previsión horaria</h2>
       @if (data.forecast?.hourly_points?.length) {
         <div class="chart-wrap"><canvas #forecastChart aria-label="Gráfico de previsión horaria de temperatura"></canvas></div>
         <p class="next-forecast" data-testid="forecast-next-run">
           Próxima consulta automática a AEMET: {{ data.forecast_next_run_at ? dateTime(data.forecast_next_run_at) : 'no programada' }}
         </p>
-        <div class="table-scroll">
-          <table data-testid="forecast-table"><caption>Datos horarios de la previsión</caption><thead><tr><th>Hora</th><th>Temperatura</th></tr></thead><tbody>@for (point of data.forecast.hourly_points; track point.timestamp) { <tr><th scope="row">{{ dateTime(point.timestamp) }}</th><td>{{ point.temperature_c }} °C</td></tr> }</tbody></table>
-        </div>
       } @else {
         <p class="empty" data-testid="forecast-empty">No hay datos de previsión horaria disponibles.</p>
         <p class="next-forecast" data-testid="forecast-next-run">
@@ -108,4 +130,4 @@
       }
     </section>
   }
-</section>
+</div>

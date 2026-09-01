@@ -106,7 +106,9 @@ def get_planning(
         )
         return _enrich(response, store, observed_at)
 
-    forecast = snapshot["forecast"] or latest_forecast
+    # The visible forecast must reflect the newest stored retrieval, even when
+    # the accepted plan was calculated with an older forecast.
+    forecast = latest_forecast or snapshot["forecast"]
     forecast_view = _forecast_view(forecast)
 
     power_by_id = {heater.id: heater.power_w for heater in config.heaters}

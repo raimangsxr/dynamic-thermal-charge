@@ -30,6 +30,32 @@ describe('App shell', () => {
     expect(TestBed.inject(Router).url).toBe('/login');
   });
 
+  it('renders a full-width toolbar and toggles the navigation on desktop', async () => {
+    const auth = TestBed.inject(Auth);
+    auth.signIn('test-token');
+    const fixture = TestBed.createComponent(App);
+    const backend = TestBed.inject(HttpTestingController);
+    fixture.detectChanges();
+    backend.expectOne('/api/v1/system/topology').flush({ mode: 'normal', canonical_driver: 'sqlite', connected: true, configuration_revision: 1, pending_events: 0, administrative_writes_allowed: true, fallback_captured_at: null, last_reconciled_at: null });
+    backend.expectOne('/api/v1/relay-test').flush(null);
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    const element = fixture.nativeElement as HTMLElement;
+    expect(element.querySelector('mat-toolbar')?.classList.contains('app-toolbar')).toBe(true);
+    expect(element.querySelector('[data-testid="navigation-toggle"]')).not.toBeNull();
+    expect(fixture.componentInstance.navigationOpen()).toBe(true);
+
+    (element.querySelector<HTMLButtonElement>('[data-testid="navigation-toggle"]'))?.click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(fixture.componentInstance.navigationOpen()).toBe(false);
+    (element.querySelector<HTMLButtonElement>('[data-testid="navigation-toggle"]'))?.click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(fixture.componentInstance.navigationOpen()).toBe(true);
+  });
+
   beforeEach(() => {
     TestBed.configureTestingModule({
       imports: [App],
