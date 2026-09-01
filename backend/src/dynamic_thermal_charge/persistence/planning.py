@@ -13,7 +13,7 @@ from ..charge_planning import AutomaticPlan, AutomaticPlanSlot, PlanningDeficit
 from ..models import ChargeConstraint, ChargeTelemetry
 from ..weather import HourlyForecastPoint
 from ..weather import ForecastCycleState
-from . import ConfigConflictError, ConfigValidationError
+from . import ConfigConflictError, ConfigValidationError, ForecastRef
 from .engine import store_errors, transaction
 from .mapping import from_utc, parse_time, parse_weekdays, to_utc
 from .schema import (
@@ -191,15 +191,84 @@ class SqlPlanningRepository:
         with transaction(self._application, self._application_location) as connection:
             row = connection.execute(select(forecast_cycle).where((forecast_cycle.c.installation_id == self._installation_id) & (forecast_cycle.c.local_date == local_date))).mappings().first()
             if row is None:
-                connection.execute(insert(forecast_cycle).values(installation_id=self._installation_id, local_date=local_date, scheduled_at=to_utc(scheduled_at), attempt=0, next_retry_at=None, last_error=None, stale=False, updated_at=to_utc(datetime.now(timezone.utc))))
+                connection.execute(insert(forecast_cycle).values(installation_id=self._installation_id, local_date=local_date, scheduled_at=to_utc(scheduled_at), attempt=0, next_retry_at=None, last_error=None, last_forecast_id=None, stale=False, last_attempt_at=None, last_result=None, next_run_at=None, updated_at=to_utc(datetime.now(timezone.utc))))
                 return ForecastCycleState(local_date, scheduled_at, 0, None, None, False)
         attempt = int(row["attempt"])
-        return ForecastCycleState(local_date, from_utc(row["scheduled_at"]), attempt, from_utc(row["next_retry_at"]), row["last_error"], bool(row["stale"]), attempt >= 6)
+        return ForecastCycleState(
+            local_date,
+            from_utc(row["scheduled_at"]),
+            attempt,
+            from_utc(row["next_retry_at"]),
+            row["last_error"],
+            bool(row["stale"]),
+            attempt >= 6,
+            from_utc(row["last_attempt_at"]),
+            row["last_result"],
+            from_utc(row["next_run_at"]),
+            None if row["last_forecast_id"] is None else int(row["last_forecast_id"]),
+        )
 
-    def save_forecast_cycle(self, state: ForecastCycleState) -> None:
+    def save_forecast_cycle(
+        self, state: ForecastCycleState, forecast_ref: ForecastRef | None = None
+    ) -> None:
         from .schema import forecast_cycle
         with transaction(self._application, self._application_location) as connection:
-            connection.execute(update(forecast_cycle).where((forecast_cycle.c.installation_id == self._installation_id) & (forecast_cycle.c.local_date == state.local_date)).values(scheduled_at=to_utc(state.scheduled_at), attempt=6 if state.completed else state.attempt, next_retry_at=None if state.next_retry_at is None else to_utc(state.next_retry_at), last_error=state.last_error, stale=state.stale, updated_at=to_utc(datetime.now(timezone.utc))))
+            values = {
+                "scheduled_at": to_utc(state.scheduled_at),
+                "attempt": 6 if state.completed else state.attempt,
+                "next_retry_at": None if state.next_retry_at is None else to_utc(state.next_retry_at),
+                "last_error": state.last_error,
+                "stale": state.stale,
+                "last_attempt_at": None if state.last_attempt_at is None else to_utc(state.last_attempt_at),
+                "last_result": state.last_result,
+                "next_run_at": None if state.next_run_at is None else to_utc(state.next_run_at),
+                "updated_at": to_utc(datetime.now(timezone.utc)),
+            }
+            if forecast_ref is not None:
+                values["last_forecast_id"] = forecast_ref.id
+            connection.execute(
+                update(forecast_cycle)
+                .where(
+                    (forecast_cycle.c.installation_id == self._installation_id)
+                    & (forecast_cycle.c.local_date == state.local_date)
+                )
+                .values(**values)
+            )
+
+    def latest_forecast_cycle(self) -> dict[str, Any] | None:
+        from .schema import forecast_cycle
+        with store_errors(self._application_location):
+            with self._application.connect() as connection:
+                row = connection.execute(
+                    select(forecast_cycle)
+                    .where(forecast_cycle.c.installation_id == self._installation_id)
+                    .order_by(forecast_cycle.c.updated_at.desc(), forecast_cycle.c.id.desc())
+                    .limit(1)
+                ).mappings().first()
+        if row is None:
+            return None
+        return {
+            "local_date": row["local_date"],
+            "scheduled_at": from_utc(row["scheduled_at"]),
+            "last_attempt_at": from_utc(row["last_attempt_at"]),
+            "last_result": row["last_result"],
+            "last_error": row["last_error"],
+            "next_run_at": from_utc(row["next_run_at"]),
+            "stale": bool(row["stale"]),
+            "last_forecast_id": None if row["last_forecast_id"] is None else int(row["last_forecast_id"]),
+        }
+
+    def forecast_cycle_status(self) -> dict[str, Any] | None:
+        """Return only safe, operator-facing retrieval metadata."""
+        cycle = self.latest_forecast_cycle()
+        if cycle is None:
+            return None
+        return {
+            "forecast_status": cycle["last_result"],
+            "forecast_last_attempt_at": cycle["last_attempt_at"],
+            "forecast_last_error": cycle["last_error"] if cycle["last_result"] == "error" else None,
+            "forecast_next_run_at": cycle["next_run_at"],
+        }
 
     def audit(self, since: datetime | None = None, until: datetime | None = None, limit: int = 100) -> list[dict[str, Any]]:
         with store_errors(self._application_location):

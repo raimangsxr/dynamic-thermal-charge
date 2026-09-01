@@ -9,6 +9,7 @@ exclusively with the fail-safe controller (constitution principle I).
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import datetime
 from typing import TYPE_CHECKING, Callable
 
@@ -84,6 +85,7 @@ def create_app(
 
     app.state.clock = clock or utc_now
     app.state.last_heartbeat = None
+    app.state.weather_refresh_lock = threading.Lock()
     if default_store is not None and default_store.context is not None:
         default_store.context.publish_process_revision("api")
 

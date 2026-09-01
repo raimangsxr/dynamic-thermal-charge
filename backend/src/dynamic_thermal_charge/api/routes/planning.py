@@ -55,6 +55,8 @@ def get_planning(
         store.location,
     )
     snapshot = reader.planning(observed_at)
+    latest_forecast = reader.latest_forecast()
+    cycle_status = store.planning.forecast_cycle_status() or {}
     heaters = [
         PlanningHeaterView(
             id=heater.id,
@@ -80,6 +82,11 @@ def get_planning(
                 observed_at=observed_at,
                 max_total_power_w=config.site.max_total_power_w,
                 heaters=heaters,
+                forecast=_forecast_view(latest_forecast),
+                forecast_status=cycle_status.get("forecast_status"),
+                forecast_last_attempt_at=cycle_status.get("forecast_last_attempt_at"),
+                forecast_last_error=cycle_status.get("forecast_last_error"),
+                forecast_next_run_at=cycle_status.get("forecast_next_run_at"),
                 plan=automatic_plan,
                 horizon_start=automatic["horizon_start"],
                 horizon_end=automatic["horizon_end"],
@@ -91,16 +98,16 @@ def get_planning(
             max_total_power_w=config.site.max_total_power_w,
             heaters=heaters,
             absence_reason="no_current_or_next_plan",
+            forecast=_forecast_view(latest_forecast),
+            forecast_status=cycle_status.get("forecast_status"),
+            forecast_last_attempt_at=cycle_status.get("forecast_last_attempt_at"),
+            forecast_last_error=cycle_status.get("forecast_last_error"),
+            forecast_next_run_at=cycle_status.get("forecast_next_run_at"),
         )
         return _enrich(response, store, observed_at)
 
-    forecast = snapshot["forecast"]
-    forecast_view = None
-    if forecast is not None:
-        forecast_view = PlanningForecastView(
-            **{key: value for key, value in forecast.items() if key != "hourly_points"},
-            hourly_points=[HourlyForecastPointView(**point) for point in forecast["hourly_points"]],
-        )
+    forecast = snapshot["forecast"] or latest_forecast
+    forecast_view = _forecast_view(forecast)
 
     power_by_id = {heater.id: heater.power_w for heater in config.heaters}
     assigned: dict[tuple[datetime, datetime], list[str]] = {}
@@ -158,6 +165,10 @@ def get_planning(
         horizon_start=horizon_start,
         horizon_end=horizon_end,
         timeline=timeline,
+        forecast_status=cycle_status.get("forecast_status"),
+        forecast_last_attempt_at=cycle_status.get("forecast_last_attempt_at"),
+        forecast_last_error=cycle_status.get("forecast_last_error"),
+        forecast_next_run_at=cycle_status.get("forecast_next_run_at"),
     )
     return _enrich(response, store, observed_at)
 
@@ -379,6 +390,15 @@ def _temperature_for_interval(forecast, start: datetime, end: datetime) -> tuple
             point["interpolated"] for point in points
         )
     return forecast["average_temperature_c"], True
+
+
+def _forecast_view(forecast) -> PlanningForecastView | None:
+    if forecast is None:
+        return None
+    return PlanningForecastView(
+        **{key: value for key, value in forecast.items() if key != "hourly_points"},
+        hourly_points=[HourlyForecastPointView(**point) for point in forecast["hourly_points"]],
+    )
 
 
 __all__ = ["router"]

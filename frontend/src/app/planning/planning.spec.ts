@@ -33,6 +33,10 @@ const PLANNING: PlanningDto = {
   allocations: [{ heater_id: 'salon', requested_minutes: 60, allocated_minutes: 30, unmet_minutes: 30 }],
   heaters: [{ id: 'salon', name: 'Salón', power_w: 2800, priority: 90, enabled: true }],
   absence_reason: null,
+  forecast_status: 'success',
+  forecast_last_attempt_at: '2026-01-16T01:00:00Z',
+  forecast_last_error: null,
+  forecast_next_run_at: '2026-01-16T04:00:00Z',
 };
 
 describe('Planning', () => {
@@ -61,6 +65,8 @@ describe('Planning', () => {
     expect(element.querySelector('[data-testid="planning-table"] tbody tr')).not.toBeNull();
     expect(element.querySelector('[data-testid="planning-table"]')?.textContent).toContain('Carga acumulada');
     expect(element.querySelector('[data-testid="planning-deficit"]')?.textContent).toContain('Carga no atendida');
+    expect(element.querySelector('[data-testid="forecast-table"] tbody tr')).not.toBeNull();
+    expect(element.querySelector('[data-testid="forecast-next-run"]')?.textContent).toContain('Próxima consulta automática');
   });
 
   it('states explicitly when there is no plan instead of fabricating rows', () => {

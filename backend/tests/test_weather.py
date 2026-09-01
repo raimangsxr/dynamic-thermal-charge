@@ -104,6 +104,33 @@ def test_aemet_fetches_hourly_endpoint_and_normalizes_valid_points() -> None:
     assert result.maximum_temperature_c == 4
 
 
+def test_aemet_accepts_period_and_nested_dato_hourly_shape() -> None:
+    payload = [{
+        "nombre": "Madrid",
+        "provincia": "Madrid",
+        "prediccion": {"dia": [{
+            "fecha": "2026-01-15T00:00:00",
+            "temperatura": {
+                "minima": 2,
+                "maxima": 12,
+                "dato": [
+                    {"periodo": "00", "value": "2"},
+                    {"periodo": "01-02", "value": "4"},
+                ],
+            },
+        }]},
+    }]
+    provider = AemetWeatherProvider(
+        AemetConfig(municipality_code="28079"),
+        api_key="secret-key",
+        http_get=lambda url, headers, timeout: {"estado": 200, "datos": "https://data.example/hourly.json"} if headers.get("api_key") else payload,
+    )
+
+    result = provider.forecast_for(date(2026, 1, 15))
+
+    assert [point.temperature_c for point in result.hourly_points] == [2, 4]
+
+
 def test_aemet_rejects_an_hourly_payload_without_usable_temperature() -> None:
     payload = [{"prediccion": {"dia": [{
         "fecha": "2026-01-15T00:00:00",

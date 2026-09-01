@@ -53,6 +53,19 @@
         }
         @if (operation()) { <p role="status">{{ operation() }}</p> }
       </form>
+      @if (selected() === 'weather') {
+        <section class="weather-status" aria-labelledby="weather-status-title">
+          <h2 id="weather-status-title">Estado del forecast</h2>
+          <p>Última consulta: {{ value('forecast_last_attempt_at') || 'sin consultas' }} · resultado: {{ value('forecast_status') || 'pendiente' }}</p>
+          @if (value('forecast_last_error')) { <p class="error" role="alert">{{ value('forecast_last_error') }}</p> }
+          <p>Próxima consulta automática: {{ value('forecast_next_run_at') || 'no programada' }}</p>
+          <button type="button" (click)="refreshWeather()" [disabled]="weatherRefreshLoading() || !writable() || value('provider') !== 'aemet'">
+            {{ weatherRefreshLoading() ? 'Consultando AEMET…' : 'Consultar AEMET ahora' }}
+          </button>
+          @if (weatherRefreshMessage()) { <p class="success" role="status">{{ weatherRefreshMessage() }}</p> }
+          @if (weatherRefreshError()) { <p class="error" role="alert">{{ weatherRefreshError() }}</p> }
+        </section>
+      }
     }
   </section>
   @if (confirming()) {

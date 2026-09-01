@@ -89,5 +89,23 @@
         </table>
       </div>
     }
+
+    <section class="visualization forecast-visualization" aria-labelledby="forecast-title">
+      <h2 id="forecast-title">Previsión horaria</h2>
+      @if (data.forecast?.hourly_points?.length) {
+        <div class="chart-wrap"><canvas #forecastChart aria-label="Gráfico de previsión horaria de temperatura"></canvas></div>
+        <p class="next-forecast" data-testid="forecast-next-run">
+          Próxima consulta automática a AEMET: {{ data.forecast_next_run_at ? dateTime(data.forecast_next_run_at) : 'no programada' }}
+        </p>
+        <div class="table-scroll">
+          <table data-testid="forecast-table"><caption>Datos horarios de la previsión</caption><thead><tr><th>Hora</th><th>Temperatura</th></tr></thead><tbody>@for (point of data.forecast.hourly_points; track point.timestamp) { <tr><th scope="row">{{ dateTime(point.timestamp) }}</th><td>{{ point.temperature_c }} °C</td></tr> }</tbody></table>
+        </div>
+      } @else {
+        <p class="empty" data-testid="forecast-empty">No hay datos de previsión horaria disponibles.</p>
+        <p class="next-forecast" data-testid="forecast-next-run">
+          Próxima consulta automática a AEMET: {{ data.forecast_next_run_at ? dateTime(data.forecast_next_run_at) : 'no programada' }}
+        </p>
+      }
+    </section>
   }
 </section>

@@ -125,6 +125,10 @@ export interface PlanningDto {
   deficits?: PlanningDeficitDto[];
   preview_token?: string | null;
   constraints_revision?: number;
+  forecast_status?: 'success' | 'error' | null;
+  forecast_last_attempt_at?: string | null;
+  forecast_last_error?: string | null;
+  forecast_next_run_at?: string | null;
 }
 
 export interface ChargeConstraintDto { id: number | null; heater_id: string; target_charge: number; at_time: string; weekdays: number[]; enabled: boolean; }
@@ -343,6 +347,14 @@ export interface DatabaseCandidateDto {
 }
 export interface MigrationDto { operation_id: string; phase: string; status: string; detail: string | null; }
 export interface ConnectionTestDto { ok: boolean; driver: string; provider?: string; host?: string; port?: number; tls?: boolean | null; }
+export interface WeatherRefreshDto {
+  status: 'success';
+  forecast_status: 'success';
+  forecast_last_attempt_at: string;
+  forecast_last_error: string | null;
+  forecast_next_run_at: string | null;
+  forecast: PlanningForecastDto | null;
+}
 
 /* --------------------------------------------------------------------------
  * Errors. A closed union, not a free string: an unhandled code must be a

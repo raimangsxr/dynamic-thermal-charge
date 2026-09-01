@@ -17,6 +17,7 @@ fieldset { border: 0; padding: 0; display: flex; gap: .25rem; flex-wrap: wrap; }
 .banner { padding: .75rem 1rem; margin: 1rem 0; border-left: 4px solid; }
 .banner p, .banner ul { margin: .35rem 0 0; } .warn { border-color: var(--warning); background: #fff8e8; } .alert { border-color: var(--danger); background: #fff0f0; }
 .empty { color: var(--muted); font-style: italic; }
+.next-forecast { color: var(--muted); font-size: .9rem; }
 .table-scroll { overflow-x: auto; margin-top: 1rem; }
 table { width: 100%; min-width: 42rem; border-collapse: collapse; background: var(--surface); }
 th, td { padding: .65rem .75rem; border-bottom: 1px solid var(--border); text-align: left; } thead th { color: var(--muted); font-size: .85rem; } caption { text-align: left; padding: .75rem 0; font-weight: 600; }
