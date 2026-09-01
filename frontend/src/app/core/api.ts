@@ -26,6 +26,7 @@ import type {
   SetFieldRequest,
   StatusDto,
   PlanningDto,
+  PlanningSiteConfigDto,
   PlanningConstraintRequest, PlanningPreviewDto, AutomaticPlanAuditPage,
   ControllerLogPageDto, ControllerLogLevel,
   TransitionHistoryDto,
@@ -56,6 +57,17 @@ export class Api {
 
   planning(): Observable<PlanningDto> {
     return this.http.get<PlanningDto>(`${BASE}/planning`);
+  }
+
+  planningConfig(): Observable<PlanningSiteConfigDto> {
+    return this.http.get<PlanningSiteConfigDto>(`${BASE}/planning/config`);
+  }
+
+  patchPlanningConfig(expectedRevision: number, values: Omit<PlanningSiteConfigDto, 'revision'>): Observable<PlanningSiteConfigDto> {
+    return this.http.patch<PlanningSiteConfigDto>(`${BASE}/planning/config`, {
+      expected_revision: expectedRevision,
+      ...values,
+    });
   }
 
   planningPreview(constraints: PlanningConstraintRequest[], expectedRevision?: number): Observable<PlanningPreviewDto> {

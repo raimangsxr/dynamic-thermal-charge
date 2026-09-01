@@ -4,7 +4,10 @@ import { FormsModule } from '@angular/forms';
 import { forkJoin } from 'rxjs';
 
 import { Api } from '../core/api';
-import type { SecretEditDto, SystemConfigurationDto, SystemSection, TopologyDto } from '../core/api.types';
+import type { PlanningSiteConfigDto, SecretEditDto, SystemConfigurationDto, SystemSection, TopologyDto } from '../core/api.types';
+import { ParamHelp } from '../shared/param-help/param-help';
+
+type ConfigSection = SystemSection | 'planning';
 
 interface Option { value: string; label: string; }
 interface FieldDefinition { name: string; type: 'text' | 'number' | 'boolean' | 'select'; options?: readonly Option[]; }
@@ -22,6 +25,16 @@ const OUTPUT_DRIVERS = [
   { value: 'gpio', label: 'GPIO' },
 ] as const;
 const LOG_LEVELS = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'].map((value) => ({ value, label: value }));
+const PLANNING_FIELDS: FieldDefinition[] = [
+  { name: 'forecast_horizon_hours', type: 'number' },
+  { name: 'replan_minutes', type: 'number' },
+  { name: 'aemet_query_hour', type: 'number' },
+  { name: 'contracted_power_w', type: 'number' },
+  { name: 'max_heating_power_w', type: 'number' },
+  { name: 'design_indoor_temperature_c', type: 'number' },
+  { name: 'design_outdoor_temperature_c', type: 'number' },
+  { name: 'feedback_horizon_hours', type: 'number' },
+];
 const FIELDS: Record<SystemSection, FieldDefinition[]> = {
   database: [{ name: 'driver', type: 'select', options: DATABASE_DRIVERS }, { name: 'host', type: 'text' }, { name: 'port', type: 'number' }, { name: 'database', type: 'text' }, { name: 'tls', type: 'boolean' }, { name: 'trusted_no_tls', type: 'boolean' }],
   api: [{ name: 'host', type: 'text' }, { name: 'port', type: 'number' }, { name: 'cors_origins', type: 'text' }, { name: 'stale_seconds', type: 'number' }],
@@ -54,13 +67,24 @@ const SECRETS: Partial<Record<SystemSection, string[]>> = {
   api: ['admin_token_digest'], database: ['postgres_username', 'postgres_password'],
   mqtt: ['mqtt_username', 'mqtt_password'], weather: ['aemet_api_key'],
 };
+const SECTION_LABELS: Record<ConfigSection, string> = {
+  database: 'database',
+  api: 'api',
+  mqtt: 'mqtt',
+  weather: 'weather',
+  planning: 'planning',
+  output: 'output',
+  logging: 'logging',
+  operations: 'operations',
+};
 
-@Component({ selector: 'dtc-system-config', imports: [FormsModule], templateUrl: './system-config.html', styleUrl: './system-config.css' })
+@Component({ selector: 'dtc-system-config', imports: [FormsModule, ParamHelp], templateUrl: './system-config.html', styleUrl: './system-config.css' })
 export class SystemConfig {
   private readonly api = inject(Api);
-  readonly sections = Object.keys(FIELDS) as SystemSection[];
-  readonly selected = signal<SystemSection>('database');
+  readonly sections: ConfigSection[] = ['database', 'api', 'mqtt', 'weather', 'planning', 'output', 'logging', 'operations'];
+  readonly selected = signal<ConfigSection>('database');
   readonly configuration = signal<SystemConfigurationDto | null>(null);
+  readonly planningConfig = signal<PlanningSiteConfigDto | null>(null);
   readonly topology = signal<TopologyDto | null>(null);
   readonly draft = signal<Record<string, unknown>>({});
   readonly secretActions = signal<Record<string, SecretEditDto['action']>>({});
@@ -74,9 +98,20 @@ export class SystemConfig {
   readonly weatherRefreshError = signal('');
 
   constructor() { this.load(); }
-  fields(): FieldDefinition[] { return FIELDS[this.selected()]; }
+  sectionLabel(section: ConfigSection): string { return SECTION_LABELS[section]; }
+  fields(): FieldDefinition[] {
+    if (this.selected() === 'planning') return PLANNING_FIELDS;
+    return FIELDS[this.selected() as SystemSection];
+  }
   groups(): FieldGroup[] {
     const fields = this.fields();
+    if (this.selected() === 'planning') {
+      return [
+        { title: 'Horizonte y replanificación', fields: fields.slice(0, 3) },
+        { title: 'Límites de potencia', fields: fields.slice(3, 5) },
+        { title: 'Modelo de demanda', fields: fields.slice(5) },
+      ];
+    }
     if (this.selected() === 'mqtt') {
       const enabled = fields[0];
       return this.mqttEnabled()
@@ -91,20 +126,36 @@ export class SystemConfig {
     ];
   }
   secrets(): string[] {
+    if (this.selected() === 'planning') return [];
     if (this.selected() === 'mqtt' && !this.mqttEnabled()) return [];
-    return SECRETS[this.selected()] ?? [];
+    return SECRETS[this.selected() as SystemSection] ?? [];
   }
   writable(): boolean { return this.topology()?.administrative_writes_allowed === true; }
   mqttEnabled(): boolean { return this.value('enabled') === true || this.value('enabled') === 'true'; }
 
   load(): void {
-    forkJoin({ configuration: this.api.systemConfiguration(), topology: this.api.topology() }).subscribe({
-      next: ({ configuration, topology }) => { this.configuration.set(configuration); this.topology.set(topology); this.resetDraft(); },
+    forkJoin({
+      configuration: this.api.systemConfiguration(),
+      topology: this.api.topology(),
+      planningConfig: this.api.planningConfig(),
+    }).subscribe({
+      next: ({ configuration, topology, planningConfig }) => {
+        this.configuration.set(configuration);
+        this.topology.set(topology);
+        this.planningConfig.set(planningConfig);
+        this.resetDraft();
+      },
       error: () => this.error.set('No se pudo cargar la configuración del sistema.'),
     });
   }
-  choose(section: SystemSection): void { this.selected.set(section); this.resetDraft(); }
-  value(field: string): unknown { return this.draft()[field] ?? this.configuration()?.sections[this.selected()][field] ?? ''; }
+  choose(section: ConfigSection): void { this.selected.set(section); this.resetDraft(); }
+  value(field: string): unknown {
+    if (this.selected() === 'planning') {
+      const planning = this.planningConfig();
+      return this.draft()[field] ?? planning?.[field as keyof PlanningSiteConfigDto] ?? '';
+    }
+    return this.draft()[field] ?? this.configuration()?.sections[this.selected() as SystemSection][field] ?? '';
+  }
   edit(field: string, value: unknown): void { this.draft.update((draft) => ({ ...draft, [field]: value })); }
   secretAction(name: string): SecretEditDto['action'] { return this.secretActions()[name] ?? 'keep'; }
   setSecretAction(name: string, action: SecretEditDto['action']): void { this.secretActions.update((current) => ({ ...current, [name]: action })); if (action !== 'replace') this.setSecretValue(name, ''); }
@@ -112,7 +163,8 @@ export class SystemConfig {
 
   requestSave(): void {
     const section = this.selected();
-    if (section === 'database' || section === 'output' || Object.values(this.secretActions()).some((action) => action !== 'keep')) this.confirming.set(true);
+    if (section === 'planning') this.save();
+    else if (section === 'database' || section === 'output' || Object.values(this.secretActions()).some((action) => action !== 'keep')) this.confirming.set(true);
     else this.save();
   }
   testDatabase(): void {
@@ -165,14 +217,39 @@ export class SystemConfig {
   }
   save(): void {
     this.confirming.set(false); this.error.set('');
-    const snapshot = this.configuration(); if (!snapshot || !this.writable()) return;
+    if (!this.writable()) return;
+    if (this.selected() === 'planning') {
+      const snapshot = this.planningConfig();
+      if (!snapshot) return;
+      const values = {
+        replan_minutes: this.coerce(PLANNING_FIELDS[1], this.value('replan_minutes')) as number,
+        forecast_horizon_hours: this.coerce(PLANNING_FIELDS[0], this.value('forecast_horizon_hours')) as number,
+        aemet_query_hour: this.coerce(PLANNING_FIELDS[2], this.value('aemet_query_hour')) as number,
+        contracted_power_w: this.coerce(PLANNING_FIELDS[3], this.value('contracted_power_w')) as number,
+        max_heating_power_w: this.coerce(PLANNING_FIELDS[4], this.value('max_heating_power_w')) as number,
+        design_indoor_temperature_c: this.coerce(PLANNING_FIELDS[5], this.value('design_indoor_temperature_c')) as number,
+        design_outdoor_temperature_c: this.coerce(PLANNING_FIELDS[6], this.value('design_outdoor_temperature_c')) as number,
+        feedback_horizon_hours: this.coerce(PLANNING_FIELDS[7], this.value('feedback_horizon_hours')) as number,
+      };
+      this.api.patchPlanningConfig(snapshot.revision, values).subscribe({
+        next: (updated) => {
+          this.planningConfig.set(updated);
+          this.draft.set({});
+          this.message.set('Parámetros de planificación guardados.');
+        },
+        error: (error: unknown) => this.error.set(error instanceof HttpErrorResponse && error.status === 409 ? 'La configuración de planificación cambió. Tus valores siguen aquí; recarga antes de guardar.' : 'No se pudo guardar. Revisa los campos.'),
+      });
+      return;
+    }
+    const snapshot = this.configuration();
+    if (!snapshot) return;
     const values: Record<string, unknown> = {};
     for (const field of this.groups().flatMap((group) => group.fields)) if (field.name in this.draft()) values[field.name] = this.coerce(field, this.draft()[field.name]);
     const secrets: Record<string, SecretEditDto> = {};
     for (const name of this.secrets()) {
       const action = this.secretAction(name); secrets[name] = action === 'replace' ? { action, value: this.secretValues()[name] ?? '' } : { action };
     }
-    this.api.patchSystem(this.selected(), snapshot.revision, values, secrets).subscribe({
+    this.api.patchSystem(this.selected() as SystemSection, snapshot.revision, values, secrets).subscribe({
       next: (updated) => { this.configuration.set(updated); this.secretValues.set({}); this.secretActions.set({}); this.draft.set({}); this.message.set(updated.pending_restart?.length ? 'Guardado. Reinicia el proceso indicado para aplicar todos los cambios.' : 'Configuración guardada.'); },
       error: (error: unknown) => this.error.set(error instanceof HttpErrorResponse && error.status === 409 ? 'La configuración cambió. Tus valores siguen aquí; recarga antes de guardar.' : 'No se pudo guardar. Revisa los campos.'),
     });

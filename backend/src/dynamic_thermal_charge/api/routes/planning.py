@@ -201,6 +201,17 @@ def activate_planning(
     return _preview_response(plan, constraints)
 
 
+@router.get(
+    "/planning/config",
+    responses=READ_RESPONSES,
+    summary="Automatic planning site parameters",
+)
+def get_planning_config(
+    store: Store = Depends(usable_store),
+) -> dict[str, int | float]:
+    return store.planning.site()
+
+
 @router.patch("/planning/config", responses=ERROR_RESPONSES)
 def update_planning_config(
     payload: PlanningSiteConfigRequest,

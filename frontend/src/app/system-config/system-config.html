@@ -8,13 +8,18 @@
     <h1>Configuración del sistema</h1>
     <p>Backend, integraciones, seguridad, previsión y comportamiento de los procesos. La configuración de acumuladores permanece en su sección propia.</p>
     <nav class="sections" aria-label="Secciones de configuración del sistema">
-      @for (section of sections; track section) { <button type="button" [class.active]="selected() === section" (click)="choose(section)">{{ section }}</button> }
+      @for (section of sections; track section) { <button type="button" [class.active]="selected() === section" (click)="choose(section)">{{ sectionLabel(section) }}</button> }
     </nav>
     @if (error()) { <p class="error" role="alert">{{ error() }}</p> }
     @if (message()) { <p class="success" role="status">{{ message() }}</p> }
     @if (configuration(); as data) {
       <form (ngSubmit)="requestSave()">
-        <p>Revisión global {{ data.revision }}</p>
+        @if (selected() === 'planning') {
+          <p>Revisión planificación {{ planningConfig()?.revision }}</p>
+          <p>Parámetros del optimizador automático (horizonte, potencia y modelo de demanda). Las restricciones de carga se gestionan en Planificación; la potencia contratada de instalación en Configuración.</p>
+        } @else {
+          <p>Revisión global {{ data.revision }}</p>
+        }
         @for (group of groups(); track group.title) {
           <div class="field-group">
             <h2>{{ group.title }}</h2>
@@ -27,7 +32,11 @@
             }
             <div class="fields">
               @for (field of group.fields; track field.name) {
-                <label [for]="field.name">{{ field.name }} <small>{{ data.activation[selected() + '.' + field.name] }}</small></label>
+                <label [for]="field.name" class="field-label-row">
+                  <span>{{ field.name }}</span>
+                  <dtc-param-help [field]="field.name" [section]="selected()" [label]="field.name" />
+                  @if (selected() !== 'planning') { <small>{{ data.activation[selected() + '.' + field.name] }}</small> }
+                </label>
                 @if (field.type === 'boolean') {
                   <select [id]="field.name" [name]="field.name" [ngModel]="value(field.name)" (ngModelChange)="edit(field.name, $event)" [disabled]="!writable()"><option [ngValue]="true">Sí</option><option [ngValue]="false">No</option></select>
                 } @else if (field.type === 'select') {
@@ -45,7 +54,11 @@
           <h2>Secretos</h2><p>Los valores guardados nunca vuelven al navegador.</p>
           @for (secret of secrets(); track secret) {
             <div class="secret">
-              <label [for]="secret + '-action'">{{ secret }} · {{ data.secrets[secret]?.configured ? 'configurado' : 'sin configurar' }}</label>
+              <label [for]="secret + '-action'" class="field-label-row">
+                <span>{{ secret }}</span>
+                <dtc-param-help [field]="secret" [label]="secret" />
+                <span>· {{ data.secrets[secret]?.configured ? 'configurado' : 'sin configurar' }}</span>
+              </label>
               <select [id]="secret + '-action'" [name]="secret + '-action'" [ngModel]="secretAction(secret)" (ngModelChange)="setSecretAction(secret, $event)" [disabled]="!writable()"><option value="keep">Conservar</option><option value="replace">Reemplazar</option><option value="clear">Eliminar</option></select>
               @if (secretAction(secret) === 'replace') { <input type="password" autocomplete="new-password" [name]="secret + '-value'" [ngModel]="secretValues()[secret] ?? ''" (ngModelChange)="setSecretValue(secret, $event)" aria-label="Valor nuevo" /> }
             </div>

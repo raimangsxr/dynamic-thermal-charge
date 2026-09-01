@@ -11,7 +11,28 @@ h3 { margin: 0; color: var(--ink); font-size: 1rem; }
 .field-group + .field-group { margin-top: 1.5rem; }
 .field-group h3 { margin-bottom: .75rem; color: var(--muted); font-size: .86rem; letter-spacing: .03em; text-transform: uppercase; }
 .fields, .heater-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .25rem 1rem; }
-.field { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .65rem; align-items: center; min-width: 0; }
+.field { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .65rem; align-items: end; min-width: 0; }
+.field-column { min-width: 0; }
+.field-label-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.15rem 0.35rem;
+  margin-bottom: 0.15rem;
+}
+.field-label-row label,
+.field-label-row .summary-term {
+  font-size: 0.86rem;
+  font-weight: 650;
+  color: var(--muted);
+}
+.summary-term {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.15rem 0.35rem;
+}
+.form-field-cell { min-width: 0; }
 .field mat-form-field { min-width: 0; width: 100%; }
 .field button { white-space: nowrap; }
 .banner { padding: .8rem 1rem; border-left: 4px solid; margin: 1rem 0; }

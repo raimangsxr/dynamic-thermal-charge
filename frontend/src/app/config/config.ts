@@ -23,6 +23,7 @@ import { Api } from '../core/api';
 import type { AddHeaterRequest, ApiErrorDto, ChangeDto, ConfigDto, UpdateHeaterRequest } from '../core/api.types';
 import { type Explained, UNREACHABLE, explain, messageFor } from '../core/errors';
 import { confirmationText, needsConfirmation } from './electrical-fields';
+import { ParamHelp } from '../shared/param-help/param-help';
 
 interface FormEdit { readonly field: string; readonly value: string; }
 interface PendingEdit {
@@ -63,6 +64,49 @@ const INSTALLATION_GROUPS = [
   { title: 'Política de temperatura interior', fields: ['indoor_max_age_minutes', 'indoor_min_plausible_c', 'indoor_max_plausible_c'] },
 ] as const;
 
+interface HeaterFormFieldMeta {
+  key: keyof HeaterForm;
+  label: string;
+  type: 'text' | 'number' | 'select';
+  helpField?: string;
+  step?: string;
+  min?: string;
+  max?: string;
+  required?: boolean;
+  readonlyOnEdit?: boolean;
+  hint?: string;
+  selectOptions?: ReadonlyArray<{ value: string | boolean; label: string }>;
+}
+
+const HEATER_FORM_FIELDS: readonly HeaterFormFieldMeta[] = [
+  { key: 'id', label: 'Identificador', type: 'text', required: true, readonlyOnEdit: true },
+  { key: 'name', label: 'Nombre', type: 'text' },
+  { key: 'model', label: 'Modelo', type: 'text' },
+  { key: 'power_kw', label: 'Potencia (kW)', type: 'number', step: '0.1', required: true },
+  { key: 'full_charge_hours', label: 'Carga completa (horas)', type: 'number', step: '0.1', required: true },
+  { key: 'target_charge', label: 'Carga objetivo (0–1)', type: 'number', min: '0', max: '1', step: '0.01' },
+  { key: 'reserve_percent', label: 'Reserva de demanda (%)', type: 'number', min: '0', step: '1', hint: 'Margen multiplicativo sobre la demanda estimada' },
+  { key: 'demand_factor', label: 'Factor de demanda', type: 'number', min: '0.01', step: '0.05' },
+  { key: 'priority', label: 'Prioridad', type: 'number' },
+  {
+    key: 'output', label: 'Salida', type: 'select', helpField: 'output',
+    selectOptions: [{ value: 'simulated', label: 'Simulada' }, { value: 'gpio', label: 'GPIO' }],
+  },
+  { key: 'pin', label: 'Pin BCM', type: 'number' },
+  {
+    key: 'active_high', label: 'Nivel activo', type: 'select',
+    selectOptions: [{ value: true, label: 'Alto' }, { value: false, label: 'Bajo' }],
+  },
+  { key: 'indoor_topic', label: 'Tópico interior', type: 'text' },
+  { key: 'temperature_topic', label: 'Tópico de temperatura', type: 'text' },
+  { key: 'target_temperature_topic', label: 'Tópico de objetivo', type: 'text' },
+  { key: 'stored_charge_topic', label: 'Tópico de carga almacenada', type: 'text' },
+  {
+    key: 'enabled', label: 'Estado', type: 'select',
+    selectOptions: [{ value: true, label: 'Activo' }, { value: false, label: 'Desactivado' }],
+  },
+];
+
 @Component({
   selector: 'dtc-confirm-dialog',
   imports: [MatButtonModule, MatDialogModule],
@@ -85,6 +129,7 @@ export class ConfirmDialog {
   imports: [
     FormsModule, RouterLink, MatButtonModule, MatCardModule, MatDialogModule,
     MatFormFieldModule, MatIconModule, MatInputModule, MatSelectModule, MatTooltipModule,
+    ParamHelp,
   ],
   templateUrl: './config.html',
   styleUrl: './config.css',
@@ -106,6 +151,7 @@ export class Config {
   readonly heaterFormError = signal('');
   readonly heaterSaving = signal(false);
   readonly installationGroups = INSTALLATION_GROUPS;
+  readonly heaterFormFields = HEATER_FORM_FIELDS;
   readonly dirty = computed(() => Object.keys(this.pending()).length > 0);
 
   constructor() { this.load(); }
@@ -144,6 +190,10 @@ export class Config {
       stored_charge_topic: 'Tópico de carga almacenada',
     };
     return labels[field] ?? field;
+  }
+
+  helpField(meta: HeaterFormFieldMeta): string {
+    return meta.helpField ?? meta.key;
   }
 
   edit(field: string, heaterId: string | null, value: string): void {

@@ -39,10 +39,16 @@
           <div class="fields">
             @for (field of group.fields; track field) {
               <div class="field" [attr.data-field]="field">
-                <mat-form-field appearance="outline">
-                  <mat-label>{{ label(field) }}{{ register(field, null) }}</mat-label>
-                  <input matInput [id]="field" [ngModel]="pending()[key(field, null)] ?? asText(data, field)" (ngModelChange)="edit(field, null, $event)" [name]="field" />
-                </mat-form-field>
+                <span hidden>{{ register(field, null) }}</span>
+                <div class="field-column">
+                  <div class="field-label-row">
+                    <label [for]="field">{{ label(field) }}</label>
+                    <dtc-param-help [field]="field" [label]="label(field)" />
+                  </div>
+                  <mat-form-field appearance="outline" subscriptSizing="dynamic">
+                    <input matInput [id]="field" [ngModel]="pending()[key(field, null)] ?? asText(data, field)" (ngModelChange)="edit(field, null, $event)" [name]="field" />
+                  </mat-form-field>
+                </div>
                 @if (fieldErrors()[key(field, null)]; as error) { <p class="field-error" role="alert" [attr.data-error]="field">{{ error }}</p> }
                 <button mat-stroked-button type="button" (click)="submit(field, null)" [attr.data-save]="field">Guardar</button>
               </div>
@@ -62,23 +68,38 @@
         <form class="heater-form" (ngSubmit)="saveHeater()" data-testid="heater-form">
           <div class="form-heading"><div><h3>{{ heaterFormMode() === 'add' ? 'Nuevo acumulador' : 'Editar acumulador' }}</h3><p>Los cambios se validan en el backend usando la revisión actual.</p></div><button mat-icon-button type="button" (click)="cancelHeaterForm()" aria-label="Cancelar formulario" matTooltip="Cancelar"><mat-icon aria-hidden="true">close</mat-icon></button></div>
           <div class="fields form-grid">
-            <mat-form-field appearance="outline"><mat-label>Identificador</mat-label><input matInput name="id" [ngModel]="form.id" (ngModelChange)="updateHeaterForm('id', $event)" [readonly]="heaterFormMode() === 'edit'" required /></mat-form-field>
-            <mat-form-field appearance="outline"><mat-label>Nombre</mat-label><input matInput name="name" [ngModel]="form.name" (ngModelChange)="updateHeaterForm('name', $event)" /></mat-form-field>
-            <mat-form-field appearance="outline"><mat-label>Modelo</mat-label><input matInput name="model" [ngModel]="form.model" (ngModelChange)="updateHeaterForm('model', $event)" /></mat-form-field>
-            <mat-form-field appearance="outline"><mat-label>Potencia (kW)</mat-label><input matInput type="number" step="0.1" name="power_kw" [ngModel]="form.power_kw" (ngModelChange)="updateHeaterForm('power_kw', $event)" required /></mat-form-field>
-            <mat-form-field appearance="outline"><mat-label>Carga completa (horas)</mat-label><input matInput type="number" step="0.1" name="full_charge_hours" [ngModel]="form.full_charge_hours" (ngModelChange)="updateHeaterForm('full_charge_hours', $event)" required /></mat-form-field>
-            <mat-form-field appearance="outline"><mat-label>Carga objetivo (0–1)</mat-label><input matInput type="number" min="0" max="1" step="0.01" name="target_charge" [ngModel]="form.target_charge" (ngModelChange)="updateHeaterForm('target_charge', $event)" /></mat-form-field>
-            <mat-form-field appearance="outline"><mat-label>Reserva de demanda (%)</mat-label><input matInput type="number" min="0" step="1" name="reserve_percent" [ngModel]="form.reserve_percent" (ngModelChange)="updateHeaterForm('reserve_percent', $event)" /><mat-hint>Margen multiplicativo sobre la demanda estimada</mat-hint></mat-form-field>
-            <mat-form-field appearance="outline"><mat-label>Factor de demanda</mat-label><input matInput type="number" min="0.01" step="0.05" name="demand_factor" [ngModel]="form.demand_factor" (ngModelChange)="updateHeaterForm('demand_factor', $event)" /></mat-form-field>
-            <mat-form-field appearance="outline"><mat-label>Prioridad</mat-label><input matInput type="number" name="priority" [ngModel]="form.priority" (ngModelChange)="updateHeaterForm('priority', $event)" /></mat-form-field>
-            <mat-form-field appearance="outline"><mat-label>Salida</mat-label><mat-select name="output" [ngModel]="form.output" (ngModelChange)="updateHeaterForm('output', $event)"><mat-option value="simulated">Simulada</mat-option><mat-option value="gpio">GPIO</mat-option></mat-select></mat-form-field>
-            <mat-form-field appearance="outline"><mat-label>Pin BCM</mat-label><input matInput type="number" name="pin" [ngModel]="form.pin" (ngModelChange)="updateHeaterForm('pin', $event)" /></mat-form-field>
-            <mat-form-field appearance="outline"><mat-label>Nivel activo</mat-label><mat-select name="active_high" [ngModel]="form.active_high" (ngModelChange)="updateHeaterForm('active_high', $event)"><mat-option [value]="true">Alto</mat-option><mat-option [value]="false">Bajo</mat-option></mat-select></mat-form-field>
-            <mat-form-field appearance="outline"><mat-label>Tópico interior</mat-label><input matInput name="indoor_topic" [ngModel]="form.indoor_topic" (ngModelChange)="updateHeaterForm('indoor_topic', $event)" /></mat-form-field>
-            <mat-form-field appearance="outline"><mat-label>Tópico de temperatura</mat-label><input matInput name="temperature_topic" [ngModel]="form.temperature_topic" (ngModelChange)="updateHeaterForm('temperature_topic', $event)" /></mat-form-field>
-            <mat-form-field appearance="outline"><mat-label>Tópico de objetivo</mat-label><input matInput name="target_temperature_topic" [ngModel]="form.target_temperature_topic" (ngModelChange)="updateHeaterForm('target_temperature_topic', $event)" /></mat-form-field>
-            <mat-form-field appearance="outline"><mat-label>Tópico de carga almacenada</mat-label><input matInput name="stored_charge_topic" [ngModel]="form.stored_charge_topic" (ngModelChange)="updateHeaterForm('stored_charge_topic', $event)" /></mat-form-field>
-            <mat-form-field appearance="outline"><mat-label>Estado</mat-label><mat-select name="enabled" [ngModel]="form.enabled" (ngModelChange)="updateHeaterForm('enabled', $event)"><mat-option [value]="true">Activo</mat-option><mat-option [value]="false">Desactivado</mat-option></mat-select></mat-form-field>
+            @for (meta of heaterFormFields; track meta.key) {
+              <div class="form-field-cell">
+                <div class="field-label-row">
+                  <label [for]="'heater-' + meta.key">{{ meta.label }}</label>
+                  <dtc-param-help [field]="helpField(meta)" [label]="meta.label" />
+                </div>
+                <mat-form-field appearance="outline" subscriptSizing="dynamic">
+                  @if (meta.type === 'select') {
+                    <mat-select [id]="'heater-' + meta.key" [name]="meta.key" [ngModel]="form[meta.key]" (ngModelChange)="updateHeaterForm(meta.key, $event)">
+                      @for (option of meta.selectOptions ?? []; track option.label) {
+                        <mat-option [value]="option.value">{{ option.label }}</mat-option>
+                      }
+                    </mat-select>
+                  } @else {
+                    <input
+                      matInput
+                      [id]="'heater-' + meta.key"
+                      [name]="meta.key"
+                      [type]="meta.type"
+                      [step]="meta.step"
+                      [min]="meta.min"
+                      [max]="meta.max"
+                      [required]="meta.required ?? false"
+                      [readonly]="meta.readonlyOnEdit && heaterFormMode() === 'edit'"
+                      [ngModel]="form[meta.key]"
+                      (ngModelChange)="updateHeaterForm(meta.key, $event)"
+                    />
+                  }
+                  @if (meta.hint) { <mat-hint>{{ meta.hint }}</mat-hint> }
+                </mat-form-field>
+              </div>
+            }
           </div>
           @if (heaterFormError()) { <p class="field-error" role="alert" data-testid="heater-form-error">{{ heaterFormError() }}</p> }
           <div class="form-actions"><button mat-flat-button color="primary" type="submit" [disabled]="heaterSaving()">{{ heaterFormMode() === 'add' ? 'Crear acumulador' : 'Guardar cambios' }}</button><button mat-button type="button" (click)="cancelHeaterForm()">Cancelar</button></div>
@@ -90,7 +111,20 @@
           <mat-card class="heater-card" [attr.data-heater]="heater.id">
             <mat-card-header><mat-card-title>{{ heater.name }}</mat-card-title><mat-card-subtitle>{{ heater.id }} · {{ heater.power_kw }} kW · {{ heater.output.kind === 'gpio' ? 'GPIO' : 'Simulada' }}</mat-card-subtitle></mat-card-header>
             <mat-card-content>
-              <dl class="heater-summary"><div><dt>Carga objetivo</dt><dd>{{ heater.target_charge * 100 }}%</dd></div><div><dt>Reserva</dt><dd>{{ heater.reserve_percent }}%</dd></div><div><dt>Prioridad</dt><dd>{{ heater.priority }}</dd></div></dl>
+              <dl class="heater-summary">
+                <div>
+                  <dt class="summary-term">Carga objetivo<dtc-param-help field="target_charge" label="Carga objetivo" /></dt>
+                  <dd>{{ heater.target_charge * 100 }}%</dd>
+                </div>
+                <div>
+                  <dt class="summary-term">Reserva<dtc-param-help field="reserve_percent" label="Reserva de demanda" /></dt>
+                  <dd>{{ heater.reserve_percent }}%</dd>
+                </div>
+                <div>
+                  <dt class="summary-term">Prioridad<dtc-param-help field="priority" label="Prioridad" /></dt>
+                  <dd>{{ heater.priority }}</dd>
+                </div>
+              </dl>
             </mat-card-content>
             <mat-card-actions align="end"><button mat-button type="button" (click)="openEditHeater(heater)" [attr.data-edit-heater]="heater.id"><mat-icon aria-hidden="true">edit</mat-icon> Editar acumulador</button><button mat-button color="warn" type="button" (click)="requestRemoveHeater(heater)" [attr.data-delete-heater]="heater.id"><mat-icon aria-hidden="true">delete</mat-icon> Eliminar</button></mat-card-actions>
           </mat-card>
