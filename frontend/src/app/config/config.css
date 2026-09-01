@@ -5,13 +5,63 @@ h1 { margin: 0; font-size: clamp(1.7rem, 4vw, 2.25rem); }
 .revisions { margin: .4rem 0 0; color: var(--muted); font-size: .9rem; }
 .surface { padding: 1.25rem; }
 .configuration-section { margin-top: 1rem; }
+.installation-section { padding: 1rem 1.25rem; }
+.installation-heading { align-items: center; }
+.installation-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.25rem 2rem;
+  margin-top: .75rem;
+}
+.installation-panel { min-width: 0; }
+.installation-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(10.5rem, 1fr));
+  gap: .65rem .85rem;
+}
+.installation-field {
+  display: grid;
+  gap: .2rem;
+  align-content: start;
+  min-width: 0;
+}
+.installation-field .field-label-row {
+  margin-bottom: 0;
+}
+.installation-field .field-label-row label {
+  font-size: .78rem;
+  line-height: 1.25;
+}
+.installation-input {
+  width: 100%;
+  max-width: 9.5rem;
+  padding: .38rem .5rem;
+  font: inherit;
+  font-size: .88rem;
+  border: 1px solid var(--border);
+  border-radius: .35rem;
+  background: #fff;
+  color: var(--ink);
+}
+.installation-input:focus {
+  outline: 2px solid color-mix(in srgb, var(--primary) 30%, transparent);
+  outline-offset: 0;
+  border-color: var(--primary);
+}
+.installation-field .field-error {
+  margin: 0;
+  font-size: .78rem;
+  line-height: 1.3;
+  grid-column: auto;
+}
 .section-heading, .form-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; }
 h2 { margin: 0; font-size: 1.25rem; }
 h3 { margin: 0; color: var(--ink); font-size: 1rem; }
 .field-group + .field-group { margin-top: 1.5rem; }
-.field-group h3 { margin-bottom: .75rem; color: var(--muted); font-size: .86rem; letter-spacing: .03em; text-transform: uppercase; }
+.field-group h3 { margin-bottom: .6rem; color: var(--muted); font-size: .82rem; letter-spacing: .03em; text-transform: uppercase; }
+.installation-panel.field-group + .installation-panel.field-group { margin-top: 0; }
 .fields, .heater-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .25rem 1rem; }
-.field { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .65rem; align-items: end; min-width: 0; }
+.field { display: grid; grid-template-columns: minmax(0, 1fr); gap: .15rem; align-items: end; min-width: 0; }
 .field-column { min-width: 0; }
 .field-label-row {
   display: flex;
@@ -34,7 +84,6 @@ h3 { margin: 0; color: var(--ink); font-size: 1rem; }
 }
 .form-field-cell { min-width: 0; }
 .field mat-form-field { min-width: 0; width: 100%; }
-.field button { white-space: nowrap; }
 .banner { padding: .8rem 1rem; border-left: 4px solid; margin: 1rem 0; }
 .banner p { margin: .25rem 0 .65rem; }
 .banner-actions, .form-actions { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
@@ -64,10 +113,12 @@ h3 { margin: 0; color: var(--ink); font-size: 1rem; }
   .surface { padding: 1rem .75rem; }
   .section-heading { align-items: stretch; flex-direction: column; }
   .section-heading button { align-self: flex-start; }
+  .installation-heading { align-items: stretch; }
+  .installation-grid { grid-template-columns: minmax(0, 1fr); gap: 1rem; }
+  .installation-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .installation-input { max-width: none; }
   .fields, .heater-fields { grid-template-columns: minmax(0, 1fr); }
-  .field { grid-template-columns: minmax(0, 1fr) auto; }
 }
-@media (max-width: 25rem) {
-  .field { grid-template-columns: 1fr; gap: .15rem; }
-  .field button { justify-self: start; margin-bottom: .4rem; }
+@media (max-width: 28rem) {
+  .installation-fields { grid-template-columns: minmax(0, 1fr); }
 }

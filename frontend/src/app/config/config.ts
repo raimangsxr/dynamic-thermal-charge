@@ -31,6 +31,7 @@ interface PendingEdit {
   readonly value: string;
   readonly heaterId: string | null;
   readonly formEdits?: readonly FormEdit[];
+  readonly batchEdits?: readonly FormEdit[];
 }
 
 export interface HeaterForm {
@@ -150,6 +151,7 @@ export class Config {
   readonly heaterFormMode = signal<'add' | 'edit' | null>(null);
   readonly heaterFormError = signal('');
   readonly heaterSaving = signal(false);
+  readonly installationSaving = signal(false);
   readonly installationGroups = INSTALLATION_GROUPS;
   readonly heaterFormFields = HEATER_FORM_FIELDS;
   readonly dirty = computed(() => Object.keys(this.pending()).length > 0);
@@ -200,6 +202,28 @@ export class Config {
     this.pending.update((current) => ({ ...current, [this.key(field, heaterId)]: value }));
   }
 
+  installationEdits(): readonly FormEdit[] {
+    const pending = this.pending();
+    const edits: FormEdit[] = [];
+    for (const group of INSTALLATION_GROUPS) {
+      for (const field of group.fields) {
+        const target = this.key(field, null);
+        if (target in pending) edits.push({ field, value: pending[target] });
+      }
+    }
+    return edits;
+  }
+
+  saveInstallation(): void {
+    const edits = this.installationEdits();
+    if (edits.length === 0 || this.installationSaving()) return;
+    if (edits.some((edit) => needsConfirmation(edit.field))) {
+      this.confirming.set({ field: edits[0].field, value: edits[0].value, heaterId: null, batchEdits: edits });
+      return;
+    }
+    this.applyInstallation(edits);
+  }
+
   submit(field: string, heaterId: string | null): void {
     const value = this.pending()[this.key(field, heaterId)];
     if (value === undefined) return;
@@ -212,7 +236,16 @@ export class Config {
 
   confirmationMessage(): string {
     const edit = this.confirming();
-    return edit === null ? '' : edit.formEdits ? 'Se aplicarán los cambios del acumulador. Revisa especialmente los valores eléctricos.' : confirmationText(edit.field, edit.value);
+    if (edit === null) return '';
+    if (edit.batchEdits?.length) {
+      const electrical = edit.batchEdits.filter((item) => needsConfirmation(item.field));
+      if (electrical.length === 1) return confirmationText(electrical[0].field, electrical[0].value);
+      if (electrical.length > 1) {
+        return 'Se aplicarán varios cambios, incluidos parámetros eléctricos. Revisa los valores antes de continuar.';
+      }
+      return `Se aplicarán ${edit.batchEdits.length} cambios en la instalación. ¿Continuar?`;
+    }
+    return edit.formEdits ? 'Se aplicarán los cambios del acumulador. Revisa especialmente los valores eléctricos.' : confirmationText(edit.field, edit.value);
   }
 
   confirm(): void {
@@ -221,6 +254,8 @@ export class Config {
     if (edit === null) return;
     if (edit.formEdits) {
       this.applyHeaterEdits(edit.heaterId!);
+    } else if (edit.batchEdits) {
+      this.applyInstallation(edit.batchEdits);
     } else {
       this.apply(edit);
     }
@@ -343,6 +378,43 @@ export class Config {
     call.subscribe({
       next: (change) => { this.saved.set(`${edit.field}: ${change.old_value ?? '—'} → ${change.new_value ?? '—'}`); this.fieldErrors.update((errors) => { const next = { ...errors }; delete next[target]; return next; }); this.discard(edit.field, edit.heaterId); this.load(); },
       error: (error: unknown) => this.reject(target, error),
+    });
+  }
+
+  private applyInstallation(edits: readonly FormEdit[]): void {
+    const current = this.config();
+    if (!current || edits.length === 0) return;
+    this.installationSaving.set(true);
+    const values = Object.fromEntries(edits.map((edit) => [edit.field, edit.value]));
+    this.api.patchInstallation(current.config_revision, values).subscribe({
+      next: (response) => {
+        this.installationSaving.set(false);
+        const count = response.changes.length;
+        if (count === 1 && response.changes[0].field) {
+          const change = response.changes[0];
+          this.saved.set(`${change.field}: ${change.old_value ?? '—'} → ${change.new_value ?? '—'}`);
+        } else {
+          this.saved.set(`Configuración guardada (${count} cambios).`);
+        }
+        this.fieldErrors.update((errors) => {
+          const next = { ...errors };
+          for (const edit of edits) delete next[this.key(edit.field, null)];
+          return next;
+        });
+        for (const edit of edits) this.discard(edit.field, null);
+        this.load();
+      },
+      error: (error: unknown) => {
+        this.installationSaving.set(false);
+        const field = error instanceof HttpErrorResponse
+          && error.error !== null
+          && typeof error.error === 'object'
+          && 'field' in error.error
+          && typeof error.error.field === 'string'
+          ? error.error.field
+          : null;
+        this.reject(field === null ? 'installation' : this.key(field, null), error);
+      },
     });
   }
 

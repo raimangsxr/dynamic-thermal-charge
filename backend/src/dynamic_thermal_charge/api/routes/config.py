@@ -21,9 +21,11 @@ from ..schemas import (
     READ_RESPONSES,
     AddHeaterRequest,
     ChangeResponse,
+    ChangesResponse,
     ConfigResponse,
     HeaterResponse,
     OutputView,
+    PatchInstallationRequest,
     ScheduleView,
     SetFieldRequest,
     UpdateHeaterRequest,
@@ -175,6 +177,30 @@ def patch_config(
     )
     store.context.refresh_fallback()
     return _change_view(change)
+
+
+@router.patch(
+    "/config/batch",
+    response_model=ChangesResponse,
+    responses=ERROR_RESPONSES,
+    summary="Change several installation fields at once",
+    description=(
+        "`revision` is mandatory: it is the optimistic lock. Send the revision you "
+        "read, and if somebody else wrote first you get 409 instead of silently "
+        "overwriting them.\n\n"
+        "The whole resulting configuration is validated before anything is "
+        "applied. A change that would leave the installation invalid changes "
+        "nothing at all."
+    ),
+)
+def patch_config_batch(
+    payload: PatchInstallationRequest, store: Store = Depends(usable_store)
+) -> ChangesResponse:
+    for field in payload.values:
+        _route_field(field)
+    changes = store.repository.set_fields(payload.revision, payload.values)
+    store.context.refresh_fallback()
+    return ChangesResponse(changes=[_change_view(change) for change in changes])
 
 
 @router.patch(

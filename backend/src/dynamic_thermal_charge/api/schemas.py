@@ -388,6 +388,16 @@ class SetFieldRequest(BaseModel):
     value: str
 
 
+class PatchInstallationRequest(BaseModel):
+    revision: int = Field(
+        description=(
+            "The configuration revision the change is based on. Mandatory: it is "
+            "the optimistic lock that stops two clients losing each other's edits."
+        )
+    )
+    values: dict[str, str] = Field(min_length=1)
+
+
 class AddHeaterRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     revision: int
@@ -440,6 +450,10 @@ class ChangeResponse(BaseModel):
     action: str
     revision_before: int
     revision_after: int
+
+
+class ChangesResponse(BaseModel):
+    changes: list[ChangeResponse]
 
 # --------------------------------------------------------------------------- #
 # Relay test (nullable physical confirmation is deliberate).
@@ -641,6 +655,8 @@ __all__ = [
     "PruneResponse",
     "RelayTestHistoryPage",
     "SetFieldRequest",
+    "PatchInstallationRequest",
+    "ChangesResponse",
     "UpdateHeaterRequest",
     "StatusResponse",
     "TransitionPage",
