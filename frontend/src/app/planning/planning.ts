@@ -293,9 +293,33 @@ export class Planning implements AfterViewInit, OnDestroy {
       .reduce((total, slot) => total + data.plan!.slot_minutes, 0);
   }
 
+  storedChargePercent(data: PlanningDto, heaterId: string, slotIndex: number): number {
+    const fromPlan = data.plan?.slots[slotIndex]?.stored_charge_percent_by_heater?.[heaterId];
+    if (fromPlan !== undefined) return fromPlan;
+    return data.timeline[slotIndex]?.stored_charge_percent_by_heater[heaterId] ?? 0;
+  }
+
+  kilowatts(watts: number): number {
+    return watts / 1000;
+  }
+
+  private planSlotAt(data: PlanningDto, slotIndex: number) {
+    return data.plan?.slots[slotIndex];
+  }
+
+  private heaterActiveInSlot(data: PlanningDto, slotIndex: number, heaterId: string): boolean {
+    const heaterIds = this.planSlotAt(data, slotIndex)?.heater_ids ?? data.timeline[slotIndex]?.heater_ids ?? [];
+    return heaterIds.includes(heaterId);
+  }
+
+  private aggregatePowerKw(data: PlanningDto, slotIndex: number): number {
+    const watts = this.planSlotAt(data, slotIndex)?.total_power_w ?? data.timeline[slotIndex]?.total_power_w ?? 0;
+    return this.kilowatts(watts);
+  }
+
   cumulativeLabel(data: PlanningDto, slotIndex: number): string {
     return data.heaters
-      .map((heater) => `${heater.name}: ${this.cumulativeMinutes(data, heater.id, slotIndex)} min`)
+      .map((heater) => `${heater.name}: ${this.storedChargePercent(data, heater.id, slotIndex).toFixed(1)} %`)
       .join(' · ');
   }
 
@@ -320,38 +344,58 @@ export class Planning implements AfterViewInit, OnDestroy {
       const colors = ['#2457a6', '#d46b28', '#3b8c68', '#8a4f9e', '#9b7a21'];
       this.charts.push(new Chart(this.temperatureCanvas.nativeElement, {
         type: 'line',
-        data: { labels, datasets: [{ label: 'Temperatura exterior (°C)', data: timeline.map((slot) => slot.temperature_c), borderColor: colors[0], backgroundColor: '#2457a622', tension: 0.25, spanGaps: false }] },
-        options: this.chartOptions<'line'>(fullLabels),
+        data: {
+          labels,
+          datasets: [
+            ...data.heaters.map((heater, index) => ({
+              label: `${heater.name} estimada (°C)`,
+              data: timeline.map((slot) => slot.estimated_temperature_c_by_heater?.[heater.id] ?? null),
+              borderColor: colors[index % colors.length],
+              backgroundColor: `${colors[index % colors.length]}22`,
+              tension: 0.25,
+              spanGaps: false,
+            })),
+            {
+              label: 'Previsión exterior (°C)',
+              data: timeline.map((slot) => slot.temperature_c),
+              borderColor: '#6b7280',
+              backgroundColor: '#6b728022',
+              borderDash: [6, 4],
+              tension: 0.25,
+              spanGaps: false,
+            },
+          ],
+        },
+        options: this.chartOptions<'line'>(fullLabels, '°C'),
       }));
 
       this.charts.push(new Chart(this.heaterCanvas.nativeElement, {
         type: 'bar',
         data: { labels, datasets: data.heaters.map((heater, index) => ({
           label: heater.name,
-          data: timeline.map((slot) => slot.heater_ids.includes(heater.id) ? heater.power_w : 0),
+          data: timeline.map((_slot, slotIndex) => this.heaterActiveInSlot(data, slotIndex, heater.id) ? this.kilowatts(heater.power_w) : 0),
           backgroundColor: `${colors[index % colors.length]}cc`,
         })) },
-        options: this.chartOptions<'bar'>(fullLabels, 'W'),
+        options: this.chartOptions<'bar'>(fullLabels, 'kW'),
       }));
 
       this.charts.push(new Chart(this.aggregateCanvas.nativeElement, {
         type: 'line',
-        data: { labels, datasets: [{ label: 'Potencia agregada (W)', data: timeline.map((slot) => slot.total_power_w), borderColor: '#2457a6', backgroundColor: '#2457a688', tension: 0.15 }, { label: 'Límite configurado (W)', data: timeline.map(() => data.max_total_power_w), borderColor: '#b33a3a', pointRadius: 0 }] },
-        options: this.chartOptions<'line'>(fullLabels, 'W'),
+        data: { labels, datasets: [{ label: 'Potencia agregada (kW)', data: timeline.map((_slot, slotIndex) => this.aggregatePowerKw(data, slotIndex)), borderColor: '#2457a6', backgroundColor: '#2457a688', tension: 0.15 }, { label: 'Límite configurado (kW)', data: timeline.map(() => this.kilowatts(data.max_total_power_w)), borderColor: '#b33a3a', pointRadius: 0 }] },
+        options: this.chartOptions<'line'>(fullLabels, 'kW'),
       }));
 
-      const cumulativeFullLabels = ['Inicio', ...timeline.map((slot) => this.dateTime(slot.end))];
       this.charts.push(new Chart(this.cumulativeCanvas.nativeElement, {
         type: 'line',
-        data: { labels: this.intervalLabels(cumulativeFullLabels), datasets: data.heaters.map((heater, index) => ({
-          label: `${heater.name} (min)`,
-          data: [0, ...timeline.map((_slot, slotIndex) => this.cumulativeMinutes(data, heater.id, slotIndex))],
+        data: { labels, datasets: data.heaters.map((heater, index) => ({
+          label: `${heater.name} (%)`,
+          data: timeline.map((_slot, slotIndex) => this.storedChargePercent(data, heater.id, slotIndex)),
           borderColor: colors[index % colors.length],
           backgroundColor: `${colors[index % colors.length]}22`,
           stepped: true,
           tension: 0,
         })) },
-        options: this.chartOptions<'line'>(cumulativeFullLabels, 'Minutos de carga acumulada'),
+        options: this.chartOptions<'line'>(fullLabels, 'Carga (%)'),
       }));
     } catch {
       // Canvas is unavailable in some browsers/test environments. The table is

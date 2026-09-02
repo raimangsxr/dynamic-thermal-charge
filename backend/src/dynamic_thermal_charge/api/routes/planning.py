@@ -140,13 +140,11 @@ def get_planning(
     timeline = _build_timeline(
         config.heaters,
         power_by_id,
-        assigned,
-        stored_temperatures,
+        _ordered_plan_slots(slots),
         forecast,
         horizon_start,
         horizon_end,
         slot_delta,
-        None,
     )
 
     response = PlanningResponse(
@@ -250,14 +248,6 @@ def _automatic_planning_response(
     horizon_hours: int,
 ) -> PlanningResponse:
     power_by_id = {heater.id: heater.power_w for heater in config.heaters}
-    assigned: dict[tuple[datetime, datetime], list[str]] = {}
-    stored_temperatures: dict[tuple[datetime, datetime], tuple[float | None, bool]] = {}
-    soc_percent_by_slot: dict[tuple[datetime, datetime], dict[str, float]] = {}
-    for item in automatic["slots"]:
-        key = (item["start"], item["end"])
-        assigned[key] = item["heater_ids"]
-        stored_temperatures[key] = (item["outdoor_temperature_c"], False)
-        soc_percent_by_slot[key] = item["stored_charge_percent"]
     slot_delta = timedelta(minutes=automatic["slot_minutes"])
     horizon_start = automatic["horizon_start"]
     horizon_end = horizon_start + timedelta(hours=horizon_hours)
@@ -275,6 +265,7 @@ def _automatic_planning_response(
                 total_power_w=item["power_w"],
                 temperature_c=item["outdoor_temperature_c"],
                 temperature_interpolated=False,
+                stored_charge_percent_by_heater=item["stored_charge_percent"],
             )
             for item in automatic["slots"]
         ],
@@ -294,13 +285,11 @@ def _automatic_planning_response(
         timeline=_build_timeline(
             config.heaters,
             power_by_id,
-            assigned,
-            stored_temperatures,
+            automatic["slots"],
             latest_forecast,
             horizon_start,
             horizon_end,
             slot_delta,
-            soc_percent_by_slot,
         ),
     )
 
@@ -415,62 +404,135 @@ def _preview_response(plan, constraints) -> PlanningPreviewResponse:
     )
 
 
+def _ordered_plan_slots(slots: list[PlanningSlotView]) -> list[dict]:
+    return [
+        {
+            "start": slot.start,
+            "end": slot.end,
+            "heater_ids": slot.heater_ids,
+            "power_w": slot.total_power_w,
+            "outdoor_temperature_c": slot.temperature_c,
+            "temperature_c": slot.temperature_c,
+            "temperature_interpolated": slot.temperature_interpolated,
+            "stored_charge_percent": slot.stored_charge_percent_by_heater or None,
+        }
+        for slot in slots
+    ]
+
+
+def _plan_slot_maps(
+    ordered_plan_slots: list[dict],
+) -> tuple[
+    dict[int, list[str]],
+    dict[int, tuple[float | None, bool]],
+    dict[int, dict[str, float]],
+    dict[int, int],
+]:
+    """Map contiguous plan slots to timeline indices by order, not datetime keys."""
+    assigned_by_index: dict[int, list[str]] = {}
+    temperatures_by_index: dict[int, tuple[float | None, bool]] = {}
+    soc_by_index: dict[int, dict[str, float]] = {}
+    power_by_index: dict[int, int] = {}
+    for index, item in enumerate(ordered_plan_slots):
+        assigned_by_index[index] = list(item.get("heater_ids") or [])
+        outdoor = item.get("outdoor_temperature_c", item.get("temperature_c"))
+        temperatures_by_index[index] = (
+            outdoor,
+            bool(item.get("temperature_interpolated", False)),
+        )
+        projected = item.get("stored_charge_percent")
+        if projected:
+            soc_by_index[index] = projected
+        if item.get("power_w") is not None:
+            power_by_index[index] = int(item["power_w"])
+    return assigned_by_index, temperatures_by_index, soc_by_index, power_by_index
+
+
+def _estimate_accumulator_temperature(heater, outdoor_c: float | None, soc_percent: float) -> float | None:
+    """Estimate room temperature from outdoor forecast and planned stored charge."""
+    if outdoor_c is None:
+        return None
+    profile = heater.thermal
+    target = profile.target_temperature_c if profile is not None else outdoor_c
+    bounded_soc = max(0.0, min(100.0, soc_percent))
+    return outdoor_c + (target - outdoor_c) * (bounded_soc / 100)
+
+
 def _build_timeline(
     heaters,
     power_by_id: dict[str, int],
-    assigned: dict[tuple[datetime, datetime], list[str]],
-    stored_temperatures: dict[tuple[datetime, datetime], tuple[float | None, bool]],
+    ordered_plan_slots: list[dict],
     forecast,
     horizon_start: datetime,
     horizon_end: datetime,
     slot_delta: timedelta,
-    soc_percent_by_slot: dict[tuple[datetime, datetime], dict[str, float]] | None = None,
 ) -> list[PlanningTimelineSlotView]:
-    """Project the accepted plan across exactly 48 hours.
-
-    When SOC projections are available from an automatic plan, each slot reports
-    equivalent full-charge minutes derived from the planned end-of-slot SOC.
-  Otherwise legacy scheduler plans accumulate equivalent minutes only while a
-    heater is assigned to charge.
-    """
+    """Project the accepted plan across the configured forecast horizon."""
     heater_by_id = {heater.id: heater for heater in heaters}
     charge_minutes = {heater.id: 0.0 for heater in heaters}
+    stored_charge_percent = {heater.id: 0.0 for heater in heaters}
+    assigned_by_index, temperatures_by_index, soc_by_index, power_by_index = _plan_slot_maps(
+        ordered_plan_slots,
+    )
+    has_projected_soc = bool(soc_by_index)
     timeline: list[PlanningTimelineSlotView] = []
     cursor = horizon_start
+    slot_index = 0
     while cursor < horizon_end:
         end = min(cursor + slot_delta, horizon_end)
-        key = (cursor, end)
-        heater_ids = sorted(assigned.get(key, []))
-        temperature, interpolated = stored_temperatures.get(
-            key, _temperature_for_interval(forecast, cursor, end)
+        heater_ids = sorted(assigned_by_index.get(slot_index, []))
+        temperature, interpolated = temperatures_by_index.get(
+            slot_index, _temperature_for_interval(forecast, cursor, end)
         )
         slot_minutes = (end - cursor).total_seconds() / 60
-        if soc_percent_by_slot is not None:
-            projected = soc_percent_by_slot.get(key)
-            if projected is not None:
-                for heater in heaters:
-                    soc = projected.get(heater.id, 0.0)
-                    charge_minutes[heater.id] = soc / 100 * heater.full_charge_minutes
-        else:
+        projected = soc_by_index.get(slot_index)
+        if projected is not None:
+            for heater in heaters:
+                soc = projected.get(heater.id, 0.0)
+                stored_charge_percent[heater.id] = soc
+                charge_minutes[heater.id] = soc / 100 * heater.full_charge_minutes
+        elif not has_projected_soc:
             for heater in heaters:
                 if heater.id in heater_ids:
                     charge_minutes[heater.id] += slot_minutes
+                stored_charge_percent[heater.id] = (
+                    charge_minutes[heater.id] / heater.full_charge_minutes * 100
+                    if heater.full_charge_minutes
+                    else 0.0
+                )
 
         timeline.append(
             PlanningTimelineSlotView(
                 start=cursor,
                 end=end,
                 heater_ids=heater_ids,
-                total_power_w=sum(power_by_id.get(heater_id, 0) for heater_id in heater_ids),
+                total_power_w=power_by_index.get(
+                    slot_index,
+                    sum(power_by_id.get(heater_id, 0) for heater_id in heater_ids),
+                ),
                 temperature_c=temperature,
                 temperature_interpolated=interpolated,
                 charge_minutes_by_heater={
                     heater_id: round(charge_minutes[heater_id], 2)
                     for heater_id in heater_by_id
                 },
+                stored_charge_percent_by_heater={
+                    heater_id: round(stored_charge_percent[heater_id], 2)
+                    for heater_id in heater_by_id
+                },
+                estimated_temperature_c_by_heater={
+                    heater_id: round(estimated, 2)
+                    for heater_id in heater_by_id
+                    if (estimated := _estimate_accumulator_temperature(
+                        heater_by_id[heater_id],
+                        temperature,
+                        stored_charge_percent[heater_id],
+                    )) is not None
+                },
             )
         )
         cursor = end
+        slot_index += 1
     return timeline
 
 

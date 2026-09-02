@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PlanningDto } from '../core/api.types';
 import { Planning } from './planning';
 
-const chartState = vi.hoisted(() => ({ configs: [] as Array<{ data: { labels: unknown[]; datasets: Array<{ label?: string }> } }> }));
+const chartState = vi.hoisted(() => ({ configs: [] as Array<{ data: { labels: unknown[]; datasets: Array<{ label?: string; data?: unknown[] }> } }> }));
 
 vi.mock('chart.js/auto', () => ({
   Chart: class {
@@ -34,14 +34,14 @@ const PLANNING: PlanningDto = {
     window_start: '2026-01-16T00:00:00Z', window_end: '2026-01-16T01:00:00Z',
     slot_minutes: 30, installation_revision: 4, created_at: '2026-01-15T20:00:00Z',
     slots: [
-      { start: '2026-01-16T00:00:00Z', end: '2026-01-16T00:30:00Z', heater_ids: ['salon'], total_power_w: 2800, temperature_c: 3, temperature_interpolated: false },
-      { start: '2026-01-16T00:30:00Z', end: '2026-01-16T01:00:00Z', heater_ids: [], total_power_w: 0, temperature_c: null, temperature_interpolated: true },
+      { start: '2026-01-16T00:00:00Z', end: '2026-01-16T00:30:00Z', heater_ids: ['salon'], total_power_w: 2800, temperature_c: 3, temperature_interpolated: false, stored_charge_percent_by_heater: { salon: 6.25 } },
+      { start: '2026-01-16T00:30:00Z', end: '2026-01-16T01:00:00Z', heater_ids: [], total_power_w: 0, temperature_c: null, temperature_interpolated: true, stored_charge_percent_by_heater: { salon: 4.17 } },
     ],
   },
   horizon_start: '2026-01-16T00:00:00Z', horizon_end: '2026-01-18T00:00:00Z',
   timeline: [
-    { start: '2026-01-16T00:00:00Z', end: '2026-01-16T00:30:00Z', heater_ids: ['salon'], total_power_w: 2800, temperature_c: 3, temperature_interpolated: false, charge_minutes_by_heater: { salon: 30 } },
-    { start: '2026-01-16T00:30:00Z', end: '2026-01-16T01:00:00Z', heater_ids: [], total_power_w: 0, temperature_c: 3.5, temperature_interpolated: false, charge_minutes_by_heater: { salon: 20 } },
+    { start: '2026-01-16T00:00:00Z', end: '2026-01-16T00:30:00Z', heater_ids: ['salon'], total_power_w: 2800, temperature_c: 3, temperature_interpolated: false, charge_minutes_by_heater: { salon: 30 }, stored_charge_percent_by_heater: { salon: 6.25 }, estimated_temperature_c_by_heater: { salon: 18.5 } },
+    { start: '2026-01-16T00:30:00Z', end: '2026-01-16T01:00:00Z', heater_ids: [], total_power_w: 0, temperature_c: 3.5, temperature_interpolated: false, charge_minutes_by_heater: { salon: 20 }, stored_charge_percent_by_heater: { salon: 4.17 }, estimated_temperature_c_by_heater: { salon: 18.2 } },
   ],
   allocations: [{ heater_id: 'salon', requested_minutes: 60, allocated_minutes: 30, unmet_minutes: 30 }],
   heaters: [{ id: 'salon', name: 'Salón', power_w: 2800, priority: 90, enabled: true }],
@@ -109,6 +109,8 @@ describe('Planning', () => {
       fixture.componentInstance.dateTime(PLANNING.timeline[0].start),
       '',
     ]);
+    expect(chartState.configs[2].data.datasets[0].data?.[0]).toBe(2.8);
+    expect(chartState.configs[4].data.datasets[0].data).toEqual([6.25, 4.17]);
   });
 
   it('opens forecast and planning details in accessible dialogs with explicit close actions', async () => {
@@ -161,6 +163,8 @@ describe('Planning', () => {
   it('shows the reserve dropping when the next interval has no charge', () => {
     expect(fixture.componentInstance.cumulativeMinutes(PLANNING, 'salon', 0)).toBe(30);
     expect(fixture.componentInstance.cumulativeMinutes(PLANNING, 'salon', 1)).toBe(20);
+    expect(fixture.componentInstance.storedChargePercent(PLANNING, 'salon', 0)).toBe(6.25);
+    expect(fixture.componentInstance.storedChargePercent(PLANNING, 'salon', 1)).toBe(4.17);
   });
 
   it('renders constraint percentages and converts them back to the API fraction', () => {
