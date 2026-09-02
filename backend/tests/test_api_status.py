@@ -246,6 +246,88 @@ def test_planning_endpoint_prefers_automatic_plan_slot_minutes_over_legacy_plan(
     assert (slot_end - slot_start).total_seconds() == 15 * 60
 
 
+def test_planning_estimated_temperature_interpolates_between_outdoor_and_target():
+    from dynamic_thermal_charge.api.routes.planning import _estimate_accumulator_temperature
+    from dynamic_thermal_charge.persistence.seed import example_installation
+
+    heater = example_installation().heaters[0]
+    assert _estimate_accumulator_temperature(heater, 17.0, 0.0) == pytest.approx(17.0)
+    assert _estimate_accumulator_temperature(heater, 17.0, 100.0) == pytest.approx(21.0)
+    assert _estimate_accumulator_temperature(heater, 17.0, 50.0) == pytest.approx(19.0)
+
+
+def test_planning_timeline_matches_plan_slots_by_index_not_exact_datetime_keys(
+    client, initialised_store, recorder,
+):
+    from dynamic_thermal_charge.charge_planning import AutomaticPlan, AutomaticPlanSlot, FEASIBLE
+
+    config, revision = initialised_store.repository.current()
+    heater_ids = [heater.id for heater in config.heaters[:2]]
+    start = API_NOW.replace(microsecond=123456)
+    points = tuple(
+        HourlyForecastPoint(start + timedelta(hours=index), 6.0)
+        for index in range(49)
+    )
+    recorder.record_forecast(
+        OutdoorForecast(
+            date=start.date(),
+            average_temperature_c=6.0,
+            minimum_temperature_c=4.0,
+            maximum_temperature_c=8.0,
+            source="aemet",
+            hourly_points=points,
+        )
+    )
+    slots = []
+    cursor = start.replace(microsecond=0)
+    for index in range(4):
+        end = cursor + timedelta(minutes=30)
+        active = (heater_ids[0],) if index % 2 == 0 else (heater_ids[1],)
+        slots.append(
+            AutomaticPlanSlot(
+                cursor,
+                end,
+                active,
+                config.heaters[0].power_w,
+                {heater.id: 10.0 * (index + 1) for heater in config.heaters},
+                {heater.id: 0.0 for heater in config.heaters},
+                outdoor_temperature_c=6.0,
+            )
+        )
+        cursor = end
+    automatic = AutomaticPlan(
+        start.replace(microsecond=0),
+        cursor,
+        30,
+        tuple(slots),
+        (),
+        FEASIBLE,
+        (),
+        "timeline-index-test",
+        start,
+    )
+    initialised_store.planning.save_plan(
+        automatic,
+        configuration_revision=revision,
+        constraints_revision=initialised_store.planning.site()["revision"],
+        reason="test",
+        active=True,
+    )
+
+    response = client.get("/api/v1/planning", headers=AUTH)
+    assert response.status_code == 200
+    body = response.json()
+    for plan_slot, timeline_slot in zip(body["plan"]["slots"], body["timeline"]):
+        assert set(plan_slot["heater_ids"]) == set(timeline_slot["heater_ids"])
+        assert timeline_slot["stored_charge_percent_by_heater"]
+        assert timeline_slot["estimated_temperature_c_by_heater"]
+    assert body["timeline"][0]["heater_ids"]
+    assert body["timeline"][1]["heater_ids"]
+    assert body["timeline"][0]["heater_ids"] != body["timeline"][1]["heater_ids"]
+    charging_slots = [slot for slot in body["timeline"] if slot["heater_ids"]]
+    assert len(charging_slots) == 4
+
+
 def test_planning_endpoint_prefers_the_newest_stored_forecast_over_plan_forecast(
     client, initialised_store, recorder
 ):

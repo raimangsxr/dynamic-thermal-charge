@@ -144,6 +144,7 @@ class PlanningSlotView(PlanSlotView):
     total_power_w: int = 0
     temperature_c: float | None = None
     temperature_interpolated: bool = False
+    stored_charge_percent_by_heater: dict[str, float] = Field(default_factory=dict)
 
 
 class PlanningTimelineSlotView(BaseModel):
@@ -154,6 +155,8 @@ class PlanningTimelineSlotView(BaseModel):
     temperature_c: float | None = None
     temperature_interpolated: bool = False
     charge_minutes_by_heater: dict[str, float] = Field(default_factory=dict)
+    stored_charge_percent_by_heater: dict[str, float] = Field(default_factory=dict)
+    estimated_temperature_c_by_heater: dict[str, float] = Field(default_factory=dict)
 
 
 class PlanningHeaterView(BaseModel):

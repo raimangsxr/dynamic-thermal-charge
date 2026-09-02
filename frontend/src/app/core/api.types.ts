@@ -79,6 +79,7 @@ export interface PlanningSlotDto extends PlanSlotDto {
   total_power_w: number;
   temperature_c: number | null;
   temperature_interpolated: boolean;
+  stored_charge_percent_by_heater?: Record<string, number>;
 }
 
 export interface PlanningTimelineSlotDto {
@@ -89,6 +90,8 @@ export interface PlanningTimelineSlotDto {
   temperature_c: number | null;
   temperature_interpolated: boolean;
   charge_minutes_by_heater: Record<string, number>;
+  stored_charge_percent_by_heater: Record<string, number>;
+  estimated_temperature_c_by_heater: Record<string, number>;
 }
 
 export interface PlanningPlanDto {
