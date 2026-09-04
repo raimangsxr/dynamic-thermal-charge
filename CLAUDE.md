@@ -1,0 +1,1 @@
+/Users/rromanit/workspace/dynamic-thermal-charge/AGENTS.md

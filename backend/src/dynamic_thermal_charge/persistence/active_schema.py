@@ -17,7 +17,7 @@ from .topology import BootstrapCorruptError, BootstrapIncompatibleError
 from . import SchemaStatus, SchemaVersionError
 
 
-CONFIGURATION_SCHEMA_REVISION = 2
+CONFIGURATION_SCHEMA_REVISION = 4
 APPLICATION_SCHEMA_REVISION = 3
 POSTGRES_CONFIGURATION_SCHEMA = "dtc_config"
 POSTGRES_APPLICATION_SCHEMA = "dtc_app"
@@ -232,6 +232,34 @@ def _upgrade_configuration_schema(engine: Engine, revision: int, expected: int) 
                 "), 1)"
             ))
         revision = 2
+    if revision == 2 and expected >= 3:
+        site_columns = {
+            column["name"] for column in inspect(engine).get_columns("charge_planning_site")
+        }
+        additions = (
+            ("mqtt_simulation_enabled", "BOOLEAN NOT NULL DEFAULT 0"),
+            ("mqtt_simulation_initial_temperature_c", "FLOAT NOT NULL DEFAULT 45"),
+            ("mqtt_simulation_publish_seconds", "FLOAT NOT NULL DEFAULT 30"),
+            ("mqtt_simulation_topic_prefix", "VARCHAR(256) NOT NULL DEFAULT 'dtc/sim'"),
+            ("mqtt_simulation_thermal_loss_c_per_hour", "FLOAT NOT NULL DEFAULT 2"),
+        )
+        with engine.begin() as connection:
+            for name, definition in additions:
+                if name not in site_columns:
+                    connection.execute(
+                        text(f"ALTER TABLE charge_planning_site ADD COLUMN {name} {definition}")
+                    )
+        revision = 3
+    if revision == 3 and expected >= 4:
+        site_columns = {
+            column["name"] for column in inspect(engine).get_columns("charge_planning_site")
+        }
+        if "base_load_w" not in site_columns:
+            with engine.begin() as connection:
+                connection.execute(
+                    text("ALTER TABLE charge_planning_site ADD COLUMN base_load_w INTEGER NOT NULL DEFAULT 0")
+                )
+        revision = 4
     if revision != expected:
         raise BootstrapIncompatibleError(
             f"configuration schema revision {revision} has no registered upgrade path to {expected}"

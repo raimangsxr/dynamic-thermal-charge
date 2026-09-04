@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import replace
-from datetime import datetime, timedelta
+from datetime import datetime, time as clock_time, timedelta
 import logging
 import math
 import signal
@@ -27,7 +27,7 @@ from .scheduler import ChargeScheduler, ScheduleResult, ScheduleSlot
 from .service import ControllerService, PlanRefresh
 from .system_settings import MqttSystemSettings
 from .thermal import ThermalDemandEngine, select_indoor_temperatures
-from .watchdog import ForecastWatchdog
+from .watchdog import DailyAemetForecastManager, ForecastWatchdog
 from .weather import OutdoorForecast, WeatherProvider
 
 logger = logging.getLogger(__name__)
@@ -148,6 +148,13 @@ def _run_controller(
     service: ControllerService | None = None
     with _controlled_termination():
         try:
+            _require_real_telemetry_for_gpio(
+                driver_name,
+                _live_mqtt_settings(
+                    store, None if system is None else system.mqtt
+                ),
+                store.planning.site(),
+            )
             driver = RecordingOutputDriver(
                 _build_output_driver(config, driver_name),
                 history,
@@ -172,6 +179,27 @@ def _run_controller(
                 live_mqtt = _live_mqtt_settings(store, None if system is None else system.mqtt)
                 planning_site = store.planning.site()
                 automatic_constraints = store.planning.constraints()
+                logger.debug(
+                    "Plan refresh started: at=%s constraints=%d active_automatic=%s "
+                    "replan_minutes=%s",
+                    now.isoformat(),
+                    len(automatic_constraints),
+                    store.planning.active_plan() is not None,
+                    planning_site["replan_minutes"],
+                )
+                timezone_name = (
+                    live_config.schedule.timezone
+                    if live_config.schedule is not None
+                    else "UTC"
+                )
+                _refresh_daily_aemet_forecast(
+                    store,
+                    history,
+                    provider,
+                    now,
+                    query_hour=int(planning_site["aemet_query_hour"]),
+                    timezone_name=timezone_name,
+                )
                 if automatic_constraints or store.planning.active_plan() is not None:
                     automatic = _build_automatic_runtime_plan(
                         store,
@@ -189,9 +217,19 @@ def _run_controller(
                             reason="periodic",
                             active=automatic[0].status != "INVALID",
                         )
+                        logger.debug(
+                            "Automatic plan persisted: status=%s slots=%d violations=%d",
+                            automatic[0].status,
+                            len(automatic[0].slots),
+                            len(automatic[0].violations),
+                        )
                         return PlanRefresh(
                             plan=automatic[1],
-                            next_refresh_seconds=_seconds_to_next_slot(now, live_config.site.slot_minutes),
+                            next_refresh_seconds=_seconds_to_next_replan(
+                                now,
+                                replan_minutes=int(planning_site["replan_minutes"]),
+                                slot_minutes=live_config.site.slot_minutes,
+                            ),
                             plan_ref=None,
                             installation_revision=live_revision,
                         )
@@ -304,6 +342,7 @@ def _build_automatic_runtime_plan(
         horizon_hours=int(planning_site["forecast_horizon_hours"]),
         slot_minutes=config.site.slot_minutes,
         max_total_power_w=int(planning_site.get("contracted_power_w", config.site.max_total_power_w)),
+        base_load_w=int(planning_site.get("base_load_w", 0)),
         max_heating_power_w=int(planning_site.get("max_heating_power_w", config.site.max_heating_power_w or config.site.max_total_power_w)),
         design_indoor_temperature_c=float(planning_site.get("design_indoor_temperature_c", config.site.design_indoor_temperature_c)),
         design_outdoor_temperature_c=float(planning_site.get("design_outdoor_temperature_c", config.site.design_outdoor_temperature_c)),
@@ -318,14 +357,87 @@ def _build_automatic_runtime_plan(
         for slot in plan.slots
     )
     allocated = {heater.id: sum(config.site.slot_minutes for slot in plan.slots if heater.id in slot.heater_ids) for heater in config.heaters}
-    unmet = {item.heater_id: round(item.deficit_percent * config.heaters[[h.id for h in config.heaters].index(item.heater_id)].full_charge_minutes / 100) for item in plan.deficits if item.deficit_percent > 0}
-    return plan, ScheduleResult(legacy_slots, allocated, unmet)
+    return plan, ScheduleResult(
+        legacy_slots,
+        allocated,
+        _aggregate_unmet_minutes(config, plan.deficits),
+    )
+
+
+def _aggregate_unmet_minutes(config: AppConfig, violations) -> dict[str, int]:
+    heaters_by_id = {heater.id: heater for heater in config.heaters}
+    unmet: dict[str, int] = {}
+    for item in violations:
+        if item.heater_id is None or item.deficit_percent <= 0:
+            continue
+        heater = heaters_by_id.get(item.heater_id)
+        if heater is None:
+            continue
+        minutes = round(item.deficit_percent * heater.full_charge_minutes / 100)
+        unmet[item.heater_id] = unmet.get(item.heater_id, 0) + minutes
+    return unmet
 
 
 def _seconds_to_next_slot(now: datetime, slot_minutes: int) -> int:
     floor = now.replace(second=0, microsecond=0, minute=(now.minute // slot_minutes) * slot_minutes)
     boundary = floor + timedelta(minutes=slot_minutes)
     return max(1, math.ceil((boundary - now).total_seconds()))
+
+
+def _seconds_to_next_replan(
+    now: datetime, *, replan_minutes: int, slot_minutes: int
+) -> int:
+    """Schedule no sooner than the configured cadence on a slot boundary."""
+    cadence_minutes = max(replan_minutes, slot_minutes)
+    target = now + timedelta(minutes=cadence_minutes)
+    floor = target.replace(
+        second=0,
+        microsecond=0,
+        minute=(target.minute // slot_minutes) * slot_minutes,
+    )
+    boundary = floor if floor == target else floor + timedelta(minutes=slot_minutes)
+    return max(slot_minutes * 60, math.ceil((boundary - now).total_seconds()))
+
+
+def _refresh_daily_aemet_forecast(
+    store,
+    history,
+    provider: WeatherProvider,
+    now: datetime,
+    *,
+    query_hour: int,
+    timezone_name: str,
+) -> None:
+    """Run and durably record the AEMET cycle without stopping planning."""
+    manager = DailyAemetForecastManager(
+        provider, query_hour=query_hour, timezone_name=timezone_name
+    )
+    zone = ZoneInfo(timezone_name)
+    local_date = now.astimezone(zone).date()
+    scheduled_at = datetime.combine(
+        local_date, clock_time(hour=query_hour), tzinfo=zone
+    )
+    try:
+        current = store.planning.forecast_cycle(local_date, scheduled_at)
+        result = manager.poll(now, current)
+        forecast_ref = (
+            history.record_forecast(result.forecast)
+            if result.forecast is not None and result.state.last_result == "success"
+            else None
+        )
+        store.planning.save_forecast_cycle(result.state, forecast_ref)
+        logger.debug(
+            "AEMET cycle refreshed: local_date=%s result=%s attempt=%d completed=%s "
+            "forecast_persisted=%s next_retry_at=%s",
+            local_date.isoformat(),
+            result.state.last_result,
+            result.state.attempt,
+            result.state.completed,
+            forecast_ref is not None,
+            result.state.next_retry_at.isoformat() if result.state.next_retry_at else None,
+        )
+    except Exception:
+        logger.error("Could not refresh the daily AEMET forecast", exc_info=True)
 
 
 def _record_forecast_cycle(
@@ -441,6 +553,26 @@ def _build_output_driver(config: AppConfig, driver_name: str) -> OutputDriver:
             {heater.id: heater.output for heater in config.heaters if heater.enabled}
         )
     raise ValueError(f"unsupported output driver: {driver_name}")
+
+
+def _require_real_telemetry_for_gpio(
+    driver_name: str,
+    mqtt: MqttSystemSettings | None,
+    planning_site: dict[str, object],
+) -> None:
+    """Never allow physical relays to run from invented accumulator state."""
+    if driver_name != "gpio":
+        return
+    causes: list[str] = []
+    if mqtt is not None and not mqtt.enabled:
+        causes.append("MQTT is disabled")
+    if bool(planning_site.get("mqtt_simulation_enabled", False)):
+        causes.append("accumulator simulation is enabled")
+    if not causes:
+        return
+    message = "GPIO controller startup rejected: " + "; ".join(causes)
+    logger.critical(message)
+    raise RuntimeError(message)
 
 
 # ------------------------------------------------------------------------ api

@@ -14,6 +14,7 @@ from ..persistence import (
     IndoorReadingRepository,
 )
 from . import IncomingMessage
+from .simulator import heater_telemetry_topics, simulation_config_from_site
 
 
 logger = logging.getLogger(__name__)
@@ -93,12 +94,9 @@ class ChargeTelemetryMessageProcessor:
             logger.error("Cannot resolve charge telemetry topic: %s", exc)
             return False
         match = None
+        simulation = simulation_config_from_site(self._planning.site())
         for heater in config.heaters:
-            topics = {
-                (heater.temperature_topic or heater.indoor_topic): "temperature_c",
-                heater.target_temperature_topic: "target_temperature_c",
-                heater.stored_charge_topic: "stored_charge_percent",
-            }
+            topics = heater_telemetry_topics(heater, simulation=simulation)
             field = topics.get(message.topic)
             if field is not None:
                 match = (heater.id, field)

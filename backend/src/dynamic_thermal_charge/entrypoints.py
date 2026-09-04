@@ -177,17 +177,29 @@ def run_api() -> None:
 
 
 def run_mqtt() -> None:
+    import threading
+
+    from .logging_config import configure_logging
     from .mqtt.client import PahoMqttClient
     from .mqtt.commands import CommandProcessor
     from .mqtt.indoor import ChargeTelemetryMessageProcessor, IndoorMessageProcessor
     from .mqtt.publisher import MqttPublisher, StoreSnapshotReader
     from .mqtt.service import MqttService, MqttSupervisor
     from .mqtt.settings import settings_from_repository
+    from .mqtt.simulator import (
+        MqttPlanningSimulator,
+        MqttSimulationService,
+        MqttSimulationSupervisor,
+        simulation_config_from_site,
+        simulation_subscription_topics,
+    )
     from .mqtt.topics import TopicLayout
     from .persistence.heartbeat import read_heartbeat
     from .persistence.history import SqlStatusReader
 
     store = _configured_store()
+    system_snapshot = store.system_configuration.current()
+    configure_logging(system_snapshot.configuration.logging.level)
     if store.context is not None:
         store.context.publish_process_revision("mqtt")
     def build_service() -> MqttService:
@@ -207,12 +219,23 @@ def run_mqtt() -> None:
             clock=lambda: datetime.now(timezone.utc),
         )
         transport = PahoMqttClient(settings)
+
+        def all_subscriptions() -> tuple[str, ...]:
+            base = snapshots.subscriptions(topics)
+            config, _revision = store.repository.current()
+            simulated = simulation_subscription_topics(
+                config.heaters,
+                store.planning.site(),
+                mqtt_enabled=True,
+            )
+            return tuple(dict.fromkeys((*base, *simulated)))
+
         publisher = MqttPublisher(
             transport,
             topics,
             snapshots,
             discovery=lambda: snapshots.discovery(topics, store.repository.installation_name()),
-            subscriptions=lambda: snapshots.subscriptions(topics),
+            subscriptions=all_subscriptions,
         )
         commands = CommandProcessor(store.repository, topics, republish=publisher.republish_heater)
         indoor = IndoorMessageProcessor(
@@ -244,12 +267,53 @@ def run_mqtt() -> None:
             indoor_handler=handle_telemetry,
         )
 
+    def build_simulation_service() -> MqttSimulationService:
+        settings = settings_from_repository(store.system_configuration)
+        application_engine = store.application_engine or store.engine
+        installation_id = store.repository.installation_id()
+        status_reader = SqlStatusReader(
+            application_engine, installation_id, store.location
+        )
+
+        def config_provider():
+            return simulation_config_from_site(store.planning.site())
+
+        def heaters_provider():
+            config, _revision = store.repository.current()
+            return config.heaters
+
+        def charging_state_provider():
+            latest = status_reader.last_output_states()
+            return {heater_id: state for heater_id, (state, _at) in latest.items()}
+
+        client = PahoMqttClient(settings)
+        simulator = MqttPlanningSimulator(
+            client,
+            config_provider=config_provider,
+            heaters_provider=heaters_provider,
+            charging_state_provider=charging_state_provider,
+            clock=lambda: datetime.now(timezone.utc),
+        )
+        return MqttSimulationService(client=client, simulator=simulator)
+
     supervisor = MqttSupervisor(store.system_configuration, build_service)
+    simulation_supervisor = MqttSimulationSupervisor(
+        store.system_configuration,
+        store.planning,
+        build_simulation_service,
+    )
+    simulation_thread = threading.Thread(
+        target=simulation_supervisor.run,
+        name="mqtt-planning-simulation",
+        daemon=True,
+    )
+    simulation_thread.start()
     try:
         supervisor.run()
     except KeyboardInterrupt:
         logger.info("MQTT publisher stopped")
     finally:
+        simulation_supervisor.stop()
         supervisor.stop()
 
 

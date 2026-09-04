@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 import logging
 
@@ -81,15 +81,35 @@ class DailyAemetForecastManager:
     def poll(self, now: datetime, state: ForecastCycleState | None = None) -> DailyForecastResult:
         local_date = now.astimezone(self._cycle.timezone).date()
         current = state or self._cycle.initial_state(local_date)
+        logger.debug(
+            "Daily AEMET forecast poll: local_date=%s attempt=%d due=%s",
+            local_date.isoformat(),
+            current.attempt,
+            self._cycle.due(current, now),
+        )
         if not self._cycle.due(current, now):
             return DailyForecastResult(self._last_valid, current, _seconds_until(current, now))
         try:
             forecast = self._provider.forecast_for(local_date)
-        except WeatherProviderError as exc:
-            updated = self._cycle.failure(current, now, str(exc))
+            if forecast.source != "aemet":
+                raise WeatherProviderError(
+                    f"unexpected forecast source: {forecast.source}"
+                )
+        except Exception as exc:
+            updated = replace(
+                self._cycle.failure(current, now, str(exc)),
+                last_attempt_at=now,
+                last_result="error",
+                next_run_at=None,
+            )
             return DailyForecastResult(self._last_valid, updated, _seconds_until(updated, now))
         self._last_valid = forecast
-        updated = self._cycle.success(current)
+        updated = replace(
+            self._cycle.success(current),
+            last_attempt_at=now,
+            last_result="success",
+            next_run_at=now.astimezone(self._cycle.timezone) + timedelta(days=1),
+        )
         return DailyForecastResult(forecast, updated, 24 * 60 * 60)
 
 

@@ -31,9 +31,15 @@ const PLANNING_FIELDS: FieldDefinition[] = [
   { name: 'aemet_query_hour', type: 'number' },
   { name: 'contracted_power_w', type: 'number' },
   { name: 'max_heating_power_w', type: 'number' },
+  { name: 'base_load_w', type: 'number' },
   { name: 'design_indoor_temperature_c', type: 'number' },
   { name: 'design_outdoor_temperature_c', type: 'number' },
   { name: 'feedback_horizon_hours', type: 'number' },
+  { name: 'mqtt_simulation_enabled', type: 'boolean' },
+  { name: 'mqtt_simulation_initial_temperature_c', type: 'number' },
+  { name: 'mqtt_simulation_publish_seconds', type: 'number' },
+  { name: 'mqtt_simulation_topic_prefix', type: 'text' },
+  { name: 'mqtt_simulation_thermal_loss_c_per_hour', type: 'number' },
 ];
 const FIELDS: Record<SystemSection, FieldDefinition[]> = {
   database: [{ name: 'driver', type: 'select', options: DATABASE_DRIVERS }, { name: 'host', type: 'text' }, { name: 'port', type: 'number' }, { name: 'database', type: 'text' }, { name: 'tls', type: 'boolean' }, { name: 'trusted_no_tls', type: 'boolean' }],
@@ -109,7 +115,8 @@ export class SystemConfig {
       return [
         { title: 'Horizonte y replanificación', fields: fields.slice(0, 3) },
         { title: 'Límites de potencia', fields: fields.slice(3, 5) },
-        { title: 'Modelo de demanda', fields: fields.slice(5) },
+        { title: 'Modelo de demanda', fields: fields.slice(5, 8) },
+        { title: 'Simulación MQTT de acumuladores', fields: fields.slice(8) },
       ];
     }
     if (this.selected() === 'mqtt') {
@@ -227,9 +234,15 @@ export class SystemConfig {
         aemet_query_hour: this.coerce(PLANNING_FIELDS[2], this.value('aemet_query_hour')) as number,
         contracted_power_w: this.coerce(PLANNING_FIELDS[3], this.value('contracted_power_w')) as number,
         max_heating_power_w: this.coerce(PLANNING_FIELDS[4], this.value('max_heating_power_w')) as number,
-        design_indoor_temperature_c: this.coerce(PLANNING_FIELDS[5], this.value('design_indoor_temperature_c')) as number,
-        design_outdoor_temperature_c: this.coerce(PLANNING_FIELDS[6], this.value('design_outdoor_temperature_c')) as number,
-        feedback_horizon_hours: this.coerce(PLANNING_FIELDS[7], this.value('feedback_horizon_hours')) as number,
+        base_load_w: this.coerce(PLANNING_FIELDS[5], this.value('base_load_w')) as number,
+        design_indoor_temperature_c: this.coerce(PLANNING_FIELDS[6], this.value('design_indoor_temperature_c')) as number,
+        design_outdoor_temperature_c: this.coerce(PLANNING_FIELDS[7], this.value('design_outdoor_temperature_c')) as number,
+        feedback_horizon_hours: this.coerce(PLANNING_FIELDS[8], this.value('feedback_horizon_hours')) as number,
+        mqtt_simulation_enabled: this.coerce(PLANNING_FIELDS[9], this.value('mqtt_simulation_enabled')) as boolean,
+        mqtt_simulation_initial_temperature_c: this.coerce(PLANNING_FIELDS[10], this.value('mqtt_simulation_initial_temperature_c')) as number,
+        mqtt_simulation_publish_seconds: this.coerce(PLANNING_FIELDS[11], this.value('mqtt_simulation_publish_seconds')) as number,
+        mqtt_simulation_topic_prefix: this.coerce(PLANNING_FIELDS[12], this.value('mqtt_simulation_topic_prefix')) as string,
+        mqtt_simulation_thermal_loss_c_per_hour: this.coerce(PLANNING_FIELDS[13], this.value('mqtt_simulation_thermal_loss_c_per_hour')) as number,
       };
       this.api.patchPlanningConfig(snapshot.revision, values).subscribe({
         next: (updated) => {

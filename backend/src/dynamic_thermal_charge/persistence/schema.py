@@ -242,17 +242,61 @@ charge_planning_site = Table(
     Column("aemet_query_hour", Integer, nullable=False, server_default="12"),
     Column("contracted_power_w", Integer, nullable=False, server_default="5200"),
     Column("max_heating_power_w", Integer, nullable=False, server_default="5200"),
+    Column("base_load_w", Integer, nullable=False, server_default="0"),
     Column("design_indoor_temperature_c", Float, nullable=False, server_default="21"),
     Column("design_outdoor_temperature_c", Float, nullable=False, server_default="0"),
     Column("feedback_horizon_hours", Float, nullable=False, server_default="6"),
+    Column("mqtt_simulation_enabled", Boolean, nullable=False, server_default="0"),
+    Column(
+        "mqtt_simulation_initial_temperature_c",
+        Float,
+        nullable=False,
+        server_default="45",
+    ),
+    Column(
+        "mqtt_simulation_publish_seconds",
+        Float,
+        nullable=False,
+        server_default="30",
+    ),
+    Column(
+        "mqtt_simulation_topic_prefix",
+        String(256),
+        nullable=False,
+        server_default="dtc/sim",
+    ),
+    Column(
+        "mqtt_simulation_thermal_loss_c_per_hour",
+        Float,
+        nullable=False,
+        server_default="2",
+    ),
     CheckConstraint("replan_minutes > 0", name="ck_charge_site_replan"),
     CheckConstraint("revision >= 1", name="ck_charge_site_revision"),
     CheckConstraint("forecast_horizon_hours > 0", name="ck_charge_site_horizon"),
     CheckConstraint("aemet_query_hour >= 0 AND aemet_query_hour <= 23", name="ck_charge_site_query_hour"),
     CheckConstraint("contracted_power_w > 0", name="ck_charge_site_contracted_power"),
     CheckConstraint("max_heating_power_w > 0", name="ck_charge_site_heating_power"),
+    CheckConstraint("base_load_w >= 0", name="ck_charge_site_base_load"),
     CheckConstraint("design_indoor_temperature_c > design_outdoor_temperature_c", name="ck_charge_site_design_temperatures"),
     CheckConstraint("feedback_horizon_hours > 0", name="ck_charge_site_feedback_horizon"),
+    CheckConstraint(
+        "mqtt_simulation_initial_temperature_c >= -50 "
+        "AND mqtt_simulation_initial_temperature_c <= 80",
+        name="ck_charge_site_sim_initial_temperature",
+    ),
+    CheckConstraint(
+        "mqtt_simulation_publish_seconds > 0",
+        name="ck_charge_site_sim_publish_seconds",
+    ),
+    CheckConstraint(
+        "length(trim(mqtt_simulation_topic_prefix)) > 0",
+        name="ck_charge_site_sim_topic_prefix",
+    ),
+    CheckConstraint(
+        "mqtt_simulation_thermal_loss_c_per_hour >= 0",
+        name="ck_charge_site_sim_thermal_loss",
+    ),
 )
 
 charge_constraint = Table(
@@ -852,6 +896,9 @@ RETAINED_TABLES: tuple[tuple[Table, str], ...] = (
     (output_transition, "occurred_at"),
     (plan, "created_at"),
     (forecast, "retrieved_at"),
+    (forecast_cycle, "updated_at"),
+    (automatic_plan, "created_at"),
+    (plan_audit, "occurred_at"),
     (relay_test_event, "occurred_at"),
     (controller_log_event, "occurred_at"),
 )

@@ -560,6 +560,7 @@ def test_planning_config_endpoint_returns_site_parameters(client):
     body = response.json()
     assert body["forecast_horizon_hours"] == 48
     assert body["replan_minutes"] == 30
+    assert body["mqtt_simulation_enabled"] is False
     assert "revision" in body
 
 
@@ -578,9 +579,17 @@ def test_planning_config_endpoint_updates_site_parameters(client):
             "design_indoor_temperature_c": current["design_indoor_temperature_c"],
             "design_outdoor_temperature_c": current["design_outdoor_temperature_c"],
             "feedback_horizon_hours": current["feedback_horizon_hours"],
+            "mqtt_simulation_enabled": True,
+            "mqtt_simulation_initial_temperature_c": 42.0,
+            "mqtt_simulation_publish_seconds": 15.0,
+            "mqtt_simulation_topic_prefix": "lab/sim",
+            "mqtt_simulation_thermal_loss_c_per_hour": 1.5,
         },
     )
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["forecast_horizon_hours"] == 36
+    assert body["mqtt_simulation_enabled"] is True
+    assert body["mqtt_simulation_initial_temperature_c"] == 42.0
+    assert body["mqtt_simulation_topic_prefix"] == "lab/sim"
     assert body["revision"] == current["revision"] + 1
