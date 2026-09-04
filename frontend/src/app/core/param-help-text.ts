@@ -117,12 +117,24 @@ const SYSTEM: Record<string, Record<string, string>> = {
       'Límite total de potencia del emplazamiento (W) para el optimizador automático.',
     max_heating_power_w:
       'Límite de potencia dedicada a calefacción/acumuladores (W) en el optimizador.',
+    base_load_w:
+      'Carga base simultánea de la vivienda (W), que se descuenta de la potencia contratada.',
     design_indoor_temperature_c:
       'Temperatura interior de diseño (°C) del modelo degree-hours para estimar demanda.',
     design_outdoor_temperature_c:
       'Temperatura exterior de diseño (°C). Debe ser inferior a la interior de diseño.',
     feedback_horizon_hours:
       'Horas de histórico de temperatura interior usadas para ajustar la demanda estimada.',
+    mqtt_simulation_enabled:
+      'Activa un cliente MQTT que publica telemetría simulada de acumuladores. Requiere MQTT habilitado en la sección mqtt.',
+    mqtt_simulation_initial_temperature_c:
+      'Temperatura inicial (°C) de todos los acumuladores al arrancar o reiniciar la simulación.',
+    mqtt_simulation_publish_seconds:
+      'Intervalo entre publicaciones MQTT de temperatura, objetivo y carga almacenada simuladas.',
+    mqtt_simulation_topic_prefix:
+      'Prefijo base de los tópicos simulados. Cada acumulador publica en {prefijo}/{id}/temperature (y target/stored_charge) salvo que tenga tópicos propios configurados.',
+    mqtt_simulation_thermal_loss_c_per_hour:
+      'Pérdida térmica general (°C/h) aplicada a todos los acumuladores en reposo. Se invierte mientras el acumulador está cargando.',
   },
   output: {
     driver: 'Driver de salida física: simulada (sin relés) o GPIO en el dispositivo controlador.',

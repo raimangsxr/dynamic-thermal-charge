@@ -53,11 +53,23 @@ de fallback, timeout y política de actualización. La clave AEMET se reemplaza
 como secreto gestionado y la API solo informa si está configurada; nunca
 devuelve su valor.
 
+Para AEMET, `aemet_query_hour` define la consulta diaria en la zona horaria de
+la instalación. Tras un fallo se realizan cinco reintentos, uno por hora; si
+se agotan, el controlador conserva la última previsión AEMET válida marcada
+como obsoleta para seguir calculando, pero nunca habilita carga automática con
+una previsión simulada o de respaldo. `replan_minutes` marca la cadencia de
+replanificación y se ajusta siempre a un límite de intervalo, sin ser menor que
+un intervalo de carga.
+
 La sección `Sistema → mqtt` permite desactivar el broker para instalaciones de
 prueba. Mientras MQTT está deshabilitado, el controlador usa los cuatro valores
 fijos globales de esa sección (temperatura, temperatura objetivo, carga
 almacenada y temperatura interior); al habilitarlo vuelve a exigir telemetría
 recibida por MQTT.
+
+Como medida de seguridad, el controlador no arranca salidas GPIO si MQTT está
+deshabilitado o si está activa la simulación de acumuladores: ambas situaciones
+proporcionan telemetría no real y se registran como un error crítico.
 
 La sección `Planificación` consulta el plan aceptado en `GET /api/v1/planning`
 y permite editar constraints recurrentes. `POST /api/v1/planning/preview` calcula
@@ -71,7 +83,8 @@ Las constraints se editan como porcentajes de 0 a 100 en el panel y se envían a
 la API como fracciones de 0 a 1. La reserva de cada acumulador es un
 porcentaje multiplicativo sobre la demanda estimada (no puntos extra de SOC).
 `demand_factor` escala la demanda degree-hours y la configuración global define
-potencia contratada, diseño 21/0 °C y horizonte de feedback. La edición completa
+potencia contratada, carga base de vivienda, límite de calefacción, diseño 21/0 °C
+y horizonte de feedback. La edición completa
 de un acumulador se guarda con una única petición `PUT /api/v1/config/heaters/{id}`.
 
 El histórico de decisiones está disponible en `GET /api/v1/history/planning-audit`

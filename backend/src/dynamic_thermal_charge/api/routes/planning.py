@@ -32,6 +32,7 @@ from ..schemas import (
     PlanningPreviewResponse,
     HeaterChargeConfigRequest,
     PlanningSiteConfigRequest,
+    PlanningSiteConfigResponse,
 )
 
 
@@ -201,23 +202,24 @@ def activate_planning(
 
 @router.get(
     "/planning/config",
+    response_model=PlanningSiteConfigResponse,
     responses=READ_RESPONSES,
     summary="Automatic planning site parameters",
 )
 def get_planning_config(
     store: Store = Depends(usable_store),
-) -> dict[str, int | float]:
-    return store.planning.site()
+) -> PlanningSiteConfigResponse:
+    return PlanningSiteConfigResponse.model_validate(store.planning.site())
 
 
-@router.patch("/planning/config", responses=ERROR_RESPONSES)
+@router.patch("/planning/config", response_model=PlanningSiteConfigResponse, responses=ERROR_RESPONSES)
 def update_planning_config(
     payload: PlanningSiteConfigRequest,
     store: Store = Depends(usable_store),
-) -> dict[str, int | float]:
+) -> PlanningSiteConfigResponse:
     values = payload.model_dump(exclude={"expected_revision"})
     store.planning.update_site(values, payload.expected_revision)
-    return store.planning.site()
+    return PlanningSiteConfigResponse.model_validate(store.planning.site())
 
 
 @router.patch("/planning/heaters/{heater_id}", response_model=PlanningResponse, responses=ERROR_RESPONSES)
@@ -378,6 +380,7 @@ def _build_automatic_plan(store: Store, observed_at: datetime, constraints: tupl
         horizon_hours=int(site["forecast_horizon_hours"]),
         slot_minutes=config.site.slot_minutes,
         max_total_power_w=int(site["contracted_power_w"]),
+        base_load_w=int(site.get("base_load_w", 0)),
         max_heating_power_w=int(site["max_heating_power_w"]),
         design_indoor_temperature_c=float(site["design_indoor_temperature_c"]),
         design_outdoor_temperature_c=float(site["design_outdoor_temperature_c"]),

@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import logging
+import math
 from typing import Mapping, Sequence
 from zoneinfo import ZoneInfo
 
@@ -16,6 +18,8 @@ from .weather import HourlyForecastPoint
 FEASIBLE = "FEASIBLE"
 DEGRADED = "DEGRADED"
 INVALID = "INVALID"
+
+logger = logging.getLogger(__name__)
 
 
 def resolve_planning_telemetry(
@@ -165,6 +169,7 @@ class PlanningInput:
     horizon_hours: int = 48
     slot_minutes: int = 30
     max_total_power_w: int = 5200
+    base_load_w: int = 0
     timezone_name: str = "UTC"
     design_indoor_temperature_c: float = 21.0
     design_outdoor_temperature_c: float = 0.0
@@ -256,6 +261,19 @@ class MilpChargePlanner:
 
     def build(self, request: PlanningInput) -> AutomaticPlan:
         generated_at = request.generated_at or request.horizon_start
+        logger.debug(
+            "Automatic planning started: heaters=%d constraints=%d forecast_points=%d "
+            "horizon_hours=%d slot_minutes=%d contracted_power_w=%d "
+            "base_load_w=%d max_heating_power_w=%s",
+            len(request.heaters),
+            len(request.constraints),
+            len(request.forecast),
+            request.horizon_hours,
+            request.slot_minutes,
+            request.max_total_power_w,
+            request.base_load_w,
+            request.max_heating_power_w,
+        )
         try:
             _validate_input(request)
             horizon_start = _ceil_align(request.horizon_start, request.slot_minutes)
@@ -264,10 +282,12 @@ class MilpChargePlanner:
         starts = _continuous_forecast_slots(horizon_start, request.forecast, request.horizon_hours, request.slot_minutes)
         if not starts or not request.forecast_automatic_eligible:
             reason = "forecast_not_eligible" if not request.forecast_automatic_eligible else "missing_aemet_coverage"
+            logger.debug("Automatic planning rejected: reason=%s", reason)
             return _invalid_plan(request, horizon_start, starts, reason, reason, generated_at)
         horizon_end = starts[-1] + timedelta(minutes=request.slot_minutes)
         missing = [item.id for item in request.heaters if item.enabled and not _telemetry_usable(request.telemetry.get(item.id))]
         if missing:
+            logger.debug("Automatic planning rejected: missing_telemetry=%s", ",".join(sorted(missing)))
             return _invalid_plan(request, horizon_start, starts, f"missing required MQTT state: {', '.join(sorted(missing))}", "missing_required_state", generated_at, missing)
         try:
             demand = DegreeHoursDemandEstimator().estimate(
@@ -279,6 +299,7 @@ class MilpChargePlanner:
             materialized = materialize_constraints(request.constraints, request.heaters, starts[0], horizon_end, request.slot_minutes, request.timezone_name)
             return self._solve(request, starts, demand, materialized, generated_at)
         except (ValueError, ArithmeticError) as exc:
+            logger.debug("Automatic planning rejected: %s", exc)
             return _invalid_plan(request, horizon_start, starts, str(exc), "invalid_configuration", generated_at)
 
     def _solve(self, request: PlanningInput, starts: Sequence[datetime], demand: Sequence[DemandEstimate], constraints: Sequence[MaterializedConstraint], generated_at: datetime) -> AutomaticPlan:
@@ -288,7 +309,9 @@ class MilpChargePlanner:
             return _invalid_plan(request, starts[0], starts, "PuLP is unavailable", "solver_unavailable", generated_at)
         heaters = tuple(sorted((item for item in request.heaters if item.enabled), key=lambda item: item.id))
         slot_hours = request.slot_minutes / 60
-        limit_w = request.max_heating_power_w or request.max_total_power_w
+        heating_limit_w = request.max_heating_power_w or request.max_total_power_w
+        contracted_limit_w = max(0, request.max_total_power_w - request.base_load_w)
+        limit_w = min(heating_limit_w, contracted_limit_w)
         oversized = tuple(item for item in heaters if item.power_w > limit_w)
         demand_by_key = {(item.heater_id, item.start): item.demand_kwh for item in demand}
         boundary_index = {start: index for index, start in enumerate(starts)}
@@ -303,13 +326,15 @@ class MilpChargePlanner:
             for i, start in enumerate(starts):
                 model += energy[(h.id, i + 1)] == energy[(h.id, i)] + h.charge_power_kw * slot_hours * on[(h.id, i)] - demand_by_key[(h.id, start)] + unmet[(h.id, i)]
         for i in range(len(starts)):
-            model += pulp.lpSum(h.power_w * on[(h.id, i)] for h in heaters) <= limit_w
+            heating_power = pulp.lpSum(h.power_w * on[(h.id, i)] for h in heaters)
+            model += heating_power <= heating_limit_w
+            model += heating_power + request.base_load_w <= request.max_total_power_w
         for h in oversized:
             for i in range(len(starts)):
                 model += on[(h.id, i)] == 0
         for index, rule in enumerate(constraints):
             model += energy[(rule.heater_id, boundary_index[rule.at])] + c_short[index] >= _heater(heaters, rule.heater_id).capacity_kwh * rule.minimum_soc_percent / 100
-        solver = _cbc_solver(pulp)
+        solver = _cbc_solver(pulp, time_limit_seconds=30)
         score: list[float] = []
         phases = []
         for priority in sorted({item.priority for item in constraints}, reverse=True):
@@ -322,16 +347,59 @@ class MilpChargePlanner:
             pulp.lpSum((len(starts) - i) * h.charge_power_kw * slot_hours * on[(h.id, i)] for h in heaters for i in range(len(starts))),
             pulp.lpSum((heater_index + 1) * (i + 1) * on[(h.id, i)] for heater_index, h in enumerate(heaters) for i in range(len(starts))),
         ))
+        time_limited = False
         for phase_index, objective in enumerate(phases):
             model.setObjective(objective)
             status = model.solve(solver)
+            logger.debug(
+                "Automatic planning solver phase=%d/%d status=%s",
+                phase_index + 1,
+                len(phases),
+                pulp.LpStatus[status],
+            )
+            if status == pulp.LpStatusNotSolved:
+                if not _model_solution_is_feasible(model, pulp, on):
+                    return _invalid_plan(
+                        request, starts[0], starts,
+                        "solver reached its time limit without a verified feasible solution",
+                        "solver_failure", generated_at,
+                    )
+                time_limited = True
+                break
             if status != pulp.LpStatusOptimal:
-                return _invalid_plan(request, starts[0], starts, f"solver status {pulp.LpStatus[status]}", "solver_failure", generated_at)
-            optimum = float(pulp.value(objective) or 0.0)
+                return _invalid_plan(
+                    request,
+                    starts[0],
+                    starts,
+                    f"solver status {pulp.LpStatus[status]}",
+                    "solver_failure",
+                    generated_at,
+                )
+            try:
+                optimum = _required_solver_value(pulp.value(objective), "objective")
+            except ValueError as exc:
+                return _invalid_plan(
+                    request, starts[0], starts, str(exc), "solver_failure", generated_at
+                )
             score.append(optimum)
+            logger.debug(
+                "Automatic planning solver phase=%d optimum=%.9g",
+                phase_index + 1,
+                optimum,
+            )
             if phase_index < len(phases) - 1:
                 model += objective <= optimum + 1e-7
+        try:
+            _require_solution_values(on, energy, unmet, c_short)
+        except ValueError as exc:
+            return _invalid_plan(request, starts[0], starts, str(exc), "solver_failure", generated_at)
         violations: list[PlanningViolation] = []
+        if time_limited:
+            violations.append(
+                PlanningViolation(
+                    None, "solver_time_limit", None, None, starts[0], "solver_time_limit"
+                )
+            )
         for h in oversized:
             violations.append(PlanningViolation(h.id, "individual_power_limit", 0.0, h.power_w - limit_w, starts[0], "heater_power_exceeds_global_limit"))
         for index, rule in enumerate(constraints):
@@ -367,11 +435,19 @@ class MilpChargePlanner:
             next((item.at for item in constraints if item.heater_id == h.id), None),
             tuple((slot.start, slot.end) for slot in plan_slots if h.id in slot.heater_ids),
         ) for h in heaters)
-        return AutomaticPlan(
+        plan = AutomaticPlan(
             starts[0], starts[-1] + timedelta(minutes=request.slot_minutes), request.slot_minutes,
-            tuple(plan_slots), tuple(violations), DEGRADED if violations else FEASIBLE,
+            tuple(plan_slots), tuple(violations), DEGRADED if violations or time_limited else FEASIBLE,
             tuple(score), input_token(request), generated_at, explanations, tuple(demand),
         )
+        logger.debug(
+            "Automatic planning completed: status=%s slots=%d violations=%d token=%s",
+            plan.status,
+            len(plan.slots),
+            len(plan.violations),
+            plan.input_token,
+        )
+        return plan
 
 
 class DeterministicChargeOptimizer(MilpChargePlanner):
@@ -386,7 +462,7 @@ def input_token(request: PlanningInput) -> str:
         "forecast": [(point.timestamp.isoformat(), point.temperature_c, point.interpolated) for point in request.forecast],
         "horizon_start": request.horizon_start.astimezone(timezone.utc).isoformat(),
         "horizon_hours": request.horizon_hours, "slot_minutes": request.slot_minutes,
-        "max_total_power_w": request.max_total_power_w, "max_heating_power_w": request.max_heating_power_w,
+        "max_total_power_w": request.max_total_power_w, "base_load_w": request.base_load_w, "max_heating_power_w": request.max_heating_power_w,
         "timezone_name": request.timezone_name, "design_indoor_temperature_c": request.design_indoor_temperature_c,
         "design_outdoor_temperature_c": request.design_outdoor_temperature_c, "feedback_horizon_hours": request.feedback_horizon_hours,
         "forecast_automatic_eligible": request.forecast_automatic_eligible,
@@ -405,7 +481,7 @@ def _validate_input(request: PlanningInput) -> None:
         raise ValueError("slot_minutes must be a positive divisor of one hour")
     if request.horizon_hours <= 0 or request.horizon_hours > 48:
         raise ValueError("horizon_hours must be between 1 and 48")
-    if request.max_total_power_w <= 0 or (request.max_heating_power_w is not None and request.max_heating_power_w <= 0):
+    if request.max_total_power_w <= 0 or request.base_load_w < 0 or (request.max_heating_power_w is not None and request.max_heating_power_w <= 0):
         raise ValueError("power limits must be positive")
     if request.design_indoor_temperature_c <= request.design_outdoor_temperature_c:
         raise ValueError("design indoor temperature must exceed design outdoor temperature")
@@ -458,11 +534,52 @@ def _heater(heaters: Sequence[Heater], heater_id: str) -> Heater:
     return next(item for item in heaters if item.id == heater_id)
 
 
-def _cbc_solver(pulp):
+def _cbc_solver(pulp, *, time_limit_seconds: int | None = None):
     import shutil
+    options = ["randomSeed 0"]
+    if time_limit_seconds is not None:
+        options.append(f"sec {time_limit_seconds}")
+    kwargs = {"msg": False, "threads": 1, "options": options}
     if shutil.which("cbc"):
-        return pulp.COIN_CMD(msg=False, threads=1, options=["randomSeed 0"])
-    return pulp.PULP_CBC_CMD(msg=False, threads=1, options=["randomSeed 0"])
+        return pulp.COIN_CMD(**kwargs)
+    return pulp.PULP_CBC_CMD(**kwargs)
+
+
+def _required_solver_value(value, label: str) -> float:
+    if value is None:
+        raise ValueError(f"solver did not assign {label}")
+    numeric = float(value)
+    if not math.isfinite(numeric):
+        raise ValueError(f"solver assigned a non-finite value to {label}")
+    return numeric
+
+
+def _require_solution_values(*variable_groups) -> None:
+    for group in variable_groups:
+        for key, variable in group.items():
+            _required_solver_value(variable.value(), str(key))
+
+
+def _model_solution_is_feasible(
+    model, pulp, binary_variables, tolerance: float = 1e-6
+) -> bool:
+    """Accept a time-limited candidate only after checking every constraint."""
+    try:
+        for variable in binary_variables.values():
+            value = _required_solver_value(variable.value(), "binary variable")
+            if abs(value - round(value)) > tolerance:
+                return False
+        for constraint in model.constraints.values():
+            value = _required_solver_value(pulp.value(constraint), "constraint")
+            if constraint.sense == 0 and abs(value) > tolerance:
+                return False
+            if constraint.sense == -1 and value > tolerance:
+                return False
+            if constraint.sense == 1 and value < -tolerance:
+                return False
+    except ValueError:
+        return False
+    return True
 
 
 def _invalid_plan(request: PlanningInput, start: datetime, starts: Sequence[datetime], detail: str, reason: str, generated_at: datetime, heater_ids: Sequence[str] = ()) -> AutomaticPlan:

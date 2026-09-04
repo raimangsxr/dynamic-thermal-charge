@@ -37,7 +37,7 @@ def _patch_batch(client, values, revision=None):
 def test_the_whole_configuration_is_readable(client):
     body = _config(client)
     assert body["config_revision"] == 1
-    assert body["schema_revision"] == "0009_remove_state_file"
+    assert body["schema_revision"] == "0011_planning_base_load"
     assert "state_file" not in body
     assert body["max_total_power_kw"] == 5.2
     assert body["slot_minutes"] == 30

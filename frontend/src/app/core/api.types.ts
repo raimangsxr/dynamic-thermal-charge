@@ -118,9 +118,15 @@ export interface PlanningSiteConfigDto {
   aemet_query_hour: number;
   contracted_power_w: number;
   max_heating_power_w: number;
+  base_load_w: number;
   design_indoor_temperature_c: number;
   design_outdoor_temperature_c: number;
   feedback_horizon_hours: number;
+  mqtt_simulation_enabled: boolean;
+  mqtt_simulation_initial_temperature_c: number;
+  mqtt_simulation_publish_seconds: number;
+  mqtt_simulation_topic_prefix: string;
+  mqtt_simulation_thermal_loss_c_per_hour: number;
 }
 
 export interface PlanningDto {

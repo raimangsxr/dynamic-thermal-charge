@@ -32,9 +32,15 @@ const planningConfig: PlanningSiteConfigDto = {
   aemet_query_hour: 12,
   contracted_power_w: 5200,
   max_heating_power_w: 5200,
+  base_load_w: 0,
   design_indoor_temperature_c: 21,
   design_outdoor_temperature_c: 0,
   feedback_horizon_hours: 6,
+  mqtt_simulation_enabled: false,
+  mqtt_simulation_initial_temperature_c: 45,
+  mqtt_simulation_publish_seconds: 30,
+  mqtt_simulation_topic_prefix: 'dtc/sim',
+  mqtt_simulation_thermal_loss_c_per_hour: 2,
 };
 
 function flushInitialLoads(backend: HttpTestingController): void {
@@ -192,9 +198,15 @@ describe('SystemConfig', () => {
       aemet_query_hour: 12,
       contracted_power_w: 5200,
       max_heating_power_w: 5200,
+      base_load_w: 0,
       design_indoor_temperature_c: 22,
       design_outdoor_temperature_c: 0,
       feedback_horizon_hours: 6,
+      mqtt_simulation_enabled: false,
+      mqtt_simulation_initial_temperature_c: 45,
+      mqtt_simulation_publish_seconds: 30,
+      mqtt_simulation_topic_prefix: 'dtc/sim',
+      mqtt_simulation_thermal_loss_c_per_hour: 2,
     });
     request.flush({ ...planningConfig, revision: 3, forecast_horizon_hours: 36, design_indoor_temperature_c: 22 });
     fixture.detectChanges();

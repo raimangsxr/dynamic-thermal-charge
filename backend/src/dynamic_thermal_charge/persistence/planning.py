@@ -52,10 +52,48 @@ class SqlPlanningRepository:
                     )
                 ).mappings().first()
         if row is None:
-            return {"revision": 1, "replan_minutes": 30, "forecast_horizon_hours": 48, "aemet_query_hour": 12, "contracted_power_w": 5200, "max_heating_power_w": 5200, "design_indoor_temperature_c": 21.0, "design_outdoor_temperature_c": 0.0, "feedback_horizon_hours": 6.0}
-        integers = ("revision", "replan_minutes", "forecast_horizon_hours", "aemet_query_hour", "contracted_power_w", "max_heating_power_w")
-        floats = ("design_indoor_temperature_c", "design_outdoor_temperature_c", "feedback_horizon_hours")
-        return {**{key: int(row[key]) for key in integers}, **{key: float(row[key]) for key in floats}}
+            return {
+                "revision": 1,
+                "replan_minutes": 30,
+                "forecast_horizon_hours": 48,
+                "aemet_query_hour": 12,
+                "contracted_power_w": 5200,
+                "max_heating_power_w": 5200,
+                "base_load_w": 0,
+                "design_indoor_temperature_c": 21.0,
+                "design_outdoor_temperature_c": 0.0,
+                "feedback_horizon_hours": 6.0,
+                "mqtt_simulation_enabled": False,
+                "mqtt_simulation_initial_temperature_c": 45.0,
+                "mqtt_simulation_publish_seconds": 30.0,
+                "mqtt_simulation_topic_prefix": "dtc/sim",
+                "mqtt_simulation_thermal_loss_c_per_hour": 2.0,
+            }
+        integers = (
+            "revision",
+            "replan_minutes",
+            "forecast_horizon_hours",
+            "aemet_query_hour",
+            "contracted_power_w",
+            "max_heating_power_w",
+            "base_load_w",
+        )
+        floats = (
+            "design_indoor_temperature_c",
+            "design_outdoor_temperature_c",
+            "feedback_horizon_hours",
+            "mqtt_simulation_initial_temperature_c",
+            "mqtt_simulation_publish_seconds",
+            "mqtt_simulation_thermal_loss_c_per_hour",
+        )
+        booleans = ("mqtt_simulation_enabled",)
+        strings = ("mqtt_simulation_topic_prefix",)
+        return {
+            **{key: int(row[key]) for key in integers},
+            **{key: float(row[key]) for key in floats},
+            **{key: bool(row[key]) for key in booleans},
+            **{key: str(row[key]) for key in strings},
+        }
 
     def heater_charge_config(self) -> dict[str, dict[str, Any]]:
         from .schema import heater_charge_config
@@ -82,18 +120,65 @@ class SqlPlanningRepository:
         current = self.site()
         if current["revision"] != expected_revision:
             raise ConfigConflictError("planning configuration changed; recalculate before saving")
-        integer_fields = {"replan_minutes", "forecast_horizon_hours", "aemet_query_hour", "contracted_power_w", "max_heating_power_w"}
-        float_fields = {"design_indoor_temperature_c", "design_outdoor_temperature_c", "feedback_horizon_hours"}
-        allowed = {key: (int(value) if key in integer_fields else float(value)) for key, value in values.items() if key in integer_fields | float_fields}
+        integer_fields = {
+            "replan_minutes",
+            "forecast_horizon_hours",
+            "aemet_query_hour",
+            "contracted_power_w",
+            "max_heating_power_w",
+            "base_load_w",
+        }
+        float_fields = {
+            "design_indoor_temperature_c",
+            "design_outdoor_temperature_c",
+            "feedback_horizon_hours",
+            "mqtt_simulation_initial_temperature_c",
+            "mqtt_simulation_publish_seconds",
+            "mqtt_simulation_thermal_loss_c_per_hour",
+        }
+        boolean_fields = {"mqtt_simulation_enabled"}
+        string_fields = {"mqtt_simulation_topic_prefix"}
+        allowed = {}
+        for key, value in values.items():
+            if key in integer_fields:
+                allowed[key] = int(value)
+            elif key in float_fields:
+                allowed[key] = float(value)
+            elif key in boolean_fields:
+                allowed[key] = bool(value)
+            elif key in string_fields:
+                allowed[key] = str(value).strip()
         combined = {**current, **allowed}
         if not 0 < int(combined["forecast_horizon_hours"]) <= 48:
             raise ConfigValidationError("forecast_horizon_hours must be between 1 and 48", field="forecast_horizon_hours")
         if int(combined["contracted_power_w"]) <= 0 or int(combined["max_heating_power_w"]) <= 0:
             raise ConfigValidationError("power limits must be positive", field="contracted_power_w")
+        if int(combined["base_load_w"]) < 0:
+            raise ConfigValidationError("base_load_w must be non-negative", field="base_load_w")
         if float(combined["design_indoor_temperature_c"]) <= float(combined["design_outdoor_temperature_c"]):
             raise ConfigValidationError("design indoor temperature must exceed design outdoor temperature", field="design_indoor_temperature_c")
         if float(combined["feedback_horizon_hours"]) <= 0:
             raise ConfigValidationError("feedback_horizon_hours must be positive", field="feedback_horizon_hours")
+        if not -50 <= float(combined["mqtt_simulation_initial_temperature_c"]) <= 80:
+            raise ConfigValidationError(
+                "mqtt_simulation_initial_temperature_c must be between -50 and 80",
+                field="mqtt_simulation_initial_temperature_c",
+            )
+        if float(combined["mqtt_simulation_publish_seconds"]) <= 0:
+            raise ConfigValidationError(
+                "mqtt_simulation_publish_seconds must be positive",
+                field="mqtt_simulation_publish_seconds",
+            )
+        if not str(combined["mqtt_simulation_topic_prefix"]).strip():
+            raise ConfigValidationError(
+                "mqtt_simulation_topic_prefix cannot be empty",
+                field="mqtt_simulation_topic_prefix",
+            )
+        if float(combined["mqtt_simulation_thermal_loss_c_per_hour"]) < 0:
+            raise ConfigValidationError(
+                "mqtt_simulation_thermal_loss_c_per_hour must be non-negative",
+                field="mqtt_simulation_thermal_loss_c_per_hour",
+            )
         next_revision = expected_revision + 1
         with transaction(self._configuration, self._configuration_location) as connection:
             existing = connection.execute(select(charge_planning_site).where(charge_planning_site.c.installation_id == self._installation_id)).first()
@@ -182,7 +267,7 @@ class SqlPlanningRepository:
             "explanations": [_json_ready(item.__dict__) for item in plan.explanations],
         }
         with transaction(self._application, self._application_location) as connection:
-            if active:
+            if active or plan.status == "INVALID":
                 connection.execute(update(automatic_plan).where((automatic_plan.c.installation_id == self._installation_id) & automatic_plan.c.active.is_(True)).values(active=False))
             plan_id = int(connection.execute(insert(automatic_plan).values(installation_id=self._installation_id, configuration_revision=configuration_revision, constraints_revision=constraints_revision, horizon_start=to_utc(plan.horizon_start), horizon_end=to_utc(plan.horizon_end), slot_minutes=plan.slot_minutes, status=stored_status, reason=reason, input_token=plan.input_token, score_json=json.dumps(plan.score), deficits_json=json.dumps(violations), inputs_json=json.dumps(inputs), active=active, created_at=to_utc(now))).inserted_primary_key[0])
             for slot in plan.slots:

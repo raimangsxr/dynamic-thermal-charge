@@ -122,6 +122,45 @@ def test_oversized_heater_is_reported_without_breaking_global_limit():
     assert all(slot.power_w == 0 for slot in result.slots)
 
 
+def test_planner_completes_within_solver_time_limit_with_full_seed_horizon():
+    import shutil
+    import time
+
+    if shutil.which("cbc") is None:
+        pytest.skip("system CBC is required for the full-horizon planner benchmark")
+
+    from dynamic_thermal_charge.persistence.seed import example_installation
+
+    config = example_installation()
+    start = API_NOW
+    points = tuple(
+        HourlyForecastPoint(start + timedelta(hours=index), 5.0)
+        for index in range(48)
+    )
+    telemetry = {
+        item.id: state(item.id, actual=45, target=55, soc=50, at=start)
+        for item in config.heaters
+        if item.enabled
+    }
+    plan_input = PlanningInput(
+        heaters=config.heaters,
+        telemetry=telemetry,
+        constraints=(),
+        forecast=points,
+        horizon_start=start,
+        horizon_hours=48,
+        slot_minutes=30,
+        max_total_power_w=5200,
+        max_heating_power_w=5200,
+        timezone_name="Europe/Madrid",
+    )
+    started = time.monotonic()
+    result = MilpChargePlanner().build(plan_input)
+    elapsed = time.monotonic() - started
+    assert result.status in {FEASIBLE, DEGRADED}
+    assert elapsed < 60
+
+
 def test_preview_uses_mqtt_fixed_telemetry_when_broker_disabled(client, initialised_store):
     system = client.get("/api/v1/system/configuration", headers=AUTH).json()
     client.patch(
