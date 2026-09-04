@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import logging
 
 from fastapi import APIRouter, Depends, Request
 
@@ -37,6 +38,7 @@ from ..schemas import (
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.get(
@@ -172,11 +174,13 @@ def preview_planning(
     app_request: Request,
     store: Store = Depends(usable_store),
 ) -> PlanningPreviewResponse:
+    logger.info("Planning preview requested: constraints=%d", len(request.constraints))
     site = store.planning.site()
     if request.expected_revision is not None and request.expected_revision != site["revision"]:
         raise ConfigValidationError("planning configuration changed; recalculate before saving")
     constraints = _parse_constraints(request.constraints)
     plan = _build_automatic_plan(store, app_request.app.state.clock(), constraints, site)
+    logger.info("Planning preview completed: status=%s violations=%d", plan.status, len(plan.violations))
     return _preview_response(plan, constraints)
 
 
