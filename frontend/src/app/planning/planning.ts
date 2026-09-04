@@ -370,13 +370,13 @@ export class Planning implements AfterViewInit, OnDestroy {
       }));
 
       this.charts.push(new Chart(this.heaterCanvas.nativeElement, {
-        type: 'bar',
+        type: 'line',
         data: { labels, datasets: data.heaters.map((heater, index) => ({
           label: heater.name,
           data: timeline.map((_slot, slotIndex) => this.heaterActiveInSlot(data, slotIndex, heater.id) ? this.kilowatts(heater.power_w) : 0),
           backgroundColor: `${colors[index % colors.length]}cc`,
         })) },
-        options: this.chartOptions<'bar'>(fullLabels, 'kW'),
+        options: this.chartOptions<'line'>(fullLabels, 'kW'),
       }));
 
       this.charts.push(new Chart(this.aggregateCanvas.nativeElement, {
