@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import math
+from time import monotonic
 from typing import Mapping, Sequence
 from zoneinfo import ZoneInfo
 
@@ -18,6 +19,7 @@ from .weather import HourlyForecastPoint
 FEASIBLE = "FEASIBLE"
 DEGRADED = "DEGRADED"
 INVALID = "INVALID"
+SOLVER_TIME_LIMIT_SECONDS = 30
 
 logger = logging.getLogger(__name__)
 
@@ -334,7 +336,8 @@ class MilpChargePlanner:
                 model += on[(h.id, i)] == 0
         for index, rule in enumerate(constraints):
             model += energy[(rule.heater_id, boundary_index[rule.at])] + c_short[index] >= _heater(heaters, rule.heater_id).capacity_kwh * rule.minimum_soc_percent / 100
-        solver = _cbc_solver(pulp, time_limit_seconds=30)
+        solver = _cbc_solver(pulp, time_limit_seconds=SOLVER_TIME_LIMIT_SECONDS)
+        solver_deadline = monotonic() + SOLVER_TIME_LIMIT_SECONDS
         score: list[float] = []
         phases = []
         for priority in sorted({item.priority for item in constraints}, reverse=True):
@@ -349,6 +352,22 @@ class MilpChargePlanner:
         ))
         time_limited = False
         for phase_index, objective in enumerate(phases):
+            remaining_seconds = solver_deadline - monotonic()
+            if remaining_seconds <= 0:
+                if not _model_solution_is_feasible(model, pulp, on):
+                    return _invalid_plan(
+                        request, starts[0], starts,
+                        "solver reached its total time limit without a verified feasible solution",
+                        "solver_failure", generated_at,
+                    )
+                logger.info(
+                    "Automatic planning solver total time limit reached before phase=%d/%d",
+                    phase_index + 1,
+                    len(phases),
+                )
+                time_limited = True
+                break
+            solver.timeLimit = remaining_seconds
             model.setObjective(objective)
             status = model.solve(solver)
             logger.debug(
@@ -534,12 +553,14 @@ def _heater(heaters: Sequence[Heater], heater_id: str) -> Heater:
     return next(item for item in heaters if item.id == heater_id)
 
 
-def _cbc_solver(pulp, *, time_limit_seconds: int | None = None):
+def _cbc_solver(pulp, *, time_limit_seconds: float | None = None):
     import shutil
-    options = ["randomSeed 0"]
-    if time_limit_seconds is not None:
-        options.append(f"sec {time_limit_seconds}")
-    kwargs = {"msg": False, "threads": 1, "options": options}
+    kwargs = {
+        "msg": False,
+        "threads": 1,
+        "options": ["randomSeed 0"],
+        "timeLimit": time_limit_seconds,
+    }
     if shutil.which("cbc"):
         return pulp.COIN_CMD(**kwargs)
     return pulp.PULP_CBC_CMD(**kwargs)
@@ -600,6 +621,6 @@ __all__ = [
     "AutomaticPlan", "AutomaticPlanSlot", "DEGRADED", "DemandEstimate",
     "DegreeHoursDemandEstimator", "DeterministicChargeOptimizer", "FEASIBLE",
     "HeaterExplanation", "INVALID", "MaterializedConstraint", "MilpChargePlanner",
-    "PlanningDeficit", "PlanningInput", "PlanningViolation", "input_token",
+    "PlanningDeficit", "PlanningInput", "PlanningViolation", "SOLVER_TIME_LIMIT_SECONDS", "input_token",
     "materialize_constraints", "resolve_planning_telemetry",
 ]
