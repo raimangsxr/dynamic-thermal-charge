@@ -7,11 +7,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PlanningDto } from '../core/api.types';
 import { Planning } from './planning';
 
-const chartState = vi.hoisted(() => ({ configs: [] as Array<{ data: { labels: unknown[]; datasets: Array<{ label?: string; data?: unknown[] }> } }> }));
+const chartState = vi.hoisted(() => ({ configs: [] as Array<{ type: string; data: { labels: unknown[]; datasets: Array<{ label?: string; data?: unknown[] }> } }> }));
 
 vi.mock('chart.js/auto', () => ({
   Chart: class {
-    constructor(_target: unknown, config: { data: { labels: unknown[]; datasets: Array<{ label?: string }> } }) {
+    constructor(_target: unknown, config: { type: string; data: { labels: unknown[]; datasets: Array<{ label?: string }> } }) {
       chartState.configs.push(config);
     }
 
@@ -109,6 +109,7 @@ describe('Planning', () => {
       fixture.componentInstance.dateTime(PLANNING.timeline[0].start),
       '',
     ]);
+    expect(chartState.configs[2].type).toBe('line');
     expect(chartState.configs[2].data.datasets[0].data?.[0]).toBe(2.8);
     expect(chartState.configs[4].data.datasets[0].data).toEqual([6.25, 4.17]);
   });
