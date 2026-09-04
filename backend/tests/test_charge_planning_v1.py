@@ -14,6 +14,7 @@ from dynamic_thermal_charge.charge_planning import (
 )
 from dynamic_thermal_charge.models import ChargeConstraint, ChargeTelemetry, Heater, OutputConfig
 from dynamic_thermal_charge.persistence.history import SqlHistoryRecorder
+from dynamic_thermal_charge.persistence.seed import example_installation
 from dynamic_thermal_charge.weather import HourlyForecastPoint
 from tests.conftest import API_NOW, AUTH
 
@@ -159,6 +160,43 @@ def test_planner_completes_within_solver_time_limit_with_full_seed_horizon():
     elapsed = time.monotonic() - started
     assert result.status in {FEASIBLE, DEGRADED}
     assert elapsed < 60
+
+
+def test_constraint_preview_shares_one_solver_time_budget(monkeypatch):
+    import time as wall_clock
+
+    import dynamic_thermal_charge.charge_planning as charge_planning
+
+    monkeypatch.setattr(charge_planning, "SOLVER_TIME_LIMIT_SECONDS", 0.1)
+    config = example_installation()
+    start = API_NOW
+    points = tuple(
+        HourlyForecastPoint(start + timedelta(hours=index), 5.0)
+        for index in range(48)
+    )
+    telemetry = {
+        item.id: state(item.id, actual=45, target=55, soc=50, at=start)
+        for item in config.heaters
+        if item.enabled
+    }
+    started = wall_clock.monotonic()
+    result = MilpChargePlanner().build(
+        PlanningInput(
+            heaters=config.heaters,
+            telemetry=telemetry,
+            constraints=(ChargeConstraint("salon", 1.0, time(7, 0), weekdays=tuple(range(7))),),
+            forecast=points,
+            horizon_start=start,
+            horizon_hours=48,
+            slot_minutes=30,
+            max_total_power_w=5200,
+            max_heating_power_w=5200,
+            timezone_name="Europe/Madrid",
+        )
+    )
+
+    assert wall_clock.monotonic() - started < 5
+    assert result.status in {INVALID, DEGRADED}
 
 
 def test_preview_uses_mqtt_fixed_telemetry_when_broker_disabled(client, initialised_store):
