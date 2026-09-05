@@ -111,6 +111,17 @@ def create_app(
     from .routes import relay_test as relay_test_routes
     from .routes import planning as planning_routes
 
+    # A process restart must be visible to the operator, never an implicit
+    # rerun against a different telemetry/forecast snapshot. The worker itself
+    # remains process-local and durable job state lives in the application DB.
+    try:
+        app.state.store_factory().planning.mark_interrupted_preview_jobs()
+    except Exception:
+        logger.debug("Could not reconcile unfinished preview jobs at API startup", exc_info=True)
+    app.state.preview_job_runner = planning_routes.PreviewJobRunner(
+        app.state.store_factory, app.state.clock
+    )
+
     # No credential: deliberately mute (FR-052).
     app.include_router(health_routes.router, tags=["health"])
     app.include_router(onboarding_routes.router)

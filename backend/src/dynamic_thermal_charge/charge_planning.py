@@ -9,7 +9,7 @@ import json
 import logging
 import math
 from time import monotonic
-from typing import Mapping, Sequence
+from typing import Callable, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
 from .models import ChargeConstraint, ChargeTelemetry, Heater
@@ -20,6 +20,7 @@ FEASIBLE = "FEASIBLE"
 DEGRADED = "DEGRADED"
 INVALID = "INVALID"
 SOLVER_TIME_LIMIT_SECONDS = 30
+PLANNING_HORIZON_HOURS = 24
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +117,10 @@ class PlanningViolation:
 PlanningDeficit = PlanningViolation
 
 
+class PlanningCancelled(Exception):
+    """Raised when a cooperative preview cancellation reaches a safe boundary."""
+
+
 @dataclass(frozen=True)
 class AutomaticPlanSlot:
     start: datetime
@@ -140,6 +145,7 @@ class HeaterExplanation:
     reserve_percent: float
     next_constraint_at: datetime | None
     charge_periods: tuple[tuple[datetime, datetime], ...]
+    capacity_kwh: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -168,7 +174,7 @@ class PlanningInput:
     constraints: tuple[ChargeConstraint, ...]
     forecast: Sequence[HourlyForecastPoint]
     horizon_start: datetime
-    horizon_hours: int = 48
+    horizon_hours: int = PLANNING_HORIZON_HOURS
     slot_minutes: int = 30
     max_total_power_w: int = 5200
     base_load_w: int = 0
@@ -180,6 +186,8 @@ class PlanningInput:
     forecast_automatic_eligible: bool = True
     generated_at: datetime | None = None
     exploration_limit: int = 100_000
+    progress_callback: Callable[[str], None] | None = None
+    cancellation_probe: Callable[[], bool] | None = None
 
 
 class DegreeHoursDemandEstimator:
@@ -263,6 +271,8 @@ class MilpChargePlanner:
 
     def build(self, request: PlanningInput) -> AutomaticPlan:
         generated_at = request.generated_at or request.horizon_start
+        _notify(request, "inputs")
+        _check_cancelled(request)
         logger.debug(
             "Automatic planning started: heaters=%d constraints=%d forecast_points=%d "
             "horizon_hours=%d slot_minutes=%d contracted_power_w=%d "
@@ -281,24 +291,39 @@ class MilpChargePlanner:
             horizon_start = _ceil_align(request.horizon_start, request.slot_minutes)
         except (ValueError, ArithmeticError) as exc:
             return _invalid_plan(request, request.horizon_start, (), str(exc), "invalid_configuration", generated_at)
+        _notify(request, "coverage")
         starts = _continuous_forecast_slots(horizon_start, request.forecast, request.horizon_hours, request.slot_minutes)
         if not starts or not request.forecast_automatic_eligible:
             reason = "forecast_not_eligible" if not request.forecast_automatic_eligible else "missing_aemet_coverage"
             logger.debug("Automatic planning rejected: reason=%s", reason)
-            return _invalid_plan(request, horizon_start, starts, reason, reason, generated_at)
+            return _invalid_plan(request, horizon_start, (), reason, reason, generated_at)
         horizon_end = starts[-1] + timedelta(minutes=request.slot_minutes)
         missing = [item.id for item in request.heaters if item.enabled and not _telemetry_usable(request.telemetry.get(item.id))]
         if missing:
             logger.debug("Automatic planning rejected: missing_telemetry=%s", ",".join(sorted(missing)))
             return _invalid_plan(request, horizon_start, starts, f"missing required MQTT state: {', '.join(sorted(missing))}", "missing_required_state", generated_at, missing)
         try:
+            _notify(request, "telemetry")
             demand = DegreeHoursDemandEstimator().estimate(
                 request.heaters, request.telemetry, request.forecast, starts, request.slot_minutes,
                 design_indoor_temperature_c=request.design_indoor_temperature_c,
                 design_outdoor_temperature_c=request.design_outdoor_temperature_c,
                 feedback_horizon_hours=request.feedback_horizon_hours,
             )
+            for item in demand:
+                logger.debug(
+                    "Planning demand: heater=%s start=%s demand_kwh=%.9g outdoor_c=%.3f feedback_c=%.3f",
+                    item.heater_id, item.start.isoformat(), item.demand_kwh,
+                    item.outdoor_temperature_c, item.feedback_temperature_c,
+                )
+            _notify(request, "demand")
             materialized = materialize_constraints(request.constraints, request.heaters, starts[0], horizon_end, request.slot_minutes, request.timezone_name)
+            for item in materialized:
+                logger.debug(
+                    "Planning constraint materialized: heater=%s at=%s minimum_soc_percent=%.3f priority=%d",
+                    item.heater_id, item.at.isoformat(), item.minimum_soc_percent, item.priority,
+                )
+            _notify(request, "constraints")
             return self._solve(request, starts, demand, materialized, generated_at)
         except (ValueError, ArithmeticError) as exc:
             logger.debug("Automatic planning rejected: %s", exc)
@@ -352,6 +377,8 @@ class MilpChargePlanner:
         ))
         time_limited = False
         for phase_index, objective in enumerate(phases):
+            _notify(request, f"solver_phase_{phase_index + 1}")
+            _check_cancelled(request)
             remaining_seconds = solver_deadline - monotonic()
             if remaining_seconds <= 0:
                 if not _model_solution_is_feasible(model, pulp, on):
@@ -370,6 +397,7 @@ class MilpChargePlanner:
             solver.timeLimit = remaining_seconds
             model.setObjective(objective)
             status = model.solve(solver)
+            _check_cancelled(request)
             logger.debug(
                 "Automatic planning solver phase=%d/%d status=%s",
                 phase_index + 1,
@@ -433,6 +461,13 @@ class MilpChargePlanner:
                 if short > 1e-6:
                     served = demand_by_key[(h.id, start)] - short
                     violations.append(PlanningViolation(h.id, "forecast_demand_kwh", served, short, start, "insufficient_stored_energy_or_power"))
+        for violation in violations:
+            logger.debug(
+                "Planning deficit: heater=%s requirement=%s at=%s reason=%s shortfall=%s",
+                violation.heater_id, violation.requirement,
+                None if violation.at is None else violation.at.isoformat(),
+                violation.reason, violation.shortfall,
+            )
         plan_slots: list[AutomaticPlanSlot] = []
         for i, start in enumerate(starts):
             active = tuple(h.id for h in heaters if float(on[(h.id, i)].value() or 0) > .5)
@@ -447,18 +482,25 @@ class MilpChargePlanner:
                 {h.id: round(demand_by_key[(h.id, start)], 9) for h in heaters},
                 {h.id: (h.power_w if h.id in active else 0) for h in heaters},
             ))
+            logger.debug(
+                "Planning slot chosen: start=%s heater_ids=%s power_w=%d",
+                start.isoformat(), ",".join(active) or "none", sum(_heater(heaters, heater_id).power_w for heater_id in active),
+            )
         explanations = tuple(HeaterExplanation(
             h.id, float(request.telemetry[h.id].stored_charge_percent),
             sum(item.demand_kwh for item in demand if item.heater_id == h.id),
             h.demand_factor, h.reserve_percent,
             next((item.at for item in constraints if item.heater_id == h.id), None),
             tuple((slot.start, slot.end) for slot in plan_slots if h.id in slot.heater_ids),
+            h.capacity_kwh,
         ) for h in heaters)
         plan = AutomaticPlan(
             starts[0], starts[-1] + timedelta(minutes=request.slot_minutes), request.slot_minutes,
             tuple(plan_slots), tuple(violations), DEGRADED if violations or time_limited else FEASIBLE,
             tuple(score), input_token(request), generated_at, explanations, tuple(demand),
         )
+        _notify(request, "safety")
+        _notify(request, "summary")
         logger.debug(
             "Automatic planning completed: status=%s slots=%d violations=%d token=%s",
             plan.status,
@@ -517,27 +559,49 @@ def _ceil_align(value: datetime, minutes: int) -> datetime:
 def _continuous_forecast_slots(start: datetime, forecast: Sequence[HourlyForecastPoint], horizon_hours: int, slot_minutes: int) -> tuple[datetime, ...]:
     if not forecast:
         return ()
-    effective_start = _effective_forecast_start(start, forecast, slot_minutes)
+    # The public automatic paths always pass the fixed 24-hour constant. Keep
+    # the old helper semantics for embedders that still ask the pure planner
+    # for a custom horizon; this is not an operator/API configuration surface.
+    if horizon_hours != PLANNING_HORIZON_HOURS:
+        effective_start = _effective_forecast_start(start, forecast, slot_minutes)
+        result = []
+        cursor = effective_start
+        configured_end = start + timedelta(hours=horizon_hours)
+        while cursor < configured_end and _weather_at(cursor, forecast) is not None:
+            result.append(cursor)
+            cursor += timedelta(minutes=slot_minutes)
+        return tuple(result)
     result = []
-    cursor = effective_start
-    configured_end = start + timedelta(hours=horizon_hours)
-    while cursor < configured_end and _weather_at(cursor, forecast) is not None:
+    cursor = _ceil_align(start, slot_minutes)
+    configured_end = cursor + timedelta(hours=horizon_hours)
+    while cursor < configured_end:
+        if _weather_at(cursor, forecast) is None:
+            logger.debug("Forecast coverage is not continuous: missing_at=%s", cursor.isoformat())
+            return ()
         result.append(cursor)
         cursor += timedelta(minutes=slot_minutes)
-    return tuple(result)
+    return tuple(result) if len(result) == horizon_hours * 60 // slot_minutes else ()
 
 
-def _effective_forecast_start(
-    start: datetime,
-    forecast: Sequence[HourlyForecastPoint],
-    slot_minutes: int,
-) -> datetime:
+def _effective_forecast_start(start: datetime, forecast: Sequence[HourlyForecastPoint], slot_minutes: int) -> datetime:
     aligned = _ceil_align(start, slot_minutes)
     if _weather_at(aligned, forecast) is not None:
         return aligned
     first_forecast = min(point.timestamp for point in forecast)
     candidate = _ceil_align(max(aligned, first_forecast), slot_minutes)
     return candidate if _weather_at(candidate, forecast) is not None else aligned
+
+
+def _notify(request: PlanningInput, step: str) -> None:
+    logger.debug("Planning workflow step: %s", step)
+    if request.progress_callback is not None:
+        request.progress_callback(step)
+
+
+def _check_cancelled(request: PlanningInput) -> None:
+    if request.cancellation_probe is not None and request.cancellation_probe():
+        logger.info("Automatic planning cancellation acknowledged at a phase boundary")
+        raise PlanningCancelled()
 
 
 def _telemetry_usable(value: ChargeTelemetry | None) -> bool:
@@ -604,7 +668,7 @@ def _model_solution_is_feasible(
 
 
 def _invalid_plan(request: PlanningInput, start: datetime, starts: Sequence[datetime], detail: str, reason: str, generated_at: datetime, heater_ids: Sequence[str] = ()) -> AutomaticPlan:
-    usable_starts = tuple(starts) or (start,)
+    usable_starts = tuple(starts)
     enabled = tuple(sorted((item for item in request.heaters if item.enabled), key=lambda item: item.id))
     violations = tuple(PlanningViolation(heater_id, "safe_planning_input", None, None, start, reason) for heater_id in heater_ids) or (PlanningViolation(None, "safe_planning_input", None, None, start, f"{reason}: {detail}"),)
     slots = tuple(AutomaticPlanSlot(
@@ -614,13 +678,14 @@ def _invalid_plan(request: PlanningInput, start: datetime, starts: Sequence[date
         {h.id: float(request.telemetry[h.id].stored_charge_percent or 0) if h.id in request.telemetry else 0.0 for h in enabled},
         {h.id: 0.0 for h in enabled}, {h.id: 0 for h in enabled},
     ) for at in usable_starts)
-    return AutomaticPlan(start, usable_starts[-1] + timedelta(minutes=request.slot_minutes), request.slot_minutes, slots, violations, INVALID, (), input_token(request), generated_at)
+    horizon_end = usable_starts[-1] + timedelta(minutes=request.slot_minutes) if usable_starts else start + timedelta(hours=request.horizon_hours)
+    return AutomaticPlan(start, horizon_end, request.slot_minutes, slots, violations, INVALID, (), input_token(request), generated_at)
 
 
 __all__ = [
     "AutomaticPlan", "AutomaticPlanSlot", "DEGRADED", "DemandEstimate",
     "DegreeHoursDemandEstimator", "DeterministicChargeOptimizer", "FEASIBLE",
     "HeaterExplanation", "INVALID", "MaterializedConstraint", "MilpChargePlanner",
-    "PlanningDeficit", "PlanningInput", "PlanningViolation", "SOLVER_TIME_LIMIT_SECONDS", "input_token",
+    "PlanningCancelled", "PlanningDeficit", "PlanningInput", "PlanningViolation", "PLANNING_HORIZON_HOURS", "SOLVER_TIME_LIMIT_SECONDS", "input_token",
     "materialize_constraints", "resolve_planning_telemetry",
 ]

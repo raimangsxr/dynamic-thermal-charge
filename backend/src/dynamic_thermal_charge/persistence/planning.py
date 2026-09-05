@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime, time, timezone
 import json
 from typing import Any, Mapping
+from uuid import uuid4
 
 from sqlalchemy import delete, insert, select, update
 from sqlalchemy.engine import Engine
@@ -22,6 +23,8 @@ from .schema import (
     charge_planning_site,
     heater_telemetry,
     plan_audit,
+    preview_job,
+    preview_job_step,
 )
 from .url import StoreLocation
 
@@ -55,7 +58,7 @@ class SqlPlanningRepository:
             return {
                 "revision": 1,
                 "replan_minutes": 30,
-                "forecast_horizon_hours": 48,
+                "forecast_horizon_hours": 24,
                 "aemet_query_hour": 12,
                 "contracted_power_w": 5200,
                 "max_heating_power_w": 5200,
@@ -72,7 +75,6 @@ class SqlPlanningRepository:
         integers = (
             "revision",
             "replan_minutes",
-            "forecast_horizon_hours",
             "aemet_query_hour",
             "contracted_power_w",
             "max_heating_power_w",
@@ -88,12 +90,14 @@ class SqlPlanningRepository:
         )
         booleans = ("mqtt_simulation_enabled",)
         strings = ("mqtt_simulation_topic_prefix",)
-        return {
+        values = {
             **{key: int(row[key]) for key in integers},
             **{key: float(row[key]) for key in floats},
             **{key: bool(row[key]) for key in booleans},
             **{key: str(row[key]) for key in strings},
         }
+        values["forecast_horizon_hours"] = 24
+        return values
 
     def heater_charge_config(self) -> dict[str, dict[str, Any]]:
         from .schema import heater_charge_config
@@ -122,7 +126,6 @@ class SqlPlanningRepository:
             raise ConfigConflictError("planning configuration changed; recalculate before saving")
         integer_fields = {
             "replan_minutes",
-            "forecast_horizon_hours",
             "aemet_query_hour",
             "contracted_power_w",
             "max_heating_power_w",
@@ -149,8 +152,7 @@ class SqlPlanningRepository:
             elif key in string_fields:
                 allowed[key] = str(value).strip()
         combined = {**current, **allowed}
-        if not 0 < int(combined["forecast_horizon_hours"]) <= 48:
-            raise ConfigValidationError("forecast_horizon_hours must be between 1 and 48", field="forecast_horizon_hours")
+        combined["forecast_horizon_hours"] = 24
         if int(combined["contracted_power_w"]) <= 0 or int(combined["max_heating_power_w"]) <= 0:
             raise ConfigValidationError("power limits must be positive", field="contracted_power_w")
         if int(combined["base_load_w"]) < 0:
@@ -274,6 +276,170 @@ class SqlPlanningRepository:
                 connection.execute(insert(automatic_plan_slot).values(plan_id=plan_id, slot_start=to_utc(slot.start), slot_end=to_utc(slot.end), heater_ids_json=json.dumps(slot.heater_ids), power_w=slot.power_w, stored_charge_json=json.dumps(slot.stored_charge_percent), required_charge_json=json.dumps(slot.required_charge_percent), outdoor_temperature_c=slot.outdoor_temperature_c, initial_soc_json=json.dumps(slot.initial_soc_percent or {}), demand_json=json.dumps(slot.demand_kwh or {}), heater_power_json=json.dumps(slot.heater_power_w or {})))
             connection.execute(insert(plan_audit).values(installation_id=self._installation_id, plan_id=plan_id, event="activated" if active else "preview", reason=reason, details_json=json.dumps({"status": plan.status, "violations": violations}), occurred_at=to_utc(now)))
         return plan_id
+
+    def create_preview_job(
+        self,
+        constraints: list[dict[str, Any]],
+        *,
+        configuration_revision: int,
+        constraints_revision: int,
+        requested_at: datetime,
+        steps: tuple[str, ...],
+    ) -> str:
+        job_id = str(uuid4())
+        with transaction(self._application, self._application_location) as connection:
+            connection.execute(insert(preview_job).values(
+                id=job_id,
+                installation_id=self._installation_id,
+                configuration_revision=configuration_revision,
+                constraints_revision=constraints_revision,
+                request_json=json.dumps({"constraints": _json_ready(constraints)}, separators=(",", ":")),
+                status="queued",
+                cancellation_requested=False,
+                requested_at=to_utc(requested_at),
+            ))
+            connection.execute(insert(preview_job_step), [
+                {"job_id": job_id, "position": position, "name": name, "status": "pending"}
+                for position, name in enumerate(steps)
+            ])
+        return job_id
+
+    def preview_job(self, job_id: str) -> dict[str, Any] | None:
+        with store_errors(self._application_location):
+            with self._application.connect() as connection:
+                row = connection.execute(select(preview_job).where(
+                    (preview_job.c.id == job_id) &
+                    (preview_job.c.installation_id == self._installation_id)
+                )).mappings().first()
+                if row is None:
+                    return None
+                steps = connection.execute(select(preview_job_step).where(
+                    preview_job_step.c.job_id == job_id
+                ).order_by(preview_job_step.c.position)).mappings().all()
+        return {
+            "id": str(row["id"]),
+            "configuration_revision": int(row["configuration_revision"]),
+            "constraints_revision": int(row["constraints_revision"]),
+            "request": json.loads(row["request_json"]),
+            "status": str(row["status"]),
+            "cancellation_requested": bool(row["cancellation_requested"]),
+            "requested_at": from_utc(row["requested_at"]),
+            "started_at": from_utc(row["started_at"]),
+            "finished_at": from_utc(row["finished_at"]),
+            "result": None if row["result_json"] is None else json.loads(row["result_json"]),
+            "error_code": row["error_code"],
+            "error_detail": row["error_detail"],
+            "steps": [{
+                "name": str(item["name"]), "status": str(item["status"]),
+                "started_at": from_utc(item["started_at"]),
+                "finished_at": from_utc(item["finished_at"]), "detail": item["detail"],
+            } for item in steps],
+        }
+
+    def latest_preview_job(self) -> dict[str, Any] | None:
+        with store_errors(self._application_location):
+            with self._application.connect() as connection:
+                job_id = connection.execute(select(preview_job.c.id).where(
+                    preview_job.c.installation_id == self._installation_id
+                ).order_by(preview_job.c.requested_at.desc()).limit(1)).scalar()
+        return None if job_id is None else self.preview_job(str(job_id))
+
+    def mark_interrupted_preview_jobs(self) -> None:
+        now = datetime.now(timezone.utc)
+        with transaction(self._application, self._application_location) as connection:
+            rows = connection.execute(select(preview_job.c.id).where(
+                (preview_job.c.installation_id == self._installation_id) &
+                preview_job.c.status.in_(("queued", "running", "cancelling"))
+            )).scalars().all()
+            if not rows:
+                return
+            connection.execute(update(preview_job).where(preview_job.c.id.in_(rows)).values(
+                status="interrupted", finished_at=to_utc(now), error_code="interrupted",
+                error_detail="El servicio se reinició mientras se calculaba la vista previa.",
+            ))
+            connection.execute(update(preview_job_step).where(
+                preview_job_step.c.job_id.in_(rows) &
+                preview_job_step.c.status.in_(("pending", "running"))
+            ).values(status="error", finished_at=to_utc(now), detail="interrupted"))
+
+    def request_preview_cancel(self, job_id: str) -> dict[str, Any] | None:
+        now = datetime.now(timezone.utc)
+        with transaction(self._application, self._application_location) as connection:
+            row = connection.execute(select(preview_job).where(
+                (preview_job.c.id == job_id) &
+                (preview_job.c.installation_id == self._installation_id)
+            )).mappings().first()
+            if row is None:
+                return None
+            if row["status"] in ("queued", "running"):
+                connection.execute(update(preview_job).where(preview_job.c.id == job_id).values(
+                    status="cancelling", cancellation_requested=True
+                ))
+            elif row["status"] == "cancelling":
+                connection.execute(update(preview_job).where(preview_job.c.id == job_id).values(cancellation_requested=True))
+        return self.preview_job(job_id)
+
+    def preview_job_cancel_requested(self, job_id: str) -> bool:
+        with store_errors(self._application_location):
+            with self._application.connect() as connection:
+                value = connection.execute(select(preview_job.c.cancellation_requested).where(
+                    (preview_job.c.id == job_id) &
+                    (preview_job.c.installation_id == self._installation_id)
+                )).scalar()
+        return bool(value)
+
+    def update_preview_step(self, job_id: str, name: str, status: str, detail: str | None = None) -> None:
+        now = datetime.now(timezone.utc)
+        with transaction(self._application, self._application_location) as connection:
+            if status == "running":
+                connection.execute(update(preview_job_step).where(
+                    (preview_job_step.c.job_id == job_id) &
+                    (preview_job_step.c.status == "running")
+                ).values(status="completed", finished_at=to_utc(now)))
+                connection.execute(update(preview_job_step).where(
+                    (preview_job_step.c.job_id == job_id) &
+                    (preview_job_step.c.name == name)
+                ).values(status="running", started_at=to_utc(now), detail=detail))
+            else:
+                connection.execute(update(preview_job_step).where(
+                    (preview_job_step.c.job_id == job_id) &
+                    (preview_job_step.c.name == name)
+                ).values(status=status, finished_at=to_utc(now), detail=detail))
+
+    def finish_preview_job(
+        self,
+        job_id: str,
+        *,
+        status: str,
+        result: dict[str, Any] | None = None,
+        error_code: str | None = None,
+        error_detail: str | None = None,
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        with transaction(self._application, self._application_location) as connection:
+            connection.execute(update(preview_job).where(
+                (preview_job.c.id == job_id) &
+                (preview_job.c.installation_id == self._installation_id)
+            ).values(
+                status=status, finished_at=to_utc(now),
+                result_json=None if result is None else json.dumps(_json_ready(result), separators=(",", ":")),
+                error_code=error_code, error_detail=error_detail,
+            ))
+            step_status = "cancelled" if status == "cancelled" else "error" if status in ("error", "interrupted") else "completed"
+            connection.execute(update(preview_job_step).where(
+                (preview_job_step.c.job_id == job_id) &
+                preview_job_step.c.status.in_(("running", "pending"))
+            ).values(status=step_status, finished_at=to_utc(now), detail=error_detail))
+
+    def start_preview_job(self, job_id: str) -> bool:
+        now = datetime.now(timezone.utc)
+        with transaction(self._application, self._application_location) as connection:
+            changed = connection.execute(update(preview_job).where(
+                (preview_job.c.id == job_id) &
+                (preview_job.c.installation_id == self._installation_id) &
+                preview_job.c.status.in_(("queued", "cancelling"))
+            ).values(status="running", started_at=to_utc(now))).rowcount
+        return changed == 1
 
     def active_plan(self) -> dict[str, Any] | None:
         with store_errors(self._application_location):

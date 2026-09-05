@@ -141,7 +141,7 @@ def test_planning_endpoint_returns_hourly_series_and_all_intervals(
     body = response.json()
     assert body["forecast"]["hourly_points"]
     assert len(body["plan"]["slots"]) > 0
-    assert len(body["timeline"]) == 48 * 60 // config.site.slot_minutes
+    assert len(body["timeline"]) == 24 * 60 // config.site.slot_minutes
     assert body["horizon_end"]
     assert body["max_total_power_w"] == config.site.max_total_power_w
     salon_minutes = [slot["charge_minutes_by_heater"]["salon"] for slot in body["timeline"][:4]]
@@ -558,7 +558,7 @@ def test_planning_config_endpoint_returns_site_parameters(client):
     response = client.get("/api/v1/planning/config", headers=AUTH)
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["forecast_horizon_hours"] == 48
+    assert body["forecast_horizon_hours"] == 24
     assert body["replan_minutes"] == 30
     assert body["mqtt_simulation_enabled"] is False
     assert "revision" in body
@@ -572,7 +572,7 @@ def test_planning_config_endpoint_updates_site_parameters(client):
         json={
             "expected_revision": current["revision"],
             "replan_minutes": current["replan_minutes"],
-            "forecast_horizon_hours": 36,
+            "forecast_horizon_hours": 24,
             "aemet_query_hour": current["aemet_query_hour"],
             "contracted_power_w": current["contracted_power_w"],
             "max_heating_power_w": current["max_heating_power_w"],
@@ -588,7 +588,7 @@ def test_planning_config_endpoint_updates_site_parameters(client):
     )
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["forecast_horizon_hours"] == 36
+    assert body["forecast_horizon_hours"] == 24
     assert body["mqtt_simulation_enabled"] is True
     assert body["mqtt_simulation_initial_temperature_c"] == 42.0
     assert body["mqtt_simulation_topic_prefix"] == "lab/sim"

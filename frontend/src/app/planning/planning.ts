@@ -1,4 +1,5 @@
 import { HttpErrorResponse } from '@angular/common/http';
+import { JsonPipe } from '@angular/common';
 import { AfterViewInit, Component, ElementRef, Injector, OnDestroy, ViewChild, afterNextRender, inject, signal } from '@angular/core';
 import { MAT_DIALOG_DATA, MatDialog, MatDialogModule } from '@angular/material/dialog';
 import { MatButtonModule } from '@angular/material/button';
@@ -7,8 +8,10 @@ import { Chart } from 'chart.js/auto';
 import type { ChartOptions, TooltipItem } from 'chart.js';
 
 import { Api } from '../core/api';
-import type { ApiErrorDto, HourlyForecastPointDto, PlanningConstraintRequest, PlanningDto, PlanningDeficitDto, PlanningPreviewDto, PlanningSlotDto } from '../core/api.types';
+import { Poller } from '../core/poll';
+import type { ApiErrorDto, HourlyForecastPointDto, PlanningConstraintRequest, PlanningDto, PlanningDeficitDto, PlanningPreviewDto, PlanningPreviewJobDto, PlanningSlotDto, PlanningTimelineSlotDto } from '../core/api.types';
 import { type Explained, UNREACHABLE, explain } from '../core/errors';
+import { formatTemperature, truncateTemperature } from '../shared/temperature/temperature';
 
 interface PlanningDetailDialogData {
   kind: 'forecast' | 'planning';
@@ -40,7 +43,7 @@ interface ConstraintDraft extends Omit<PlanningConstraintRequest, 'target_charge
           <div class="table-scroll">
             <table><caption>Registros horarios recibidos</caption><thead><tr><th>Hora</th><th>Temperatura</th></tr></thead><tbody>
               @for (point of forecast.hourly_points; track point.timestamp) {
-                <tr><th scope="row">{{ dateTime(point.timestamp) }}</th><td>{{ point.temperature_c }} °C</td></tr>
+                <tr><th scope="row">{{ dateTime(point.timestamp) }}</th><td>{{ formatTemperature(point.temperature_c) }} °C</td></tr>
               }
             </tbody></table>
           </div>
@@ -106,16 +109,20 @@ export class PlanningDetailDialog {
     return `${this.dateTime(points[0].timestamp)}–${this.dateTime(points[points.length - 1].timestamp)}`;
   }
 
+  formatTemperature(value: number | null | undefined): string {
+    return formatTemperature(value);
+  }
+
   temperatures(forecast: NonNullable<PlanningDto['forecast']>): string {
-    const minimum = forecast.minimum_temperature_c === null ? 'no disponible' : `${forecast.minimum_temperature_c} °C`;
-    const maximum = forecast.maximum_temperature_c === null ? 'no disponible' : `${forecast.maximum_temperature_c} °C`;
-    return `media ${forecast.average_temperature_c} °C · mínima ${minimum} · máxima ${maximum}`;
+    const minimum = forecast.minimum_temperature_c === null ? 'no disponible' : `${formatTemperature(forecast.minimum_temperature_c)} °C`;
+    const maximum = forecast.maximum_temperature_c === null ? 'no disponible' : `${formatTemperature(forecast.maximum_temperature_c)} °C`;
+    return `media ${formatTemperature(forecast.average_temperature_c)} °C · mínima ${minimum} · máxima ${maximum}`;
   }
 }
 
 @Component({
   selector: 'dtc-planning',
-  imports: [FormsModule],
+  imports: [FormsModule, JsonPipe],
   templateUrl: './planning.html',
   styleUrl: './planning.css',
 })
@@ -130,6 +137,7 @@ export class Planning implements AfterViewInit, OnDestroy {
   readonly preview = signal<PlanningPreviewDto | null>(null);
   readonly actionMessage = signal('');
   readonly actionError = signal('');
+  readonly previewJob = signal<PlanningPreviewJobDto | null>(null);
 
   @ViewChild('temperatureChart') private temperatureCanvas?: ElementRef<HTMLCanvasElement>;
   @ViewChild('forecastChart') private forecastCanvas?: ElementRef<HTMLCanvasElement>;
@@ -137,9 +145,12 @@ export class Planning implements AfterViewInit, OnDestroy {
   @ViewChild('aggregateChart') private aggregateCanvas?: ElementRef<HTMLCanvasElement>;
   @ViewChild('cumulativeChart') private cumulativeCanvas?: ElementRef<HTMLCanvasElement>;
   private charts: Chart[] = [];
+  private readonly previewPoller = new Poller(() => this.pollPreviewJob());
+  private readonly previewStorageKey = 'dtc.planning.preview-job';
 
   constructor() {
     this.refresh();
+    this.restorePreviewJob();
   }
 
   ngAfterViewInit(): void {
@@ -148,6 +159,7 @@ export class Planning implements AfterViewInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.destroyCharts();
+    this.previewPoller.stop();
   }
 
   refresh(): void {
@@ -157,6 +169,7 @@ export class Planning implements AfterViewInit, OnDestroy {
         this.draftConstraints.set((planning.constraints ?? []).map((item) => ({ heater_id: item.heater_id, target_charge: item.target_charge * 100, at_time: item.at_time, weekdays: item.weekdays })));
         this.failure.set(null);
         this.loading.set(false);
+        if (planning.preview_job) this.acceptPreviewJob(planning.preview_job);
         this.scheduleChartRender();
       },
       error: (error: unknown) => {
@@ -179,10 +192,19 @@ export class Planning implements AfterViewInit, OnDestroy {
     }));
   }
   recalculate(): void {
-    this.actionError.set(''); this.actionMessage.set('Calculando vista previa…');
-    this.api.planningPreview(this.apiConstraints(), this.snapshot()?.constraints_revision).subscribe({
-      next: (value) => { this.preview.set(value); this.actionMessage.set('Vista previa calculada. Todavía no modifica el plan activo.'); },
-      error: () => { this.actionMessage.set(''); this.actionError.set('No se pudo calcular la vista previa. Revisa las constraints y la telemetría.'); },
+    this.actionError.set(''); this.actionMessage.set('Iniciando vista previa…'); this.preview.set(null);
+    this.api.planningPreviewJobStart(this.apiConstraints(), this.snapshot()?.constraints_revision).subscribe({
+      next: (job) => { this.acceptPreviewJob(job); this.actionMessage.set('Vista previa en curso. Puedes seguir sus comprobaciones o cancelarla.'); },
+      error: () => { this.actionMessage.set(''); this.actionError.set('No se pudo iniciar la vista previa. Revisa las constraints y la telemetría.'); },
+    });
+  }
+  cancelPreview(): void {
+    const job = this.previewJob();
+    if (!job || ['completed', 'error', 'cancelled', 'interrupted'].includes(job.status)) return;
+    this.actionMessage.set('Solicitando cancelación…');
+    this.api.planningPreviewJobCancel(job.job_id).subscribe({
+      next: (value) => { this.acceptPreviewJob(value); this.actionMessage.set('La vista previa está cancelando; terminará al cerrar la fase activa.'); },
+      error: () => this.actionError.set('No se pudo solicitar la cancelación. Vuelve a consultar el estado del trabajo.'),
     });
   }
   activate(): void {
@@ -224,9 +246,17 @@ export class Planning implements AfterViewInit, OnDestroy {
   }
 
   temperatures(forecast: NonNullable<PlanningDto['forecast']>): string {
-    const minimum = forecast.minimum_temperature_c === null ? 'no disponible' : `${forecast.minimum_temperature_c} °C`;
-    const maximum = forecast.maximum_temperature_c === null ? 'no disponible' : `${forecast.maximum_temperature_c} °C`;
-    return `media ${forecast.average_temperature_c} °C · mínima ${minimum} · máxima ${maximum}`;
+    const minimum = forecast.minimum_temperature_c === null ? 'no disponible' : `${formatTemperature(forecast.minimum_temperature_c)} °C`;
+    const maximum = forecast.maximum_temperature_c === null ? 'no disponible' : `${formatTemperature(forecast.maximum_temperature_c)} °C`;
+    return `media ${formatTemperature(forecast.average_temperature_c)} °C · mínima ${minimum} · máxima ${maximum}`;
+  }
+
+  formatTemperature(value: number | null | undefined): string {
+    return formatTemperature(value);
+  }
+
+  temperatureMap(values: Record<string, number>): string {
+    return Object.entries(values).map(([heaterId, value]) => `${heaterId}: ${formatTemperature(value)} °C`).join(' · ');
   }
 
   openForecastDetails(): void {
@@ -248,7 +278,7 @@ export class Planning implements AfterViewInit, OnDestroy {
   }
 
   forecastTemperatures(points: HourlyForecastPointDto[]): number[] {
-    return points.map((point) => point.temperature_c);
+    return points.map((point) => truncateTemperature(point.temperature_c));
   }
 
   time(value: string): string {
@@ -323,10 +353,85 @@ export class Planning implements AfterViewInit, OnDestroy {
       .join(' · ');
   }
 
+  jobStatusText(status: string): string {
+    return ({ queued: 'pendiente', running: 'en curso', cancelling: 'cancelando', completed: 'completado', error: 'error', cancelled: 'cancelado', interrupted: 'interrumpido' } as Record<string, string>)[status] ?? status;
+  }
+
+  checkStatusText(status: string): string {
+    return ({ pending: 'pendiente', running: 'en curso', completed: 'completado', error: 'error', cancelled: 'cancelado', skipped: 'omitido' } as Record<string, string>)[status] ?? status;
+  }
+
+  checkText(name: string): string {
+    return ({ input_validation: 'Validación de inputs', telemetry: 'Telemetría', aemet_coverage: 'Cobertura AEMET', demand_estimation: 'Estimación de demanda', constraints: 'Materialización de constraints', resolution: 'Resolución', safety_validation: 'Validación de seguridad', operator_summary: 'Resumen final' } as Record<string, string>)[name] ?? name;
+  }
+
+  previewSlotLabel(slot: Record<string, unknown>): string { return this.dateTime(String(slot['start'] ?? '')); }
+  previewSlotPower(slot: Record<string, unknown>): number { return Number(slot['power_w'] ?? 0); }
+  previewSlotHeaters(slot: Record<string, unknown>): string { return Array.isArray(slot['heater_ids']) && slot['heater_ids'].length ? slot['heater_ids'].join(', ') : 'ninguno'; }
+  matrixCell(slot: Record<string, unknown>, heaterId: string): string {
+    const power = (slot['heater_power_w'] as Record<string, number> | undefined)?.[heaterId] ?? 0;
+    const energy = (slot['energy_delivered_kwh'] as Record<string, number> | undefined)?.[heaterId] ?? 0;
+    const capacity = (slot['capacity_percent_by_heater'] as Record<string, number> | undefined)?.[heaterId] ?? 0;
+    const soc = (slot['stored_charge_percent'] as Record<string, number> | undefined)?.[heaterId] ?? 0;
+    return `${power} W · ${energy.toFixed(2)} kWh · ${capacity.toFixed(1)} % capacidad · SOC ${soc.toFixed(1)} %`;
+  }
+  previewSummaryText(summary: Record<string, unknown>): string {
+    const demand = summary['demand_kwh_by_heater'] as Record<string, number> | undefined;
+    if (!demand) return 'Sin resumen disponible.';
+    return Object.entries(demand).map(([heater, value]) => `${heater}: ${Number(value).toFixed(2)} kWh`).join(' · ') || 'No se estima demanda.';
+  }
+
+  displayTimeline(data: PlanningDto): PlanningTimelineSlotDto[] {
+    const result = this.preview() ?? data.preview_job?.result;
+    if (!result) return data.timeline.map((slot) => ({
+      ...slot,
+      temperature_c: slot.temperature_c === null ? null : truncateTemperature(slot.temperature_c),
+      estimated_temperature_c_by_heater: Object.fromEntries(Object.entries(slot.estimated_temperature_c_by_heater).map(([id, value]) => [id, truncateTemperature(value)])),
+    }));
+    return result.slots.map((slot) => {
+      const soc = (slot['stored_charge_percent'] as Record<string, number> | undefined) ?? {};
+      const indoor = (slot['indoor_temperature_c'] as Record<string, number> | undefined) ?? {};
+      const heaters = Array.isArray(slot['heater_ids']) ? slot['heater_ids'] as string[] : [];
+      return {
+        start: String(slot['start'] ?? ''), end: String(slot['end'] ?? ''), heater_ids: heaters,
+        total_power_w: Number(slot['power_w'] ?? 0), temperature_c: typeof slot['outdoor_temperature_c'] === 'number' ? truncateTemperature(Number(slot['outdoor_temperature_c'])) : null,
+        temperature_interpolated: false, charge_minutes_by_heater: {}, stored_charge_percent_by_heater: soc,
+        estimated_temperature_c_by_heater: Object.fromEntries(Object.entries(indoor).map(([id, value]) => [id, truncateTemperature(value)])),
+      };
+    });
+  }
+
+  private acceptPreviewJob(job: PlanningPreviewJobDto): void {
+    this.previewJob.set(job);
+    try { sessionStorage.setItem(this.previewStorageKey, job.job_id); } catch { /* storage may be disabled */ }
+    if (job.result) {
+      this.preview.set(job.result);
+      this.previewPoller.stop();
+      this.actionMessage.set(job.result.status === 'INVALID' ? 'La ventana no es planificable; revisa los avisos.' : 'Vista previa calculada. Todavía no modifica el plan activo.');
+    } else if (['completed', 'error', 'cancelled', 'interrupted'].includes(job.status)) {
+      this.previewPoller.stop();
+    } else {
+      this.previewPoller.start(2);
+    }
+  }
+
+  private pollPreviewJob(): void {
+    const job = this.previewJob();
+    if (!job) return;
+    this.api.planningPreviewJob(job.job_id).subscribe({ next: (value) => this.acceptPreviewJob(value) });
+  }
+
+  private restorePreviewJob(): void {
+    let jobId: string | null = null;
+    try { jobId = sessionStorage.getItem(this.previewStorageKey); } catch { return; }
+    if (!jobId) return;
+    this.api.planningPreviewJob(jobId).subscribe({ next: (job) => this.acceptPreviewJob(job), error: () => { try { sessionStorage.removeItem(this.previewStorageKey); } catch { /* ignore */ } } });
+  }
+
   private renderCharts(): void {
     const data = this.snapshot();
-    const timeline = data?.timeline ?? [];
     if (!data) return;
+    const timeline = this.displayTimeline(data);
     this.destroyCharts();
     try {
       if (data.forecast?.hourly_points.length && this.forecastCanvas) {
@@ -337,6 +442,28 @@ export class Planning implements AfterViewInit, OnDestroy {
           data: { labels: this.intervalLabels(fullLabels), datasets: [{ label: 'Temperatura exterior (°C)', data: this.forecastTemperatures(points), borderColor: '#2457a6', backgroundColor: '#2457a622', tension: 0.25, spanGaps: false }] },
           options: this.chartOptions<'line'>(fullLabels),
         }));
+      }
+      const preview = this.preview() ?? data.preview_job?.result;
+      if (preview && this.temperatureCanvas && this.heaterCanvas && this.aggregateCanvas && this.cumulativeCanvas) {
+        const slots = preview.slots;
+        const fullLabels = slots.map((slot) => this.previewSlotLabel(slot));
+        const labels = this.intervalLabels(fullLabels);
+        const colors = ['#2457a6', '#d46b28', '#3b8c68', '#8a4f9e', '#9b7a21'];
+        const numberMap = (slot: Record<string, unknown>, key: string, heaterId: string): number | null => {
+          const values = slot[key] as Record<string, number> | undefined;
+          return values && typeof values[heaterId] === 'number' ? truncateTemperature(values[heaterId]) : null;
+        };
+        this.charts.push(new Chart(this.temperatureCanvas.nativeElement, { type: 'line', data: { labels, datasets: [
+          ...data.heaters.map((heater, index) => ({ label: `${heater.name} estimada (°C)`, data: slots.map((slot) => numberMap(slot, 'indoor_temperature_c', heater.id)), borderColor: colors[index % colors.length], tension: 0.25 })),
+          { label: 'Previsión exterior (°C)', data: slots.map((slot) => typeof slot['outdoor_temperature_c'] === 'number' ? truncateTemperature(Number(slot['outdoor_temperature_c'])) : null), borderColor: '#6b7280', borderDash: [6, 4], tension: 0.25 },
+        ] }, options: this.chartOptions<'line'>(fullLabels, '°C') }));
+        this.charts.push(new Chart(this.heaterCanvas.nativeElement, { type: 'bar', data: { labels, datasets: data.heaters.map((heater, index) => ({ label: heater.name, data: slots.map((slot) => Array.isArray(slot['heater_ids']) && (slot['heater_ids'] as string[]).includes(heater.id) ? this.kilowatts(heater.power_w) : 0), backgroundColor: `${colors[index % colors.length]}cc` })) }, options: this.chartOptions<'bar'>(fullLabels, 'kW') }));
+        const limits = preview.operator_summary['power_limits'] as Record<string, number | null> | undefined;
+        const contracted = limits?.['contracted_w'] ?? data.max_total_power_w;
+        const heating = limits?.['heating_w'];
+        this.charts.push(new Chart(this.aggregateCanvas.nativeElement, { type: 'line', data: { labels, datasets: [{ label: 'Potencia agregada (kW)', data: slots.map((slot) => this.kilowatts(this.previewSlotPower(slot))), borderColor: '#2457a6' }, { label: 'Carga base (kW)', data: slots.map(() => this.kilowatts(data.base_load_w)), borderColor: '#6b7280', borderDash: [3, 3], pointRadius: 0 }, { label: 'Límite contratado (kW)', data: slots.map(() => this.kilowatts(contracted)), borderColor: '#b33a3a', pointRadius: 0 }, ...(heating === null || heating === undefined ? [] : [{ label: 'Límite calefacción (kW)', data: slots.map(() => this.kilowatts(heating)), borderColor: '#d46b28', pointRadius: 0 }]) ] }, options: this.chartOptions<'line'>(fullLabels, 'kW') }));
+        this.charts.push(new Chart(this.cumulativeCanvas.nativeElement, { type: 'line', data: { labels, datasets: data.heaters.map((heater, index) => ({ label: `${heater.name} (%)`, data: slots.map((slot) => numberMap(slot, 'stored_charge_percent', heater.id)), borderColor: colors[index % colors.length], stepped: true })) }, options: this.chartOptions<'line'>(fullLabels, 'Carga (%)') }));
+        return;
       }
       if (!data.plan || !timeline.length || !this.temperatureCanvas || !this.heaterCanvas || !this.aggregateCanvas || !this.cumulativeCanvas) return;
       const fullLabels = timeline.map((slot) => this.slotLabel(slot));
@@ -381,7 +508,7 @@ export class Planning implements AfterViewInit, OnDestroy {
 
       this.charts.push(new Chart(this.aggregateCanvas.nativeElement, {
         type: 'line',
-        data: { labels, datasets: [{ label: 'Potencia agregada (kW)', data: timeline.map((_slot, slotIndex) => this.aggregatePowerKw(data, slotIndex)), borderColor: '#2457a6', backgroundColor: '#2457a688', tension: 0.15 }, { label: 'Límite configurado (kW)', data: timeline.map(() => this.kilowatts(data.max_total_power_w)), borderColor: '#b33a3a', pointRadius: 0 }] },
+        data: { labels, datasets: [{ label: 'Potencia agregada (kW)', data: timeline.map((_slot, slotIndex) => this.aggregatePowerKw(data, slotIndex)), borderColor: '#2457a6', backgroundColor: '#2457a688', tension: 0.15 }, { label: 'Carga base (kW)', data: timeline.map(() => this.kilowatts(data.base_load_w)), borderColor: '#6b7280', borderDash: [3, 3], pointRadius: 0 }, { label: 'Límite contratado (kW)', data: timeline.map(() => this.kilowatts(data.max_total_power_w)), borderColor: '#b33a3a', pointRadius: 0 }, { label: 'Límite calefacción (kW)', data: timeline.map(() => this.kilowatts(data.max_heating_power_w || data.max_total_power_w)), borderColor: '#d46b28', pointRadius: 0 }] },
         options: this.chartOptions<'line'>(fullLabels, 'kW'),
       }));
 

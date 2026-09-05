@@ -32,6 +32,32 @@ al expirar el límite de tiempo será `DEGRADED` con la violación
 - **THEN** el controlador no publica un plan factible salvo que la solución se
   haya verificado, y en tal caso informa `solver_time_limit`
 
+### Requirement: Horizonte operativo completo
+
+La planificación automática y sus vistas previas deben cubrir exactamente las
+24 horas continuas desde el siguiente límite de intervalo configurado. Si falta
+cobertura AEMET horaria utilizable en cualquier parte de esa ventana, el
+resultado es explícitamente no planificable y no contiene un plan parcial.
+
+#### Scenario: Cobertura meteorológica incompleta
+
+- **WHEN** la previsión no cubre de forma continua las próximas 24 horas
+- **THEN** la planificación devuelve `INVALID`, explica la falta de cobertura
+  y no publica intervalos parciales
+
+### Requirement: Vista previa durable y cancelable
+
+Cada vista previa se ejecuta como un trabajo persistente con pasos ordenados y
+estado consultable. El operador puede recuperar el trabajo tras recargar y
+solicitar su cancelación; un trabajo cancelado o interrumpido no puede activar
+un plan.
+
+#### Scenario: Cancelación durante una vista previa
+
+- **WHEN** el operador solicita cancelar un trabajo en curso
+- **THEN** el trabajo muestra `cancelling`, termina de forma segura en un límite
+  de fase y queda `cancelled` sin resultado activable
+
 ### Requirement: Protección de salidas GPIO
 
 El controlador no debe arrancar salidas GPIO cuando MQTT está deshabilitado o

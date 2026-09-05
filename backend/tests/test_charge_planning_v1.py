@@ -215,7 +215,7 @@ def test_preview_uses_mqtt_fixed_telemetry_when_broker_disabled(client, initiali
         },
     )
     config, revision = initialised_store.repository.current()
-    points = forecast(API_NOW, 6, 4)
+    points = forecast(API_NOW, 24, 4)
     record = SimpleNamespace(
         date=API_NOW.date(), average_temperature_c=4, minimum_temperature_c=4,
         maximum_temperature_c=4, source="aemet", location="test",
@@ -235,7 +235,7 @@ def test_preview_uses_mqtt_fixed_telemetry_when_broker_disabled(client, initiali
 
 def test_preview_activation_persists_v1_snapshot(client, initialised_store):
     config, revision = initialised_store.repository.current()
-    points = forecast(API_NOW, 3, 4)
+    points = forecast(API_NOW, 24, 4)
     record = SimpleNamespace(
         date=API_NOW.date(), average_temperature_c=4, minimum_temperature_c=4,
         maximum_temperature_c=4, source="aemet", location="test",

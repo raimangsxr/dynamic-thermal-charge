@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 from .controller import ChargeController
 from .drivers import OutputDriver, RecordingOutputDriver, SimulatedOutputDriver
 from .gpio_driver import GpioOutputDriver
-from .charge_planning import DeterministicChargeOptimizer, PlanningInput, resolve_planning_telemetry
+from .charge_planning import PLANNING_HORIZON_HOURS, DeterministicChargeOptimizer, PlanningInput, resolve_planning_telemetry
 from .models import AppConfig, ChargeTelemetry
 from .persistence import ConfigStoreError
 from .persistence.active_plan import SqlActivePlanRepository
@@ -339,7 +339,7 @@ def _build_automatic_runtime_plan(
         constraints=constraints,
         forecast=store.planning.latest_forecast(now),
         horizon_start=now,
-        horizon_hours=int(planning_site["forecast_horizon_hours"]),
+        horizon_hours=PLANNING_HORIZON_HOURS,
         slot_minutes=config.site.slot_minutes,
         max_total_power_w=int(planning_site.get("contracted_power_w", config.site.max_total_power_w)),
         base_load_w=int(planning_site.get("base_load_w", 0)),

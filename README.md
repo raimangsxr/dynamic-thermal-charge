@@ -72,9 +72,14 @@ deshabilitado o si está activa la simulación de acumuladores: ambas situacione
 proporcionan telemetría no real y se registran como un error crítico.
 
 La sección `Planificación` consulta el plan aceptado en `GET /api/v1/planning`
-y permite editar constraints recurrentes. `POST /api/v1/planning/preview` calcula
-una vista previa sin tocar el controlador; `POST /api/v1/planning/activate`
-valida el token de inputs y guarda constraints y plan conjuntamente. La
+y permite editar constraints recurrentes. La vista previa se inicia con
+`POST /api/v1/planning/preview/jobs`, se consulta con
+`GET /api/v1/planning/preview/jobs/{job_id}` y se cancela con
+`POST /api/v1/planning/preview/jobs/{job_id}/cancel`; el trabajo y sus checks
+se conservan al recargar. `POST /api/v1/planning/activate` valida el token de
+inputs y guarda constraints y plan conjuntamente. El horizonte automático es
+siempre de 24 horas desde el siguiente límite de intervalo: sin cobertura AEMET
+horaria continua no se publica un plan parcial. La
 telemetría MQTT de cada acumulador se valida por separado y una muestra
 incompleta o de más de 15 minutos se marca como caducada y deja ese acumulador
 fuera del plan.
@@ -89,8 +94,9 @@ de un acumulador se guarda con una única petición `PUT /api/v1/config/heaters/
 
 El histórico de decisiones está disponible en `GET /api/v1/history/planning-audit`
 y conserva el motivo, el estado y las violaciones de cada preview o activación.
-La misma vista proyecta 48 horas completas; los minutos equivalentes de cada
-acumulador reflejan el SOC planificado al final de cada intervalo.
+La misma vista proyecta 24 horas completas; los gráficos muestran el contexto
+de preview cuando existe y ofrecen una alternativa textual con unidades para
+cada intervalo. El resumen usa lenguaje operativo y agrupa avisos por causa.
 
 Para actualizaciones automatizadas, `deploy/reconcile.sh` lee `deploy/release`,
 descarga las imágenes y aplica la versión indicada. El cronjob se instala con:

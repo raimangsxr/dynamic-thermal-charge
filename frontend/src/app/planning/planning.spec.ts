@@ -22,6 +22,8 @@ vi.mock('chart.js/auto', () => ({
 const PLANNING: PlanningDto = {
   observed_at: '2026-01-16T01:00:00Z',
   max_total_power_w: 5200,
+  max_heating_power_w: 4200,
+  base_load_w: 600,
   forecast: {
     date: '2026-01-16', source: 'aemet', average_temperature_c: 6,
     minimum_temperature_c: 3, maximum_temperature_c: 10, municipality: 'Madrid',
@@ -58,6 +60,7 @@ describe('Planning', () => {
 
   beforeEach(async () => {
     TestBed.resetTestingModule();
+    sessionStorage.removeItem('dtc.planning.preview-job');
     await TestBed.configureTestingModule({
       imports: [Planning],
       providers: [provideHttpClient(), provideHttpClientTesting()],
@@ -89,7 +92,7 @@ describe('Planning', () => {
     expect(element.querySelector('[aria-labelledby="cumulative-title"]')).not.toBeNull();
     expect(element.querySelector('[data-testid="planning-table"]')).toBeNull();
     expect(element.querySelector('[data-testid="planning-deficit"]')?.textContent).toContain('Carga no atendida');
-    expect(element.querySelector('[data-testid="forecast-table"]')).toBeNull();
+    expect(element.querySelector('[data-testid="forecast-table"]')).not.toBeNull();
     expect(element.querySelector('[data-testid="forecast-chart-card"]')).not.toBeNull();
     expect(element.querySelector('[data-testid="forecast-next-run"]')?.textContent).toContain('Próxima consulta automática');
     expect(element.querySelector('section.planning')).toBeNull();
@@ -122,7 +125,7 @@ describe('Planning', () => {
     element.querySelector<HTMLButtonElement>('[data-testid="forecast-detail-button"]')?.click();
     await fixture.whenStable();
     expect(document.querySelector('mat-dialog-container')).not.toBeNull();
-    expect(document.querySelector('mat-dialog-container')?.textContent).toContain('3 °C');
+    expect(document.querySelector('mat-dialog-container')?.textContent).toContain('3.0 °C');
     expect(document.querySelector('.cdk-overlay-backdrop')).not.toBeNull();
     expect(document.querySelector('[data-testid="detail-dialog-close"]')).not.toBeNull();
     (document.querySelector<HTMLButtonElement>('[data-testid="detail-dialog-close"]'))?.click();
@@ -174,11 +177,11 @@ describe('Planning', () => {
     ]);
     fixture.componentInstance.snapshot.set({ ...PLANNING, constraints_revision: 4 });
     fixture.componentInstance.recalculate();
-    const request = backend.expectOne('/api/v1/planning/preview');
+    const request = backend.expectOne('/api/v1/planning/preview/jobs');
     expect(request.request.body.constraints).toEqual([
       { heater_id: 'salon', target_charge: 0.25, at_time: '07:00', weekdays: [0, 1, 2, 3, 4, 5, 6] },
     ]);
-    request.flush({ token: 'preview', status: 'FEASIBLE', score: [], horizon_start: PLANNING.horizon_start!, horizon_end: PLANNING.horizon_end!, slot_minutes: 30, slots: [], deficits: [], violations: [], explanations: [], demand: [], constraints: [] });
+    request.flush({ job_id: 'preview-job', status: 'completed', cancellation_requested: false, requested_at: PLANNING.observed_at, started_at: PLANNING.observed_at, finished_at: PLANNING.observed_at, checks: [], result: { token: 'preview', status: 'FEASIBLE', score: [], horizon_start: PLANNING.horizon_start!, horizon_end: PLANNING.horizon_end!, slot_minutes: 30, slots: [], deficits: [], violations: [], explanations: [], demand: [], constraints: [], operator_summary: {} }, operator_summary: {}, error_code: null, error_detail: null });
   });
 
   it('uses the received hourly temperatures and exposes sparse labels with complete tooltips', () => {

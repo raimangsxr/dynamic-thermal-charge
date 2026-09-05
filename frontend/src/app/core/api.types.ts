@@ -132,6 +132,8 @@ export interface PlanningSiteConfigDto {
 export interface PlanningDto {
   observed_at: string;
   max_total_power_w: number;
+  max_heating_power_w: number;
+  base_load_w: number;
   plan: PlanningPlanDto | null;
   forecast: PlanningForecastDto | null;
   allocations: AllocationDto[];
@@ -150,13 +152,16 @@ export interface PlanningDto {
   forecast_last_attempt_at?: string | null;
   forecast_last_error?: string | null;
   forecast_next_run_at?: string | null;
+  preview_job?: PlanningPreviewJobDto | null;
 }
 
 export interface ChargeConstraintDto { id: number | null; heater_id: string; target_charge: number; at_time: string; weekdays: number[]; enabled: boolean; }
 export interface ChargeTelemetryDto { heater_id: string; temperature_c: number | null; target_temperature_c: number | null; stored_charge_percent: number | null; temperature_received_at: string | null; target_received_at: string | null; stored_charge_received_at: string | null; state: 'ready' | 'telemetry_stale'; missing_fields: string[]; oldest_age_seconds: number | null; }
 export interface PlanningDeficitDto { heater_id: string | null; requirement: string; achievable_value: number | null; shortfall: number | null; at: string | null; reason: string; target_charge_percent: number; projected_charge_percent: number; deficit_percent: number; }
 export interface PlanningConstraintRequest { heater_id: string; target_charge: number; at_time: string; weekdays: number[]; }
-export interface PlanningPreviewDto { token: string; status: 'FEASIBLE' | 'DEGRADED' | 'INVALID'; score: number[]; horizon_start: string; horizon_end: string; slot_minutes: number; slots: Array<Record<string, unknown>>; deficits: PlanningDeficitDto[]; violations: PlanningDeficitDto[]; explanations: Array<Record<string, unknown>>; demand: Array<Record<string, unknown>>; constraints: ChargeConstraintDto[]; }
+export interface PlanningPreviewDto { token: string; status: 'FEASIBLE' | 'DEGRADED' | 'INVALID'; score: number[]; horizon_start: string; horizon_end: string; slot_minutes: number; slots: Array<Record<string, unknown>>; deficits: PlanningDeficitDto[]; violations: PlanningDeficitDto[]; explanations: Array<Record<string, unknown>>; demand: Array<Record<string, unknown>>; constraints: ChargeConstraintDto[]; operator_summary: Record<string, unknown>; }
+export interface PlanningCheckDto { name: string; status: 'pending' | 'running' | 'completed' | 'error' | 'cancelled' | 'skipped'; detail: string | null; started_at: string | null; finished_at: string | null; }
+export interface PlanningPreviewJobDto { job_id: string; status: 'queued' | 'running' | 'cancelling' | 'completed' | 'error' | 'cancelled' | 'interrupted'; cancellation_requested: boolean; requested_at: string; started_at: string | null; finished_at: string | null; checks: PlanningCheckDto[]; result: PlanningPreviewDto | null; operator_summary: Record<string, unknown>; error_code: string | null; error_detail: string | null; }
 export interface AutomaticPlanAuditItem { id: number; plan_id: number | null; event: string; reason: string; details: Record<string, unknown>; occurred_at: string; }
 export interface AutomaticPlanAuditPage { items: AutomaticPlanAuditItem[]; }
 

@@ -107,8 +107,6 @@ const SYSTEM: Record<string, Record<string, string>> = {
     refresh_minutes: 'Minutos entre consultas automáticas de previsión.',
   },
   planning: {
-    forecast_horizon_hours:
-      'Horas hacia delante que cubre el optimizador MILP y la vista de Planificación (1–48).',
     replan_minutes:
       'Cadencia prevista de replanificación automática. Guardado en configuración; el runtime puede replanificar también al cambiar restricciones o forecast.',
     aemet_query_hour:

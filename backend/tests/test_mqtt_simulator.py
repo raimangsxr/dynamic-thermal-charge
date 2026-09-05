@@ -162,6 +162,9 @@ def test_simulator_logs_and_publishes_three_topics_per_heater(caplog):
         "dtc/sim/salon/stored_charge",
     }
     assert "Published simulated telemetry for 1 heater(s)" in caplog.text
+    assert "dtc/sim/salon/temperature=45.00" in caplog.text
+    assert "dtc/sim/salon/target=55.00" in caplog.text
+    assert "dtc/sim/salon/stored_charge=50.0" in caplog.text
 
 
 def test_simulator_supervisor_starts_only_when_enabled_and_mqtt_is_on():
