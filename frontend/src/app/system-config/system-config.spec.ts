@@ -30,6 +30,7 @@ const planningConfig: PlanningSiteConfigDto = {
   replan_minutes: 30,
   planning_window_hours: 12,
   forecast_horizon_hours: 48,
+  solver_time_limit_seconds: 120,
   aemet_query_hour: 12,
   contracted_power_w: 5200,
   max_heating_power_w: 5200,
@@ -190,6 +191,7 @@ describe('SystemConfig', () => {
     fixture.detectChanges();
     expect((fixture.nativeElement as HTMLElement).querySelector('#planning_window_hours')).not.toBeNull();
     expect((fixture.nativeElement as HTMLElement).querySelector('#forecast_horizon_hours')).not.toBeNull();
+    expect((fixture.nativeElement as HTMLElement).querySelector('#solver_time_limit_seconds')).not.toBeNull();
     fixture.componentInstance.edit('forecast_horizon_hours', '36');
     fixture.componentInstance.edit('planning_window_hours', '12');
     fixture.componentInstance.edit('design_indoor_temperature_c', '22');
@@ -200,6 +202,7 @@ describe('SystemConfig', () => {
       replan_minutes: 30,
       planning_window_hours: 12,
       forecast_horizon_hours: 36,
+      solver_time_limit_seconds: 120,
       aemet_query_hour: 12,
       contracted_power_w: 5200,
       max_heating_power_w: 5200,

@@ -560,6 +560,7 @@ def test_planning_config_endpoint_returns_site_parameters(client):
     body = response.json()
     assert body["planning_window_hours"] == 12
     assert body["forecast_horizon_hours"] == 24
+    assert body["solver_time_limit_seconds"] == 120
     assert body["replan_minutes"] == 30
     assert body["mqtt_simulation_enabled"] is False
     assert "revision" in body
@@ -575,6 +576,7 @@ def test_planning_config_endpoint_updates_site_parameters(client):
             "replan_minutes": current["replan_minutes"],
             "planning_window_hours": 12,
             "forecast_horizon_hours": 24,
+            "solver_time_limit_seconds": 120,
             "aemet_query_hour": current["aemet_query_hour"],
             "contracted_power_w": current["contracted_power_w"],
             "max_heating_power_w": current["max_heating_power_w"],
@@ -591,6 +593,7 @@ def test_planning_config_endpoint_updates_site_parameters(client):
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["forecast_horizon_hours"] == 24
+    assert body["solver_time_limit_seconds"] == 120
     assert body["mqtt_simulation_enabled"] is True
     assert body["mqtt_simulation_initial_temperature_c"] == 42.0
     assert body["mqtt_simulation_topic_prefix"] == "lab/sim"
@@ -620,3 +623,79 @@ def test_planning_config_rejects_invalid_durations(client, window_hours, horizon
         },
     )
     assert response.status_code == 422
+
+
+@pytest.mark.parametrize("value", [0, -1, 1.5, True])
+def test_planning_config_rejects_invalid_solver_time_limit_without_persisting(client, value):
+    current = client.get("/api/v1/planning/config", headers=AUTH).json()
+    response = client.patch(
+        "/api/v1/planning/config",
+        headers=AUTH,
+        json={
+            "expected_revision": current["revision"],
+            "replan_minutes": current["replan_minutes"],
+            "planning_window_hours": current["planning_window_hours"],
+            "forecast_horizon_hours": current["forecast_horizon_hours"],
+            "solver_time_limit_seconds": value,
+            "aemet_query_hour": current["aemet_query_hour"],
+            "contracted_power_w": current["contracted_power_w"],
+            "max_heating_power_w": current["max_heating_power_w"],
+            "base_load_w": current["base_load_w"],
+            "design_indoor_temperature_c": current["design_indoor_temperature_c"],
+            "design_outdoor_temperature_c": current["design_outdoor_temperature_c"],
+            "feedback_horizon_hours": current["feedback_horizon_hours"],
+        },
+    )
+    assert response.status_code == 422, response.text
+    unchanged = client.get("/api/v1/planning/config", headers=AUTH).json()
+    assert unchanged["revision"] == current["revision"]
+    assert unchanged["solver_time_limit_seconds"] == current["solver_time_limit_seconds"]
+
+
+def test_planning_config_updates_solver_time_limit(client):
+    current = client.get("/api/v1/planning/config", headers=AUTH).json()
+    response = client.patch(
+        "/api/v1/planning/config",
+        headers=AUTH,
+        json={
+            "expected_revision": current["revision"],
+            "replan_minutes": current["replan_minutes"],
+            "planning_window_hours": current["planning_window_hours"],
+            "forecast_horizon_hours": current["forecast_horizon_hours"],
+            "solver_time_limit_seconds": 45,
+            "aemet_query_hour": current["aemet_query_hour"],
+            "contracted_power_w": current["contracted_power_w"],
+            "max_heating_power_w": current["max_heating_power_w"],
+            "base_load_w": current["base_load_w"],
+            "design_indoor_temperature_c": current["design_indoor_temperature_c"],
+            "design_outdoor_temperature_c": current["design_outdoor_temperature_c"],
+            "feedback_horizon_hours": current["feedback_horizon_hours"],
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["solver_time_limit_seconds"] == 45
+
+
+def test_preview_build_receives_the_persisted_solver_time_limit(monkeypatch, initialised_store):
+    from dynamic_thermal_charge.api.routes import planning as planning_route
+
+    captured = {}
+
+    class CapturingOptimizer:
+        def build(self, request):
+            captured["request"] = request
+            return object()
+
+    monkeypatch.setattr(planning_route, "DeterministicChargeOptimizer", CapturingOptimizer)
+    site = initialised_store.planning.site()
+    initialised_store.planning.update_site(
+        {"solver_time_limit_seconds": 45}, int(site["revision"])
+    )
+    planning_route._build_automatic_plan(
+        initialised_store,
+        API_NOW,
+        (),
+        initialised_store.planning.site(),
+    )
+
+    assert captured["request"].solver_time_limit_seconds == 45

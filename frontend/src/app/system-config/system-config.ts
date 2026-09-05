@@ -29,6 +29,7 @@ const PLANNING_FIELDS: FieldDefinition[] = [
   { name: 'replan_minutes', type: 'number' },
   { name: 'planning_window_hours', type: 'number' },
   { name: 'forecast_horizon_hours', type: 'number' },
+  { name: 'solver_time_limit_seconds', type: 'number' },
   { name: 'aemet_query_hour', type: 'number' },
   { name: 'contracted_power_w', type: 'number' },
   { name: 'max_heating_power_w', type: 'number' },
@@ -114,10 +115,10 @@ export class SystemConfig {
     const fields = this.fields();
     if (this.selected() === 'planning') {
       return [
-        { title: 'Replanificación y horizonte', fields: fields.slice(0, 4) },
-        { title: 'Límites de potencia', fields: fields.slice(4, 6) },
-        { title: 'Modelo de demanda', fields: fields.slice(6, 10) },
-        { title: 'Simulación MQTT de acumuladores', fields: fields.slice(10) },
+        { title: 'Replanificación y horizonte', fields: fields.slice(0, 5) },
+        { title: 'Límites de potencia', fields: fields.slice(5, 7) },
+        { title: 'Modelo de demanda', fields: fields.slice(7, 11) },
+        { title: 'Simulación MQTT de acumuladores', fields: fields.slice(11) },
       ];
     }
     if (this.selected() === 'mqtt') {
@@ -232,6 +233,7 @@ export class SystemConfig {
       const number = (name: string): number => Number(this.value(name));
       const values = {
         replan_minutes: number('replan_minutes'), planning_window_hours: number('planning_window_hours'), forecast_horizon_hours: number('forecast_horizon_hours'), aemet_query_hour: number('aemet_query_hour'),
+        solver_time_limit_seconds: number('solver_time_limit_seconds'),
         contracted_power_w: number('contracted_power_w'), max_heating_power_w: number('max_heating_power_w'),
         base_load_w: number('base_load_w'), design_indoor_temperature_c: number('design_indoor_temperature_c'),
         design_outdoor_temperature_c: number('design_outdoor_temperature_c'), feedback_horizon_hours: number('feedback_horizon_hours'),

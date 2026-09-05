@@ -73,7 +73,8 @@ proporcionan telemetría no real y se registran como un error crítico.
 
 La sección `Sistema → planning` permite configurar la ventana visible y el
 horizonte completo, ambos entre 1 y 48 horas, con ventana no mayor que el
-horizonte. La sección `Planificación` consulta el plan aceptado en `GET /api/v1/planning`
+horizonte, además del límite total de tiempo del optimizador en segundos
+(entero positivo; por defecto 120). La sección `Planificación` consulta el plan aceptado en `GET /api/v1/planning`
 y permite editar constraints recurrentes. La vista previa se inicia con
 `POST /api/v1/planning/preview/jobs`, se consulta con
 `GET /api/v1/planning/preview/jobs/{job_id}` y se cancela con

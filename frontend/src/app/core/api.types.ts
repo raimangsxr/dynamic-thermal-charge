@@ -116,6 +116,7 @@ export interface PlanningSiteConfigDto {
   replan_minutes: number;
   planning_window_hours: number;
   forecast_horizon_hours: number;
+  solver_time_limit_seconds: number;
   aemet_query_hour: number;
   contracted_power_w: number;
   max_heating_power_w: number;

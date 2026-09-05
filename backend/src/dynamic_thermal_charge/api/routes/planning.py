@@ -568,6 +568,7 @@ def _build_automatic_plan(
         design_indoor_temperature_c=float(site["design_indoor_temperature_c"]),
         design_outdoor_temperature_c=float(site["design_outdoor_temperature_c"]),
         feedback_horizon_hours=float(site["feedback_horizon_hours"]),
+        solver_time_limit_seconds=int(site["solver_time_limit_seconds"]),
         forecast_automatic_eligible=(store.planning.latest_forecast_automatic_eligible() if hasattr(store.planning, "latest_forecast_automatic_eligible") else True),
         generated_at=observed_at,
         timezone_name=timezone_name,

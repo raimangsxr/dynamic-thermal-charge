@@ -347,6 +347,7 @@ def _build_automatic_runtime_plan(
         design_indoor_temperature_c=float(planning_site.get("design_indoor_temperature_c", config.site.design_indoor_temperature_c)),
         design_outdoor_temperature_c=float(planning_site.get("design_outdoor_temperature_c", config.site.design_outdoor_temperature_c)),
         feedback_horizon_hours=float(planning_site.get("feedback_horizon_hours", config.site.feedback_horizon_hours)),
+        solver_time_limit_seconds=int(planning_site.get("solver_time_limit_seconds", 120)),
         forecast_automatic_eligible=(store.planning.latest_forecast_automatic_eligible() if hasattr(store.planning, "latest_forecast_automatic_eligible") else True),
         generated_at=now,
         timezone_name=timezone_name,

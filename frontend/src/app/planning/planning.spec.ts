@@ -4,7 +4,7 @@ import { MatDialog } from '@angular/material/dialog';
 import { TestBed, type ComponentFixture } from '@angular/core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { PlanningDto, PlanningPreviewDto } from '../core/api.types';
+import type { PlanningDto, PlanningPreviewDto, PlanningPreviewJobDto } from '../core/api.types';
 import { Planning } from './planning';
 
 const chartState = vi.hoisted(() => ({ configs: [] as Array<{ type: string; data: { labels: unknown[]; datasets: Array<{ label?: string; data?: unknown[] }> } }> }));
@@ -54,6 +54,34 @@ const PLANNING: PlanningDto = {
   forecast_next_run_at: '2026-01-16T04:00:00Z',
 };
 
+const TWO_HEATER_PLANNING: PlanningDto = {
+  ...PLANNING,
+  heaters: [
+    ...PLANNING.heaters,
+    { id: 'cocina', name: 'Cocina', power_w: 1800, priority: 80, enabled: true },
+  ],
+};
+
+const PREVIEW: PlanningPreviewDto = {
+  token: 'preview-token', status: 'DEGRADED', score: [],
+  window_start: '2026-01-16T00:00:00Z', window_end: '2026-01-16T01:00:00Z',
+  horizon_start: '2026-01-16T00:00:00Z', horizon_end: '2026-01-16T02:00:00Z', slot_minutes: 30,
+  slots: [
+    { start: '2026-01-16T00:00:00Z', end: '2026-01-16T00:30:00Z', heater_ids: ['salon'], power_w: 2800, heater_power_w: { salon: 2800, cocina: 0 }, energy_delivered_kwh: { salon: 1.4, cocina: 0 }, capacity_percent_by_heater: { salon: 7, cocina: 0 }, stored_charge_percent: { salon: 25, cocina: 35 } },
+    { start: '2026-01-16T00:30:00Z', end: '2026-01-16T01:00:00Z', heater_ids: ['cocina'], power_w: 1800, heater_power_w: { salon: 0, cocina: 1800 }, energy_delivered_kwh: { salon: 0, cocina: 0.9 }, capacity_percent_by_heater: { salon: 0, cocina: 5 }, stored_charge_percent: { salon: 30, cocina: 40 } },
+    { start: '2026-01-16T01:00:00Z', end: '2026-01-16T01:30:00Z', heater_ids: [], power_w: 0, heater_power_w: { salon: 0, cocina: 0 }, energy_delivered_kwh: { salon: 0, cocina: 0 }, capacity_percent_by_heater: { salon: 0, cocina: 0 }, stored_charge_percent: { salon: 35, cocina: 45 } },
+  ],
+  deficits: [{ heater_id: 'salon', requirement: 'minimum_soc', achievable_value: 60, shortfall: 10, at: '2026-01-16T01:00:00Z', reason: 'insufficient_capacity_or_power', target_charge_percent: 70, projected_charge_percent: 60, deficit_percent: 10 }],
+  violations: [], explanations: [], demand: [], constraints: [],
+  operator_summary: { warnings: [{ cause: 'insufficient_capacity_or_power', count: 1, recommended_action: 'Revisa potencia disponible, capacidad y el objetivo de carga.' }] },
+};
+
+const PREVIEW_JOB = (result: PlanningPreviewDto): PlanningPreviewJobDto => ({
+  job_id: 'preview-job', status: 'completed', cancellation_requested: false,
+  requested_at: PLANNING.observed_at, started_at: PLANNING.observed_at, finished_at: PLANNING.observed_at,
+  checks: [], result, operator_summary: result.operator_summary, error_code: null, error_detail: null,
+});
+
 describe('Planning', () => {
   let fixture: ComponentFixture<Planning>;
   let backend: HttpTestingController;
@@ -92,7 +120,7 @@ describe('Planning', () => {
     expect(element.querySelector('[aria-labelledby="cumulative-title"]')).not.toBeNull();
     expect(element.querySelector('[data-testid="planning-table"]')).toBeNull();
     expect(element.querySelector('[data-testid="planning-deficit"]')?.textContent).toContain('Carga no atendida');
-    expect(element.querySelector('[data-testid="forecast-table"]')).not.toBeNull();
+    expect(element.querySelector('[data-testid="forecast-table"]')).toBeNull();
     expect(element.querySelector('[data-testid="forecast-chart-card"]')).not.toBeNull();
     expect(element.querySelector('[data-testid="forecast-next-run"]')?.textContent).toContain('Próxima consulta automática');
     expect(element.querySelector('section.planning')).toBeNull();
@@ -115,6 +143,76 @@ describe('Planning', () => {
     expect(chartState.configs[2].type).toBe('line');
     expect(chartState.configs[2].data.datasets[0].data?.[0]).toBe(2.8);
     expect(chartState.configs[4].data.datasets[0].data).toEqual([6.25, 4.17]);
+  });
+
+  it('renders one compact preview chart without detail tables in the page', async () => {
+    backend.expectOne('/api/v1/planning').flush({ ...TWO_HEATER_PLANNING, preview_job: PREVIEW_JOB(PREVIEW) });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const element = fixture.nativeElement as HTMLElement;
+    expect(fixture.componentInstance.previewWindowSlots(PREVIEW)).toHaveLength(2);
+    expect(fixture.componentInstance.previewChartPoint(PREVIEW.slots[0], 'salon')).toMatchObject({
+      y: 2.8, power_w: 2800, energy_delivered_kwh: 1.4, capacity_percent: 7, soc_percent: 25,
+    });
+    expect(element.querySelector('[data-testid="preview-visualization"]')).not.toBeNull();
+    expect(element.querySelector('[data-testid="charge-matrix"]')).toBeNull();
+    expect(element.querySelectorAll('[data-testid="preview-heater-table"]')).toHaveLength(0);
+    expect(element.querySelectorAll('[data-testid="forecast-table"]')).toHaveLength(0);
+
+    const previewChart = chartState.configs.find((config) => config.data.datasets.length === 2);
+    expect(previewChart).toBeDefined();
+    expect(previewChart?.data.labels).toHaveLength(2);
+    expect(previewChart?.data.datasets[0].data?.[0]).toMatchObject({
+      power_w: 2800, energy_delivered_kwh: 1.4, capacity_percent: 7, soc_percent: 25,
+    });
+  });
+
+  it('does not overlap preview job polls when duplicate ticks arrive', () => {
+    backend.expectOne('/api/v1/planning').flush(PLANNING);
+    fixture.componentInstance.previewJob.set({ ...PREVIEW_JOB(PREVIEW), status: 'running', result: null });
+
+    const poll = (fixture.componentInstance as unknown as { pollPreviewJob: () => void }).pollPreviewJob;
+    poll.call(fixture.componentInstance);
+    poll.call(fixture.componentInstance);
+
+    const request = backend.expectOne('/api/v1/planning/preview/jobs/preview-job');
+    expect(() => backend.expectOne('/api/v1/planning/preview/jobs/preview-job')).toThrow();
+    request.flush({ ...PREVIEW_JOB(PREVIEW), status: 'running', result: null });
+  });
+
+  it('shows problem details for degraded previews and falls back to violations for invalid previews', async () => {
+    backend.expectOne('/api/v1/planning').flush(TWO_HEATER_PLANNING);
+    fixture.componentInstance.previewJob.set(PREVIEW_JOB(PREVIEW));
+    fixture.detectChanges();
+
+    const element = fixture.nativeElement as HTMLElement;
+    const button = element.querySelector<HTMLButtonElement>('[data-testid="preview-problems-button"]');
+    expect(button).not.toBeNull();
+    button?.click();
+    await fixture.whenStable();
+    let dialog = document.querySelector('mat-dialog-container');
+    expect(dialog?.textContent).toContain('Salón');
+    expect(dialog?.textContent).toContain('minimum_soc');
+    expect(dialog?.textContent).toContain('70.0 %');
+    expect(dialog?.textContent).toContain('Revisa potencia disponible');
+    expect(dialog?.querySelectorAll('[data-testid="preview-problem"]')).toHaveLength(1);
+    document.querySelector<HTMLButtonElement>('[data-testid="detail-dialog-close"]')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    const invalid = { ...PREVIEW, status: 'INVALID' as const, deficits: [], violations: PREVIEW.deficits };
+    fixture.componentInstance.previewJob.set(PREVIEW_JOB(invalid));
+    fixture.componentInstance.preview.set(invalid);
+    fixture.detectChanges();
+    expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="preview-problems-button"]')).not.toBeNull();
+    expect((fixture.nativeElement as HTMLElement).querySelector('.preview-reasons')?.textContent).toContain('No hay suficiente potencia');
+  });
+
+  it('does not show the problem button for a feasible preview', () => {
+    backend.expectOne('/api/v1/planning').flush(PLANNING);
+    fixture.componentInstance.previewJob.set(PREVIEW_JOB({ ...PREVIEW, status: 'FEASIBLE', deficits: [], violations: [] }));
+    fixture.detectChanges();
+    expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="preview-problems-button"]')).toBeNull();
   });
 
   it('opens forecast and planning details in accessible dialogs with explicit close actions', async () => {
@@ -150,6 +248,55 @@ describe('Planning', () => {
 
     expect(open.mock.calls[0][1]).toMatchObject({ width: 'min(92vw, 72rem)' });
     expect(open.mock.calls[1][1]).toMatchObject({ width: 'min(92vw, 72rem)' });
+    open.mockRestore();
+  });
+
+  it('opens preview detail tables in one tab per heater without a chart', async () => {
+    backend.expectOne('/api/v1/planning').flush({ ...TWO_HEATER_PLANNING, preview_job: PREVIEW_JOB(PREVIEW) });
+    fixture.detectChanges();
+    (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('[data-testid="preview-chart-detail-button"]')?.click();
+    await fixture.whenStable();
+
+    const dialog = document.querySelector('mat-dialog-container');
+    expect(dialog?.querySelector('[data-testid="preview-detail-tabs"]')).not.toBeNull();
+    expect(dialog?.querySelectorAll('[role="tab"]')).toHaveLength(2);
+    expect(dialog?.querySelectorAll('[data-testid="preview-detail-heater-table"]')).toHaveLength(1);
+    expect(dialog?.querySelectorAll('canvas')).toHaveLength(0);
+    expect(dialog?.textContent).toContain('Salón');
+    expect(dialog?.textContent).toContain('Cocina');
+    expect(dialog?.textContent).toContain('2800');
+    dialog?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[1]?.click();
+    await fixture.whenStable();
+    const secondTabDialog = document.querySelector('mat-dialog-container');
+    expect(secondTabDialog?.querySelectorAll('[data-testid="preview-detail-heater-table"]')).toHaveLength(1);
+    expect(secondTabDialog?.textContent).toContain('0.90');
+    expect(secondTabDialog?.querySelectorAll('canvas')).toHaveLength(0);
+    document.querySelector<HTMLButtonElement>('[data-testid="detail-dialog-close"]')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  });
+
+  it('opens an enlarged dialog from each graph section', () => {
+    backend.expectOne('/api/v1/planning').flush(PLANNING);
+    fixture.detectChanges();
+    const dialog = TestBed.inject(MatDialog);
+    const open = vi.spyOn(dialog, 'open').mockReturnValue({} as never);
+    const element = fixture.nativeElement as HTMLElement;
+    for (const testId of [
+      'temperature-chart-detail-button', 'heater-chart-detail-button',
+      'aggregate-chart-detail-button', 'cumulative-chart-detail-button',
+      'forecast-chart-detail-button',
+    ]) {
+      element.querySelector<HTMLButtonElement>(`[data-testid="${testId}"]`)?.click();
+    }
+    fixture.componentInstance.previewJob.set(PREVIEW_JOB(PREVIEW));
+    fixture.componentInstance.preview.set(PREVIEW);
+    fixture.detectChanges();
+    (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('[data-testid="preview-chart-detail-button"]')?.click();
+
+    expect(open).toHaveBeenCalledTimes(6);
+    expect(open.mock.calls.slice(0, 5).every(([, config]) => (config as { data?: { kind?: string } }).data?.kind === 'chart')).toBe(true);
+    expect((open.mock.calls[5][1] as { data?: { kind?: string } }).data?.kind).toBe('preview');
+    expect(open.mock.calls.slice(0, 5).map(([, config]) => (config as { data?: { chart?: { labels: string[] } } }).data?.chart?.labels.length)).toEqual([2, 2, 2, 2, 2]);
     open.mockRestore();
   });
 
