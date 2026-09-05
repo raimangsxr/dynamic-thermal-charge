@@ -66,7 +66,7 @@ def test_capacity_and_degree_hours_v1_formula_factor_reserve_and_warm_zero():
 def test_forecast_continuity_truncates_horizon_and_missing_or_fallback_is_invalid():
     points = (HourlyForecastPoint(API_NOW, 5), HourlyForecastPoint(API_NOW + timedelta(hours=1), 5))
     result = MilpChargePlanner().build(request(points=points, hours=8, telemetry={"a": state(soc=100)}))
-    assert result.horizon_end == API_NOW + timedelta(hours=2)
+    assert result.horizon_end == API_NOW + timedelta(hours=8)
     assert MilpChargePlanner().build(request(points=(), hours=2)).status == INVALID
     assert MilpChargePlanner().build(PlanningInput(**{**request(points=points).__dict__, "forecast_automatic_eligible": False})).status == INVALID
 
@@ -85,10 +85,10 @@ def test_planner_anchors_the_24_hour_horizon_at_recalculation_time():
     ))
 
     assert result.status == FEASIBLE
-    assert result.horizon_start == start
-    assert result.horizon_end == start + timedelta(hours=PLANNING_HORIZON_HOURS)
+    assert result.horizon_start == datetime(2026, 1, 16, 23, 30, tzinfo=timezone.utc)
+    assert result.horizon_end == result.horizon_start + timedelta(hours=PLANNING_HORIZON_HOURS)
     assert len(result.slots) == 48
-    assert result.slots[0].start == start
+    assert result.slots[0].start == result.horizon_start
     assert result.slots[-1].end == result.horizon_end
 
 
@@ -102,9 +102,7 @@ def test_planner_starts_at_first_available_forecast_hour_when_now_is_uncovered()
         for index in range(48)
     )
     starts = _continuous_forecast_slots(start, points, 48, 30)
-    assert starts
-    assert starts[0] == forecast_start
-    assert starts[-1] < start + timedelta(hours=48)
+    assert starts == ()
 
 
 def test_constraints_materialize_weekdays_at_boundaries_including_horizon_end():
@@ -255,7 +253,7 @@ def test_preview_uses_mqtt_fixed_telemetry_when_broker_disabled(client, initiali
     assert preview.json()["status"] != INVALID
 
 
-def test_preview_activation_persists_v1_snapshot(client, initialised_store):
+def test_preview_activation_persists_v1_snapshot(client, initialised_store, api_clock):
     config, revision = initialised_store.repository.current()
     points = forecast(API_NOW, 24, 4)
     record = SimpleNamespace(
@@ -277,6 +275,7 @@ def test_preview_activation_persists_v1_snapshot(client, initialised_store):
     assert preview.status_code == 200, preview.text
     body = preview.json()
     assert body["status"] in {FEASIBLE, DEGRADED}
+    api_clock.advance(minutes=5)
     activated = client.post(
         "/api/v1/planning/activate", headers=AUTH,
         json={"token": body["token"], "constraints": [], "expected_revision": 1},

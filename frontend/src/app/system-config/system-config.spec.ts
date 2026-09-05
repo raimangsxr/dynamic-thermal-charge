@@ -28,6 +28,7 @@ const topology: TopologyDto = { mode: 'normal', canonical_driver: 'sqlite', conn
 const planningConfig: PlanningSiteConfigDto = {
   revision: 2,
   replan_minutes: 30,
+  planning_window_hours: 12,
   forecast_horizon_hours: 48,
   aemet_query_hour: 12,
   contracted_power_w: 5200,
@@ -187,13 +188,17 @@ describe('SystemConfig', () => {
     flushInitialLoads(backend); fixture.detectChanges();
     fixture.componentInstance.choose('planning');
     fixture.detectChanges();
+    expect((fixture.nativeElement as HTMLElement).querySelector('#planning_window_hours')).not.toBeNull();
+    expect((fixture.nativeElement as HTMLElement).querySelector('#forecast_horizon_hours')).not.toBeNull();
     fixture.componentInstance.edit('forecast_horizon_hours', '36');
+    fixture.componentInstance.edit('planning_window_hours', '12');
     fixture.componentInstance.edit('design_indoor_temperature_c', '22');
     fixture.componentInstance.save();
     const request = backend.expectOne('/api/v1/planning/config');
     expect(request.request.body).toEqual({
       expected_revision: 2,
       replan_minutes: 30,
+      planning_window_hours: 12,
       forecast_horizon_hours: 36,
       aemet_query_hour: 12,
       contracted_power_w: 5200,

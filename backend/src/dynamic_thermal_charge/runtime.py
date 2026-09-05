@@ -339,7 +339,7 @@ def _build_automatic_runtime_plan(
         constraints=constraints,
         forecast=store.planning.latest_forecast(now),
         horizon_start=now,
-        horizon_hours=PLANNING_HORIZON_HOURS,
+        horizon_hours=int(planning_site.get("forecast_horizon_hours", PLANNING_HORIZON_HOURS)),
         slot_minutes=config.site.slot_minutes,
         max_total_power_w=int(planning_site.get("contracted_power_w", config.site.max_total_power_w)),
         base_load_w=int(planning_site.get("base_load_w", 0)),

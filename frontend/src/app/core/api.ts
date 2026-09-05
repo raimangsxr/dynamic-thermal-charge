@@ -64,7 +64,7 @@ export class Api {
     return this.http.get<PlanningSiteConfigDto>(`${BASE}/planning/config`);
   }
 
-  patchPlanningConfig(expectedRevision: number, values: Omit<PlanningSiteConfigDto, 'revision' | 'forecast_horizon_hours'>): Observable<PlanningSiteConfigDto> {
+  patchPlanningConfig(expectedRevision: number, values: Omit<PlanningSiteConfigDto, 'revision'>): Observable<PlanningSiteConfigDto> {
     return this.http.patch<PlanningSiteConfigDto>(`${BASE}/planning/config`, {
       expected_revision: expectedRevision,
       ...values,

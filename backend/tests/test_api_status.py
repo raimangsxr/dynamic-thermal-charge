@@ -558,6 +558,7 @@ def test_planning_config_endpoint_returns_site_parameters(client):
     response = client.get("/api/v1/planning/config", headers=AUTH)
     assert response.status_code == 200, response.text
     body = response.json()
+    assert body["planning_window_hours"] == 12
     assert body["forecast_horizon_hours"] == 24
     assert body["replan_minutes"] == 30
     assert body["mqtt_simulation_enabled"] is False
@@ -572,6 +573,7 @@ def test_planning_config_endpoint_updates_site_parameters(client):
         json={
             "expected_revision": current["revision"],
             "replan_minutes": current["replan_minutes"],
+            "planning_window_hours": 12,
             "forecast_horizon_hours": 24,
             "aemet_query_hour": current["aemet_query_hour"],
             "contracted_power_w": current["contracted_power_w"],
@@ -593,3 +595,28 @@ def test_planning_config_endpoint_updates_site_parameters(client):
     assert body["mqtt_simulation_initial_temperature_c"] == 42.0
     assert body["mqtt_simulation_topic_prefix"] == "lab/sim"
     assert body["revision"] == current["revision"] + 1
+
+
+@pytest.mark.parametrize(
+    ("window_hours", "horizon_hours"),
+    [(0, 24), (49, 48), (24, 12), (1.5, 24)],
+)
+def test_planning_config_rejects_invalid_durations(client, window_hours, horizon_hours):
+    current = client.get("/api/v1/planning/config", headers=AUTH).json()
+    response = client.patch(
+        "/api/v1/planning/config",
+        headers=AUTH,
+        json={
+            "expected_revision": current["revision"],
+            "replan_minutes": current["replan_minutes"],
+            "planning_window_hours": window_hours,
+            "forecast_horizon_hours": horizon_hours,
+            "aemet_query_hour": current["aemet_query_hour"],
+            "contracted_power_w": current["contracted_power_w"],
+            "max_heating_power_w": current["max_heating_power_w"],
+            "design_indoor_temperature_c": current["design_indoor_temperature_c"],
+            "design_outdoor_temperature_c": current["design_outdoor_temperature_c"],
+            "feedback_horizon_hours": current["feedback_horizon_hours"],
+        },
+    )
+    assert response.status_code == 422

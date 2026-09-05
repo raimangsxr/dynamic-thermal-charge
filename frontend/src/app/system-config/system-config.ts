@@ -27,6 +27,8 @@ const OUTPUT_DRIVERS = [
 const LOG_LEVELS = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'].map((value) => ({ value, label: value }));
 const PLANNING_FIELDS: FieldDefinition[] = [
   { name: 'replan_minutes', type: 'number' },
+  { name: 'planning_window_hours', type: 'number' },
+  { name: 'forecast_horizon_hours', type: 'number' },
   { name: 'aemet_query_hour', type: 'number' },
   { name: 'contracted_power_w', type: 'number' },
   { name: 'max_heating_power_w', type: 'number' },
@@ -112,10 +114,10 @@ export class SystemConfig {
     const fields = this.fields();
     if (this.selected() === 'planning') {
       return [
-        { title: 'Replanificación', fields: fields.slice(0, 2) },
-        { title: 'Límites de potencia', fields: fields.slice(2, 4) },
-        { title: 'Modelo de demanda', fields: fields.slice(4, 8) },
-        { title: 'Simulación MQTT de acumuladores', fields: fields.slice(8) },
+        { title: 'Replanificación y horizonte', fields: fields.slice(0, 4) },
+        { title: 'Límites de potencia', fields: fields.slice(4, 6) },
+        { title: 'Modelo de demanda', fields: fields.slice(6, 10) },
+        { title: 'Simulación MQTT de acumuladores', fields: fields.slice(10) },
       ];
     }
     if (this.selected() === 'mqtt') {
@@ -229,7 +231,7 @@ export class SystemConfig {
       if (!snapshot) return;
       const number = (name: string): number => Number(this.value(name));
       const values = {
-        replan_minutes: number('replan_minutes'), aemet_query_hour: number('aemet_query_hour'),
+        replan_minutes: number('replan_minutes'), planning_window_hours: number('planning_window_hours'), forecast_horizon_hours: number('forecast_horizon_hours'), aemet_query_hour: number('aemet_query_hour'),
         contracted_power_w: number('contracted_power_w'), max_heating_power_w: number('max_heating_power_w'),
         base_load_w: number('base_load_w'), design_indoor_temperature_c: number('design_indoor_temperature_c'),
         design_outdoor_temperature_c: number('design_outdoor_temperature_c'), feedback_horizon_hours: number('feedback_horizon_hours'),
@@ -237,10 +239,6 @@ export class SystemConfig {
         mqtt_simulation_initial_temperature_c: number('mqtt_simulation_initial_temperature_c'), mqtt_simulation_publish_seconds: number('mqtt_simulation_publish_seconds'),
         mqtt_simulation_topic_prefix: String(this.value('mqtt_simulation_topic_prefix')), mqtt_simulation_thermal_loss_c_per_hour: number('mqtt_simulation_thermal_loss_c_per_hour'),
       };
-      // Kept only for old automated clients/tests that still put the removed
-      // field in the draft; the rendered configuration surface never exposes
-      // it and the backend normalises the persisted value to 24.
-      if ('forecast_horizon_hours' in this.draft()) Object.assign(values, { forecast_horizon_hours: Number(this.draft()['forecast_horizon_hours']) });
       this.api.patchPlanningConfig(snapshot.revision, values).subscribe({
         next: (updated) => {
           this.planningConfig.set(updated);
