@@ -21,6 +21,7 @@ def test_dev_compose_matrix_has_isolated_state_and_one_shot_postgres_override():
     assert "dev-sqlite-state" in sqlite
     assert 'entrypoint: ["python"]' in sqlite
     assert "service_completed_successfully" in sqlite
+    assert "connection_messages false" in (ROOT / "deploy/mosquitto.dev.conf").read_text()
     assert "postgres:" in postgres
     assert "dev-postgres-state" in postgres
     assert "dev-postgres-data" in postgres
