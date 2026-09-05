@@ -361,7 +361,7 @@ export class PlanningDetailDialog implements AfterViewInit, OnDestroy {
 
 @Component({
   selector: 'dtc-planning',
-  imports: [FormsModule, JsonPipe],
+  imports: [FormsModule, JsonPipe, MatTabsModule],
   templateUrl: './planning.html',
   styleUrl: './planning.css',
 })
@@ -377,6 +377,7 @@ export class Planning implements AfterViewInit, OnDestroy {
   readonly actionMessage = signal('');
   readonly actionError = signal('');
   readonly previewJob = signal<PlanningPreviewJobDto | null>(null);
+  readonly selectedTab = signal(0);
 
   @ViewChild('temperatureChart') private temperatureCanvas?: ElementRef<HTMLCanvasElement>;
   @ViewChild('forecastChart') private forecastCanvas?: ElementRef<HTMLCanvasElement>;
@@ -401,6 +402,11 @@ export class Planning implements AfterViewInit, OnDestroy {
   ngOnDestroy(): void {
     this.destroyCharts();
     this.previewPoller.stop();
+  }
+
+  onTabChange(index: number): void {
+    this.selectedTab.set(index);
+    this.scheduleChartRender();
   }
 
   refresh(): void {
@@ -773,23 +779,11 @@ export class Planning implements AfterViewInit, OnDestroy {
   }
 
   displayTimeline(data: PlanningDto): PlanningTimelineSlotDto[] {
-    const result = this.preview() ?? data.preview_job?.result;
-    if (!result) return data.timeline.map((slot) => ({
+    return data.timeline.map((slot) => ({
       ...slot,
       temperature_c: slot.temperature_c === null ? null : truncateTemperature(slot.temperature_c),
       estimated_temperature_c_by_heater: Object.fromEntries(Object.entries(slot.estimated_temperature_c_by_heater).map(([id, value]) => [id, truncateTemperature(value)])),
     }));
-    return this.previewWindowSlots(result).map((slot) => {
-      const soc = (slot['stored_charge_percent'] as Record<string, number> | undefined) ?? {};
-      const indoor = (slot['indoor_temperature_c'] as Record<string, number> | undefined) ?? {};
-      const heaters = Array.isArray(slot['heater_ids']) ? slot['heater_ids'] as string[] : [];
-      return {
-        start: String(slot['start'] ?? ''), end: String(slot['end'] ?? ''), heater_ids: heaters,
-        total_power_w: Number(slot['power_w'] ?? 0), temperature_c: typeof slot['outdoor_temperature_c'] === 'number' ? truncateTemperature(Number(slot['outdoor_temperature_c'])) : null,
-        temperature_interpolated: false, charge_minutes_by_heater: {}, stored_charge_percent_by_heater: soc,
-        estimated_temperature_c_by_heater: Object.fromEntries(Object.entries(indoor).map(([id, value]) => [id, truncateTemperature(value)])),
-      };
-    });
   }
 
   private acceptPreviewJob(job: PlanningPreviewJobDto): void {
@@ -831,17 +825,21 @@ export class Planning implements AfterViewInit, OnDestroy {
     const timeline = this.displayTimeline(data);
     this.destroyCharts();
     try {
-      if (data.forecast?.hourly_points.length && this.forecastCanvas) {
-        const points = data.forecast.hourly_points;
-        const fullLabels = points.map((point) => this.dateTime(point.timestamp));
-        this.charts.push(new Chart(this.forecastCanvas.nativeElement, {
-          type: 'line',
-          data: { labels: this.intervalLabels(fullLabels), datasets: [{ label: 'Temperatura exterior (°C)', data: this.forecastTemperatures(points), borderColor: '#2457a6', backgroundColor: '#2457a622', tension: 0.25, spanGaps: false }] },
-          options: this.chartOptions<'line'>(fullLabels),
-        }));
+      if (this.selectedTab() === 2) {
+        if (data.forecast?.hourly_points.length && this.forecastCanvas) {
+          const points = data.forecast.hourly_points;
+          const fullLabels = points.map((point) => this.dateTime(point.timestamp));
+          this.charts.push(new Chart(this.forecastCanvas.nativeElement, {
+            type: 'line',
+            data: { labels: this.intervalLabels(fullLabels), datasets: [{ label: 'Temperatura exterior (°C)', data: this.forecastTemperatures(points), borderColor: '#2457a6', backgroundColor: '#2457a622', tension: 0.25, spanGaps: false }] },
+            options: this.chartOptions<'line'>(fullLabels),
+          }));
+        }
+        return;
       }
       const preview = this.preview() ?? data.preview_job?.result;
-      if (preview && this.previewCanvas) {
+      if (this.selectedTab() === 1) {
+        if (!preview || !this.previewCanvas) return;
         const slots = this.previewWindowSlots(preview);
         const fullLabels = slots.map((slot) => this.previewSlotLabel(slot));
         const colors = ['#2457a6', '#d46b28', '#3b8c68', '#8a4f9e', '#9b7a21'];
@@ -864,27 +862,6 @@ export class Planning implements AfterViewInit, OnDestroy {
             return `${context.dataset.label ?? 'Acumulador'}: ${point.power_w} W · ${point.energy_delivered_kwh.toFixed(2)} kWh · ${point.capacity_percent.toFixed(1)} % capacidad · SOC ${point.soc_percent.toFixed(1)} %`;
           }),
         }) as unknown as Chart);
-        return;
-      }
-      if (preview && this.temperatureCanvas && this.heaterCanvas && this.aggregateCanvas && this.cumulativeCanvas) {
-        const slots = this.previewWindowSlots(preview);
-        const fullLabels = slots.map((slot) => this.previewSlotLabel(slot));
-        const labels = this.intervalLabels(fullLabels);
-        const colors = ['#2457a6', '#d46b28', '#3b8c68', '#8a4f9e', '#9b7a21'];
-        const numberMap = (slot: Record<string, unknown>, key: string, heaterId: string): number | null => {
-          const values = slot[key] as Record<string, number> | undefined;
-          return values && typeof values[heaterId] === 'number' ? truncateTemperature(values[heaterId]) : null;
-        };
-        this.charts.push(new Chart(this.temperatureCanvas.nativeElement, { type: 'line', data: { labels, datasets: [
-          ...data.heaters.map((heater, index) => ({ label: `${heater.name} estimada (°C)`, data: slots.map((slot) => numberMap(slot, 'indoor_temperature_c', heater.id)), borderColor: colors[index % colors.length], tension: 0.25 })),
-          { label: 'Previsión exterior (°C)', data: slots.map((slot) => typeof slot['outdoor_temperature_c'] === 'number' ? truncateTemperature(Number(slot['outdoor_temperature_c'])) : null), borderColor: '#6b7280', borderDash: [6, 4], tension: 0.25 },
-        ] }, options: this.chartOptions<'line'>(fullLabels, '°C') }));
-        this.charts.push(new Chart(this.heaterCanvas.nativeElement, { type: 'bar', data: { labels, datasets: data.heaters.map((heater, index) => ({ label: heater.name, data: slots.map((slot) => Array.isArray(slot['heater_ids']) && (slot['heater_ids'] as string[]).includes(heater.id) ? this.kilowatts(heater.power_w) : 0), backgroundColor: `${colors[index % colors.length]}cc` })) }, options: this.chartOptions<'bar'>(fullLabels, 'kW') }));
-        const limits = preview.operator_summary['power_limits'] as Record<string, number | null> | undefined;
-        const contracted = limits?.['contracted_w'] ?? data.max_total_power_w;
-        const heating = limits?.['heating_w'];
-        this.charts.push(new Chart(this.aggregateCanvas.nativeElement, { type: 'line', data: { labels, datasets: [{ label: 'Potencia agregada (kW)', data: slots.map((slot) => this.kilowatts(this.previewSlotPower(slot))), borderColor: '#2457a6' }, { label: 'Carga base (kW)', data: slots.map(() => this.kilowatts(data.base_load_w)), borderColor: '#6b7280', borderDash: [3, 3], pointRadius: 0 }, { label: 'Límite contratado (kW)', data: slots.map(() => this.kilowatts(contracted)), borderColor: '#b33a3a', pointRadius: 0 }, ...(heating === null || heating === undefined ? [] : [{ label: 'Límite calefacción (kW)', data: slots.map(() => this.kilowatts(heating)), borderColor: '#d46b28', pointRadius: 0 }]) ] }, options: this.chartOptions<'line'>(fullLabels, 'kW') }));
-        this.charts.push(new Chart(this.cumulativeCanvas.nativeElement, { type: 'line', data: { labels, datasets: data.heaters.map((heater, index) => ({ label: `${heater.name} (%)`, data: slots.map((slot) => numberMap(slot, 'stored_charge_percent', heater.id)), borderColor: colors[index % colors.length], stepped: true })) }, options: this.chartOptions<'line'>(fullLabels, 'Carga (%)') }));
         return;
       }
       if (!data.plan || !timeline.length || !this.temperatureCanvas || !this.heaterCanvas || !this.aggregateCanvas || !this.cumulativeCanvas) return;

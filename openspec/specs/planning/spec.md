@@ -126,6 +126,27 @@ fuente de problemas.
 - **WHEN** una vista previa `FEASIBLE` no contiene déficits ni violaciones
 - **THEN** no se muestra el botón de problemas
 
+### Requirement: Separación de contextos en la vista de planificación
+
+La vista de Planificación debe ofrecer tres pestañas accesibles, en este orden:
+Planificación activa, Nueva planificación y Previsión meteorológica. Debe abrir
+en Planificación activa; esta pestaña solo muestra el plan aceptado y sus
+gráficos, Nueva planificación concentra constraints y preview, y Previsión
+meteorológica concentra el resumen y gráfico meteorológico. Cambiar de pestaña
+no debe perder la edición ni el trabajo de preview en curso.
+
+#### Scenario: Llegada a la vista de planificación
+
+- **WHEN** el operador entra en Planificación
+- **THEN** se selecciona Planificación activa y no se mezcla su contenido con
+  constraints, preview o detalle meteorológico
+
+#### Scenario: Consulta o edición separada
+
+- **WHEN** el operador selecciona Nueva planificación o Previsión meteorológica
+- **THEN** ve únicamente el ámbito correspondiente y puede volver al plan
+  activo conservando el estado de edición y de preview
+
 ### Requirement: Protección de salidas GPIO
 
 El controlador no debe arrancar salidas GPIO cuando MQTT está deshabilitado o
