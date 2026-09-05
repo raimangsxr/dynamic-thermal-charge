@@ -232,6 +232,8 @@ def test_the_api_entrypoint_builds_no_output_driver(monkeypatch, tmp_path, capsy
     run_api()
     assert served["host"] == "127.0.0.1"
     assert served["port"] == 8080
+    assert served["log_level"] == "info"
+    assert "log_config" in served
 
 
 def test_the_api_entrypoint_starts_safe_onboarding_without_an_admin_token(monkeypatch, tmp_path, capsys):

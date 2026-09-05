@@ -138,7 +138,7 @@ class MqttService:
                 self._sync_subscriptions()
             return True
         self._connected = False
-        logger.warning("MQTT connection unavailable: %s", reason or "unknown reason")
+        logger.error("MQTT connection unavailable: %s", reason or "unknown reason")
         return False
 
     def _sync_subscriptions(self) -> None:
