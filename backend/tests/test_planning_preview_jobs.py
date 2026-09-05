@@ -52,7 +52,8 @@ def test_preview_job_is_durable_and_returns_all_final_checks(client):
         "input_validation", "telemetry", "aemet_coverage", "demand_estimation",
         "constraints", "resolution", "safety_validation", "operator_summary",
     }
-    assert final["operator_summary"]["window"]["hours"] == 24
+    assert final["operator_summary"]["window"]["hours"] == 12
+    assert final["operator_summary"]["horizon"]["hours"] == 24
 
 
 def test_preview_job_cancel_is_visible_and_cannot_produce_a_result(initialised_store):
@@ -74,3 +75,36 @@ def test_preview_job_cancel_is_visible_and_cannot_produce_a_result(initialised_s
     assert final is not None
     assert final["status"] == "cancelled"
     assert final["result"] is None
+
+
+def test_preview_job_with_legacy_result_remains_readable(client, initialised_store):
+    token = "test-token-" + "z" * 32
+    headers = {"Authorization": f"Bearer {token}"}
+    started = client.post(
+        "/api/v1/planning/preview/jobs",
+        headers=headers,
+        json={"constraints": []},
+    )
+    assert started.status_code == 200, started.text
+    job_id = started.json()["job_id"]
+
+    final = None
+    for _ in range(100):
+        response = client.get(f"/api/v1/planning/preview/jobs/{job_id}", headers=headers)
+        assert response.status_code == 200, response.text
+        if response.json()["status"] not in {"queued", "running", "cancelling"}:
+            final = initialised_store.planning.preview_job(job_id)
+            break
+    assert final is not None
+    assert final["result"] is not None
+
+    legacy_result = dict(final["result"])
+    legacy_result.pop("window_start")
+    legacy_result.pop("window_end")
+    initialised_store.planning.finish_preview_job(job_id, status="completed", result=legacy_result)
+
+    response = client.get(f"/api/v1/planning/preview/jobs/{job_id}", headers=headers)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["result"]["window_start"] == body["result"]["horizon_start"]
+    assert body["result"]["window_end"] == "2026-01-16T13:00:00Z"

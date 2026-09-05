@@ -14,9 +14,8 @@ decision.
 from __future__ import annotations
 
 from datetime import date, datetime, time
-from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 
 
 # --------------------------------------------------------------------------- #
@@ -262,6 +261,8 @@ class PlanningPreviewResponse(BaseModel):
     token: str
     status: str
     score: list[float]
+    window_start: datetime
+    window_end: datetime
     horizon_start: datetime
     horizon_end: datetime
     slot_minutes: int
@@ -326,7 +327,8 @@ class HeaterChargeConfigRequest(BaseModel):
 class PlanningSiteConfigRequest(BaseModel):
     expected_revision: int
     replan_minutes: int = Field(gt=0)
-    forecast_horizon_hours: Literal[24] = 24
+    planning_window_hours: StrictInt = Field(gt=0, le=48, default=12)
+    forecast_horizon_hours: StrictInt = Field(gt=0, le=48)
     aemet_query_hour: int = Field(ge=0, le=23)
     contracted_power_w: int = Field(gt=0)
     max_heating_power_w: int = Field(gt=0)
@@ -346,10 +348,17 @@ class PlanningSiteConfigRequest(BaseModel):
             raise ValueError("design indoor temperature must exceed design outdoor temperature")
         return self
 
+    @model_validator(mode="after")
+    def validate_planning_durations(self):
+        if self.planning_window_hours > self.forecast_horizon_hours:
+            raise ValueError("planning_window_hours must not exceed forecast_horizon_hours")
+        return self
+
 
 class PlanningSiteConfigResponse(BaseModel):
     revision: int
     replan_minutes: int
+    planning_window_hours: int
     forecast_horizon_hours: int
     aemet_query_hour: int
     contracted_power_w: int

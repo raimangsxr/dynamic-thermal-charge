@@ -174,7 +174,8 @@ def get_planning(
             heaters=heaters,
             latest_forecast=latest_forecast,
             cycle_status=cycle_status,
-            horizon_hours=PLANNING_HORIZON_HOURS,
+            horizon_hours=int(planning_site["forecast_horizon_hours"]),
+            planning_window_hours=int(planning_site["planning_window_hours"]),
         )
         return _enrich(response, store, observed_at)
 
@@ -211,9 +212,13 @@ def get_planning(
     plan_data = snapshot["plan"]
     slot_delta = timedelta(minutes=plan_data["slot_minutes"])
     slots: list[PlanningSlotView] = []
-    cursor = plan_data["window_start"]
-    while cursor < plan_data["window_end"]:
-        end = min(cursor + slot_delta, plan_data["window_end"])
+    horizon_start = plan_data["window_start"]
+    horizon_end = horizon_start + timedelta(hours=int(planning_site["forecast_horizon_hours"]))
+    visible_window_end = horizon_start + timedelta(hours=int(planning_site["planning_window_hours"]))
+    cursor = horizon_start
+    timeline_slots: list[PlanningSlotView] = []
+    while cursor < visible_window_end:
+        end = min(cursor + slot_delta, visible_window_end)
         key = (cursor, end)
         heater_ids = sorted(assigned.get(key, []))
         temperature, interpolated = stored_temperatures.get(
@@ -231,12 +236,30 @@ def get_planning(
         )
         cursor = end
 
-    horizon_start = plan_data["window_start"]
-    horizon_end = horizon_start + timedelta(hours=PLANNING_HORIZON_HOURS)
+    cursor = horizon_start
+    while cursor < horizon_end:
+        end = min(cursor + slot_delta, horizon_end)
+        key = (cursor, end)
+        heater_ids = sorted(assigned.get(key, []))
+        temperature, interpolated = stored_temperatures.get(
+            key, _temperature_for_interval(forecast, cursor, end)
+        )
+        timeline_slots.append(
+            PlanningSlotView(
+                start=cursor,
+                end=end,
+                heater_ids=heater_ids,
+                total_power_w=sum(power_by_id.get(heater_id, 0) for heater_id in heater_ids),
+                temperature_c=temperature,
+                temperature_interpolated=interpolated,
+            )
+        )
+        cursor = end
+
     timeline = _build_timeline(
         config.heaters,
         power_by_id,
-        _ordered_plan_slots(slots),
+        _ordered_plan_slots(timeline_slots),
         forecast,
         horizon_start,
         horizon_end,
@@ -246,7 +269,10 @@ def get_planning(
     response = PlanningResponse(
         observed_at=observed_at,
         max_total_power_w=config.site.max_total_power_w,
-        plan=PlanningPlanView(**plan_data, slots=slots),
+        plan=PlanningPlanView(
+            **{**plan_data, "window_start": horizon_start, "window_end": visible_window_end},
+            slots=slots,
+        ),
         forecast=forecast_view,
         allocations=[AllocationSummary(**item) for item in snapshot["allocations"]],
         heaters=heaters,
@@ -297,7 +323,7 @@ def start_preview_job(
         steps=PREVIEW_STEP_NAMES,
     )
     _job_runner(app_request).submit(job_id)
-    return _job_response(store.planning.preview_job(job_id))
+    return _job_response(store.planning.preview_job(job_id), site=site)
 
 
 @router.get("/planning/preview/jobs/{job_id}", response_model=PlanningPreviewJobResponse, responses=ERROR_RESPONSES)
@@ -305,7 +331,7 @@ def get_preview_job(job_id: str, store: Store = Depends(usable_store)) -> Planni
     job = store.planning.preview_job(job_id)
     if job is None:
         raise not_found("preview job does not exist", field="job_id")
-    return _job_response(job)
+    return _job_response(job, site=store.planning.site())
 
 
 @router.post("/planning/preview/jobs/{job_id}/cancel", response_model=PlanningPreviewJobResponse, responses=ERROR_RESPONSES)
@@ -313,7 +339,7 @@ def cancel_preview_job(job_id: str, store: Store = Depends(usable_store)) -> Pla
     job = store.planning.request_preview_cancel(job_id)
     if job is None:
         raise not_found("preview job does not exist", field="job_id")
-    return _job_response(job)
+    return _job_response(job, site=store.planning.site())
 
 
 @router.delete("/planning/preview/jobs/{job_id}", response_model=PlanningPreviewJobResponse, responses=ERROR_RESPONSES, include_in_schema=False)
@@ -389,14 +415,16 @@ def _automatic_planning_response(
     latest_forecast,
     cycle_status: dict,
     horizon_hours: int,
+    planning_window_hours: int,
 ) -> PlanningResponse:
     power_by_id = {heater.id: heater.power_w for heater in config.heaters}
     slot_delta = timedelta(minutes=automatic["slot_minutes"])
     horizon_start = automatic["horizon_start"]
     horizon_end = horizon_start + timedelta(hours=horizon_hours)
+    window_end = horizon_start + timedelta(hours=planning_window_hours)
     automatic_plan = PlanningPlanView(
         window_start=automatic["horizon_start"],
-        window_end=automatic["horizon_end"],
+        window_end=window_end,
         slot_minutes=automatic["slot_minutes"],
         installation_revision=revision,
         created_at=automatic["created_at"],
@@ -411,6 +439,7 @@ def _automatic_planning_response(
                 stored_charge_percent_by_heater=item["stored_charge_percent"],
             )
             for item in automatic["slots"]
+            if item["start"] < window_end
         ],
     )
     return PlanningResponse(
@@ -473,11 +502,12 @@ def _enrich(response: PlanningResponse, store: Store, observed_at: datetime) -> 
     response.plan_status = None if active is None else active["status"]
     response.deficits = [] if active is None else [PlanningDeficitView(**item) for item in active["deficits"]]
     response.preview_token = None if active is None else active["input_token"]
-    response.constraints_revision = planning.site()["revision"]
-    response.base_load_w = int(planning.site().get("base_load_w", 0))
-    response.max_heating_power_w = int(planning.site().get("max_heating_power_w", response.max_total_power_w))
+    site = planning.site()
+    response.constraints_revision = site["revision"]
+    response.base_load_w = int(site.get("base_load_w", 0))
+    response.max_heating_power_w = int(site.get("max_heating_power_w", response.max_total_power_w))
     latest_job = planning.latest_preview_job()
-    response.preview_job = _job_response(latest_job) if latest_job is not None else None
+    response.preview_job = _job_response(latest_job, site=site) if latest_job is not None else None
     return response
 
 
@@ -530,7 +560,7 @@ def _build_automatic_plan(
         constraints=constraints,
         forecast=store.planning.latest_forecast(observed_at),
         horizon_start=observed_at,
-        horizon_hours=PLANNING_HORIZON_HOURS,
+        horizon_hours=int(site["forecast_horizon_hours"]),
         slot_minutes=config.site.slot_minutes,
         max_total_power_w=int(site["contracted_power_w"]),
         base_load_w=int(site.get("base_load_w", 0)),
@@ -549,6 +579,9 @@ def _build_automatic_plan(
 
 def _preview_response(plan, constraints, *, site: dict[str, int | float] | None = None) -> PlanningPreviewResponse:
     violations = [PlanningDeficitView(**item.__dict__, target_charge_percent=item.target_charge_percent, projected_charge_percent=item.projected_charge_percent, deficit_percent=item.deficit_percent) for item in plan.violations]
+    planning_window_hours = 12 if site is None else int(site["planning_window_hours"])
+    horizon_hours = PLANNING_HORIZON_HOURS if site is None else int(site["forecast_horizon_hours"])
+    window_end = plan.horizon_start + timedelta(hours=planning_window_hours)
     forecast_points = len({item.start for item in plan.demand}) or len(plan.slots)
     warnings: dict[str, dict[str, Any]] = {}
     for item in violations:
@@ -557,7 +590,8 @@ def _preview_response(plan, constraints, *, site: dict[str, int | float] | None 
         warning["count"] += 1
     capacity_by_heater = {item.heater_id: item.capacity_kwh for item in plan.explanations}
     operator_summary = {
-        "window": {"start": plan.horizon_start, "end": plan.horizon_end, "hours": PLANNING_HORIZON_HOURS},
+        "window": {"start": plan.horizon_start, "end": window_end, "hours": planning_window_hours},
+        "horizon": {"start": plan.horizon_start, "end": plan.horizon_end, "hours": horizon_hours},
         "forecast": {"source": "AEMET" if forecast_points else "no utilizable", "points_used": forecast_points},
         "demand_kwh_by_heater": {heater_id: round(sum(item.demand_kwh for item in plan.demand if item.heater_id == heater_id), 6) for heater_id in sorted({item.heater_id for item in plan.demand})},
         "constraints": {"count": len(constraints), "satisfied": not any(item.requirement == "minimum_soc" for item in violations)},
@@ -571,6 +605,7 @@ def _preview_response(plan, constraints, *, site: dict[str, int | float] | None 
     }
     return PlanningPreviewResponse(
         token=plan.input_token, status=plan.status, score=list(plan.score),
+        window_start=plan.horizon_start, window_end=window_end,
         horizon_start=plan.horizon_start, horizon_end=plan.horizon_end,
         slot_minutes=plan.slot_minutes,
         slots=[{"start": item.start, "end": item.end, "heater_ids": list(item.heater_ids), "power_w": item.power_w, "stored_charge_percent": item.stored_charge_percent, "initial_soc_percent": item.initial_soc_percent, "demand_kwh": item.demand_kwh, "heater_power_w": item.heater_power_w, "required_charge_percent": item.required_charge_percent, "outdoor_temperature_c": item.outdoor_temperature_c, "energy_delivered_kwh": {heater_id: round(power / 1000 * (item.end - item.start).total_seconds() / 3600, 6) for heater_id, power in (item.heater_power_w or {}).items() if power > 0}, "capacity_percent_by_heater": {heater_id: round((power / 1000 * (item.end - item.start).total_seconds() / 3600) / capacity * 100, 6) for heater_id, power in (item.heater_power_w or {}).items() if power > 0 and (capacity := capacity_by_heater.get(heater_id, 0)) > 0}} for item in plan.slots],
@@ -595,10 +630,25 @@ def _recommended_action(reason: str) -> str:
     return "Revisa la entrada indicada y vuelve a calcular."
 
 
-def _job_response(job: dict[str, Any] | None) -> PlanningPreviewJobResponse:
+def _job_response(
+    job: dict[str, Any] | None,
+    *,
+    site: dict[str, int | float] | None = None,
+) -> PlanningPreviewJobResponse:
     if job is None:
         raise not_found("preview job does not exist", field="job_id")
-    result = None if job["result"] is None else PlanningPreviewResponse.model_validate(job["result"])
+    result_payload = None if job["result"] is None else dict(job["result"])
+    if result_payload is not None:
+        # Results created before the configurable planning window was added do
+        # not contain these fields. Keep durable jobs readable after upgrades.
+        result_payload.setdefault("window_start", result_payload.get("horizon_start"))
+        if "window_end" not in result_payload and result_payload.get("window_start") is not None:
+            planning_window_hours = 12 if site is None else int(site["planning_window_hours"])
+            window_start = result_payload["window_start"]
+            if not isinstance(window_start, datetime):
+                window_start = datetime.fromisoformat(str(window_start).replace("Z", "+00:00"))
+            result_payload["window_end"] = window_start + timedelta(hours=planning_window_hours)
+    result = None if result_payload is None else PlanningPreviewResponse.model_validate(result_payload)
     return PlanningPreviewJobResponse(
         job_id=job["id"], status=job["status"], cancellation_requested=job["cancellation_requested"],
         requested_at=job["requested_at"], started_at=job["started_at"], finished_at=job["finished_at"],

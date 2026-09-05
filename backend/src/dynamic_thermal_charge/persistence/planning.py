@@ -58,6 +58,7 @@ class SqlPlanningRepository:
             return {
                 "revision": 1,
                 "replan_minutes": 30,
+                "planning_window_hours": 12,
                 "forecast_horizon_hours": 24,
                 "aemet_query_hour": 12,
                 "contracted_power_w": 5200,
@@ -75,6 +76,8 @@ class SqlPlanningRepository:
         integers = (
             "revision",
             "replan_minutes",
+            "planning_window_hours",
+            "forecast_horizon_hours",
             "aemet_query_hour",
             "contracted_power_w",
             "max_heating_power_w",
@@ -96,7 +99,6 @@ class SqlPlanningRepository:
             **{key: bool(row[key]) for key in booleans},
             **{key: str(row[key]) for key in strings},
         }
-        values["forecast_horizon_hours"] = 24
         return values
 
     def heater_charge_config(self) -> dict[str, dict[str, Any]]:
@@ -126,6 +128,8 @@ class SqlPlanningRepository:
             raise ConfigConflictError("planning configuration changed; recalculate before saving")
         integer_fields = {
             "replan_minutes",
+            "planning_window_hours",
+            "forecast_horizon_hours",
             "aemet_query_hour",
             "contracted_power_w",
             "max_heating_power_w",
@@ -144,6 +148,10 @@ class SqlPlanningRepository:
         allowed = {}
         for key, value in values.items():
             if key in integer_fields:
+                if key in {"planning_window_hours", "forecast_horizon_hours"} and (
+                    isinstance(value, bool) or int(value) != float(value)
+                ):
+                    raise ConfigValidationError(f"{key} must be an integer", field=key)
                 allowed[key] = int(value)
             elif key in float_fields:
                 allowed[key] = float(value)
@@ -152,7 +160,14 @@ class SqlPlanningRepository:
             elif key in string_fields:
                 allowed[key] = str(value).strip()
         combined = {**current, **allowed}
-        combined["forecast_horizon_hours"] = 24
+        window_hours = int(combined["planning_window_hours"])
+        horizon_hours = int(combined["forecast_horizon_hours"])
+        if not 1 <= window_hours <= 48:
+            raise ConfigValidationError("planning_window_hours must be between 1 and 48", field="planning_window_hours")
+        if not 1 <= horizon_hours <= 48:
+            raise ConfigValidationError("forecast_horizon_hours must be between 1 and 48", field="forecast_horizon_hours")
+        if window_hours > horizon_hours:
+            raise ConfigValidationError("planning_window_hours must not exceed forecast_horizon_hours", field="planning_window_hours")
         if int(combined["contracted_power_w"]) <= 0 or int(combined["max_heating_power_w"]) <= 0:
             raise ConfigValidationError("power limits must be positive", field="contracted_power_w")
         if int(combined["base_load_w"]) < 0:

@@ -9,13 +9,15 @@ import type { ChartOptions, TooltipItem } from 'chart.js';
 
 import { Api } from '../core/api';
 import { Poller } from '../core/poll';
-import type { ApiErrorDto, HourlyForecastPointDto, PlanningConstraintRequest, PlanningDto, PlanningDeficitDto, PlanningPreviewDto, PlanningPreviewJobDto, PlanningSlotDto, PlanningTimelineSlotDto } from '../core/api.types';
+import type { ApiErrorDto, HourlyForecastPointDto, PlanningCheckDto, PlanningConstraintRequest, PlanningDto, PlanningDeficitDto, PlanningPreviewDto, PlanningPreviewJobDto, PlanningSlotDto, PlanningTimelineSlotDto } from '../core/api.types';
 import { type Explained, UNREACHABLE, explain } from '../core/errors';
 import { formatTemperature, truncateTemperature } from '../shared/temperature/temperature';
 
 interface PlanningDetailDialogData {
-  kind: 'forecast' | 'planning';
-  planning: PlanningDto;
+  kind: 'forecast' | 'planning' | 'failure';
+  planning?: PlanningDto;
+  check?: PlanningCheckDto;
+  job?: PlanningPreviewJobDto;
 }
 
 interface ConstraintDraft extends Omit<PlanningConstraintRequest, 'target_charge'> {
@@ -26,9 +28,16 @@ interface ConstraintDraft extends Omit<PlanningConstraintRequest, 'target_charge
   selector: 'dtc-planning-detail-dialog',
   imports: [MatButtonModule, MatDialogModule],
   template: `
-    <h2 mat-dialog-title>{{ data.kind === 'forecast' ? 'Detalle de la previsión' : 'Detalle de la planificación' }}</h2>
+    <h2 mat-dialog-title>{{ data.kind === 'forecast' ? 'Detalle de la previsión' : data.kind === 'failure' ? 'Detalle del fallo de la vista previa' : 'Detalle de la planificación' }}</h2>
     <mat-dialog-content>
-      @if (data.kind === 'forecast' && data.planning.forecast; as forecast) {
+      @if (data.kind === 'failure') {
+        <dl class="detail-list">
+          <div><dt>Paso</dt><dd>{{ data.check ? checkText(data.check.name) : 'Trabajo de vista previa' }}</dd></div>
+          <div><dt>Estado</dt><dd>{{ data.check ? checkStatusText(data.check.status) : 'error' }}</dd></div>
+          <div><dt>Detalle</dt><dd>{{ data.check?.detail || 'No hay detalle adicional.' }}</dd></div>
+          @if (data.job?.error_detail) { <div><dt>Error general</dt><dd>{{ data.job?.error_detail }}</dd></div> }
+        </dl>
+      } @else if (data.kind === 'forecast' && data.planning?.forecast; as forecast) {
         <dl class="detail-list">
           <div><dt>Origen</dt><dd>{{ sourceText(forecast.source) }}</dd></div>
           <div><dt>Fecha</dt><dd>{{ dateText(forecast.date) }}</dd></div>
@@ -36,8 +45,8 @@ interface ConstraintDraft extends Omit<PlanningConstraintRequest, 'target_charge
           <div><dt>Rango horario</dt><dd>{{ forecastRange(forecast.hourly_points) }}</dd></div>
           <div><dt>Registros horarios</dt><dd>{{ forecast.hourly_points.length }}</dd></div>
           <div><dt>Temperaturas</dt><dd>{{ temperatures(forecast) }}</dd></div>
-          <div><dt>Última consulta</dt><dd>{{ dateTime(data.planning.forecast_last_attempt_at) }}</dd></div>
-          <div><dt>Próxima consulta</dt><dd>{{ dateTime(data.planning.forecast_next_run_at) }}</dd></div>
+          <div><dt>Última consulta</dt><dd>{{ dateTime(data.planning?.forecast_last_attempt_at) }}</dd></div>
+          <div><dt>Próxima consulta</dt><dd>{{ dateTime(data.planning?.forecast_next_run_at) }}</dd></div>
         </dl>
         @if (forecast.hourly_points.length) {
           <div class="table-scroll">
@@ -50,11 +59,11 @@ interface ConstraintDraft extends Omit<PlanningConstraintRequest, 'target_charge
         }
       } @else if (data.kind === 'forecast') {
         <p>No hay datos de previsión horaria disponibles.</p>
-        <p>Última consulta: {{ dateTime(data.planning.forecast_last_attempt_at) }} · Próxima consulta: {{ dateTime(data.planning.forecast_next_run_at) }}</p>
-      } @else if (data.planning.plan; as plan) {
+        <p>Última consulta: {{ dateTime(data.planning?.forecast_last_attempt_at) }} · Próxima consulta: {{ dateTime(data.planning?.forecast_next_run_at) }}</p>
+      } @else if (data.planning?.plan; as plan) {
         <dl class="detail-list">
           <div><dt>Ventana</dt><dd>{{ dateTime(plan.window_start) }}–{{ dateTime(plan.window_end) }}</dd></div>
-          <div><dt>Horizonte</dt><dd>{{ dateTime(data.planning.horizon_start) }}–{{ dateTime(data.planning.horizon_end) }}</dd></div>
+          <div><dt>Horizonte</dt><dd>{{ dateTime(data.planning?.horizon_start) }}–{{ dateTime(data.planning?.horizon_end) }}</dd></div>
           <div><dt>Intervalo</dt><dd>{{ plan.slot_minutes }} minutos</dd></div>
           <div><dt>Registros de planificación</dt><dd>{{ plan.slots.length }}</dd></div>
           <div><dt>Creado</dt><dd>{{ dateTime(plan.created_at) }}</dd></div>
@@ -117,6 +126,14 @@ export class PlanningDetailDialog {
     const minimum = forecast.minimum_temperature_c === null ? 'no disponible' : `${formatTemperature(forecast.minimum_temperature_c)} °C`;
     const maximum = forecast.maximum_temperature_c === null ? 'no disponible' : `${formatTemperature(forecast.maximum_temperature_c)} °C`;
     return `media ${formatTemperature(forecast.average_temperature_c)} °C · mínima ${minimum} · máxima ${maximum}`;
+  }
+
+  checkText(name: string): string {
+    return ({ input_validation: 'Validación de inputs', telemetry: 'Telemetría', aemet_coverage: 'Cobertura AEMET', demand_estimation: 'Estimación de demanda', constraints: 'Materialización de constraints', resolution: 'Resolución', safety_validation: 'Validación de seguridad', operator_summary: 'Resumen final' } as Record<string, string>)[name] ?? name;
+  }
+
+  checkStatusText(status: string): string {
+    return ({ pending: 'pendiente', running: 'en curso', completed: 'completado', error: 'error', cancelled: 'cancelado', skipped: 'omitido' } as Record<string, string>)[status] ?? status;
   }
 }
 
@@ -269,6 +286,23 @@ export class Planning implements AfterViewInit, OnDestroy {
     if (planning) this.dialog.open(PlanningDetailDialog, { width: 'min(92vw, 72rem)', data: { kind: 'planning', planning }, ariaLabel: 'Detalle de la planificación', ariaModal: true });
   }
 
+  hasPreviewFailure(job: PlanningPreviewJobDto): boolean {
+    return job.status === 'error' || job.checks.some((check) => check.status === 'error');
+  }
+
+  openPreviewFailure(job: PlanningPreviewJobDto, check?: PlanningCheckDto): void {
+    const failed = check ?? job.checks.find((item) => item.status === 'error');
+    const fallback: PlanningCheckDto = {
+      name: 'preview_job', status: 'error', detail: job.error_detail,
+      started_at: null, finished_at: job.finished_at,
+    };
+    this.dialog.open(PlanningDetailDialog, {
+      width: 'min(92vw, 42rem)',
+      data: { kind: 'failure', check: failed ?? fallback, job },
+      ariaLabel: 'Detalle del fallo de la vista previa', ariaModal: true,
+    });
+  }
+
   intervalLabels(labels: string[]): string[] {
     return labels.map((label, index) => index % 5 === 0 ? label : '');
   }
@@ -368,6 +402,9 @@ export class Planning implements AfterViewInit, OnDestroy {
   previewSlotLabel(slot: Record<string, unknown>): string { return this.dateTime(String(slot['start'] ?? '')); }
   previewSlotPower(slot: Record<string, unknown>): number { return Number(slot['power_w'] ?? 0); }
   previewSlotHeaters(slot: Record<string, unknown>): string { return Array.isArray(slot['heater_ids']) && slot['heater_ids'].length ? slot['heater_ids'].join(', ') : 'ninguno'; }
+  previewChargingSlots(result: PlanningPreviewDto): Array<Record<string, unknown>> {
+    return result.slots.filter((slot) => this.previewSlotPower(slot) > 0);
+  }
   matrixCell(slot: Record<string, unknown>, heaterId: string): string {
     const power = (slot['heater_power_w'] as Record<string, number> | undefined)?.[heaterId] ?? 0;
     const energy = (slot['energy_delivered_kwh'] as Record<string, number> | undefined)?.[heaterId] ?? 0;

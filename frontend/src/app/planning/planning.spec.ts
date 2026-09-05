@@ -4,7 +4,7 @@ import { MatDialog } from '@angular/material/dialog';
 import { TestBed, type ComponentFixture } from '@angular/core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { PlanningDto } from '../core/api.types';
+import type { PlanningDto, PlanningPreviewDto } from '../core/api.types';
 import { Planning } from './planning';
 
 const chartState = vi.hoisted(() => ({ configs: [] as Array<{ type: string; data: { labels: unknown[]; datasets: Array<{ label?: string; data?: unknown[] }> } }> }));
@@ -171,6 +171,18 @@ describe('Planning', () => {
     expect(fixture.componentInstance.storedChargePercent(PLANNING, 'salon', 1)).toBe(4.17);
   });
 
+  it('shows only charging intervals in the preview slots table', () => {
+    const slots = fixture.componentInstance.previewChargingSlots({
+      ...({} as PlanningPreviewDto),
+      slots: [
+        { start: '2026-01-16T00:00:00Z', power_w: 0 },
+        { start: '2026-01-16T00:30:00Z', power_w: 2400 },
+        { start: '2026-01-16T01:00:00Z', power_w: -1 },
+      ],
+    });
+    expect(slots.map((slot) => slot['power_w'])).toEqual([2400]);
+  });
+
   it('renders constraint percentages and converts them back to the API fraction', () => {
     fixture.componentInstance.draftConstraints.set([
       { heater_id: 'salon', target_charge: 25, at_time: '07:00', weekdays: [0, 1, 2, 3, 4, 5, 6] },
@@ -191,5 +203,30 @@ describe('Planning', () => {
       'intervalo-0', '', '', '', '', 'intervalo-5', '', '', '', '', 'intervalo-10',
     ]);
     expect(fixture.componentInstance.intervalTooltipLabel(labels, 7)).toBe('intervalo-7');
+  });
+
+  it('offers failure details for a failed preview step and includes the general error', async () => {
+    backend.expectOne('/api/v1/planning').flush(PLANNING);
+    fixture.detectChanges();
+    fixture.componentInstance.previewJob.set({
+      job_id: 'failed-job', status: 'error', cancellation_requested: false,
+      requested_at: PLANNING.observed_at, started_at: PLANNING.observed_at,
+      finished_at: PLANNING.observed_at, checks: [{
+        name: 'resolution', status: 'error', detail: 'CBC no devolvió una solución válida.',
+        started_at: PLANNING.observed_at, finished_at: PLANNING.observed_at,
+      }], result: null, operator_summary: {}, error_code: 'preview_failed',
+      error_detail: 'El trabajo de vista previa terminó con error.',
+    });
+    fixture.detectChanges();
+    const button = (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('[data-testid="preview-check-failure-button"]');
+    expect(button).not.toBeNull();
+    button?.click();
+    await fixture.whenStable();
+    const dialog = document.querySelector('mat-dialog-container');
+    expect(dialog?.textContent).toContain('Resolución');
+    expect(dialog?.textContent).toContain('CBC no devolvió una solución válida.');
+    expect(dialog?.textContent).toContain('El trabajo de vista previa terminó con error.');
+    document.querySelector<HTMLButtonElement>('[data-testid="detail-dialog-close"]')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 100));
   });
 });

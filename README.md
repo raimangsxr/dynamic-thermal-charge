@@ -71,15 +71,18 @@ Como medida de seguridad, el controlador no arranca salidas GPIO si MQTT está
 deshabilitado o si está activa la simulación de acumuladores: ambas situaciones
 proporcionan telemetría no real y se registran como un error crítico.
 
-La sección `Planificación` consulta el plan aceptado en `GET /api/v1/planning`
+La sección `Sistema → planning` permite configurar la ventana visible y el
+horizonte completo, ambos entre 1 y 48 horas, con ventana no mayor que el
+horizonte. La sección `Planificación` consulta el plan aceptado en `GET /api/v1/planning`
 y permite editar constraints recurrentes. La vista previa se inicia con
 `POST /api/v1/planning/preview/jobs`, se consulta con
 `GET /api/v1/planning/preview/jobs/{job_id}` y se cancela con
 `POST /api/v1/planning/preview/jobs/{job_id}/cancel`; el trabajo y sus checks
 se conservan al recargar. `POST /api/v1/planning/activate` valida el token de
-inputs y guarda constraints y plan conjuntamente. El horizonte automático es
-siempre de 24 horas desde el instante en que se recalcula: sin cobertura AEMET
-horaria continua no se publica un plan parcial. La
+inputs y guarda constraints y plan conjuntamente. Por defecto la ventana es
+de 12 horas y el horizonte de 24 horas; ambos comienzan en el slot actual,
+redondeado hacia abajo. Sin cobertura AEMET horaria continua para todo el
+horizonte no se publica un plan parcial. La
 telemetría MQTT de cada acumulador se valida por separado y una muestra
 incompleta o de más de 15 minutos se marca como caducada y deja ese acumulador
 fuera del plan.
@@ -94,7 +97,8 @@ de un acumulador se guarda con una única petición `PUT /api/v1/config/heaters/
 
 El histórico de decisiones está disponible en `GET /api/v1/history/planning-audit`
 y conserva el motivo, el estado y las violaciones de cada preview o activación.
-La misma vista proyecta 24 horas completas; los gráficos muestran el contexto
+La misma vista proyecta el horizonte completo configurado y muestra la ventana
+visible como sus intervalos iniciales; los gráficos muestran el contexto
 de preview cuando existe y ofrecen una alternativa textual con unidades para
 cada intervalo. El resumen usa lenguaje operativo y agrupa avisos por causa.
 

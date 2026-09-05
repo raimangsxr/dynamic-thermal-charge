@@ -16,7 +16,7 @@
       <form (ngSubmit)="requestSave()">
         @if (selected() === 'planning') {
           <p>Revisión planificación {{ planningConfig()?.revision }}</p>
-          <p>Parámetros del optimizador automático (ventana fija de 24 horas, potencia y modelo de demanda). Las restricciones de carga se gestionan en Planificación; la potencia contratada de instalación en Configuración.</p>
+          <p>Parámetros del optimizador automático, incluida la ventana visible y el horizonte completo. Las restricciones de carga se gestionan en Planificación; la potencia contratada de instalación en Configuración.</p>
         } @else {
           <p>Revisión global {{ data.revision }}</p>
         }

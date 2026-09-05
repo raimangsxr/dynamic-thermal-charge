@@ -288,10 +288,10 @@ class MilpChargePlanner:
         )
         try:
             _validate_input(request)
-            # The rolling horizon is anchored to the instant at which the
-            # recalculation was requested. Slot duration controls the plan
-            # resolution, not when the 24-hour window starts.
-            horizon_start = request.horizon_start
+            # The rolling horizon starts at the current slot, never in the
+            # middle of one. This keeps automatic, preview and activation
+            # responses on the same deterministic slot boundary.
+            horizon_start = _floor_align(request.horizon_start, request.slot_minutes)
         except (ValueError, ArithmeticError) as exc:
             return _invalid_plan(request, request.horizon_start, (), str(exc), "invalid_configuration", generated_at)
         _notify(request, "coverage")
@@ -519,12 +519,18 @@ class DeterministicChargeOptimizer(MilpChargePlanner):
 
 
 def input_token(request: PlanningInput) -> str:
+    # The calculation is anchored to the current slot. The token must use the
+    # same stable anchor so preview and activation remain compatible while the
+    # clock advances within that slot.
+    token_horizon_start = request.horizon_start
+    if request.slot_minutes > 0:
+        token_horizon_start = _floor_align(request.horizon_start, request.slot_minutes)
     payload = {
         "heaters": [(h.id, h.power_w, h.full_charge_minutes, h.enabled, h.priority, h.demand_factor, h.reserve_percent) for h in request.heaters],
         "telemetry": {key: _json_telemetry(value) for key, value in sorted(request.telemetry.items())},
         "constraints": [(c.id, c.heater_id, c.target_charge, c.at.isoformat(), c.weekdays) for c in request.constraints],
         "forecast": [(point.timestamp.isoformat(), point.temperature_c, point.interpolated) for point in request.forecast],
-        "horizon_start": request.horizon_start.astimezone(timezone.utc).isoformat(),
+        "horizon_start": token_horizon_start.astimezone(timezone.utc).isoformat(),
         "horizon_hours": request.horizon_hours, "slot_minutes": request.slot_minutes,
         "max_total_power_w": request.max_total_power_w, "base_load_w": request.base_load_w, "max_heating_power_w": request.max_heating_power_w,
         "timezone_name": request.timezone_name, "design_indoor_temperature_c": request.design_indoor_temperature_c,
@@ -535,7 +541,15 @@ def input_token(request: PlanningInput) -> str:
 
 
 def _json_telemetry(value: ChargeTelemetry) -> dict[str, object]:
-    return {key: (item.isoformat() if isinstance(item, datetime) else item) for key, item in value.__dict__.items()}
+    # Receipt times validate freshness but do not affect the plan itself. They
+    # must not invalidate activation when the same fixed/live values are read
+    # again a few minutes after the preview.
+    return {
+        "heater_id": value.heater_id,
+        "temperature_c": value.temperature_c,
+        "target_temperature_c": value.target_temperature_c,
+        "stored_charge_percent": value.stored_charge_percent,
+    }
 
 
 def _validate_input(request: PlanningInput) -> None:
@@ -554,26 +568,17 @@ def _validate_input(request: PlanningInput) -> None:
     ZoneInfo(request.timezone_name)
 
 
-def _ceil_align(value: datetime, minutes: int) -> datetime:
-    floor = value.replace(second=0, microsecond=0, minute=(value.minute // minutes) * minutes)
-    return floor if value == floor else floor + timedelta(minutes=minutes)
+def _floor_align(value: datetime, minutes: int) -> datetime:
+    return value.replace(
+        second=0,
+        microsecond=0,
+        minute=(value.minute // minutes) * minutes,
+    )
 
 
 def _continuous_forecast_slots(start: datetime, forecast: Sequence[HourlyForecastPoint], horizon_hours: int, slot_minutes: int) -> tuple[datetime, ...]:
     if not forecast:
         return ()
-    # The public automatic paths always pass the fixed 24-hour constant. Keep
-    # the old helper semantics for embedders that still ask the pure planner
-    # for a custom horizon; this is not an operator/API configuration surface.
-    if horizon_hours != PLANNING_HORIZON_HOURS:
-        effective_start = _effective_forecast_start(start, forecast, slot_minutes)
-        result = []
-        cursor = effective_start
-        configured_end = start + timedelta(hours=horizon_hours)
-        while cursor < configured_end and _weather_at(cursor, forecast) is not None:
-            result.append(cursor)
-            cursor += timedelta(minutes=slot_minutes)
-        return tuple(result)
     result = []
     cursor = start
     configured_end = start + timedelta(hours=horizon_hours)
@@ -584,15 +589,6 @@ def _continuous_forecast_slots(start: datetime, forecast: Sequence[HourlyForecas
         result.append(cursor)
         cursor += timedelta(minutes=slot_minutes)
     return tuple(result) if len(result) == horizon_hours * 60 // slot_minutes else ()
-
-
-def _effective_forecast_start(start: datetime, forecast: Sequence[HourlyForecastPoint], slot_minutes: int) -> datetime:
-    aligned = _ceil_align(start, slot_minutes)
-    if _weather_at(aligned, forecast) is not None:
-        return aligned
-    first_forecast = min(point.timestamp for point in forecast)
-    candidate = _ceil_align(max(aligned, first_forecast), slot_minutes)
-    return candidate if _weather_at(candidate, forecast) is not None else aligned
 
 
 def _notify(request: PlanningInput, step: str) -> None:

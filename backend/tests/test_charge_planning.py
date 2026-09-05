@@ -29,7 +29,7 @@ def test_optimizer_keeps_each_accumulator_independent_and_never_exceeds_limit():
         heaters=(_heater("a"), _heater("b", reserve=0)),
         telemetry={"a": _telemetry("a", 0), "b": _telemetry("b", 100)},
         constraints=(ChargeConstraint("a", .5, time(1, 0)),),
-        forecast=(HourlyForecastPoint(start, 5),), horizon_start=start,
+        forecast=(HourlyForecastPoint(start, 5), HourlyForecastPoint(start + timedelta(hours=1), 5)), horizon_start=start,
         horizon_hours=2, slot_minutes=30, max_total_power_w=2400,
     ))
     assert all(slot.power_w <= 2400 for slot in result.slots)
