@@ -112,6 +112,23 @@ def test_constraints_materialize_weekdays_at_boundaries_including_horizon_end():
     assert [(item.at, item.minimum_soc_percent) for item in values] == [(start + timedelta(hours=2), 50)]
 
 
+def test_exact_constraint_target_does_not_crash_cbc():
+    item = heater(power_w=2000, hours=2)
+    rule = ChargeConstraint("a", 1.0, time(4, 0), weekdays=(4,))
+    result = MilpChargePlanner().build(request(
+        heaters=(item,),
+        telemetry={"a": state(actual=21, target=21, soc=0)},
+        constraints=(rule,),
+        points=forecast(API_NOW, 4, 21),
+        start=API_NOW,
+        limit=2000,
+        hours=2,
+    ))
+
+    assert result.status == FEASIBLE
+    assert not result.violations
+
+
 def test_planner_accepts_zero_soc_respects_power_capacity_jit_and_is_deterministic():
     item = heater(power_w=2000, hours=2)
     rule = ChargeConstraint("a", 1, time(5, 0), weekdays=(4,))

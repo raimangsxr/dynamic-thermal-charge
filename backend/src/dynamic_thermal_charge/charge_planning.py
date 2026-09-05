@@ -353,7 +353,19 @@ class MilpChargePlanner:
         on = {(h.id, i): pulp.LpVariable(f"on_{h.id}_{i:03d}", cat="Binary") for h in heaters for i in range(len(starts))}
         energy = {(h.id, i): pulp.LpVariable(f"energy_{h.id}_{i:03d}", lowBound=0, upBound=h.capacity_kwh) for h in heaters for i in range(len(starts) + 1)}
         unmet = {(h.id, i): pulp.LpVariable(f"unmet_{h.id}_{i:03d}", lowBound=0, upBound=demand_by_key[(h.id, starts[i])]) for h in heaters for i in range(len(starts))}
-        c_short = {index: pulp.LpVariable(f"constraint_shortfall_{index:03d}", lowBound=0) for index in range(len(constraints))}
+        # A constraint shortfall cannot exceed the energy required by its
+        # target.  Keeping this slack bounded also avoids a CBC 2.10.12
+        # presolve/postsolve assertion when an exactly feasible 100% target
+        # leaves the slack at zero while its upper bound is infinite.
+        c_short = {
+            index: pulp.LpVariable(
+                f"constraint_shortfall_{index:03d}",
+                lowBound=0,
+                upBound=_heater(heaters, rule.heater_id).capacity_kwh
+                * rule.minimum_soc_percent / 100,
+            )
+            for index, rule in enumerate(constraints)
+        }
         for h in heaters:
             initial_energy = h.capacity_kwh * float(request.telemetry[h.id].stored_charge_percent) / 100
             model += energy[(h.id, 0)] == initial_energy
