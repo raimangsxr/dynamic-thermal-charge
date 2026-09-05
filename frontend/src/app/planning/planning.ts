@@ -48,6 +48,7 @@ interface ConstraintDraft extends Omit<PlanningConstraintRequest, 'target_charge
 }
 
 interface PreviewChartPoint {
+  x: number;
   y: number;
   power_w: number;
   energy_delivered_kwh: number;
@@ -113,7 +114,15 @@ function recommendedPlanningAction(cause: string): string | null {
           }
         </div>
       } @else if (data.kind === 'preview' && data.preview; as preview) {
-        <p class="hint">Detalle por acumulador de la ventana planificada. Selecciona una pestaña para consultar sus intervalos.</p>
+        <p class="hint">Detalle por intervalo y acumulador de la ventana planificada.</p>
+        <div class="table-scroll preview-slot-summary" data-testid="preview-slots-detail-table">
+          <table aria-label="Intervalos con carga de la vista previa"><caption>Intervalos con carga</caption><thead><tr><th scope="col">Intervalo</th><th scope="col">Acumuladores</th><th scope="col">Potencia (W)</th></tr></thead><tbody>
+            @for (slot of previewChargingSlots(preview); track $index) {
+              <tr><th scope="row">{{ previewSlotLabel(slot) }}</th><td>{{ previewSlotHeaters(slot) }}</td><td>{{ previewSlotPower(slot) }}</td></tr>
+            }
+          </tbody></table>
+        </div>
+        <p class="hint preview-detail-tabs-hint">Selecciona una pestaña para consultar potencia, energía, capacidad y SOC por acumulador.</p>
         @if (data.planning; as planning) {
           @if (planning.heaters.length) {
             <mat-tab-group class="preview-detail-tabs" data-testid="preview-detail-tabs" animationDuration="0ms">
@@ -122,7 +131,7 @@ function recommendedPlanningAction(cause: string): string | null {
                 <section class="preview-detail-table" data-testid="preview-detail-heater-table" [attr.aria-labelledby]="'preview-detail-heater-title-' + heater.id">
                   <h3 [id]="'preview-detail-heater-title-' + heater.id">{{ heater.name }}</h3>
                   <div class="table-scroll"><table [attr.aria-label]="'Detalle de planificación de ' + heater.name"><thead><tr><th scope="col">Intervalo</th><th scope="col">Potencia (W)</th><th scope="col">Energía (kWh)</th><th scope="col">Capacidad (%)</th><th scope="col">SOC (%)</th></tr></thead><tbody>
-                    @for (slot of previewWindowSlots(preview); track $index) { <tr><th scope="row">{{ previewSlotLabel(slot) }}</th><td>{{ previewPower(slot, heater.id) }}</td><td>{{ previewEnergy(slot, heater.id).toFixed(2) }}</td><td>{{ previewCapacity(slot, heater.id).toFixed(1) }}</td><td>{{ previewSoc(slot, heater.id).toFixed(1) }}</td></tr> }
+                    @for (slot of previewWindowSlots(preview); track $index) { <tr><th scope="row">{{ previewSlotLabel(slot) }}</th><td>{{ previewPower(slot, heater.id, heater.power_w) }}</td><td>{{ previewEnergy(slot, heater.id).toFixed(2) }}</td><td>{{ previewCapacity(slot, heater.id).toFixed(1) }}</td><td>{{ previewSoc(slot, heater.id).toFixed(1) }}</td></tr> }
                   </tbody></table></div>
                 </section>
               </mat-tab>
@@ -190,9 +199,11 @@ function recommendedPlanningAction(cause: string): string | null {
     .problem h3 { margin: 0 0 .75rem; font-size: 1rem; }
     .detail-chart-wrap { height: min(62vh, 34rem); min-height: 20rem; }
     .preview-detail-tabs { margin-top: .75rem; }
+    .preview-detail-tabs-hint { margin-top: 1.25rem; }
     .preview-detail-table { padding-top: .75rem; }
     .preview-detail-table h3 { margin: 0; font-size: 1rem; }
     .preview-detail-table table { min-width: 42rem; }
+    .preview-slot-summary table { min-width: 36rem; }
     .table-scroll { overflow-x: auto; margin-top: 1.25rem; }
     table { border-collapse: collapse; width: 100%; min-width: 30rem; }
     th, td { padding: .5rem .65rem; border-bottom: 1px solid var(--border); text-align: left; }
@@ -290,6 +301,18 @@ export class PlanningDetailDialog implements AfterViewInit, OnDestroy {
     return this.dateTime(String(slot['start'] ?? ''));
   }
 
+  previewSlotPower(slot: Record<string, unknown>): number {
+    return Number(slot['power_w'] ?? 0);
+  }
+
+  previewSlotHeaters(slot: Record<string, unknown>): string {
+    return Array.isArray(slot['heater_ids']) && slot['heater_ids'].length ? slot['heater_ids'].join(', ') : 'ninguno';
+  }
+
+  previewChargingSlots(result: PlanningPreviewDto): Array<Record<string, unknown>> {
+    return this.previewWindowSlots(result).filter((slot) => this.previewSlotPower(slot) > 0);
+  }
+
   previewWindowSlots(result: PlanningPreviewDto): Array<Record<string, unknown>> {
     const windowStart = Date.parse(result.window_start);
     const windowEnd = Date.parse(result.window_end);
@@ -305,8 +328,14 @@ export class PlanningDetailDialog implements AfterViewInit, OnDestroy {
     return typeof values?.[heaterId] === 'number' ? values[heaterId] : 0;
   }
 
-  previewPower(slot: Record<string, unknown>, heaterId: string): number {
-    return this.previewSlotMetric(slot, 'heater_power_w', heaterId);
+  previewPower(slot: Record<string, unknown>, heaterId: string, fallbackPowerW = 0): number {
+    const values = slot['heater_power_w'] as Record<string, number> | undefined;
+    const value = values?.[heaterId];
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    const heaterIds = slot['heater_ids'];
+    if (!Array.isArray(heaterIds) || !heaterIds.some((id) => String(id) === heaterId)) return 0;
+    if (fallbackPowerW > 0) return fallbackPowerW;
+    return heaterIds.length === 1 ? this.previewSlotPower(slot) : 0;
   }
 
   previewEnergy(slot: Record<string, unknown>, heaterId: string): number {
@@ -687,8 +716,14 @@ export class Planning implements AfterViewInit, OnDestroy {
     const values = slot[key] as Record<string, number> | undefined;
     return typeof values?.[heaterId] === 'number' ? values[heaterId] : 0;
   }
-  previewPower(slot: Record<string, unknown>, heaterId: string): number {
-    return this.previewSlotMetric(slot, 'heater_power_w', heaterId);
+  previewPower(slot: Record<string, unknown>, heaterId: string, fallbackPowerW = 0): number {
+    const values = slot['heater_power_w'] as Record<string, number> | undefined;
+    const value = values?.[heaterId];
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    const heaterIds = slot['heater_ids'];
+    if (!Array.isArray(heaterIds) || !heaterIds.some((id) => String(id) === heaterId)) return 0;
+    if (fallbackPowerW > 0) return fallbackPowerW;
+    return heaterIds.length === 1 ? this.previewSlotPower(slot) : 0;
   }
   previewEnergy(slot: Record<string, unknown>, heaterId: string): number {
     return this.previewSlotMetric(slot, 'energy_delivered_kwh', heaterId);
@@ -699,9 +734,10 @@ export class Planning implements AfterViewInit, OnDestroy {
   previewSoc(slot: Record<string, unknown>, heaterId: string): number {
     return this.previewSlotMetric(slot, 'stored_charge_percent', heaterId);
   }
-  previewChartPoint(slot: Record<string, unknown>, heaterId: string): PreviewChartPoint {
-    const power_w = this.previewPower(slot, heaterId);
+  previewChartPoint(slot: Record<string, unknown>, heaterId: string, fallbackPowerW = 0, index = 0): PreviewChartPoint {
+    const power_w = this.previewPower(slot, heaterId, fallbackPowerW);
     return {
+      x: index,
       y: this.kilowatts(power_w),
       power_w,
       energy_delivered_kwh: this.previewEnergy(slot, heaterId),
@@ -713,6 +749,27 @@ export class Planning implements AfterViewInit, OnDestroy {
     const demand = summary['demand_kwh_by_heater'] as Record<string, number> | undefined;
     if (!demand) return 'Sin resumen disponible.';
     return Object.entries(demand).map(([heater, value]) => `${heater}: ${Number(value).toFixed(2)} kWh`).join(' · ') || 'No se estima demanda.';
+  }
+
+  previewIntervalCount(result: PlanningPreviewDto): number {
+    return this.previewWindowSlots(result).length;
+  }
+
+  private previewChartHeaters(data: PlanningDto, slots: Array<Record<string, unknown>>): Array<{ id: string; name: string; power_w: number }> {
+    const configured = new Map(data.heaters.map((heater) => [heater.id, { id: heater.id, name: heater.name, power_w: heater.power_w }]));
+    const ids = new Set(configured.keys());
+    for (const slot of slots) {
+      if (Array.isArray(slot['heater_ids'])) {
+        for (const heaterId of slot['heater_ids']) ids.add(String(heaterId));
+      }
+      for (const key of ['heater_power_w', 'stored_charge_percent']) {
+        const values = slot[key];
+        if (values && typeof values === 'object' && !Array.isArray(values)) {
+          for (const heaterId of Object.keys(values)) ids.add(heaterId);
+        }
+      }
+    }
+    return [...ids].map((id) => configured.get(id) ?? { id, name: id, power_w: 0 });
   }
 
   displayTimeline(data: PlanningDto): PlanningTimelineSlotDto[] {
@@ -788,13 +845,14 @@ export class Planning implements AfterViewInit, OnDestroy {
         const slots = this.previewWindowSlots(preview);
         const fullLabels = slots.map((slot) => this.previewSlotLabel(slot));
         const colors = ['#2457a6', '#d46b28', '#3b8c68', '#8a4f9e', '#9b7a21'];
+        const previewHeaters = this.previewChartHeaters(data, slots);
         this.charts.push(new Chart(this.previewCanvas.nativeElement, {
           type: 'line',
           data: {
             labels: this.intervalLabels(fullLabels),
-            datasets: data.heaters.map((heater, index) => ({
+            datasets: previewHeaters.map((heater, index) => ({
               label: heater.name,
-              data: slots.map((slot) => this.previewChartPoint(slot, heater.id)),
+              data: slots.map((slot, slotIndex) => this.previewChartPoint(slot, heater.id, heater.power_w, slotIndex)),
               borderColor: colors[index % colors.length],
               backgroundColor: `${colors[index % colors.length]}22`,
               tension: 0.2,

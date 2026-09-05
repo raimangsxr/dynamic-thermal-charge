@@ -11,6 +11,7 @@ from dynamic_thermal_charge.charge_planning import (
     MilpChargePlanner,
     PLANNING_HORIZON_HOURS,
     PlanningInput,
+    input_token,
     materialize_constraints,
 )
 from dynamic_thermal_charge.models import ChargeConstraint, ChargeTelemetry, Heater, OutputConfig
@@ -36,13 +37,13 @@ def forecast(start=API_NOW, count=6, temperature=0):
     return tuple(HourlyForecastPoint(start + timedelta(hours=i), temperature) for i in range(count))
 
 
-def request(*, heaters=None, telemetry=None, constraints=(), points=None, start=API_NOW, limit=5200, hours=4):
+def request(*, heaters=None, telemetry=None, constraints=(), points=None, start=API_NOW, limit=5200, hours=4, slot_minutes=30):
     heaters = tuple(heaters or (heater(),))
     return PlanningInput(
         heaters=heaters,
         telemetry=({item.id: state(item.id) for item in heaters} if telemetry is None else telemetry),
         constraints=tuple(constraints), forecast=(forecast(start) if points is None else points),
-        horizon_start=start, horizon_hours=hours, slot_minutes=30,
+        horizon_start=start, horizon_hours=hours, slot_minutes=slot_minutes,
         max_total_power_w=limit, timezone_name="Europe/Madrid",
     )
 
@@ -71,7 +72,7 @@ def test_forecast_continuity_truncates_horizon_and_missing_or_fallback_is_invali
     assert MilpChargePlanner().build(PlanningInput(**{**request(points=points).__dict__, "forecast_automatic_eligible": False})).status == INVALID
 
 
-def test_planner_anchors_the_24_hour_horizon_at_recalculation_time():
+def test_planner_anchors_the_24_hour_horizon_at_next_slot():
     start = datetime(2026, 1, 16, 23, 45, tzinfo=timezone.utc)
     forecast = tuple(
         HourlyForecastPoint(datetime(2026, 1, 16, 23, tzinfo=timezone.utc) + timedelta(hours=index), 5)
@@ -85,7 +86,8 @@ def test_planner_anchors_the_24_hour_horizon_at_recalculation_time():
     ))
 
     assert result.status == FEASIBLE
-    assert result.horizon_start == datetime(2026, 1, 16, 23, 30, tzinfo=timezone.utc)
+    expected_start = datetime(2026, 1, 17, 0, 0, tzinfo=timezone.utc)
+    assert result.horizon_start == expected_start
     assert result.horizon_end == result.horizon_start + timedelta(hours=PLANNING_HORIZON_HOURS)
     assert len(result.slots) == 48
     assert result.slots[0].start == result.horizon_start
@@ -105,11 +107,76 @@ def test_planner_starts_at_first_available_forecast_hour_when_now_is_uncovered()
     assert starts == ()
 
 
+def test_planner_starts_at_next_slot_without_planning_the_past():
+    start = datetime(2026, 1, 16, 23, 25, tzinfo=timezone.utc)
+    points = tuple(
+        HourlyForecastPoint(
+            datetime(2026, 1, 16, 23, 0, tzinfo=timezone.utc) + timedelta(hours=index),
+            21,
+        )
+        for index in range(4)
+    )
+    result = MilpChargePlanner().build(request(
+        telemetry={"a": state(actual=21, target=21, soc=100, at=start)},
+        points=points,
+        start=start,
+        hours=1,
+        slot_minutes=15,
+    ))
+
+    assert result.status == FEASIBLE
+    assert result.horizon_start == datetime(2026, 1, 16, 23, 30, tzinfo=timezone.utc)
+    assert result.horizon_end == datetime(2026, 1, 17, 0, 30, tzinfo=timezone.utc)
+    assert len(result.slots) == 4
+    assert all(slot.start >= start for slot in result.slots)
+
+
+def test_input_token_uses_the_same_future_slot_alignment():
+    common_points = forecast(
+        datetime(2026, 1, 16, 23, 0, tzinfo=timezone.utc), 4, 21
+    )
+    before_boundary = request(
+        start=datetime(2026, 1, 16, 23, 25, tzinfo=timezone.utc),
+        points=common_points,
+        slot_minutes=15,
+    )
+    at_boundary = request(
+        start=datetime(2026, 1, 16, 23, 30, tzinfo=timezone.utc),
+        points=common_points,
+        slot_minutes=15,
+    )
+    after_boundary = request(
+        start=datetime(2026, 1, 16, 23, 30, 1, tzinfo=timezone.utc),
+        points=common_points,
+        slot_minutes=15,
+    )
+
+    assert input_token(before_boundary) == input_token(at_boundary)
+    assert input_token(before_boundary) != input_token(after_boundary)
+
+
 def test_constraints_materialize_weekdays_at_boundaries_including_horizon_end():
     start = datetime(2026, 1, 16, 0, 0, tzinfo=timezone.utc)
     rule = ChargeConstraint("a", .5, time(2, 0), weekdays=(4,))
     values = materialize_constraints((rule,), (heater(),), start, start + timedelta(hours=2), 30, "UTC")
     assert [(item.at, item.minimum_soc_percent) for item in values] == [(start + timedelta(hours=2), 50)]
+
+
+def test_exact_constraint_target_does_not_crash_cbc():
+    item = heater(power_w=2000, hours=2)
+    rule = ChargeConstraint("a", 1.0, time(4, 0), weekdays=(4,))
+    result = MilpChargePlanner().build(request(
+        heaters=(item,),
+        telemetry={"a": state(actual=21, target=21, soc=0)},
+        constraints=(rule,),
+        points=forecast(API_NOW, 4, 21),
+        start=API_NOW,
+        limit=2000,
+        hours=2,
+    ))
+
+    assert result.status == FEASIBLE
+    assert not result.violations
 
 
 def test_planner_accepts_zero_soc_respects_power_capacity_jit_and_is_deterministic():
@@ -141,6 +208,14 @@ def test_oversized_heater_is_reported_without_breaking_global_limit():
     assert result.status == DEGRADED
     assert any(item.requirement == "individual_power_limit" for item in result.violations)
     assert all(slot.power_w == 0 for slot in result.slots)
+
+
+def test_base_load_above_contract_remains_infeasible():
+    result = MilpChargePlanner().build(PlanningInput(**{
+        **request().__dict__,
+        "base_load_w": 6000,
+    }))
+    assert result.status == INVALID
 
 
 def test_planner_completes_within_solver_time_limit_with_full_seed_horizon():
@@ -219,6 +294,27 @@ def test_constraint_preview_shares_one_solver_time_budget(monkeypatch):
     assert result.status in {INVALID, DEGRADED}
 
 
+def test_solver_logs_phase_runtime_and_model_size(caplog):
+    import logging
+
+    caplog.set_level(logging.DEBUG, logger="dynamic_thermal_charge.charge_planning")
+    result = MilpChargePlanner().build(request(
+        telemetry={"a": state(soc=100)},
+        points=forecast(API_NOW, 8, 5),
+        hours=2,
+    ))
+
+    assert result.status in {FEASIBLE, DEGRADED}
+    assert "Automatic planning solver model built:" in caplog.text
+    assert "Automatic planning solver phase=1/4" in caplog.text
+    assert "duration_seconds=" in caplog.text
+    assert "total_elapsed_seconds=" in caplog.text
+    assert "budget_seconds=" in caplog.text
+    assert "variables=" in caplog.text
+    assert "constraints=" in caplog.text
+    assert "solver_total_elapsed_seconds=" in caplog.text
+
+
 def test_preview_uses_mqtt_fixed_telemetry_when_broker_disabled(client, initialised_store):
     system = client.get("/api/v1/system/configuration", headers=AUTH).json()
     client.patch(
@@ -255,7 +351,7 @@ def test_preview_uses_mqtt_fixed_telemetry_when_broker_disabled(client, initiali
 
 def test_preview_activation_persists_v1_snapshot(client, initialised_store, api_clock):
     config, revision = initialised_store.repository.current()
-    points = forecast(API_NOW, 24, 4)
+    points = forecast(API_NOW, 25, 4)
     record = SimpleNamespace(
         date=API_NOW.date(), average_temperature_c=4, minimum_temperature_c=4,
         maximum_temperature_c=4, source="aemet", location="test",
@@ -268,6 +364,7 @@ def test_preview_activation_persists_v1_snapshot(client, initialised_store, api_
     for item in config.heaters:
         for field, value in (("temperature_c", 21), ("target_temperature_c", 21), ("stored_charge_percent", 100)):
             initialised_store.planning.record_telemetry(item.id, field, value, API_NOW)
+    api_clock.advance(minutes=1)
     preview = client.post(
         "/api/v1/planning/preview", headers=AUTH,
         json={"constraints": [], "expected_revision": 1},
@@ -275,7 +372,7 @@ def test_preview_activation_persists_v1_snapshot(client, initialised_store, api_
     assert preview.status_code == 200, preview.text
     body = preview.json()
     assert body["status"] in {FEASIBLE, DEGRADED}
-    api_clock.advance(minutes=5)
+    api_clock.advance(minutes=4)
     activated = client.post(
         "/api/v1/planning/activate", headers=AUTH,
         json={"token": body["token"], "constraints": [], "expected_revision": 1},

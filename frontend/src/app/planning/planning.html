@@ -83,20 +83,19 @@
           @if (job.result; as result) {
             <div class="operator-result" data-testid="operator-summary"><strong>Resultado para el operador</strong><p>Ventana {{ dateTime(result.window_start) }}–{{ dateTime(result.window_end) }} · horizonte {{ dateTime(result.horizon_start) }}–{{ dateTime(result.horizon_end) }} · previsión AEMET usada: {{ result.operator_summary['forecast'] ? 'sí' : 'no disponible' }}</p><p>Carga prevista: {{ previewSummaryText(result.operator_summary) }}</p><p>{{ result.operator_summary['recommended_action'] }}</p></div>
             @if (result.constraints.length) { <div class="semantic-table chart-table" role="table" data-testid="constraint-markers" aria-label="Límites de carga por acumulador"><div role="row" class="semantic-row header"><span role="columnheader">Acumulador</span><span role="columnheader">Objetivo</span><span role="columnheader">Hora límite</span></div>@for (constraint of result.constraints; track $index) { <div role="row" class="semantic-row"><span role="cell">{{ constraint.heater_id }}</span><span role="cell">{{ constraint.target_charge * 100 }} %</span><span role="cell">{{ constraint.at_time }}</span></div> }</div> }
-            <div class="table-scroll" data-testid="preview-slots-table"><div class="semantic-table" role="table" aria-label="Intervalos con carga de la vista previa"><div role="row" class="semantic-row header"><span role="columnheader">Intervalo</span><span role="columnheader">Acumuladores</span><span role="columnheader">Potencia (W)</span></div>@for (slot of previewChargingSlots(result); track $index) { <div role="row" class="semantic-row"><span role="cell">{{ previewSlotLabel(slot) }}</span><span role="cell">{{ previewSlotHeaters(slot) }}</span><span role="cell">{{ previewSlotPower(slot) }}</span></div> }</div></div>
             @if (previewProblems(result).length) { <button type="button" class="secondary preview-problems-button" (click)="openPreviewProblems(result)" data-testid="preview-problems-button">Ver detalle de problemas ({{ previewProblems(result).length }})</button> }
-            <section class="preview-visualization card" data-testid="preview-visualization" aria-labelledby="preview-visualization-title">
+            <div class="preview-visualization" data-testid="preview-visualization">
               <div class="card-header"><h4 id="preview-visualization-title">Vista previa por acumulador</h4><button type="button" class="secondary" (click)="openPreviewChartDetails()" data-testid="preview-chart-detail-button">Ver detalle</button></div>
               <p class="hint">Potencia por intervalo; consulta energía, capacidad utilizada y SOC en cada punto.</p>
               <div class="chart-wrap"><canvas #previewChart aria-label="Gráfico de potencia, capacidad y SOC por acumulador"></canvas></div>
-            </section>
+            </div>
           }
         </section>
       }
       @if (preview(); as candidate) {
         <div class="preview" role="status">
           <strong>Vista previa: {{ candidate.status }}</strong>
-          · {{ candidate.slots.length }} intervalos de 30 minutos
+          · {{ previewIntervalCount(candidate) }} intervalos de {{ candidate.slot_minutes }} minutos
           @if (previewProblems(candidate).length) {
             <span class="warning"> · Problemas detectados: {{ previewProblems(candidate).length }}</span>
           }

@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 from dynamic_thermal_charge.charge_planning import (
     PLANNING_HORIZON_HOURS,
@@ -6,7 +7,9 @@ from dynamic_thermal_charge.charge_planning import (
     PlanningInput,
 )
 from dynamic_thermal_charge.models import ChargeTelemetry
+from dynamic_thermal_charge.persistence.history import SqlHistoryRecorder
 from dynamic_thermal_charge.weather import HourlyForecastPoint
+from tests.conftest import API_NOW, AUTH
 
 
 def test_planner_rejects_incomplete_24_hour_coverage_without_partial_slots():
@@ -108,3 +111,136 @@ def test_preview_job_with_legacy_result_remains_readable(client, initialised_sto
     body = response.json()
     assert body["result"]["window_start"] == body["result"]["horizon_start"]
     assert body["result"]["window_end"] == "2026-01-16T13:00:00Z"
+
+
+def _seed_valid_preview_inputs(initialised_store):
+    config, configuration_revision = initialised_store.repository.current()
+    points = tuple(
+        HourlyForecastPoint(API_NOW + timedelta(hours=index), 4.0)
+        for index in range(25)
+    )
+    SqlHistoryRecorder(
+        initialised_store.application_engine,
+        initialised_store.repository.installation_id(),
+        initialised_store.location,
+    ).record_forecast(SimpleNamespace(
+        date=API_NOW.date(), average_temperature_c=4.0,
+        minimum_temperature_c=4.0, maximum_temperature_c=4.0,
+        source="aemet", location="test", retrieved_at=API_NOW,
+        hourly_points=points,
+    ))
+    for heater in config.heaters:
+        for field, value in (
+            ("temperature_c", 21.0),
+            ("target_temperature_c", 21.0),
+            ("stored_charge_percent", 100.0),
+        ):
+            initialised_store.planning.record_telemetry(heater.id, field, value, API_NOW)
+    return configuration_revision, initialised_store.planning.site()["revision"]
+
+
+def _persist_preview_job(initialised_store, result, configuration_revision, constraints_revision):
+    from dynamic_thermal_charge.api.routes.planning import PREVIEW_STEP_NAMES
+
+    job_id = initialised_store.planning.create_preview_job(
+        [],
+        configuration_revision=configuration_revision,
+        constraints_revision=constraints_revision,
+        requested_at=API_NOW,
+        steps=PREVIEW_STEP_NAMES,
+    )
+    initialised_store.planning.finish_preview_job(
+        job_id,
+        status="completed",
+        result=result,
+    )
+    return job_id
+
+
+def test_activation_reuses_completed_preview_without_second_solver_call(
+    client, initialised_store, monkeypatch,
+):
+    configuration_revision, constraints_revision = _seed_valid_preview_inputs(initialised_store)
+    preview = client.post(
+        "/api/v1/planning/preview",
+        headers=AUTH,
+        json={"constraints": [], "expected_revision": constraints_revision},
+    )
+    assert preview.status_code == 200, preview.text
+    result = preview.json()
+    _persist_preview_job(
+        initialised_store, result, configuration_revision, constraints_revision,
+    )
+
+    import dynamic_thermal_charge.api.routes.planning as planning_route
+
+    calls = []
+
+    class FailingOptimizer:
+        def build(self, request):
+            calls.append(request)
+            raise AssertionError("activation should reuse the completed preview")
+
+    monkeypatch.setattr(planning_route, "DeterministicChargeOptimizer", FailingOptimizer)
+    activated = client.post(
+        "/api/v1/planning/activate",
+        headers=AUTH,
+        json={
+            "token": result["token"],
+            "constraints": [],
+            "expected_revision": constraints_revision,
+        },
+    )
+
+    assert activated.status_code == 200, activated.text
+    assert calls == []
+    assert activated.json()["token"] == result["token"]
+
+
+def test_changed_telemetry_cannot_activate_cached_preview(
+    client, initialised_store, monkeypatch,
+):
+    configuration_revision, constraints_revision = _seed_valid_preview_inputs(initialised_store)
+    preview = client.post(
+        "/api/v1/planning/preview",
+        headers=AUTH,
+        json={"constraints": [], "expected_revision": constraints_revision},
+    )
+    assert preview.status_code == 200, preview.text
+    result = preview.json()
+    _persist_preview_job(
+        initialised_store, result, configuration_revision, constraints_revision,
+    )
+    system = client.get("/api/v1/system/configuration", headers=AUTH).json()
+    changed = client.patch(
+        "/api/v1/system/configuration/mqtt",
+        headers=AUTH,
+        json={
+            "expected_revision": system["revision"],
+            "values": {"fixed_stored_charge_percent": 40.0},
+        },
+    )
+    assert changed.status_code == 200, changed.text
+
+    import dynamic_thermal_charge.api.routes.planning as planning_route
+
+    calls = []
+
+    class FailingOptimizer:
+        def build(self, request):
+            calls.append(request)
+            raise AssertionError("stale activation must be rejected before solving")
+
+    monkeypatch.setattr(planning_route, "DeterministicChargeOptimizer", FailingOptimizer)
+    activated = client.post(
+        "/api/v1/planning/activate",
+        headers=AUTH,
+        json={
+            "token": result["token"],
+            "constraints": [],
+            "expected_revision": constraints_revision,
+        },
+    )
+
+    assert activated.status_code >= 400
+    assert calls == []

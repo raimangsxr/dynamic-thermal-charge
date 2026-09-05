@@ -364,6 +364,28 @@ class SqlPlanningRepository:
                 ).order_by(preview_job.c.requested_at.desc()).limit(1)).scalar()
         return None if job_id is None else self.preview_job(str(job_id))
 
+    def latest_completed_preview_job(
+        self,
+        *,
+        configuration_revision: int,
+        constraints_revision: int,
+        constraints: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        """Return the newest durable preview matching the activation inputs."""
+        with store_errors(self._application_location):
+            with self._application.connect() as connection:
+                job_ids = connection.execute(select(preview_job.c.id).where(
+                    (preview_job.c.installation_id == self._installation_id)
+                    & (preview_job.c.configuration_revision == configuration_revision)
+                    & (preview_job.c.constraints_revision == constraints_revision)
+                    & (preview_job.c.status == "completed")
+                ).order_by(preview_job.c.requested_at.desc())).scalars().all()
+        for job_id in job_ids:
+            job = self.preview_job(str(job_id))
+            if job is not None and job["request"].get("constraints") == constraints:
+                return job
+        return None
+
     def mark_interrupted_preview_jobs(self) -> None:
         now = datetime.now(timezone.utc)
         with transaction(self._application, self._application_location) as connection:

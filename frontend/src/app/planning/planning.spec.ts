@@ -145,7 +145,7 @@ describe('Planning', () => {
     expect(chartState.configs[4].data.datasets[0].data).toEqual([6.25, 4.17]);
   });
 
-  it('renders one compact preview chart without detail tables in the page', async () => {
+  it('renders one compact preview chart and keeps preview tables in the detail dialog', async () => {
     backend.expectOne('/api/v1/planning').flush({ ...TWO_HEATER_PLANNING, preview_job: PREVIEW_JOB(PREVIEW) });
     await fixture.whenStable();
     fixture.detectChanges();
@@ -156,14 +156,17 @@ describe('Planning', () => {
       y: 2.8, power_w: 2800, energy_delivered_kwh: 1.4, capacity_percent: 7, soc_percent: 25,
     });
     expect(element.querySelector('[data-testid="preview-visualization"]')).not.toBeNull();
+    expect(element.querySelector('section[data-testid="preview-visualization"]')).toBeNull();
     expect(element.querySelector('[data-testid="charge-matrix"]')).toBeNull();
-    expect(element.querySelectorAll('[data-testid="preview-heater-table"]')).toHaveLength(0);
+    expect(element.querySelector('[data-testid="preview-slots-table"]')).toBeNull();
     expect(element.querySelectorAll('[data-testid="forecast-table"]')).toHaveLength(0);
+    expect(element.querySelector('.preview[role="status"]')?.textContent).toContain('2 intervalos de 30 minutos');
 
     const previewChart = chartState.configs.find((config) => config.data.datasets.length === 2);
     expect(previewChart).toBeDefined();
     expect(previewChart?.data.labels).toHaveLength(2);
     expect(previewChart?.data.datasets[0].data?.[0]).toMatchObject({
+      x: 0,
       power_w: 2800, energy_delivered_kwh: 1.4, capacity_percent: 7, soc_percent: 25,
     });
   });
@@ -251,13 +254,15 @@ describe('Planning', () => {
     open.mockRestore();
   });
 
-  it('opens preview detail tables in one tab per heater without a chart', async () => {
+  it('opens the interval summary and one detail table per heater without a chart', async () => {
     backend.expectOne('/api/v1/planning').flush({ ...TWO_HEATER_PLANNING, preview_job: PREVIEW_JOB(PREVIEW) });
     fixture.detectChanges();
     (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('[data-testid="preview-chart-detail-button"]')?.click();
     await fixture.whenStable();
 
     const dialog = document.querySelector('mat-dialog-container');
+    expect(dialog?.querySelector('[data-testid="preview-slots-detail-table"]')).not.toBeNull();
+    expect(dialog?.querySelectorAll('[data-testid="preview-slots-detail-table"] tbody tr')).toHaveLength(2);
     expect(dialog?.querySelector('[data-testid="preview-detail-tabs"]')).not.toBeNull();
     expect(dialog?.querySelectorAll('[role="tab"]')).toHaveLength(2);
     expect(dialog?.querySelectorAll('[data-testid="preview-detail-heater-table"]')).toHaveLength(1);

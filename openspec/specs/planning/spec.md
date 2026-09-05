@@ -32,6 +32,25 @@ al expirar el límite de tiempo será `DEGRADED` con la violación
 - **THEN** el controlador no publica un plan factible salvo que la solución se
   haya verificado, y en tal caso informa `solver_time_limit`
 
+### Requirement: Activación segura de previews completados
+
+La activación debe poder reutilizar un preview durable completado cuando el
+token de entrada vigente, las revisiones de configuración y constraints y el
+payload de constraints coinciden. En cualquier otro caso debe mantener la
+validación normal y nunca activar un resultado obsoleto o `INVALID`.
+
+#### Scenario: Activación inmediata de un preview válido
+
+- **WHEN** se activa un preview completado y todas sus entradas siguen
+  coincidiendo
+- **THEN** se persiste ese mismo plan sin ejecutar una segunda resolución
+
+#### Scenario: Entrada modificada después del preview
+
+- **WHEN** cambia la telemetría, previsión, configuración o constraints desde
+  que terminó el preview
+- **THEN** el token deja de coincidir y el resultado anterior no se activa
+
 ### Requirement: Límite de tiempo configurable del solver
 
 La configuración de planificación debe exponer y persistir
@@ -51,12 +70,13 @@ usar el valor vigente como presupuesto total compartido del solver.
 
 ### Requirement: Ventana y horizonte operativo
 
-La planificación automática y sus vistas previas deben comenzar en el slot
-actual, redondeado hacia abajo y sin segundos ni microsegundos. Deben cubrir
-exactamente el horizonte configurado, mientras que la ventana visible inicial
-comparte ese comienzo y usa su propia duración. Si falta cobertura AEMET
-horaria utilizable en cualquier parte del horizonte, el resultado es
-explícitamente no planificable y no contiene un plan parcial.
+La planificación automática y sus vistas previas deben comenzar en el primer
+límite de slot que no haya quedado atrás: el límite exacto se conserva y un
+instante intermedio se redondea hacia arriba, descartando segundos y
+microsegundos. Deben cubrir exactamente el horizonte configurado, mientras
+que la ventana visible inicial comparte ese comienzo y usa su propia duración.
+Si falta cobertura AEMET horaria utilizable en cualquier parte del horizonte,
+el resultado es explícitamente no planificable y no contiene un plan parcial.
 
 #### Scenario: Cobertura meteorológica incompleta
 
@@ -64,12 +84,12 @@ explícitamente no planificable y no contiene un plan parcial.
 - **THEN** la planificación devuelve `INVALID`, explica la falta de cobertura
   y no publica intervalos parciales
 
-#### Scenario: Ventana visible y horizonte completo
+#### Scenario: Ventana visible y horizonte completo desde el siguiente slot
 
 - **WHEN** el slot es de 15 minutos, el recálculo ocurre a las 12:10 y la
   ventana y el horizonte son de 12 y 24 horas
-- **THEN** ambos comienzan a las 12:00, la ventana termina a las 00:00 y el
-  horizonte termina a las 12:00 del día siguiente
+- **THEN** ambos comienzan a las 12:15, la ventana termina a las 00:15 y el
+  horizonte termina a las 12:15 del día siguiente
 
 ### Requirement: Vista previa durable y cancelable
 
