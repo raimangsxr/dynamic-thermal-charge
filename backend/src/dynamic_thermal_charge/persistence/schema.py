@@ -238,7 +238,7 @@ charge_planning_site = Table(
     Column("installation_id", Integer, ForeignKey("installation.id", ondelete="CASCADE"), primary_key=True),
     Column("revision", Integer, nullable=False, server_default="1"),
     Column("replan_minutes", Integer, nullable=False, server_default="30"),
-    Column("forecast_horizon_hours", Integer, nullable=False, server_default="48"),
+    Column("forecast_horizon_hours", Integer, nullable=False, server_default="24"),
     Column("aemet_query_hour", Integer, nullable=False, server_default="12"),
     Column("contracted_power_w", Integer, nullable=False, server_default="5200"),
     Column("max_heating_power_w", Integer, nullable=False, server_default="5200"),
@@ -415,6 +415,49 @@ automatic_plan_slot = Table(
     Column("demand_json", Text, nullable=False, server_default="{}"),
     Column("heater_power_json", Text, nullable=False, server_default="{}"),
     UniqueConstraint("plan_id", "slot_start", name="uq_automatic_plan_slot"),
+)
+
+preview_job = Table(
+    "preview_job",
+    application_metadata,
+    Column("id", String(36), primary_key=True),
+    Column("installation_id", Integer, nullable=False),
+    Column("configuration_revision", Integer, nullable=False),
+    Column("constraints_revision", Integer, nullable=False),
+    Column("request_json", Text, nullable=False),
+    Column("status", String(16), nullable=False),
+    Column("cancellation_requested", Boolean, nullable=False, server_default="0"),
+    Column("requested_at", DateTime, nullable=False),
+    Column("started_at", DateTime, nullable=True),
+    Column("finished_at", DateTime, nullable=True),
+    Column("result_json", Text, nullable=True),
+    Column("error_code", String(64), nullable=True),
+    Column("error_detail", String(512), nullable=True),
+    CheckConstraint(
+        "status IN ('queued', 'running', 'cancelling', 'completed', 'error', 'cancelled', 'interrupted')",
+        name="ck_preview_job_status",
+    ),
+    Index("ix_preview_job_installation_requested", "installation_id", "requested_at"),
+)
+
+preview_job_step = Table(
+    "preview_job_step",
+    application_metadata,
+    Column("id", Integer, primary_key=True),
+    Column("job_id", String(36), ForeignKey("preview_job.id", ondelete="CASCADE"), nullable=False),
+    Column("position", Integer, nullable=False),
+    Column("name", String(64), nullable=False),
+    Column("status", String(16), nullable=False, server_default="pending"),
+    Column("started_at", DateTime, nullable=True),
+    Column("finished_at", DateTime, nullable=True),
+    Column("detail", String(512), nullable=True),
+    UniqueConstraint("job_id", "name", name="uq_preview_job_step_name"),
+    UniqueConstraint("job_id", "position", name="uq_preview_job_step_position"),
+    CheckConstraint(
+        "status IN ('pending', 'running', 'completed', 'error', 'cancelled', 'skipped')",
+        name="ck_preview_job_step_status",
+    ),
+    Index("ix_preview_job_step_job_position", "job_id", "position"),
 )
 
 plan_audit = Table(
@@ -881,6 +924,10 @@ CONSTRAINT_FIELDS: dict[str, tuple[str, str]] = {
     "ck_relay_test_session_status": ("status", "the relay-test status is not recognised"),
     "ck_relay_test_output_power": ("power_w", "the relay-test output power must be positive"),
     "ck_relay_test_output_result": ("result", "the relay-test output result is not recognised"),
+    "ck_preview_job_status": ("status", "the preview job status is not recognised"),
+    "ck_preview_job_step_status": ("status", "the preview check status is not recognised"),
+    "uq_preview_job_step_name": ("name", "a preview job cannot repeat a check name"),
+    "uq_preview_job_step_position": ("position", "a preview job cannot repeat a check position"),
 }
 
 
@@ -898,6 +945,7 @@ RETAINED_TABLES: tuple[tuple[Table, str], ...] = (
     (forecast, "retrieved_at"),
     (forecast_cycle, "updated_at"),
     (automatic_plan, "created_at"),
+    (preview_job, "requested_at"),
     (plan_audit, "occurred_at"),
     (relay_test_event, "occurred_at"),
     (controller_log_event, "occurred_at"),
@@ -936,6 +984,8 @@ APPLICATION_TABLES = (
     automatic_plan,
     automatic_plan_slot,
     plan_audit,
+    preview_job,
+    preview_job_step,
     process_applied_revision,
     reconciled_event,
 )
@@ -949,6 +999,7 @@ HISTORY_TABLES = (
     automatic_plan,
     automatic_plan_slot,
     plan_audit,
+    preview_job,
     output_transition,
 )
 
@@ -989,6 +1040,7 @@ __all__ = [
     "automatic_plan",
     "automatic_plan_slot",
     "plan_audit",
+    "preview_job", "preview_job_step",
     "weather_config",
     "relay_test_control", "relay_test_session", "relay_test_output", "relay_test_event",
 ]

@@ -72,13 +72,26 @@
           <button type="button" class="secondary" (click)="removeConstraint(index)">Quitar</button>
         </div>
       }
-      <div class="constraint-actions"><button type="button" (click)="recalculate()">Recalcular vista previa</button><button type="button" class="secondary" (click)="refresh()">Descartar</button><button type="button" [disabled]="!preview()" (click)="activate()">Guardar y activar</button></div>
+      <div class="constraint-actions"><button type="button" (click)="recalculate()">Recalcular vista previa</button><button type="button" class="secondary" (click)="refresh()">Descartar</button><button type="button" [disabled]="!preview() || preview()?.status === 'INVALID'" (click)="activate()">Guardar y activar</button></div>
       @if (actionMessage()) { <p role="status">{{ actionMessage() }}</p> } @if (actionError()) { <p class="error" role="alert">{{ actionError() }}</p> }
+      @if (previewJob(); as job) {
+        <section class="preview-job" aria-labelledby="preview-job-title" data-testid="preview-job">
+          <div class="section-header"><div><h3 id="preview-job-title">Vista previa de 24 horas: {{ jobStatusText(job.status) }}</h3><p class="hint">Trabajo {{ job.job_id }} · se conserva al recargar esta pantalla.</p></div><button type="button" class="secondary" (click)="cancelPreview()" [disabled]="job.status !== 'queued' && job.status !== 'running'">Cancelar cálculo</button></div>
+          <ol class="checks" data-testid="preview-checks">
+            @for (check of job.checks; track check.name) { <li class="check" [attr.data-state]="check.status"><span>{{ checkText(check.name) }}</span><strong>{{ checkStatusText(check.status) }}</strong>@if (check.detail) { <small>{{ check.detail }}</small> }</li> }
+          </ol>
+          @if (job.result; as result) {
+            <div class="operator-result" data-testid="operator-summary"><strong>Resultado para el operador</strong><p>Ventana {{ dateTime(result.horizon_start) }}–{{ dateTime(result.horizon_end) }} · previsión AEMET usada: {{ result.operator_summary['forecast'] ? 'sí' : 'no disponible' }}</p><p>Carga prevista: {{ previewSummaryText(result.operator_summary) }}</p><p>{{ result.operator_summary['recommended_action'] }}</p></div>
+            @if (result.constraints.length) { <div class="semantic-table chart-table" role="table" data-testid="constraint-markers" aria-label="Límites de carga por acumulador"><div role="row" class="semantic-row header"><span role="columnheader">Acumulador</span><span role="columnheader">Objetivo</span><span role="columnheader">Hora límite</span></div>@for (constraint of result.constraints; track $index) { <div role="row" class="semantic-row"><span role="cell">{{ constraint.heater_id }}</span><span role="cell">{{ constraint.target_charge * 100 }} %</span><span role="cell">{{ constraint.at_time }}</span></div> }</div> }
+            <div class="table-scroll" data-testid="preview-slots-table"><div class="semantic-table" role="table" aria-label="Intervalos de la vista previa de 24 horas"><div role="row" class="semantic-row header"><span role="columnheader">Intervalo</span><span role="columnheader">Acumuladores</span><span role="columnheader">Potencia (W)</span></div>@for (slot of result.slots; track $index) { <div role="row" class="semantic-row"><span role="cell">{{ previewSlotLabel(slot) }}</span><span role="cell">{{ previewSlotHeaters(slot) }}</span><span role="cell">{{ previewSlotPower(slot) }}</span></div> }</div></div>
+            <div class="table-scroll" data-testid="charge-matrix"><div class="semantic-table" role="table" aria-label="Matriz de carga por acumulador e intervalo"><div role="row" class="semantic-row header"><span role="columnheader">Acumulador</span><span role="columnheader">Intervalos, potencia, energía y capacidad</span></div>@for (heater of data.heaters; track heater.id) { <div role="row" class="semantic-row"><span role="cell">{{ heater.name }}</span><span role="cell">@for (slot of result.slots; track $index) { {{ previewSlotLabel(slot) }}: {{ matrixCell(slot, heater.id) }}<br /> }</span></div> }</div></div>
+          }
+        </section>
+      }
       @if (preview(); as candidate) {
         <div class="preview" role="status">
-          <strong>Preview: {{ candidate.status }}</strong>
-          · {{ candidate.slots.length }} intervalos
-          · puntuación {{ candidate.score.join(' / ') }}
+          <strong>Vista previa: {{ candidate.status }}</strong>
+          · {{ candidate.slots.length }} intervalos de 30 minutos
           @if (candidate.deficits.length) {
             <span class="warning"> · Déficits detectados: {{ candidate.deficits.length }}</span>
           }
@@ -96,12 +109,11 @@
       <p class="empty" data-testid="planning-no-forecast">Sin previsión utilizable; las temperaturas no se rellenan con ceros.</p>
     }
 
-    @if (!data.plan) {
+    @if (!data.plan && !preview()) {
       <p class="empty" data-testid="planning-empty">No hay un plan actual ni próximo. No se inventan intervalos.</p>
     } @else {
-      <p class="window" data-testid="planning-window">
-        Ventana {{ dateTime(data.plan.window_start) }}–{{ dateTime(data.plan.window_end) }} · horizonte {{ dateTime(data.horizon_start) }}–{{ dateTime(data.horizon_end) }} · configuración rev. {{ data.plan.installation_revision }}
-      </p>
+      @if (data.plan; as plan) { <p class="window" data-testid="planning-window">Ventana {{ dateTime(plan.window_start) }}–{{ dateTime(plan.window_end) }} · horizonte {{ dateTime(data.horizon_start) }}–{{ dateTime(data.horizon_end) }} · configuración rev. {{ plan.installation_revision }}</p> }
+      @if (!data.plan && preview(); as candidate) { <p class="window" data-testid="planning-window">Vista previa · ventana {{ dateTime(candidate.horizon_start) }}–{{ dateTime(candidate.horizon_end) }} · 24 horas</p> }
       @if (hasUnmet(data)) {
         <div class="banner warn" role="alert" data-testid="planning-deficit">
           <strong>Carga no atendida</strong>
@@ -115,19 +127,23 @@
         <h2 id="temperature-title">Temperatura estimada por acumulador</h2>
         <p class="hint">Temperatura de estancia inferida del SOC planificado y previsión exterior por intervalo.</p>
         <div class="chart-wrap"><canvas #temperatureChart aria-label="Gráfico de temperatura estimada por acumulador y previsión exterior"></canvas></div>
+        <div class="semantic-table chart-table" role="table" data-testid="temperature-table" aria-label="Valores de temperatura por intervalo"><div role="row" class="semantic-row header"><span role="columnheader">Intervalo</span><span role="columnheader">Temperaturas (°C)</span></div>@for (slot of displayTimeline(data); track slot.start) { <div role="row" class="semantic-row"><span role="cell">{{ dateTime(slot.start) }}</span><span role="cell">{{ temperatureMap(slot.estimated_temperature_c_by_heater) }} · exterior {{ slot.temperature_c === null ? 'sin dato' : formatTemperature(slot.temperature_c) + ' °C' }}</span></div> }</div>
       </section>
       <section class="visualization card" data-testid="heater-card" aria-labelledby="heater-title">
         <h2 id="heater-title">Carga por acumulador</h2>
         <div class="chart-wrap"><canvas #heaterChart aria-label="Gráfico de carga por acumulador"></canvas></div>
+        <div class="semantic-table chart-table" role="table" data-testid="heater-table" aria-label="Potencia por acumulador"><div role="row" class="semantic-row header"><span role="columnheader">Intervalo</span><span role="columnheader">Potencia (W)</span></div>@for (slot of displayTimeline(data); track slot.start) { <div role="row" class="semantic-row"><span role="cell">{{ dateTime(slot.start) }}</span><span role="cell">{{ slot.total_power_w }}</span></div> }</div>
       </section>
       <section class="visualization card" data-testid="aggregate-card" aria-labelledby="aggregate-title">
         <h2 id="aggregate-title">Potencia agregada frente al límite</h2>
         <div class="chart-wrap"><canvas #aggregateChart aria-label="Gráfico de potencia agregada y límite"></canvas></div>
+        <div class="semantic-table chart-table" role="table" data-testid="aggregate-table" aria-label="Potencia total frente a límite"><div role="row" class="semantic-row header"><span role="columnheader">Intervalo</span><span role="columnheader">Total (W)</span><span role="columnheader">Carga base (W)</span><span role="columnheader">Límites (W)</span></div>@for (slot of displayTimeline(data); track slot.start) { <div role="row" class="semantic-row"><span role="cell">{{ dateTime(slot.start) }}</span><span role="cell">{{ slot.total_power_w }}</span><span role="cell">{{ data.base_load_w }}</span><span role="cell">{{ data.max_total_power_w }} / {{ data.max_heating_power_w }}</span></div> }</div>
       </section>
       <section class="visualization card" data-testid="cumulative-card" aria-labelledby="cumulative-title">
         <h2 id="cumulative-title">Carga acumulada por acumulador</h2>
         <p class="hint">Porcentaje de carga planificada al cierre de cada intervalo.</p>
         <div class="chart-wrap"><canvas #cumulativeChart aria-label="Gráfico de carga acumulada por acumulador"></canvas></div>
+        <div class="semantic-table chart-table" role="table" data-testid="cumulative-table" aria-label="SOC por acumulador"><div role="row" class="semantic-row header"><span role="columnheader">Intervalo</span><span role="columnheader">SOC (%)</span></div>@for (slot of displayTimeline(data); track slot.start) { <div role="row" class="semantic-row"><span role="cell">{{ dateTime(slot.start) }}</span><span role="cell">{{ slot.stored_charge_percent_by_heater | json }}</span></div> }</div>
       </section>
 
     }
@@ -136,6 +152,7 @@
       <h2 id="forecast-title">Previsión horaria</h2>
       @if (data.forecast?.hourly_points?.length) {
         <div class="chart-wrap"><canvas #forecastChart aria-label="Gráfico de previsión horaria de temperatura"></canvas></div>
+        <div class="semantic-table chart-table" role="table" data-testid="forecast-table" aria-label="Previsión horaria AEMET"><div role="row" class="semantic-row header"><span role="columnheader">Hora</span><span role="columnheader">Temperatura (°C)</span></div>@for (point of data.forecast.hourly_points; track point.timestamp) { <div role="row" class="semantic-row"><span role="cell">{{ dateTime(point.timestamp) }}</span><span role="cell">{{ formatTemperature(point.temperature_c) }} °C</span></div> }</div>
         <p class="next-forecast" data-testid="forecast-next-run">
           Próxima consulta automática a AEMET: {{ data.forecast_next_run_at ? dateTime(data.forecast_next_run_at) : 'no programada' }}
         </p>

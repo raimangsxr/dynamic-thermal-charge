@@ -22,6 +22,20 @@ fieldset { border: 0; padding: 0; display: flex; gap: .25rem; flex-wrap: wrap; }
 .constraint-actions { justify-content: flex-start; margin-top: .75rem; }
 .constraint-actions button:disabled { opacity: .5; cursor: not-allowed; }
 .preview { margin-top: .75rem; padding: .65rem; border-left: 4px solid var(--primary); }
+.preview-job { margin-top: 1rem; padding: 1rem; border: 1px solid var(--border); border-radius: .5rem; background: var(--surface); }
+.preview-job h3 { margin: 0 0 .35rem; font-size: 1rem; }
+.checks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; padding: 0; list-style: none; }
+.check { display: grid; grid-template-columns: 1fr auto; gap: .25rem .75rem; padding: .55rem; border: 1px solid var(--border); border-radius: .35rem; }
+.check strong { text-transform: capitalize; }
+.check small { grid-column: 1 / -1; color: var(--muted); }
+.check[data-state="error"], .check[data-state="cancelled"] { border-color: var(--danger); }
+.operator-result { margin-top: .75rem; padding: .75rem; background: #eef6ff; border-left: 4px solid var(--primary); }
+.operator-result p { margin: .35rem 0 0; }
+.semantic-table { display: grid; gap: 0; min-width: 36rem; }
+.chart-table { overflow-x: auto; margin-top: .75rem; border: 1px solid var(--border); border-radius: .4rem; }
+.semantic-row { display: grid; grid-template-columns: minmax(11rem, .8fr) minmax(16rem, 1fr) minmax(8rem, .5fr); gap: .75rem; padding: .45rem .65rem; border-bottom: 1px solid var(--border); }
+.semantic-row:last-child { border-bottom: 0; }
+.semantic-row.header { font-weight: 700; color: var(--muted); background: var(--surface); }
 .warning, .error { color: var(--danger); }
 .window { color: var(--muted); font-size: .9rem; }
 .hint { color: var(--muted); font-size: .9rem; margin: 0 0 .5rem; }
@@ -41,6 +55,7 @@ th, td { padding: .65rem .75rem; border-bottom: 1px solid var(--border); text-al
   .constraint-row { grid-template-columns: 1fr 1fr; }
   .constraint-row label { font-size: .85rem; }
   .constraint-row fieldset, .constraint-row button { grid-column: 1 / -1; }
+  .checks { grid-template-columns: 1fr; }
 }
 @media (max-width: 36rem) {
   .summary-list div { grid-template-columns: 1fr; gap: .1rem; }

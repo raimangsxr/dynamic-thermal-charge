@@ -27,6 +27,7 @@ import { Poller } from '../core/poll';
 import { OutputIndicator } from '../shared/output-indicator/output-indicator';
 import { formatAge, formatInstant } from '../shared/age/age';
 import { ControllerHealth } from './controller-health/controller-health';
+import { formatTemperature } from '../shared/temperature/temperature';
 
 @Component({
   selector: 'dtc-status',
@@ -103,6 +104,10 @@ export class Status {
 
   hours(minutes: number): string {
     return (minutes / 60).toFixed(1).replace('.0', '');
+  }
+
+  temperature(value: number | null | undefined): string {
+    return value === null || value === undefined ? 'sin dato' : `${formatTemperature(value)} °C`;
   }
 
   age(seconds: number | null): string {

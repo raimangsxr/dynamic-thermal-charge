@@ -17,8 +17,8 @@ from .topology import BootstrapCorruptError, BootstrapIncompatibleError
 from . import SchemaStatus, SchemaVersionError
 
 
-CONFIGURATION_SCHEMA_REVISION = 4
-APPLICATION_SCHEMA_REVISION = 3
+CONFIGURATION_SCHEMA_REVISION = 5
+APPLICATION_SCHEMA_REVISION = 4
 POSTGRES_CONFIGURATION_SCHEMA = "dtc_config"
 POSTGRES_APPLICATION_SCHEMA = "dtc_app"
 
@@ -195,6 +195,10 @@ def _upgrade_application_schema(engine: Engine, revision: int, expected: int) ->
                 if name not in columns:
                     connection.execute(text(f"ALTER TABLE automatic_plan_slot ADD COLUMN {name} TEXT NOT NULL DEFAULT '{{}}'"))
         revision = 3
+    if revision == 3 and expected >= 4:
+        from .schema import preview_job, preview_job_step
+        application_metadata.create_all(engine, tables=[preview_job, preview_job_step])
+        revision = 4
     if revision != expected:
         raise BootstrapIncompatibleError(
             f"application schema revision {revision} has no registered upgrade path to {expected}"
@@ -260,6 +264,10 @@ def _upgrade_configuration_schema(engine: Engine, revision: int, expected: int) 
                     text("ALTER TABLE charge_planning_site ADD COLUMN base_load_w INTEGER NOT NULL DEFAULT 0")
                 )
         revision = 4
+    if revision == 4 and expected >= 5:
+        with engine.begin() as connection:
+            connection.execute(text("UPDATE charge_planning_site SET forecast_horizon_hours = 24"))
+        revision = 5
     if revision != expected:
         raise BootstrapIncompatibleError(
             f"configuration schema revision {revision} has no registered upgrade path to {expected}"

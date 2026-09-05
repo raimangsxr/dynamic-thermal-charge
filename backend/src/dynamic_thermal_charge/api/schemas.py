@@ -14,6 +14,7 @@ decision.
 from __future__ import annotations
 
 from datetime import date, datetime, time
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -197,6 +198,9 @@ class PlanningResponse(BaseModel):
     forecast_last_attempt_at: datetime | None = None
     forecast_last_error: str | None = None
     forecast_next_run_at: datetime | None = None
+    preview_job: "PlanningPreviewJobResponse | None" = None
+    base_load_w: int = 0
+    max_heating_power_w: int = 0
 
 
 class WeatherRefreshResponse(BaseModel):
@@ -267,6 +271,29 @@ class PlanningPreviewResponse(BaseModel):
     explanations: list[dict] = Field(default_factory=list)
     demand: list[dict] = Field(default_factory=list)
     constraints: list[ChargeConstraintView] = Field(default_factory=list)
+    operator_summary: dict = Field(default_factory=dict)
+
+
+class PlanningCheckView(BaseModel):
+    name: str
+    status: str
+    detail: str | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+class PlanningPreviewJobResponse(BaseModel):
+    job_id: str
+    status: str
+    cancellation_requested: bool = False
+    requested_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    checks: list[PlanningCheckView] = Field(default_factory=list)
+    result: PlanningPreviewResponse | None = None
+    operator_summary: dict = Field(default_factory=dict)
+    error_code: str | None = None
+    error_detail: str | None = None
 
 
 class PlanningActivateRequest(BaseModel):
@@ -299,7 +326,7 @@ class HeaterChargeConfigRequest(BaseModel):
 class PlanningSiteConfigRequest(BaseModel):
     expected_revision: int
     replan_minutes: int = Field(gt=0)
-    forecast_horizon_hours: int = Field(gt=0, le=48)
+    forecast_horizon_hours: Literal[24] = 24
     aemet_query_hour: int = Field(ge=0, le=23)
     contracted_power_w: int = Field(gt=0)
     max_heating_power_w: int = Field(gt=0)
@@ -639,6 +666,9 @@ class ErrorResponse(BaseModel):
     heater_id: str | None = None
 
 
+PlanningResponse.model_rebuild()
+
+
 ERROR_RESPONSES: dict[int | str, dict] = {
     401: {"model": ErrorResponse, "description": "Missing or wrong credential"},
     404: {"model": ErrorResponse, "description": "Unknown field, heater or resource"},
@@ -672,6 +702,8 @@ __all__ = [
     "PlanPage",
     "PlanSummary",
     "PlanningForecastView",
+    "PlanningCheckView",
+    "PlanningPreviewJobResponse",
     "PlanningResponse",
     "WeatherRefreshResponse",
     "PlanningPlanView",

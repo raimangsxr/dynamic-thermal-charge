@@ -28,7 +28,7 @@ import type {
   StatusDto,
   PlanningDto,
   PlanningSiteConfigDto,
-  PlanningConstraintRequest, PlanningPreviewDto, AutomaticPlanAuditPage,
+  PlanningConstraintRequest, PlanningPreviewDto, PlanningPreviewJobDto, AutomaticPlanAuditPage,
   ControllerLogPageDto, ControllerLogLevel,
   TransitionHistoryDto,
   RelayTestStartDto, RelayTestViewDto,
@@ -64,7 +64,7 @@ export class Api {
     return this.http.get<PlanningSiteConfigDto>(`${BASE}/planning/config`);
   }
 
-  patchPlanningConfig(expectedRevision: number, values: Omit<PlanningSiteConfigDto, 'revision'>): Observable<PlanningSiteConfigDto> {
+  patchPlanningConfig(expectedRevision: number, values: Omit<PlanningSiteConfigDto, 'revision' | 'forecast_horizon_hours'>): Observable<PlanningSiteConfigDto> {
     return this.http.patch<PlanningSiteConfigDto>(`${BASE}/planning/config`, {
       expected_revision: expectedRevision,
       ...values,
@@ -73,6 +73,15 @@ export class Api {
 
   planningPreview(constraints: PlanningConstraintRequest[], expectedRevision?: number): Observable<PlanningPreviewDto> {
     return this.http.post<PlanningPreviewDto>(`${BASE}/planning/preview`, { constraints, expected_revision: expectedRevision });
+  }
+  planningPreviewJobStart(constraints: PlanningConstraintRequest[], expectedRevision?: number): Observable<PlanningPreviewJobDto> {
+    return this.http.post<PlanningPreviewJobDto>(`${BASE}/planning/preview/jobs`, { constraints, expected_revision: expectedRevision });
+  }
+  planningPreviewJob(jobId: string): Observable<PlanningPreviewJobDto> {
+    return this.http.get<PlanningPreviewJobDto>(`${BASE}/planning/preview/jobs/${encodeURIComponent(jobId)}`);
+  }
+  planningPreviewJobCancel(jobId: string): Observable<PlanningPreviewJobDto> {
+    return this.http.post<PlanningPreviewJobDto>(`${BASE}/planning/preview/jobs/${encodeURIComponent(jobId)}/cancel`, {});
   }
   planningActivate(token: string, constraints: PlanningConstraintRequest[], expectedRevision: number): Observable<PlanningPreviewDto> {
     return this.http.post<PlanningPreviewDto>(`${BASE}/planning/activate`, { token, constraints, expected_revision: expectedRevision });

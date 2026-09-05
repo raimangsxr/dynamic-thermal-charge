@@ -155,6 +155,7 @@ class MqttPlanningSimulator:
         charging = self._charging_state_provider()
         target_temperature_c = config.initial_temperature_c + 10.0
         published_heaters = 0
+        published_messages: list[str] = []
         for heater in self._heaters_provider():
             if not heater.enabled:
                 continue
@@ -174,16 +175,22 @@ class MqttPlanningSimulator:
                 topic_prefix=config.topic_prefix,
             )
             stored_charge = temperature_to_stored_charge_percent(current)
-            self._publish(temperature_topic, f"{current:.2f}")
-            self._publish(target_topic, f"{target_temperature_c:.2f}")
-            self._publish(stored_charge_topic, f"{stored_charge:.1f}")
+            messages = (
+                (temperature_topic, f"{current:.2f}"),
+                (target_topic, f"{target_temperature_c:.2f}"),
+                (stored_charge_topic, f"{stored_charge:.1f}"),
+            )
+            for topic, payload in messages:
+                self._publish(topic, payload)
+                published_messages.append(f"{topic}={payload}")
             published_heaters += 1
         self._last_advanced_at = now
         if published_heaters:
             logger.info(
-                "Published simulated telemetry for %d heater(s) on prefix %s",
+                "Published simulated telemetry for %d heater(s) on prefix %s: %s",
                 published_heaters,
                 config.topic_prefix,
+                ", ".join(published_messages),
             )
 
     def _publish(self, topic: str, payload: str) -> None:

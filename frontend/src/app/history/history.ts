@@ -23,6 +23,7 @@ import type {
 } from '../core/api.types';
 import { type Explained, UNREACHABLE, explain } from '../core/errors';
 import { formatInstant } from '../shared/age/age';
+import { formatTemperature } from '../shared/temperature/temperature';
 
 type Tab = 'plans' | 'forecasts' | 'transitions' | 'planning';
 
@@ -49,6 +50,10 @@ export class History {
 
   /** Heater ids present in the configuration, to flag the ones that are gone. */
   readonly configuredHeaters = signal<Set<string>>(new Set());
+
+  temperature(value: number | null | undefined): string {
+    return value === null || value === undefined ? '—' : `${formatTemperature(value)} °C`;
+  }
 
   readonly page = computed(() => {
     switch (this.tab()) {

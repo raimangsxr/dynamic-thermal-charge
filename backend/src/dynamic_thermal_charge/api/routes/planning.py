@@ -4,12 +4,20 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import logging
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 
 from fastapi import APIRouter, Depends, Request
 
 from ...persistence.bootstrap import Store
 from ...persistence.history import SqlStatusReader
-from ...charge_planning import DeterministicChargeOptimizer, PlanningInput, resolve_planning_telemetry
+from ...charge_planning import (
+    PLANNING_HORIZON_HOURS,
+    DeterministicChargeOptimizer,
+    PlanningCancelled,
+    PlanningInput,
+    resolve_planning_telemetry,
+)
 from ...models import ChargeConstraint, ChargeTelemetry
 from ...persistence import ConfigValidationError
 from ..dependencies import usable_store
@@ -34,11 +42,96 @@ from ..schemas import (
     HeaterChargeConfigRequest,
     PlanningSiteConfigRequest,
     PlanningSiteConfigResponse,
+    PlanningCheckView,
+    PlanningPreviewJobResponse,
 )
+from ..errors import not_found
 
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+PREVIEW_STEP_NAMES = (
+    "input_validation", "telemetry", "aemet_coverage", "demand_estimation",
+    "constraints", "resolution", "safety_validation", "operator_summary",
+)
+
+
+class PreviewJobRunner:
+    """One process-local worker for durable, cooperative preview jobs."""
+
+    def __init__(self, store_factory, clock) -> None:
+        self._store_factory = store_factory
+        self._clock = clock
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="preview-job")
+
+    def submit(self, job_id: str) -> None:
+        self._executor.submit(self._run, job_id)
+
+    def _run(self, job_id: str) -> None:
+        store = self._store_factory()
+        repository = store.planning
+        if not repository.start_preview_job(job_id):
+            return
+        try:
+            job = repository.preview_job(job_id)
+            if job is None:
+                return
+            if repository.preview_job_cancel_requested(job_id):
+                repository.finish_preview_job(job_id, status="cancelled", error_code="cancelled", error_detail="La cancelación se solicitó antes de iniciar el cálculo.")
+                return
+            site = repository.site()
+            config, configuration_revision = store.repository.current()
+            if configuration_revision != job["configuration_revision"] or site["revision"] != job["constraints_revision"]:
+                repository.finish_preview_job(job_id, status="error", error_code="stale_input", error_detail="La configuración o las constraints cambiaron antes de iniciar el cálculo.")
+                return
+            constraints = _parse_constraints([
+                ChargeConstraintRequest.model_validate(item)
+                for item in job["request"]["constraints"]
+            ])
+
+            def progress(step: str) -> None:
+                mapped = {
+                    "inputs": "input_validation", "coverage": "aemet_coverage",
+                    "telemetry": "telemetry", "demand": "demand_estimation",
+                    "constraints": "constraints", "safety": "safety_validation",
+                    "summary": "operator_summary",
+                }.get(step, "resolution" if step.startswith("solver_phase_") else None)
+                if mapped is not None:
+                    repository.update_preview_step(job_id, mapped, "running")
+
+            plan = _build_automatic_plan(
+                store, self._clock(), constraints, site,
+                progress_callback=progress,
+                cancellation_probe=lambda: repository.preview_job_cancel_requested(job_id),
+            )
+            payload = _preview_response(plan, constraints, site=site).model_dump(mode="json")
+            repository.finish_preview_job(job_id, status="completed", result=payload)
+            if plan.status == "INVALID" and plan.violations:
+                reason = plan.violations[0].reason.split(":", 1)[0]
+                failed_step = {
+                    "missing_aemet_coverage": "aemet_coverage",
+                    "forecast_not_eligible": "aemet_coverage",
+                    "missing_required_state": "telemetry",
+                    "invalid_configuration": "input_validation",
+                }.get(reason, "resolution" if reason.startswith("solver") else None)
+                if failed_step is not None:
+                    repository.update_preview_step(job_id, failed_step, "error", detail=reason)
+            logger.info("Planning preview job completed: job_id=%s status=%s", job_id, plan.status)
+        except PlanningCancelled:
+            repository.finish_preview_job(job_id, status="cancelled", error_code="cancelled", error_detail="La vista previa se canceló al finalizar la fase activa del solver.")
+            logger.info("Planning preview job cancelled: job_id=%s", job_id)
+        except Exception as exc:  # the durable job contains the operator-safe detail
+            logger.exception("Planning preview job failed: job_id=%s", job_id)
+            repository.finish_preview_job(job_id, status="error", error_code="preview_failed", error_detail=str(exc)[:512])
+
+
+def _job_runner(request: Request) -> PreviewJobRunner:
+    runner = getattr(request.app.state, "preview_job_runner", None)
+    if runner is None:
+        runner = PreviewJobRunner(request.app.state.store_factory, request.app.state.clock)
+        request.app.state.preview_job_runner = runner
+    return runner
 
 
 @router.get(
@@ -81,7 +174,7 @@ def get_planning(
             heaters=heaters,
             latest_forecast=latest_forecast,
             cycle_status=cycle_status,
-            horizon_hours=int(planning_site["forecast_horizon_hours"]),
+            horizon_hours=PLANNING_HORIZON_HOURS,
         )
         return _enrich(response, store, observed_at)
 
@@ -139,7 +232,7 @@ def get_planning(
         cursor = end
 
     horizon_start = plan_data["window_start"]
-    horizon_end = horizon_start + timedelta(hours=int(planning_site["forecast_horizon_hours"]))
+    horizon_end = horizon_start + timedelta(hours=PLANNING_HORIZON_HOURS)
     timeline = _build_timeline(
         config.heaters,
         power_by_id,
@@ -181,7 +274,51 @@ def preview_planning(
     constraints = _parse_constraints(request.constraints)
     plan = _build_automatic_plan(store, app_request.app.state.clock(), constraints, site)
     logger.info("Planning preview completed: status=%s violations=%d", plan.status, len(plan.violations))
-    return _preview_response(plan, constraints)
+    return _preview_response(plan, constraints, site=site)
+
+
+@router.post("/planning/preview/jobs", response_model=PlanningPreviewJobResponse, responses=ERROR_RESPONSES)
+def start_preview_job(
+    request: PlanningPreviewRequest,
+    app_request: Request,
+    store: Store = Depends(usable_store),
+) -> PlanningPreviewJobResponse:
+    site = store.planning.site()
+    if request.expected_revision is not None and request.expected_revision != site["revision"]:
+        raise ConfigValidationError("planning configuration changed; recalculate before saving")
+    constraints = _parse_constraints(request.constraints)
+    _validate_constraint_heaters(store, constraints)
+    _config, configuration_revision = store.repository.current()
+    job_id = store.planning.create_preview_job(
+        [item.model_dump() for item in request.constraints],
+        configuration_revision=configuration_revision,
+        constraints_revision=int(site["revision"]),
+        requested_at=app_request.app.state.clock(),
+        steps=PREVIEW_STEP_NAMES,
+    )
+    _job_runner(app_request).submit(job_id)
+    return _job_response(store.planning.preview_job(job_id))
+
+
+@router.get("/planning/preview/jobs/{job_id}", response_model=PlanningPreviewJobResponse, responses=ERROR_RESPONSES)
+def get_preview_job(job_id: str, store: Store = Depends(usable_store)) -> PlanningPreviewJobResponse:
+    job = store.planning.preview_job(job_id)
+    if job is None:
+        raise not_found("preview job does not exist", field="job_id")
+    return _job_response(job)
+
+
+@router.post("/planning/preview/jobs/{job_id}/cancel", response_model=PlanningPreviewJobResponse, responses=ERROR_RESPONSES)
+def cancel_preview_job(job_id: str, store: Store = Depends(usable_store)) -> PlanningPreviewJobResponse:
+    job = store.planning.request_preview_cancel(job_id)
+    if job is None:
+        raise not_found("preview job does not exist", field="job_id")
+    return _job_response(job)
+
+
+@router.delete("/planning/preview/jobs/{job_id}", response_model=PlanningPreviewJobResponse, responses=ERROR_RESPONSES, include_in_schema=False)
+def delete_preview_job(job_id: str, store: Store = Depends(usable_store)) -> PlanningPreviewJobResponse:
+    return cancel_preview_job(job_id, store)
 
 
 @router.post("/planning/activate", response_model=PlanningPreviewResponse, responses=ERROR_RESPONSES)
@@ -201,7 +338,7 @@ def activate_planning(
         raise ConfigValidationError("the plan is invalid and cannot be activated", field="planning")
     new_revision = store.planning.replace_constraints(constraints, request.expected_revision)
     store.planning.save_plan(plan, configuration_revision=store.repository.current()[1], constraints_revision=new_revision, reason="activated", active=True)
-    return _preview_response(plan, constraints)
+    return _preview_response(plan, constraints, site=site)
 
 
 @router.get(
@@ -337,6 +474,10 @@ def _enrich(response: PlanningResponse, store: Store, observed_at: datetime) -> 
     response.deficits = [] if active is None else [PlanningDeficitView(**item) for item in active["deficits"]]
     response.preview_token = None if active is None else active["input_token"]
     response.constraints_revision = planning.site()["revision"]
+    response.base_load_w = int(planning.site().get("base_load_w", 0))
+    response.max_heating_power_w = int(planning.site().get("max_heating_power_w", response.max_total_power_w))
+    latest_job = planning.latest_preview_job()
+    response.preview_job = _job_response(latest_job) if latest_job is not None else None
     return response
 
 
@@ -353,7 +494,15 @@ def _parse_constraints(items: list[ChargeConstraintRequest]) -> tuple[ChargeCons
     return tuple(result)
 
 
-def _build_automatic_plan(store: Store, observed_at: datetime, constraints: tuple[ChargeConstraint, ...], site: dict[str, int | float]):
+def _build_automatic_plan(
+    store: Store,
+    observed_at: datetime,
+    constraints: tuple[ChargeConstraint, ...],
+    site: dict[str, int | float],
+    *,
+    progress_callback=None,
+    cancellation_probe=None,
+):
     config, _revision = store.repository.current()
     known_heaters = {heater.id for heater in config.heaters}
     for constraint in constraints:
@@ -381,7 +530,7 @@ def _build_automatic_plan(store: Store, observed_at: datetime, constraints: tupl
         constraints=constraints,
         forecast=store.planning.latest_forecast(observed_at),
         horizon_start=observed_at,
-        horizon_hours=int(site["forecast_horizon_hours"]),
+        horizon_hours=PLANNING_HORIZON_HOURS,
         slot_minutes=config.site.slot_minutes,
         max_total_power_w=int(site["contracted_power_w"]),
         base_load_w=int(site.get("base_load_w", 0)),
@@ -392,23 +541,78 @@ def _build_automatic_plan(store: Store, observed_at: datetime, constraints: tupl
         forecast_automatic_eligible=(store.planning.latest_forecast_automatic_eligible() if hasattr(store.planning, "latest_forecast_automatic_eligible") else True),
         generated_at=observed_at,
         timezone_name=timezone_name,
+        progress_callback=progress_callback,
+        cancellation_probe=cancellation_probe,
     )
     return DeterministicChargeOptimizer().build(request)
 
 
-def _preview_response(plan, constraints) -> PlanningPreviewResponse:
+def _preview_response(plan, constraints, *, site: dict[str, int | float] | None = None) -> PlanningPreviewResponse:
     violations = [PlanningDeficitView(**item.__dict__, target_charge_percent=item.target_charge_percent, projected_charge_percent=item.projected_charge_percent, deficit_percent=item.deficit_percent) for item in plan.violations]
+    forecast_points = len({item.start for item in plan.demand}) or len(plan.slots)
+    warnings: dict[str, dict[str, Any]] = {}
+    for item in violations:
+        cause = item.reason.split(":", 1)[0]
+        warning = warnings.setdefault(cause, {"cause": cause, "count": 0, "recommended_action": _recommended_action(cause)})
+        warning["count"] += 1
+    capacity_by_heater = {item.heater_id: item.capacity_kwh for item in plan.explanations}
+    operator_summary = {
+        "window": {"start": plan.horizon_start, "end": plan.horizon_end, "hours": PLANNING_HORIZON_HOURS},
+        "forecast": {"source": "AEMET" if forecast_points else "no utilizable", "points_used": forecast_points},
+        "demand_kwh_by_heater": {heater_id: round(sum(item.demand_kwh for item in plan.demand if item.heater_id == heater_id), 6) for heater_id in sorted({item.heater_id for item in plan.demand})},
+        "constraints": {"count": len(constraints), "satisfied": not any(item.requirement == "minimum_soc" for item in violations)},
+        "warnings": list(warnings.values()),
+        "recommended_action": "Revisa los avisos agrupados y corrige la entrada indicada." if warnings else "No se requieren acciones adicionales.",
+        "power_limits": {
+            "contracted_w": None if site is None else int(site["contracted_power_w"]),
+            "base_load_w": 0 if site is None else int(site.get("base_load_w", 0)),
+            "heating_w": None if site is None else int(site["max_heating_power_w"]),
+        },
+    }
     return PlanningPreviewResponse(
         token=plan.input_token, status=plan.status, score=list(plan.score),
         horizon_start=plan.horizon_start, horizon_end=plan.horizon_end,
         slot_minutes=plan.slot_minutes,
-        slots=[{"start": item.start, "end": item.end, "heater_ids": list(item.heater_ids), "power_w": item.power_w, "stored_charge_percent": item.stored_charge_percent, "initial_soc_percent": item.initial_soc_percent, "demand_kwh": item.demand_kwh, "heater_power_w": item.heater_power_w, "required_charge_percent": item.required_charge_percent, "outdoor_temperature_c": item.outdoor_temperature_c} for item in plan.slots],
+        slots=[{"start": item.start, "end": item.end, "heater_ids": list(item.heater_ids), "power_w": item.power_w, "stored_charge_percent": item.stored_charge_percent, "initial_soc_percent": item.initial_soc_percent, "demand_kwh": item.demand_kwh, "heater_power_w": item.heater_power_w, "required_charge_percent": item.required_charge_percent, "outdoor_temperature_c": item.outdoor_temperature_c, "energy_delivered_kwh": {heater_id: round(power / 1000 * (item.end - item.start).total_seconds() / 3600, 6) for heater_id, power in (item.heater_power_w or {}).items() if power > 0}, "capacity_percent_by_heater": {heater_id: round((power / 1000 * (item.end - item.start).total_seconds() / 3600) / capacity * 100, 6) for heater_id, power in (item.heater_power_w or {}).items() if power > 0 and (capacity := capacity_by_heater.get(heater_id, 0)) > 0}} for item in plan.slots],
         deficits=violations,
         violations=violations,
         explanations=[item.__dict__ for item in plan.explanations],
         demand=[item.__dict__ for item in plan.demand],
         constraints=[ChargeConstraintView(id=item.id, heater_id=item.heater_id, target_charge=item.target_charge, at_time=item.at.strftime("%H:%M"), weekdays=list(item.weekdays)) for item in constraints],
+        operator_summary=operator_summary,
     )
+
+
+def _recommended_action(reason: str) -> str:
+    if reason == "missing_aemet_coverage":
+        return "Espera una previsión AEMET horaria completa de 24 horas o revisa la conexión meteorológica."
+    if reason == "missing_required_state":
+        return "Comprueba que cada acumulador publica temperatura, consigna y carga reciente."
+    if reason in {"insufficient_capacity_or_power", "insufficient_stored_energy_or_power"}:
+        return "Revisa potencia disponible, capacidad y el objetivo de carga."
+    if reason.startswith("solver"):
+        return "Revisa la configuración del optimizador o contacta con soporte."
+    return "Revisa la entrada indicada y vuelve a calcular."
+
+
+def _job_response(job: dict[str, Any] | None) -> PlanningPreviewJobResponse:
+    if job is None:
+        raise not_found("preview job does not exist", field="job_id")
+    result = None if job["result"] is None else PlanningPreviewResponse.model_validate(job["result"])
+    return PlanningPreviewJobResponse(
+        job_id=job["id"], status=job["status"], cancellation_requested=job["cancellation_requested"],
+        requested_at=job["requested_at"], started_at=job["started_at"], finished_at=job["finished_at"],
+        checks=[PlanningCheckView(**item) for item in job["steps"]], result=result,
+        operator_summary={} if result is None else result.operator_summary,
+        error_code=job["error_code"], error_detail=job["error_detail"],
+    )
+
+
+def _validate_constraint_heaters(store: Store, constraints: tuple[ChargeConstraint, ...]) -> None:
+    known_heaters = {heater.id for heater in store.repository.current()[0].heaters}
+    for constraint in constraints:
+        if constraint.heater_id not in known_heaters:
+            raise ConfigValidationError("heater does not exist", field="heater_id", heater_id=constraint.heater_id)
 
 
 def _ordered_plan_slots(slots: list[PlanningSlotView]) -> list[dict]:

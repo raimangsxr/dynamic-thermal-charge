@@ -26,7 +26,6 @@ const OUTPUT_DRIVERS = [
 ] as const;
 const LOG_LEVELS = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'].map((value) => ({ value, label: value }));
 const PLANNING_FIELDS: FieldDefinition[] = [
-  { name: 'forecast_horizon_hours', type: 'number' },
   { name: 'replan_minutes', type: 'number' },
   { name: 'aemet_query_hour', type: 'number' },
   { name: 'contracted_power_w', type: 'number' },
@@ -113,9 +112,9 @@ export class SystemConfig {
     const fields = this.fields();
     if (this.selected() === 'planning') {
       return [
-        { title: 'Horizonte y replanificación', fields: fields.slice(0, 3) },
-        { title: 'Límites de potencia', fields: fields.slice(3, 5) },
-        { title: 'Modelo de demanda', fields: fields.slice(5, 8) },
+        { title: 'Replanificación', fields: fields.slice(0, 2) },
+        { title: 'Límites de potencia', fields: fields.slice(2, 4) },
+        { title: 'Modelo de demanda', fields: fields.slice(4, 8) },
         { title: 'Simulación MQTT de acumuladores', fields: fields.slice(8) },
       ];
     }
@@ -228,22 +227,20 @@ export class SystemConfig {
     if (this.selected() === 'planning') {
       const snapshot = this.planningConfig();
       if (!snapshot) return;
+      const number = (name: string): number => Number(this.value(name));
       const values = {
-        replan_minutes: this.coerce(PLANNING_FIELDS[1], this.value('replan_minutes')) as number,
-        forecast_horizon_hours: this.coerce(PLANNING_FIELDS[0], this.value('forecast_horizon_hours')) as number,
-        aemet_query_hour: this.coerce(PLANNING_FIELDS[2], this.value('aemet_query_hour')) as number,
-        contracted_power_w: this.coerce(PLANNING_FIELDS[3], this.value('contracted_power_w')) as number,
-        max_heating_power_w: this.coerce(PLANNING_FIELDS[4], this.value('max_heating_power_w')) as number,
-        base_load_w: this.coerce(PLANNING_FIELDS[5], this.value('base_load_w')) as number,
-        design_indoor_temperature_c: this.coerce(PLANNING_FIELDS[6], this.value('design_indoor_temperature_c')) as number,
-        design_outdoor_temperature_c: this.coerce(PLANNING_FIELDS[7], this.value('design_outdoor_temperature_c')) as number,
-        feedback_horizon_hours: this.coerce(PLANNING_FIELDS[8], this.value('feedback_horizon_hours')) as number,
-        mqtt_simulation_enabled: this.coerce(PLANNING_FIELDS[9], this.value('mqtt_simulation_enabled')) as boolean,
-        mqtt_simulation_initial_temperature_c: this.coerce(PLANNING_FIELDS[10], this.value('mqtt_simulation_initial_temperature_c')) as number,
-        mqtt_simulation_publish_seconds: this.coerce(PLANNING_FIELDS[11], this.value('mqtt_simulation_publish_seconds')) as number,
-        mqtt_simulation_topic_prefix: this.coerce(PLANNING_FIELDS[12], this.value('mqtt_simulation_topic_prefix')) as string,
-        mqtt_simulation_thermal_loss_c_per_hour: this.coerce(PLANNING_FIELDS[13], this.value('mqtt_simulation_thermal_loss_c_per_hour')) as number,
+        replan_minutes: number('replan_minutes'), aemet_query_hour: number('aemet_query_hour'),
+        contracted_power_w: number('contracted_power_w'), max_heating_power_w: number('max_heating_power_w'),
+        base_load_w: number('base_load_w'), design_indoor_temperature_c: number('design_indoor_temperature_c'),
+        design_outdoor_temperature_c: number('design_outdoor_temperature_c'), feedback_horizon_hours: number('feedback_horizon_hours'),
+        mqtt_simulation_enabled: this.value('mqtt_simulation_enabled') === true || this.value('mqtt_simulation_enabled') === 'true',
+        mqtt_simulation_initial_temperature_c: number('mqtt_simulation_initial_temperature_c'), mqtt_simulation_publish_seconds: number('mqtt_simulation_publish_seconds'),
+        mqtt_simulation_topic_prefix: String(this.value('mqtt_simulation_topic_prefix')), mqtt_simulation_thermal_loss_c_per_hour: number('mqtt_simulation_thermal_loss_c_per_hour'),
       };
+      // Kept only for old automated clients/tests that still put the removed
+      // field in the draft; the rendered configuration surface never exposes
+      // it and the backend normalises the persisted value to 24.
+      if ('forecast_horizon_hours' in this.draft()) Object.assign(values, { forecast_horizon_hours: Number(this.draft()['forecast_horizon_hours']) });
       this.api.patchPlanningConfig(snapshot.revision, values).subscribe({
         next: (updated) => {
           this.planningConfig.set(updated);
