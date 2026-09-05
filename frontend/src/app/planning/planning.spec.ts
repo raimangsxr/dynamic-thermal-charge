@@ -128,6 +128,10 @@ describe('Planning', () => {
     expect(element.querySelector('[aria-labelledby="aggregate-title"]')).not.toBeNull();
     expect(element.querySelector('[aria-labelledby="cumulative-title"]')).not.toBeNull();
     expect(element.querySelector('[data-testid="planning-deficit"]')?.textContent).toContain('Carga no atendida');
+    expect(element.querySelector('[data-testid="temperature-table"]')).toBeNull();
+    expect(element.querySelector('[data-testid="heater-table"]')).toBeNull();
+    expect(element.querySelector('[data-testid="aggregate-table"]')).toBeNull();
+    expect(element.querySelector('[data-testid="cumulative-table"]')).toBeNull();
     expect(element.querySelector('[data-testid="forecast-summary"]')).toBeNull();
     expect(element.querySelector('[data-testid="forecast-chart-card"]')).toBeNull();
     expect(element.querySelector('[data-testid="new-planning-tab"]')).toBeNull();
@@ -359,10 +363,68 @@ describe('Planning', () => {
     (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('[data-testid="preview-chart-detail-button"]')?.click();
 
     expect(open).toHaveBeenCalledTimes(6);
-    expect(open.mock.calls.slice(0, 5).every(([, config]) => (config as { data?: { kind?: string } }).data?.kind === 'chart')).toBe(true);
+    expect(open.mock.calls.slice(0, 4).every(([, config]) => (config as { data?: { kind?: string } }).data?.kind === 'planning-table')).toBe(true);
+    expect(open.mock.calls.slice(0, 4).every(([, config]) => (config as { width?: string; maxWidth?: string }).width === 'min(98vw, 192rem)' && (config as { maxWidth?: string }).maxWidth === '98vw')).toBe(true);
+    expect((open.mock.calls[0][1] as { data?: { table?: { headers: string[]; rows: string[][] } } }).data?.table).toMatchObject({
+      headers: ['Intervalo', 'Salón (°C)', 'Exterior (°C)'],
+      rows: [['16 ene 2026, 01:00', '18.5', '3.0'], ['16 ene 2026, 01:30', '18.2', '3.5']],
+    });
+    expect((open.mock.calls[1][1] as { data?: { table?: { headers: string[]; rows: string[][] } } }).data?.table?.headers).toEqual(['Intervalo', 'Salón (W)', 'Total (W)']);
+    expect((open.mock.calls[2][1] as { data?: { table?: { headers: string[] } } }).data?.table?.headers).toEqual(['Intervalo', 'Total (W)', 'Carga base (W)', 'Límite contratado (W)', 'Límite calefacción (W)']);
+    expect((open.mock.calls[3][1] as { data?: { table?: { headers: string[] } } }).data?.table?.headers).toEqual(['Intervalo', 'Salón (%)']);
+    expect((open.mock.calls[4][1] as { data?: { kind?: string } }).data?.kind).toBe('chart');
     expect((open.mock.calls[5][1] as { data?: { kind?: string } }).data?.kind).toBe('preview');
-    expect(open.mock.calls.slice(0, 5).map(([, config]) => (config as { data?: { chart?: { labels: string[] } } }).data?.chart?.labels.length)).toEqual([2, 2, 2, 2, 2]);
+    expect((open.mock.calls[4][1] as { data?: { chart?: { labels: string[] } } }).data?.chart?.labels.length).toBe(2);
     open.mockRestore();
+  });
+
+  it('renders each active graph detail as a compact table-only dialog', async () => {
+    backend.expectOne('/api/v1/planning').flush(PLANNING);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const element = fixture.nativeElement as HTMLElement;
+    const details = [
+      { testId: 'temperature-chart-detail-button', headers: ['Intervalo', 'Salón (°C)', 'Exterior (°C)'], values: ['18.5', '3.0'] },
+      { testId: 'heater-chart-detail-button', headers: ['Intervalo', 'Salón (W)', 'Total (W)'], values: ['2800', '2800'] },
+      { testId: 'aggregate-chart-detail-button', headers: ['Intervalo', 'Total (W)', 'Carga base (W)', 'Límite contratado (W)', 'Límite calefacción (W)'], values: ['2800', '600', '5200', '4200'] },
+      { testId: 'cumulative-chart-detail-button', headers: ['Intervalo', 'Salón (%)'], values: ['6.3 %'] },
+    ];
+
+    for (const detail of details) {
+      element.querySelector<HTMLButtonElement>(`[data-testid="${detail.testId}"]`)?.click();
+      await fixture.whenStable();
+      const dialog = document.querySelector('mat-dialog-container');
+      const table = dialog?.querySelector<HTMLTableElement>('[data-testid="planning-detail-table"]');
+      expect(table).not.toBeNull();
+      expect(Array.from(table?.querySelectorAll('thead th') ?? []).map((header) => header.textContent?.trim())).toEqual(detail.headers);
+      expect(table?.querySelectorAll('tbody tr')).toHaveLength(2);
+      expect(Array.from(table?.querySelectorAll('tbody tr:first-child td') ?? []).map((cell) => cell.textContent?.trim())).toEqual(detail.values);
+      expect(table?.querySelector('tbody th[scope="row"]')).not.toBeNull();
+      expect(dialog?.querySelectorAll('canvas')).toHaveLength(0);
+      document.querySelector<HTMLButtonElement>('[data-testid="detail-dialog-close"]')?.click();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  });
+
+  it('marks missing active temperature values as sin dato in the detail table', async () => {
+    const planningWithoutTemperature: PlanningDto = {
+      ...PLANNING,
+      timeline: PLANNING.timeline.map((slot, index) => index === 0 ? {
+        ...slot,
+        temperature_c: null,
+        estimated_temperature_c_by_heater: {},
+      } : slot),
+    };
+    backend.expectOne('/api/v1/planning').flush(planningWithoutTemperature);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('[data-testid="temperature-chart-detail-button"]')?.click();
+    await fixture.whenStable();
+
+    const table = document.querySelector<HTMLTableElement>('[data-testid="planning-detail-table"]');
+    expect(Array.from(table?.querySelectorAll('tbody tr:first-child td') ?? []).map((cell) => cell.textContent?.trim())).toEqual(['sin dato', 'sin dato']);
+    document.querySelector<HTMLButtonElement>('[data-testid="detail-dialog-close"]')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 100));
   });
 
   it('states explicitly when there is no plan instead of fabricating rows', () => {

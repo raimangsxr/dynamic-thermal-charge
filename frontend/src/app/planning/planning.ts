@@ -1,5 +1,4 @@
 import { HttpErrorResponse } from '@angular/common/http';
-import { JsonPipe } from '@angular/common';
 import { AfterViewInit, Component, ElementRef, Injector, OnDestroy, ViewChild, afterNextRender, inject, signal } from '@angular/core';
 import { MAT_DIALOG_DATA, MatDialog, MatDialogModule } from '@angular/material/dialog';
 import { MatButtonModule } from '@angular/material/button';
@@ -15,12 +14,20 @@ import { type Explained, UNREACHABLE, explain } from '../core/errors';
 import { formatTemperature, truncateTemperature } from '../shared/temperature/temperature';
 
 interface PlanningDetailDialogData {
-  kind: 'forecast' | 'planning' | 'failure' | 'problems' | 'preview' | 'chart';
+  kind: 'forecast' | 'planning' | 'failure' | 'problems' | 'preview' | 'planning-table' | 'chart';
   planning?: PlanningDto;
   check?: PlanningCheckDto;
   job?: PlanningPreviewJobDto;
   preview?: PlanningPreviewDto;
+  table?: PlanningTableDetail;
   chart?: ChartDetail;
+}
+
+interface PlanningTableDetail {
+  title: string;
+  ariaLabel: string;
+  headers: string[];
+  rows: string[][];
 }
 
 interface ChartDetailDataset {
@@ -86,7 +93,7 @@ function recommendedPlanningAction(cause: string): string | null {
   selector: 'dtc-planning-detail-dialog',
   imports: [MatButtonModule, MatDialogModule, MatTabsModule],
   template: `
-    <h2 mat-dialog-title>{{ data.kind === 'forecast' ? 'Detalle de la previsión' : data.kind === 'failure' ? 'Detalle del fallo de la vista previa' : data.kind === 'problems' ? 'Problemas de la vista previa' : data.kind === 'preview' ? 'Detalle de la vista previa' : data.kind === 'chart' ? data.chart?.title : 'Detalle de la planificación' }}</h2>
+    <h2 mat-dialog-title>{{ data.kind === 'forecast' ? 'Detalle de la previsión' : data.kind === 'failure' ? 'Detalle del fallo de la vista previa' : data.kind === 'problems' ? 'Problemas de la vista previa' : data.kind === 'preview' ? 'Detalle de la vista previa' : data.kind === 'planning-table' ? data.table?.title : data.kind === 'chart' ? data.chart?.title : 'Detalle de la planificación' }}</h2>
     <mat-dialog-content>
       @if (data.kind === 'failure') {
         <dl class="detail-list">
@@ -141,6 +148,14 @@ function recommendedPlanningAction(cause: string): string | null {
             <p>No hay acumuladores configurados.</p>
           }
         }
+      } @else if (data.kind === 'planning-table' && data.table; as table) {
+        <div class="table-scroll planning-detail-table-scroll" data-testid="planning-detail-table-scroll">
+          <table class="planning-detail-table" [attr.aria-label]="table.ariaLabel" data-testid="planning-detail-table">
+            <caption>{{ table.title }}</caption>
+            <thead><tr>@for (header of table.headers; track $index) { <th scope="col">{{ header }}</th> }</tr></thead>
+            <tbody>@for (row of table.rows; track $index) { <tr>@for (cell of row; track $index) { @if ($index === 0) { <th scope="row">{{ cell }}</th> } @else { <td>{{ cell }}</td> } }</tr> }</tbody>
+          </table>
+        </div>
       } @else if (data.kind === 'chart' && data.chart; as chart) {
         <div class="detail-chart-wrap"><canvas #detailChart [attr.aria-label]="chart.ariaLabel"></canvas></div>
       } @else if (data.kind === 'forecast' && data.planning?.forecast; as forecast) {
@@ -205,6 +220,12 @@ function recommendedPlanningAction(cause: string): string | null {
     .preview-detail-table table { min-width: 42rem; }
     .preview-slot-summary table { min-width: 36rem; }
     .table-scroll { overflow-x: auto; margin-top: 1.25rem; }
+    .planning-detail-table-scroll { max-height: min(70vh, 52rem); overflow: auto; margin-top: 0; }
+    .planning-detail-table { width: max-content; min-width: 100%; }
+    .planning-detail-table th, .planning-detail-table td { padding: .4rem .55rem; white-space: nowrap; }
+    .planning-detail-table thead th { position: sticky; top: 0; z-index: 2; background: var(--surface); }
+    .planning-detail-table tbody th { position: sticky; left: 0; z-index: 1; background: var(--surface); }
+    .planning-detail-table thead th:first-child { left: 0; z-index: 3; }
     table { border-collapse: collapse; width: 100%; min-width: 30rem; }
     th, td { padding: .5rem .65rem; border-bottom: 1px solid var(--border); text-align: left; }
     caption { text-align: left; padding: .5rem 0; font-weight: 600; }
@@ -361,7 +382,7 @@ export class PlanningDetailDialog implements AfterViewInit, OnDestroy {
 
 @Component({
   selector: 'dtc-planning',
-  imports: [FormsModule, JsonPipe, MatTabsModule],
+  imports: [FormsModule, MatTabsModule],
   templateUrl: './planning.html',
   styleUrl: './planning.css',
 })
@@ -502,10 +523,6 @@ export class Planning implements AfterViewInit, OnDestroy {
     return formatTemperature(value);
   }
 
-  temperatureMap(values: Record<string, number>): string {
-    return Object.entries(values).map(([heaterId, value]) => `${heaterId}: ${formatTemperature(value)} °C`).join(' · ');
-  }
-
   openForecastDetails(): void {
     const planning = this.snapshot();
     if (planning) this.dialog.open(PlanningDetailDialog, { width: 'min(92vw, 72rem)', data: { kind: 'forecast', planning }, ariaLabel: 'Detalle de la previsión', ariaModal: true });
@@ -553,31 +570,68 @@ export class Planning implements AfterViewInit, OnDestroy {
   }
 
   openTemperatureChartDetails(): void {
-    const chart = this.acceptedChart('Temperatura estimada por acumulador', 'Gráfico ampliado de temperatura estimada por acumulador y previsión exterior', '°C', (data, slots, colors) => [
-      ...data.heaters.map((heater, index) => ({ label: `${heater.name} estimada (°C)`, data: slots.map((slot) => slot.estimated_temperature_c_by_heater?.[heater.id] ?? null), borderColor: colors[index % colors.length], tension: 0.25 })),
-      { label: 'Previsión exterior (°C)', data: slots.map((slot) => slot.temperature_c), borderColor: '#6b7280', borderDash: [6, 4], tension: 0.25 },
-    ]);
-    if (chart) this.openChartDetails(chart);
+    const active = this.activeTimeline();
+    if (!active) return;
+    const { data, slots } = active;
+    this.openPlanningTableDetails({
+      title: 'Temperatura estimada por acumulador',
+      ariaLabel: 'Valores de temperatura estimada por acumulador y temperatura exterior por intervalo',
+      headers: ['Intervalo', ...data.heaters.map((heater) => `${heater.name} (°C)`), 'Exterior (°C)'],
+      rows: slots.map((slot) => [
+        this.slotLabel(slot),
+        ...data.heaters.map((heater) => this.formatTemperature(slot.estimated_temperature_c_by_heater?.[heater.id])),
+        this.formatTemperature(slot.temperature_c),
+      ]),
+    });
   }
 
   openHeaterChartDetails(): void {
-    const chart = this.acceptedChart('Carga por acumulador', 'Gráfico ampliado de carga por acumulador', 'kW', (data, slots, colors) => data.heaters.map((heater, index) => ({ label: heater.name, data: slots.map((slot) => slot.heater_ids.includes(heater.id) ? this.kilowatts(heater.power_w) : 0), backgroundColor: `${colors[index % colors.length]}cc` })));
-    if (chart) this.openChartDetails({ ...chart, type: 'bar' });
+    const active = this.activeTimeline();
+    if (!active) return;
+    const { data, slots } = active;
+    this.openPlanningTableDetails({
+      title: 'Carga por acumulador',
+      ariaLabel: 'Potencia por acumulador y potencia total por intervalo',
+      headers: ['Intervalo', ...data.heaters.map((heater) => `${heater.name} (W)`), 'Total (W)'],
+      rows: slots.map((slot, index) => [
+        this.slotLabel(slot),
+        ...data.heaters.map((heater) => this.powerValue(this.heaterActiveInSlot(data, index, heater.id) ? heater.power_w : 0)),
+        this.powerValue(this.aggregatePowerKw(data, index) * 1000),
+      ]),
+    });
   }
 
   openAggregateChartDetails(): void {
-    const chart = this.acceptedChart('Potencia agregada frente al límite', 'Gráfico ampliado de potencia agregada y límites', 'kW', (data, slots) => [
-      { label: 'Potencia agregada (kW)', data: slots.map((slot) => this.kilowatts(slot.total_power_w)), borderColor: '#2457a6' },
-      { label: 'Carga base (kW)', data: slots.map(() => this.kilowatts(data.base_load_w)), borderColor: '#6b7280', borderDash: [3, 3], pointRadius: 0 },
-      { label: 'Límite contratado (kW)', data: slots.map(() => this.kilowatts(data.max_total_power_w)), borderColor: '#b33a3a', pointRadius: 0 },
-      { label: 'Límite calefacción (kW)', data: slots.map(() => this.kilowatts(data.max_heating_power_w || data.max_total_power_w)), borderColor: '#d46b28', pointRadius: 0 },
-    ]);
-    if (chart) this.openChartDetails(chart);
+    const active = this.activeTimeline();
+    if (!active) return;
+    const { data, slots } = active;
+    this.openPlanningTableDetails({
+      title: 'Potencia agregada frente al límite',
+      ariaLabel: 'Potencia agregada, carga base y límites por intervalo',
+      headers: ['Intervalo', 'Total (W)', 'Carga base (W)', 'Límite contratado (W)', 'Límite calefacción (W)'],
+      rows: slots.map((slot, index) => [
+        this.slotLabel(slot),
+        this.powerValue(this.aggregatePowerKw(data, index) * 1000),
+        this.powerValue(data.base_load_w),
+        this.powerValue(data.max_total_power_w),
+        this.powerValue(data.max_heating_power_w || data.max_total_power_w),
+      ]),
+    });
   }
 
   openCumulativeChartDetails(): void {
-    const chart = this.acceptedChart('Carga acumulada por acumulador', 'Gráfico ampliado de carga acumulada por acumulador', 'Carga (%)', (data, slots, colors) => data.heaters.map((heater, index) => ({ label: `${heater.name} (%)`, data: slots.map((slot) => slot.stored_charge_percent_by_heater[heater.id]), borderColor: colors[index % colors.length], stepped: true })));
-    if (chart) this.openChartDetails(chart);
+    const active = this.activeTimeline();
+    if (!active) return;
+    const { data, slots } = active;
+    this.openPlanningTableDetails({
+      title: 'Carga acumulada por acumulador',
+      ariaLabel: 'Porcentaje de carga acumulada por acumulador y por intervalo',
+      headers: ['Intervalo', ...data.heaters.map((heater) => `${heater.name} (%)`)],
+      rows: slots.map((slot, index) => [
+        this.slotLabel(slot),
+        ...data.heaters.map((heater) => `${this.storedChargePercent(data, heater.id, index).toFixed(1)} %`),
+      ]),
+    });
   }
 
   openForecastChartDetails(): void {
@@ -593,16 +647,25 @@ export class Planning implements AfterViewInit, OnDestroy {
     });
   }
 
-  private acceptedChart(
-    title: string,
-    ariaLabel: string,
-    yAxisTitle: string,
-    datasets: (data: PlanningDto, slots: PlanningTimelineSlotDto[], colors: string[]) => ChartDetailDataset[],
-  ): ChartDetail | null {
+  private activeTimeline(): { data: PlanningDto; slots: PlanningTimelineSlotDto[] } | null {
     const data = this.snapshot();
     const slots = data ? this.displayTimeline(data) : [];
-    if (!data || !data.plan || !slots.length) return null;
-    return { title, ariaLabel, type: 'line', labels: slots.map((slot) => this.slotLabel(slot)), datasets: datasets(data, slots, ['#2457a6', '#d46b28', '#3b8c68', '#8a4f9e', '#9b7a21']), yAxisTitle };
+    if (!data?.plan || !slots.length) return null;
+    return { data, slots };
+  }
+
+  private powerValue(value: number): string {
+    return String(Math.round(value));
+  }
+
+  private openPlanningTableDetails(table: PlanningTableDetail): void {
+    this.dialog.open(PlanningDetailDialog, {
+      width: 'min(98vw, 192rem)',
+      maxWidth: '98vw',
+      data: { kind: 'planning-table', table },
+      ariaLabel: `Detalle tabular: ${table.title}`,
+      ariaModal: true,
+    });
   }
 
   private openChartDetails(chart: ChartDetail): void {

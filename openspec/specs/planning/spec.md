@@ -147,6 +147,28 @@ no debe perder la edición ni el trabajo de preview en curso.
 - **THEN** ve únicamente el ámbito correspondiente y puede volver al plan
   activo conservando el estado de edición y de preview
 
+### Requirement: Detalle tabular de la planificación activa
+
+La pestaña Planificación activa debe reservar sus tarjetas para las gráficas y
+ofrecer el detalle de cada una mediante su botón “Ver detalle”. Cada diálogo de
+detalle de gráfica debe mostrar únicamente una tabla accesible, con el intervalo
+como cabecera de fila y una columna por acumulador cuando aplique. El diálogo
+debe aprovechar el ancho disponible y limitar el scroll al contenedor de la tabla
+cuando el número de columnas lo requiera.
+
+#### Scenario: Consulta del detalle de una gráfica activa
+
+- **WHEN** el operador pulsa “Ver detalle” en una de las cuatro gráficas de
+  Planificación activa
+- **THEN** se abre un diálogo amplio con la tabla correspondiente, sin volver a
+  mostrar la gráfica ni añadir una tabla inline a la tarjeta
+
+#### Scenario: Datos ausentes en el detalle tabular
+
+- **WHEN** un intervalo no tiene un valor de temperatura utilizable
+- **THEN** la celda correspondiente muestra “sin dato” y conserva el resto de
+  columnas e intervalos consultables
+
 ### Requirement: Protección de salidas GPIO
 
 El controlador no debe arrancar salidas GPIO cuando MQTT está deshabilitado o
