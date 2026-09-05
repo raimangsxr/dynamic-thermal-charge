@@ -70,12 +70,13 @@ usar el valor vigente como presupuesto total compartido del solver.
 
 ### Requirement: Ventana y horizonte operativo
 
-La planificación automática y sus vistas previas deben comenzar en el slot
-actual, redondeado hacia abajo y sin segundos ni microsegundos. Deben cubrir
-exactamente el horizonte configurado, mientras que la ventana visible inicial
-comparte ese comienzo y usa su propia duración. Si falta cobertura AEMET
-horaria utilizable en cualquier parte del horizonte, el resultado es
-explícitamente no planificable y no contiene un plan parcial.
+La planificación automática y sus vistas previas deben comenzar en el primer
+límite de slot que no haya quedado atrás: el límite exacto se conserva y un
+instante intermedio se redondea hacia arriba, descartando segundos y
+microsegundos. Deben cubrir exactamente el horizonte configurado, mientras
+que la ventana visible inicial comparte ese comienzo y usa su propia duración.
+Si falta cobertura AEMET horaria utilizable en cualquier parte del horizonte,
+el resultado es explícitamente no planificable y no contiene un plan parcial.
 
 #### Scenario: Cobertura meteorológica incompleta
 
@@ -83,12 +84,12 @@ explícitamente no planificable y no contiene un plan parcial.
 - **THEN** la planificación devuelve `INVALID`, explica la falta de cobertura
   y no publica intervalos parciales
 
-#### Scenario: Ventana visible y horizonte completo
+#### Scenario: Ventana visible y horizonte completo desde el siguiente slot
 
 - **WHEN** el slot es de 15 minutos, el recálculo ocurre a las 12:10 y la
   ventana y el horizonte son de 12 y 24 horas
-- **THEN** ambos comienzan a las 12:00, la ventana termina a las 00:00 y el
-  horizonte termina a las 12:00 del día siguiente
+- **THEN** ambos comienzan a las 12:15, la ventana termina a las 00:15 y el
+  horizonte termina a las 12:15 del día siguiente
 
 ### Requirement: Vista previa durable y cancelable
 

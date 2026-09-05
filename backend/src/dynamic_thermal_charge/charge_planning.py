@@ -13,6 +13,7 @@ from typing import Callable, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
 from .models import ChargeConstraint, ChargeTelemetry, Heater
+from .scheduler import align_to_slot
 from .system_settings import MqttSystemSettings
 from .weather import HourlyForecastPoint
 
@@ -291,10 +292,10 @@ class MilpChargePlanner:
         )
         try:
             _validate_input(request)
-            # The rolling horizon starts at the current slot, never in the
-            # middle of one. This keeps automatic, preview and activation
-            # responses on the same deterministic slot boundary.
-            horizon_start = _floor_align(request.horizon_start, request.slot_minutes)
+            # The rolling horizon starts at the first slot boundary that has
+            # not passed yet. This keeps automatic, preview and activation
+            # responses executable without planning an already-started slot.
+            horizon_start = align_to_slot(request.horizon_start, request.slot_minutes)
         except (ValueError, ArithmeticError) as exc:
             return _invalid_plan(request, request.horizon_start, (), str(exc), "invalid_configuration", generated_at)
         _notify(request, "coverage")
@@ -572,12 +573,12 @@ class DeterministicChargeOptimizer(MilpChargePlanner):
 
 
 def input_token(request: PlanningInput) -> str:
-    # The calculation is anchored to the current slot. The token must use the
-    # same stable anchor so preview and activation remain compatible while the
-    # clock advances within that slot.
+    # The calculation is anchored to the next slot boundary. The token must
+    # use the same stable anchor so preview and activation remain compatible
+    # while the clock advances within that slot.
     token_horizon_start = request.horizon_start
     if request.slot_minutes > 0:
-        token_horizon_start = _floor_align(request.horizon_start, request.slot_minutes)
+        token_horizon_start = align_to_slot(request.horizon_start, request.slot_minutes)
     payload = {
         "heaters": [(h.id, h.power_w, h.full_charge_minutes, h.enabled, h.priority, h.demand_factor, h.reserve_percent) for h in request.heaters],
         "telemetry": {key: _json_telemetry(value) for key, value in sorted(request.telemetry.items())},
@@ -636,14 +637,6 @@ def _validate_input(request: PlanningInput) -> None:
     if request.feedback_horizon_hours <= 0:
         raise ValueError("feedback_horizon_hours must be positive")
     ZoneInfo(request.timezone_name)
-
-
-def _floor_align(value: datetime, minutes: int) -> datetime:
-    return value.replace(
-        second=0,
-        microsecond=0,
-        minute=(value.minute // minutes) * minutes,
-    )
 
 
 def _continuous_forecast_slots(start: datetime, forecast: Sequence[HourlyForecastPoint], horizon_hours: int, slot_minutes: int) -> tuple[datetime, ...]:
