@@ -32,6 +32,23 @@ al expirar el límite de tiempo será `DEGRADED` con la violación
 - **THEN** el controlador no publica un plan factible salvo que la solución se
   haya verificado, y en tal caso informa `solver_time_limit`
 
+### Requirement: Límite de tiempo configurable del solver
+
+La configuración de planificación debe exponer y persistir
+`solver_time_limit_seconds` como entero estrictamente positivo, con valor
+predeterminado de 120 segundos. La preview y la planificación automática deben
+usar el valor vigente como presupuesto total compartido del solver.
+
+#### Scenario: Configuración válida del límite del solver
+
+- **WHEN** se guarda un límite positivo y entero
+- **THEN** se persiste y se aplica a las previews y a la planificación automática
+
+#### Scenario: Configuración inválida del límite del solver
+
+- **WHEN** se intenta guardar cero, un valor negativo o un valor no entero
+- **THEN** la API rechaza el cambio y conserva el límite vigente
+
 ### Requirement: Ventana y horizonte operativo
 
 La planificación automática y sus vistas previas deben comenzar en el slot
@@ -66,6 +83,28 @@ un plan.
 - **WHEN** el operador solicita cancelar un trabajo en curso
 - **THEN** el trabajo muestra `cancelling`, termina de forma segura en un límite
   de fase y queda `cancelled` sin resultado activable
+
+### Requirement: Consulta compacta de la vista previa
+
+La vista previa debe representar únicamente su ventana visible con una
+visualización compacta de series por acumulador. Cada acumulador debe conservar
+una tabla accesible por intervalo con potencia, energía entregada, porcentaje
+de capacidad utilizado y SOC. Si existen déficits o violaciones, la vista
+previa debe ofrecer un diálogo accesible con el acumulador, requisito,
+momento, valores objetivo/proyectado/déficit, causa explicada y acción
+recomendada cuando exista; `deficits` tiene prioridad sobre `violations` como
+fuente de problemas.
+
+#### Scenario: Preview degradada con problemas
+
+- **WHEN** una vista previa `DEGRADED` contiene uno o más déficits o violaciones
+- **THEN** se muestra el botón de detalle y el diálogo enumera todos los
+  problemas con sus valores y explicación, sin limitarse al contador
+
+#### Scenario: Preview sin problemas
+
+- **WHEN** una vista previa `FEASIBLE` no contiene déficits ni violaciones
+- **THEN** no se muestra el botón de problemas
 
 ### Requirement: Protección de salidas GPIO
 

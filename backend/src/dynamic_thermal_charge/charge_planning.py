@@ -19,6 +19,8 @@ from .weather import HourlyForecastPoint
 FEASIBLE = "FEASIBLE"
 DEGRADED = "DEGRADED"
 INVALID = "INVALID"
+# Direct planner callers without persisted site settings retain the historical
+# short fallback. Application entry points always inject the persisted value.
 SOLVER_TIME_LIMIT_SECONDS = 30
 PLANNING_HORIZON_HOURS = 24
 
@@ -184,6 +186,7 @@ class PlanningInput:
     feedback_horizon_hours: float = 6.0
     max_heating_power_w: int | None = None
     forecast_automatic_eligible: bool = True
+    solver_time_limit_seconds: int | None = None
     generated_at: datetime | None = None
     exploration_limit: int = 100_000
     progress_callback: Callable[[str], None] | None = None
@@ -364,8 +367,9 @@ class MilpChargePlanner:
                 model += on[(h.id, i)] == 0
         for index, rule in enumerate(constraints):
             model += energy[(rule.heater_id, boundary_index[rule.at])] + c_short[index] >= _heater(heaters, rule.heater_id).capacity_kwh * rule.minimum_soc_percent / 100
-        solver = _cbc_solver(pulp, time_limit_seconds=SOLVER_TIME_LIMIT_SECONDS)
-        solver_deadline = monotonic() + SOLVER_TIME_LIMIT_SECONDS
+        solver_time_limit_seconds = request.solver_time_limit_seconds or SOLVER_TIME_LIMIT_SECONDS
+        solver = _cbc_solver(pulp, time_limit_seconds=solver_time_limit_seconds)
+        solver_deadline = monotonic() + solver_time_limit_seconds
         score: list[float] = []
         phases = []
         for priority in sorted({item.priority for item in constraints}, reverse=True):
@@ -536,6 +540,7 @@ def input_token(request: PlanningInput) -> str:
         "timezone_name": request.timezone_name, "design_indoor_temperature_c": request.design_indoor_temperature_c,
         "design_outdoor_temperature_c": request.design_outdoor_temperature_c, "feedback_horizon_hours": request.feedback_horizon_hours,
         "forecast_automatic_eligible": request.forecast_automatic_eligible,
+        "solver_time_limit_seconds": request.solver_time_limit_seconds or SOLVER_TIME_LIMIT_SECONDS,
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
@@ -559,6 +564,12 @@ def _validate_input(request: PlanningInput) -> None:
         raise ValueError("slot_minutes must be a positive divisor of one hour")
     if request.horizon_hours <= 0 or request.horizon_hours > 48:
         raise ValueError("horizon_hours must be between 1 and 48")
+    if request.solver_time_limit_seconds is not None and (
+        isinstance(request.solver_time_limit_seconds, bool)
+        or not isinstance(request.solver_time_limit_seconds, int)
+        or request.solver_time_limit_seconds <= 0
+    ):
+        raise ValueError("solver_time_limit_seconds must be a positive integer")
     if request.max_total_power_w <= 0 or request.base_load_w < 0 or (request.max_heating_power_w is not None and request.max_heating_power_w <= 0):
         raise ValueError("power limits must be positive")
     if request.design_indoor_temperature_c <= request.design_outdoor_temperature_c:

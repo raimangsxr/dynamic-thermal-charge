@@ -57,7 +57,9 @@ export class Poller {
 
   start(intervalSeconds: number = DEFAULT_INTERVAL_SECONDS): void {
     this.intervalSeconds = clampInterval(intervalSeconds);
-    this.stopListening = this.host.onVisibilityChange(() => this.onVisibility());
+    if (this.stopListening === null) {
+      this.stopListening = this.host.onVisibilityChange(() => this.onVisibility());
+    }
     if (!this.host.isHidden()) {
       this.resume();
     }

@@ -44,7 +44,7 @@
                     @for (option of field.options ?? []; track option.value) { <option [value]="option.value">{{ option.label }}</option> }
                   </select>
                 } @else {
-                  <input [id]="field.name" [name]="field.name" [type]="field.type" [ngModel]="value(field.name)" (ngModelChange)="edit(field.name, $event)" [disabled]="!writable()" />
+                  <input [id]="field.name" [name]="field.name" [type]="field.type" [attr.min]="field.name === 'solver_time_limit_seconds' ? 1 : null" [attr.step]="field.name === 'solver_time_limit_seconds' ? 1 : null" [ngModel]="value(field.name)" (ngModelChange)="edit(field.name, $event)" [disabled]="!writable()" />
                 }
               }
             </div>

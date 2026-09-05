@@ -16,7 +16,7 @@ class FakeHost implements PollHost {
   hidden = false;
   intervalMs: number | null = null;
   private handler: (() => void) | null = null;
-  private listener: (() => void) | null = null;
+  private listeners = new Set<() => void>();
   removed = false;
 
   setInterval(handler: () => void, ms: number): unknown {
@@ -35,10 +35,8 @@ class FakeHost implements PollHost {
   }
 
   onVisibilityChange(listener: () => void): () => void {
-    this.listener = listener;
-    return () => {
-      this.removed = true;
-    };
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); this.removed = true; };
   }
 
   fireTick(): void {
@@ -47,7 +45,7 @@ class FakeHost implements PollHost {
 
   setHidden(hidden: boolean): void {
     this.hidden = hidden;
-    this.listener?.();
+    for (const listener of this.listeners) listener();
   }
 
   get scheduled(): boolean {
@@ -140,5 +138,18 @@ describe('Poller', () => {
     instance.start();
     host.setHidden(false); // a spurious visibility event while visible
     expect(host.intervalMs).toBe(DEFAULT_INTERVAL_SECONDS * 1000);
+  });
+
+  it('registers only one visibility listener when started repeatedly', () => {
+    const { host, ticks, poller: instance } = poller();
+    instance.start(2);
+    instance.start(2);
+    instance.start(2);
+
+    host.setHidden(true);
+    const before = ticks.length;
+    host.setHidden(false);
+
+    expect(ticks.length).toBe(before + 1);
   });
 });

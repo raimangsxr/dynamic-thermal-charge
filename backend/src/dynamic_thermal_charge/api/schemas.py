@@ -329,6 +329,7 @@ class PlanningSiteConfigRequest(BaseModel):
     replan_minutes: int = Field(gt=0)
     planning_window_hours: StrictInt = Field(gt=0, le=48, default=12)
     forecast_horizon_hours: StrictInt = Field(gt=0, le=48)
+    solver_time_limit_seconds: StrictInt = Field(gt=0, default=120)
     aemet_query_hour: int = Field(ge=0, le=23)
     contracted_power_w: int = Field(gt=0)
     max_heating_power_w: int = Field(gt=0)
@@ -360,6 +361,7 @@ class PlanningSiteConfigResponse(BaseModel):
     replan_minutes: int
     planning_window_hours: int
     forecast_horizon_hours: int
+    solver_time_limit_seconds: int
     aemet_query_hour: int
     contracted_power_w: int
     max_heating_power_w: int

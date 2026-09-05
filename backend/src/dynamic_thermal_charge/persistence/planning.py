@@ -60,6 +60,7 @@ class SqlPlanningRepository:
                 "replan_minutes": 30,
                 "planning_window_hours": 12,
                 "forecast_horizon_hours": 24,
+                "solver_time_limit_seconds": 120,
                 "aemet_query_hour": 12,
                 "contracted_power_w": 5200,
                 "max_heating_power_w": 5200,
@@ -78,6 +79,7 @@ class SqlPlanningRepository:
             "replan_minutes",
             "planning_window_hours",
             "forecast_horizon_hours",
+            "solver_time_limit_seconds",
             "aemet_query_hour",
             "contracted_power_w",
             "max_heating_power_w",
@@ -130,6 +132,7 @@ class SqlPlanningRepository:
             "replan_minutes",
             "planning_window_hours",
             "forecast_horizon_hours",
+            "solver_time_limit_seconds",
             "aemet_query_hour",
             "contracted_power_w",
             "max_heating_power_w",
@@ -148,7 +151,7 @@ class SqlPlanningRepository:
         allowed = {}
         for key, value in values.items():
             if key in integer_fields:
-                if key in {"planning_window_hours", "forecast_horizon_hours"} and (
+                if key in {"planning_window_hours", "forecast_horizon_hours", "solver_time_limit_seconds"} and (
                     isinstance(value, bool) or int(value) != float(value)
                 ):
                     raise ConfigValidationError(f"{key} must be an integer", field=key)
@@ -168,6 +171,8 @@ class SqlPlanningRepository:
             raise ConfigValidationError("forecast_horizon_hours must be between 1 and 48", field="forecast_horizon_hours")
         if window_hours > horizon_hours:
             raise ConfigValidationError("planning_window_hours must not exceed forecast_horizon_hours", field="planning_window_hours")
+        if int(combined["solver_time_limit_seconds"]) <= 0:
+            raise ConfigValidationError("solver_time_limit_seconds must be positive", field="solver_time_limit_seconds")
         if int(combined["contracted_power_w"]) <= 0 or int(combined["max_heating_power_w"]) <= 0:
             raise ConfigValidationError("power limits must be positive", field="contracted_power_w")
         if int(combined["base_load_w"]) < 0:

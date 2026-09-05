@@ -109,6 +109,8 @@ const SYSTEM: Record<string, Record<string, string>> = {
   planning: {
     replan_minutes:
       'Cadencia prevista de replanificación automática. Guardado en configuración; el runtime puede replanificar también al cambiar restricciones o forecast.',
+    solver_time_limit_seconds:
+      'Tiempo máximo total (segundos) que el optimizador puede dedicar a una planificación. Debe ser un entero positivo.',
     aemet_query_hour:
       'Hora local (0–23) preferida para la consulta diaria de previsión AEMET.',
     contracted_power_w:

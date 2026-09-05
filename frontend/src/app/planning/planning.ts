@@ -3,6 +3,7 @@ import { JsonPipe } from '@angular/common';
 import { AfterViewInit, Component, ElementRef, Injector, OnDestroy, ViewChild, afterNextRender, inject, signal } from '@angular/core';
 import { MAT_DIALOG_DATA, MatDialog, MatDialogModule } from '@angular/material/dialog';
 import { MatButtonModule } from '@angular/material/button';
+import { MatTabsModule } from '@angular/material/tabs';
 import { FormsModule } from '@angular/forms';
 import { Chart } from 'chart.js/auto';
 import type { ChartOptions, TooltipItem } from 'chart.js';
@@ -14,21 +15,77 @@ import { type Explained, UNREACHABLE, explain } from '../core/errors';
 import { formatTemperature, truncateTemperature } from '../shared/temperature/temperature';
 
 interface PlanningDetailDialogData {
-  kind: 'forecast' | 'planning' | 'failure';
+  kind: 'forecast' | 'planning' | 'failure' | 'problems' | 'preview' | 'chart';
   planning?: PlanningDto;
   check?: PlanningCheckDto;
   job?: PlanningPreviewJobDto;
+  preview?: PlanningPreviewDto;
+  chart?: ChartDetail;
+}
+
+interface ChartDetailDataset {
+  label: string;
+  data: unknown[];
+  borderColor?: string;
+  backgroundColor?: string;
+  borderDash?: number[];
+  pointRadius?: number;
+  tension?: number;
+  stepped?: boolean;
+}
+
+interface ChartDetail {
+  title: string;
+  ariaLabel: string;
+  type: 'line' | 'bar';
+  labels: string[];
+  datasets: ChartDetailDataset[];
+  yAxisTitle?: string;
 }
 
 interface ConstraintDraft extends Omit<PlanningConstraintRequest, 'target_charge'> {
   target_charge: number;
 }
 
+interface PreviewChartPoint {
+  y: number;
+  power_w: number;
+  energy_delivered_kwh: number;
+  capacity_percent: number;
+  soc_percent: number;
+}
+
+function previewProblems(preview: PlanningPreviewDto): PlanningDeficitDto[] {
+  return preview.deficits.length ? preview.deficits : preview.violations;
+}
+
+function explainPlanningDeficit(item: PlanningDeficitDto): string {
+  const detail = item.reason.includes(':') ? item.reason.split(':', 2)[1].trim() : item.reason;
+  if (item.reason.startsWith('forecast_not_eligible')) return 'La previsión activa no es de AEMET. La planificación automática solo usa forecast horario AEMET.';
+  if (item.reason.startsWith('missing_aemet_coverage')) return 'No hay cobertura horaria AEMET continua desde el inicio del horizonte planificado.';
+  if (item.reason.startsWith('missing_required_state')) return `Falta telemetría MQTT completa y reciente: ${detail}.`;
+  if (item.reason.startsWith('invalid_configuration')) return `Configuración o constraint inválida: ${detail}.`;
+  if (item.reason.startsWith('insufficient_capacity_or_power')) return 'No hay suficiente potencia o capacidad disponible para cumplir el objetivo de carga.';
+  if (item.reason.startsWith('insufficient_stored_energy_or_power')) return 'La energía almacenada o la potencia disponible no cubren la demanda prevista.';
+  if (item.reason.startsWith('heater_power_exceeds_global_limit')) return 'La potencia nominal del acumulador supera el límite disponible de calefacción.';
+  if (item.reason.startsWith('solver_time_limit')) return 'El optimizador alcanzó su límite de tiempo y entregó una solución degradada.';
+  if (item.reason.startsWith('solver_failure') || item.reason.startsWith('solver_unavailable')) return 'El optimizador no pudo resolver el plan; revisa la instalación o contacta soporte.';
+  return detail || item.reason;
+}
+
+function recommendedPlanningAction(cause: string): string | null {
+  if (cause === 'missing_aemet_coverage') return 'Espera una previsión AEMET horaria completa de 24 horas o revisa la conexión meteorológica.';
+  if (cause === 'missing_required_state') return 'Comprueba que cada acumulador publica temperatura, consigna y carga reciente.';
+  if (cause === 'insufficient_capacity_or_power' || cause === 'insufficient_stored_energy_or_power') return 'Revisa potencia disponible, capacidad y el objetivo de carga.';
+  if (cause.startsWith('solver')) return 'Revisa la configuración del optimizador o contacta con soporte.';
+  return null;
+}
+
 @Component({
   selector: 'dtc-planning-detail-dialog',
-  imports: [MatButtonModule, MatDialogModule],
+  imports: [MatButtonModule, MatDialogModule, MatTabsModule],
   template: `
-    <h2 mat-dialog-title>{{ data.kind === 'forecast' ? 'Detalle de la previsión' : data.kind === 'failure' ? 'Detalle del fallo de la vista previa' : 'Detalle de la planificación' }}</h2>
+    <h2 mat-dialog-title>{{ data.kind === 'forecast' ? 'Detalle de la previsión' : data.kind === 'failure' ? 'Detalle del fallo de la vista previa' : data.kind === 'problems' ? 'Problemas de la vista previa' : data.kind === 'preview' ? 'Detalle de la vista previa' : data.kind === 'chart' ? data.chart?.title : 'Detalle de la planificación' }}</h2>
     <mat-dialog-content>
       @if (data.kind === 'failure') {
         <dl class="detail-list">
@@ -37,6 +94,46 @@ interface ConstraintDraft extends Omit<PlanningConstraintRequest, 'target_charge
           <div><dt>Detalle</dt><dd>{{ data.check?.detail || 'No hay detalle adicional.' }}</dd></div>
           @if (data.job?.error_detail) { <div><dt>Error general</dt><dd>{{ data.job?.error_detail }}</dd></div> }
         </dl>
+      } @else if (data.kind === 'problems' && data.preview; as preview) {
+        <p data-testid="preview-problems-dialog-intro">Se encontraron {{ previewProblems(preview).length }} problemas en la ventana planificada.</p>
+        <div class="problem-list" data-testid="preview-problems-dialog">
+          @for (item of previewProblems(preview); track $index) {
+            <article class="problem" data-testid="preview-problem">
+              <h3>{{ item.requirement || 'Incumplimiento de planificación' }}</h3>
+              <dl class="detail-list">
+                <div><dt>Acumulador</dt><dd>{{ heaterText(item.heater_id, data.planning) }}</dd></div>
+                <div><dt>Momento</dt><dd>{{ dateTime(item.at) }}</dd></div>
+                <div><dt>Objetivo</dt><dd>{{ percentage(item.target_charge_percent) }}</dd></div>
+                <div><dt>Proyectado</dt><dd>{{ percentage(item.projected_charge_percent) }}</dd></div>
+                <div><dt>Déficit</dt><dd>{{ percentage(item.deficit_percent) }}</dd></div>
+                <div><dt>Causa</dt><dd>{{ problemExplanation(item) }}</dd></div>
+                @if (problemAction(item, preview); as action) { <div><dt>Acción recomendada</dt><dd>{{ action }}</dd></div> }
+              </dl>
+            </article>
+          }
+        </div>
+      } @else if (data.kind === 'preview' && data.preview; as preview) {
+        <p class="hint">Detalle por acumulador de la ventana planificada. Selecciona una pestaña para consultar sus intervalos.</p>
+        @if (data.planning; as planning) {
+          @if (planning.heaters.length) {
+            <mat-tab-group class="preview-detail-tabs" data-testid="preview-detail-tabs" animationDuration="0ms">
+              @for (heater of planning.heaters; track heater.id) {
+              <mat-tab [label]="heater.name">
+                <section class="preview-detail-table" data-testid="preview-detail-heater-table" [attr.aria-labelledby]="'preview-detail-heater-title-' + heater.id">
+                  <h3 [id]="'preview-detail-heater-title-' + heater.id">{{ heater.name }}</h3>
+                  <div class="table-scroll"><table [attr.aria-label]="'Detalle de planificación de ' + heater.name"><thead><tr><th scope="col">Intervalo</th><th scope="col">Potencia (W)</th><th scope="col">Energía (kWh)</th><th scope="col">Capacidad (%)</th><th scope="col">SOC (%)</th></tr></thead><tbody>
+                    @for (slot of previewWindowSlots(preview); track $index) { <tr><th scope="row">{{ previewSlotLabel(slot) }}</th><td>{{ previewPower(slot, heater.id) }}</td><td>{{ previewEnergy(slot, heater.id).toFixed(2) }}</td><td>{{ previewCapacity(slot, heater.id).toFixed(1) }}</td><td>{{ previewSoc(slot, heater.id).toFixed(1) }}</td></tr> }
+                  </tbody></table></div>
+                </section>
+              </mat-tab>
+              }
+            </mat-tab-group>
+          } @else {
+            <p>No hay acumuladores configurados.</p>
+          }
+        }
+      } @else if (data.kind === 'chart' && data.chart; as chart) {
+        <div class="detail-chart-wrap"><canvas #detailChart [attr.aria-label]="chart.ariaLabel"></canvas></div>
       } @else if (data.kind === 'forecast' && data.planning?.forecast; as forecast) {
         <dl class="detail-list">
           <div><dt>Origen</dt><dd>{{ sourceText(forecast.source) }}</dd></div>
@@ -88,6 +185,14 @@ interface ConstraintDraft extends Omit<PlanningConstraintRequest, 'target_charge
     .detail-list { display: grid; gap: .6rem; margin: 0; }
     .detail-list div { display: grid; grid-template-columns: minmax(9rem, .7fr) 1fr; gap: 1rem; }
     dt { color: var(--muted); font-weight: 600; } dd { margin: 0; }
+    .problem-list { display: grid; gap: 1rem; }
+    .problem { padding: .75rem; border: 1px solid var(--border); border-radius: .45rem; }
+    .problem h3 { margin: 0 0 .75rem; font-size: 1rem; }
+    .detail-chart-wrap { height: min(62vh, 34rem); min-height: 20rem; }
+    .preview-detail-tabs { margin-top: .75rem; }
+    .preview-detail-table { padding-top: .75rem; }
+    .preview-detail-table h3 { margin: 0; font-size: 1rem; }
+    .preview-detail-table table { min-width: 42rem; }
     .table-scroll { overflow-x: auto; margin-top: 1.25rem; }
     table { border-collapse: collapse; width: 100%; min-width: 30rem; }
     th, td { padding: .5rem .65rem; border-bottom: 1px solid var(--border); text-align: left; }
@@ -95,8 +200,61 @@ interface ConstraintDraft extends Omit<PlanningConstraintRequest, 'target_charge
     @media (max-width: 36rem) { .detail-list div { grid-template-columns: 1fr; gap: .1rem; } }
   `,
 })
-export class PlanningDetailDialog {
+export class PlanningDetailDialog implements AfterViewInit, OnDestroy {
   readonly data = inject<PlanningDetailDialogData>(MAT_DIALOG_DATA);
+  @ViewChild('detailChart') private detailCanvas?: ElementRef<HTMLCanvasElement>;
+  private detailChart?: Chart;
+
+  ngAfterViewInit(): void {
+    if (this.data.kind !== 'chart' || !this.data.chart || !this.detailCanvas) return;
+    try {
+      const chart = this.data.chart;
+      this.detailChart = new Chart(this.detailCanvas.nativeElement, {
+        type: chart.type,
+        data: { labels: chart.labels, datasets: chart.datasets },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: 'index', intersect: false },
+          plugins: { legend: { display: true } },
+          scales: { x: { ticks: { autoSkip: true, maxTicksLimit: 12 } }, y: { beginAtZero: true, ...(chart.yAxisTitle ? { title: { display: true, text: chart.yAxisTitle } } : {}) } },
+        } as never,
+      }) as unknown as Chart;
+    } catch {
+      // The dialog remains usable through its explicit close action if Canvas is unavailable.
+    }
+  }
+
+  ngOnDestroy(): void {
+    this.detailChart?.destroy();
+  }
+
+  previewProblems(preview: PlanningPreviewDto): PlanningDeficitDto[] {
+    return previewProblems(preview);
+  }
+
+  heaterText(heaterId: string | null, planning: PlanningDto | undefined): string {
+    if (!heaterId) return 'Instalación';
+    return planning?.heaters.find((heater) => heater.id === heaterId)?.name ?? heaterId;
+  }
+
+  percentage(value: number | null | undefined): string {
+    return value === null || value === undefined ? 'no disponible' : `${value.toFixed(1)} %`;
+  }
+
+  problemExplanation(item: PlanningDeficitDto): string {
+    return explainPlanningDeficit(item);
+  }
+
+  problemAction(item: PlanningDeficitDto, preview: PlanningPreviewDto): string | null {
+    const cause = item.reason.split(':', 1)[0];
+    const warnings = preview.operator_summary['warnings'];
+    if (Array.isArray(warnings)) {
+      const warning = warnings.find((value): value is Record<string, unknown> => typeof value === 'object' && value !== null && value['cause'] === cause);
+      if (typeof warning?.['recommended_action'] === 'string') return warning['recommended_action'];
+    }
+    return recommendedPlanningAction(cause);
+  }
 
   sourceText(source: string): string {
     return source === 'aemet' ? 'AEMET' : source === 'fallback' ? 'Fallback (última previsión válida)' : 'Simulación local';
@@ -126,6 +284,41 @@ export class PlanningDetailDialog {
     const minimum = forecast.minimum_temperature_c === null ? 'no disponible' : `${formatTemperature(forecast.minimum_temperature_c)} °C`;
     const maximum = forecast.maximum_temperature_c === null ? 'no disponible' : `${formatTemperature(forecast.maximum_temperature_c)} °C`;
     return `media ${formatTemperature(forecast.average_temperature_c)} °C · mínima ${minimum} · máxima ${maximum}`;
+  }
+
+  previewSlotLabel(slot: Record<string, unknown>): string {
+    return this.dateTime(String(slot['start'] ?? ''));
+  }
+
+  previewWindowSlots(result: PlanningPreviewDto): Array<Record<string, unknown>> {
+    const windowStart = Date.parse(result.window_start);
+    const windowEnd = Date.parse(result.window_end);
+    if (!Number.isFinite(windowStart) || !Number.isFinite(windowEnd)) return result.slots;
+    return result.slots.filter((slot) => {
+      const start = Date.parse(String(slot['start'] ?? ''));
+      return Number.isFinite(start) && start >= windowStart && start < windowEnd;
+    });
+  }
+
+  previewSlotMetric(slot: Record<string, unknown>, key: 'heater_power_w' | 'energy_delivered_kwh' | 'capacity_percent_by_heater' | 'stored_charge_percent', heaterId: string): number {
+    const values = slot[key] as Record<string, number> | undefined;
+    return typeof values?.[heaterId] === 'number' ? values[heaterId] : 0;
+  }
+
+  previewPower(slot: Record<string, unknown>, heaterId: string): number {
+    return this.previewSlotMetric(slot, 'heater_power_w', heaterId);
+  }
+
+  previewEnergy(slot: Record<string, unknown>, heaterId: string): number {
+    return this.previewSlotMetric(slot, 'energy_delivered_kwh', heaterId);
+  }
+
+  previewCapacity(slot: Record<string, unknown>, heaterId: string): number {
+    return this.previewSlotMetric(slot, 'capacity_percent_by_heater', heaterId);
+  }
+
+  previewSoc(slot: Record<string, unknown>, heaterId: string): number {
+    return this.previewSlotMetric(slot, 'stored_charge_percent', heaterId);
   }
 
   checkText(name: string): string {
@@ -161,9 +354,11 @@ export class Planning implements AfterViewInit, OnDestroy {
   @ViewChild('heaterChart') private heaterCanvas?: ElementRef<HTMLCanvasElement>;
   @ViewChild('aggregateChart') private aggregateCanvas?: ElementRef<HTMLCanvasElement>;
   @ViewChild('cumulativeChart') private cumulativeCanvas?: ElementRef<HTMLCanvasElement>;
+  @ViewChild('previewChart') private previewCanvas?: ElementRef<HTMLCanvasElement>;
   private charts: Chart[] = [];
   private readonly previewPoller = new Poller(() => this.pollPreviewJob());
   private readonly previewStorageKey = 'dtc.planning.preview-job';
+  private previewPollInFlight = false;
 
   constructor() {
     this.refresh();
@@ -303,6 +498,82 @@ export class Planning implements AfterViewInit, OnDestroy {
     });
   }
 
+  openPreviewProblems(preview: PlanningPreviewDto): void {
+    this.dialog.open(PlanningDetailDialog, {
+      width: 'min(92vw, 58rem)',
+      data: { kind: 'problems', planning: this.snapshot(), preview },
+      ariaLabel: 'Problemas de la vista previa', ariaModal: true,
+    });
+  }
+
+  openPreviewChartDetails(): void {
+    const planning = this.snapshot();
+    const preview = this.preview() ?? planning?.preview_job?.result;
+    if (!planning || !preview) return;
+    this.dialog.open(PlanningDetailDialog, {
+      width: 'min(96vw, 72rem)',
+      data: { kind: 'preview', planning, preview },
+      ariaLabel: 'Detalle de la vista previa por acumulador', ariaModal: true,
+    });
+  }
+
+  openTemperatureChartDetails(): void {
+    const chart = this.acceptedChart('Temperatura estimada por acumulador', 'Gráfico ampliado de temperatura estimada por acumulador y previsión exterior', '°C', (data, slots, colors) => [
+      ...data.heaters.map((heater, index) => ({ label: `${heater.name} estimada (°C)`, data: slots.map((slot) => slot.estimated_temperature_c_by_heater?.[heater.id] ?? null), borderColor: colors[index % colors.length], tension: 0.25 })),
+      { label: 'Previsión exterior (°C)', data: slots.map((slot) => slot.temperature_c), borderColor: '#6b7280', borderDash: [6, 4], tension: 0.25 },
+    ]);
+    if (chart) this.openChartDetails(chart);
+  }
+
+  openHeaterChartDetails(): void {
+    const chart = this.acceptedChart('Carga por acumulador', 'Gráfico ampliado de carga por acumulador', 'kW', (data, slots, colors) => data.heaters.map((heater, index) => ({ label: heater.name, data: slots.map((slot) => slot.heater_ids.includes(heater.id) ? this.kilowatts(heater.power_w) : 0), backgroundColor: `${colors[index % colors.length]}cc` })));
+    if (chart) this.openChartDetails({ ...chart, type: 'bar' });
+  }
+
+  openAggregateChartDetails(): void {
+    const chart = this.acceptedChart('Potencia agregada frente al límite', 'Gráfico ampliado de potencia agregada y límites', 'kW', (data, slots) => [
+      { label: 'Potencia agregada (kW)', data: slots.map((slot) => this.kilowatts(slot.total_power_w)), borderColor: '#2457a6' },
+      { label: 'Carga base (kW)', data: slots.map(() => this.kilowatts(data.base_load_w)), borderColor: '#6b7280', borderDash: [3, 3], pointRadius: 0 },
+      { label: 'Límite contratado (kW)', data: slots.map(() => this.kilowatts(data.max_total_power_w)), borderColor: '#b33a3a', pointRadius: 0 },
+      { label: 'Límite calefacción (kW)', data: slots.map(() => this.kilowatts(data.max_heating_power_w || data.max_total_power_w)), borderColor: '#d46b28', pointRadius: 0 },
+    ]);
+    if (chart) this.openChartDetails(chart);
+  }
+
+  openCumulativeChartDetails(): void {
+    const chart = this.acceptedChart('Carga acumulada por acumulador', 'Gráfico ampliado de carga acumulada por acumulador', 'Carga (%)', (data, slots, colors) => data.heaters.map((heater, index) => ({ label: `${heater.name} (%)`, data: slots.map((slot) => slot.stored_charge_percent_by_heater[heater.id]), borderColor: colors[index % colors.length], stepped: true })));
+    if (chart) this.openChartDetails(chart);
+  }
+
+  openForecastChartDetails(): void {
+    const data = this.snapshot();
+    const points = data?.forecast?.hourly_points;
+    if (!data || !points?.length) return;
+    this.openChartDetails({
+      title: 'Detalle de la previsión horaria',
+      ariaLabel: 'Gráfico ampliado de previsión horaria de temperatura',
+      type: 'line',
+      labels: points.map((point) => this.dateTime(point.timestamp)),
+      datasets: [{ label: 'Temperatura exterior (°C)', data: this.forecastTemperatures(points), borderColor: '#2457a6', backgroundColor: '#2457a622', tension: 0.25 }],
+    });
+  }
+
+  private acceptedChart(
+    title: string,
+    ariaLabel: string,
+    yAxisTitle: string,
+    datasets: (data: PlanningDto, slots: PlanningTimelineSlotDto[], colors: string[]) => ChartDetailDataset[],
+  ): ChartDetail | null {
+    const data = this.snapshot();
+    const slots = data ? this.displayTimeline(data) : [];
+    if (!data || !data.plan || !slots.length) return null;
+    return { title, ariaLabel, type: 'line', labels: slots.map((slot) => this.slotLabel(slot)), datasets: datasets(data, slots, ['#2457a6', '#d46b28', '#3b8c68', '#8a4f9e', '#9b7a21']), yAxisTitle };
+  }
+
+  private openChartDetails(chart: ChartDetail): void {
+    this.dialog.open(PlanningDetailDialog, { width: 'min(96vw, 96rem)', data: { kind: 'chart', chart }, ariaLabel: chart.title, ariaModal: true });
+  }
+
   intervalLabels(labels: string[]): string[] {
     return labels.map((label, index) => index % 5 === 0 ? label : '');
   }
@@ -328,23 +599,21 @@ export class Planning implements AfterViewInit, OnDestroy {
   }
 
   deficitExplanation(item: PlanningDeficitDto): string {
-    const detail = item.reason.includes(':') ? item.reason.split(':', 2)[1].trim() : item.reason;
-    if (item.reason.startsWith('forecast_not_eligible')) {
-      return 'La previsión activa no es de AEMET. La planificación automática solo usa forecast horario AEMET.';
+    return explainPlanningDeficit(item);
+  }
+
+  previewProblems(result: PlanningPreviewDto): PlanningDeficitDto[] {
+    return previewProblems(result);
+  }
+
+  previewProblemAction(item: PlanningDeficitDto, result: PlanningPreviewDto): string | null {
+    const cause = item.reason.split(':', 1)[0];
+    const warnings = result.operator_summary['warnings'];
+    if (Array.isArray(warnings)) {
+      const warning = warnings.find((value): value is Record<string, unknown> => typeof value === 'object' && value !== null && value['cause'] === cause);
+      if (typeof warning?.['recommended_action'] === 'string') return warning['recommended_action'];
     }
-    if (item.reason.startsWith('missing_aemet_coverage')) {
-      return 'No hay cobertura horaria AEMET continua desde el inicio del horizonte planificado.';
-    }
-    if (item.reason.startsWith('missing_required_state')) {
-      return `Falta telemetría MQTT completa y reciente: ${detail}.`;
-    }
-    if (item.reason.startsWith('invalid_configuration')) {
-      return `Configuración o constraint inválida: ${detail}.`;
-    }
-    if (item.reason.startsWith('solver_failure') || item.reason.startsWith('solver_unavailable')) {
-      return 'El optimizador no pudo resolver el plan; revisa la instalación o contacta soporte.';
-    }
-    return detail || item.reason;
+    return recommendedPlanningAction(cause);
   }
 
   cumulativeMinutes(data: PlanningDto, heaterId: string, throughSlot: number): number {
@@ -403,14 +672,42 @@ export class Planning implements AfterViewInit, OnDestroy {
   previewSlotPower(slot: Record<string, unknown>): number { return Number(slot['power_w'] ?? 0); }
   previewSlotHeaters(slot: Record<string, unknown>): string { return Array.isArray(slot['heater_ids']) && slot['heater_ids'].length ? slot['heater_ids'].join(', ') : 'ninguno'; }
   previewChargingSlots(result: PlanningPreviewDto): Array<Record<string, unknown>> {
-    return result.slots.filter((slot) => this.previewSlotPower(slot) > 0);
+    return this.previewWindowSlots(result).filter((slot) => this.previewSlotPower(slot) > 0);
   }
-  matrixCell(slot: Record<string, unknown>, heaterId: string): string {
-    const power = (slot['heater_power_w'] as Record<string, number> | undefined)?.[heaterId] ?? 0;
-    const energy = (slot['energy_delivered_kwh'] as Record<string, number> | undefined)?.[heaterId] ?? 0;
-    const capacity = (slot['capacity_percent_by_heater'] as Record<string, number> | undefined)?.[heaterId] ?? 0;
-    const soc = (slot['stored_charge_percent'] as Record<string, number> | undefined)?.[heaterId] ?? 0;
-    return `${power} W · ${energy.toFixed(2)} kWh · ${capacity.toFixed(1)} % capacidad · SOC ${soc.toFixed(1)} %`;
+  previewWindowSlots(result: PlanningPreviewDto): Array<Record<string, unknown>> {
+    const windowStart = Date.parse(result.window_start);
+    const windowEnd = Date.parse(result.window_end);
+    if (!Number.isFinite(windowStart) || !Number.isFinite(windowEnd)) return result.slots;
+    return result.slots.filter((slot) => {
+      const start = Date.parse(String(slot['start'] ?? ''));
+      return Number.isFinite(start) && start >= windowStart && start < windowEnd;
+    });
+  }
+  previewSlotMetric(slot: Record<string, unknown>, key: 'heater_power_w' | 'energy_delivered_kwh' | 'capacity_percent_by_heater' | 'stored_charge_percent', heaterId: string): number {
+    const values = slot[key] as Record<string, number> | undefined;
+    return typeof values?.[heaterId] === 'number' ? values[heaterId] : 0;
+  }
+  previewPower(slot: Record<string, unknown>, heaterId: string): number {
+    return this.previewSlotMetric(slot, 'heater_power_w', heaterId);
+  }
+  previewEnergy(slot: Record<string, unknown>, heaterId: string): number {
+    return this.previewSlotMetric(slot, 'energy_delivered_kwh', heaterId);
+  }
+  previewCapacity(slot: Record<string, unknown>, heaterId: string): number {
+    return this.previewSlotMetric(slot, 'capacity_percent_by_heater', heaterId);
+  }
+  previewSoc(slot: Record<string, unknown>, heaterId: string): number {
+    return this.previewSlotMetric(slot, 'stored_charge_percent', heaterId);
+  }
+  previewChartPoint(slot: Record<string, unknown>, heaterId: string): PreviewChartPoint {
+    const power_w = this.previewPower(slot, heaterId);
+    return {
+      y: this.kilowatts(power_w),
+      power_w,
+      energy_delivered_kwh: this.previewEnergy(slot, heaterId),
+      capacity_percent: this.previewCapacity(slot, heaterId),
+      soc_percent: this.previewSoc(slot, heaterId),
+    };
   }
   previewSummaryText(summary: Record<string, unknown>): string {
     const demand = summary['demand_kwh_by_heater'] as Record<string, number> | undefined;
@@ -425,7 +722,7 @@ export class Planning implements AfterViewInit, OnDestroy {
       temperature_c: slot.temperature_c === null ? null : truncateTemperature(slot.temperature_c),
       estimated_temperature_c_by_heater: Object.fromEntries(Object.entries(slot.estimated_temperature_c_by_heater).map(([id, value]) => [id, truncateTemperature(value)])),
     }));
-    return result.slots.map((slot) => {
+    return this.previewWindowSlots(result).map((slot) => {
       const soc = (slot['stored_charge_percent'] as Record<string, number> | undefined) ?? {};
       const indoor = (slot['indoor_temperature_c'] as Record<string, number> | undefined) ?? {};
       const heaters = Array.isArray(slot['heater_ids']) ? slot['heater_ids'] as string[] : [];
@@ -445,6 +742,7 @@ export class Planning implements AfterViewInit, OnDestroy {
       this.preview.set(job.result);
       this.previewPoller.stop();
       this.actionMessage.set(job.result.status === 'INVALID' ? 'La ventana no es planificable; revisa los avisos.' : 'Vista previa calculada. Todavía no modifica el plan activo.');
+      this.scheduleChartRender();
     } else if (['completed', 'error', 'cancelled', 'interrupted'].includes(job.status)) {
       this.previewPoller.stop();
     } else {
@@ -454,8 +752,13 @@ export class Planning implements AfterViewInit, OnDestroy {
 
   private pollPreviewJob(): void {
     const job = this.previewJob();
-    if (!job) return;
-    this.api.planningPreviewJob(job.job_id).subscribe({ next: (value) => this.acceptPreviewJob(value) });
+    if (!job || this.previewPollInFlight) return;
+    this.previewPollInFlight = true;
+    this.api.planningPreviewJob(job.job_id).subscribe({
+      next: (value) => this.acceptPreviewJob(value),
+      error: () => { this.previewPollInFlight = false; },
+      complete: () => { this.previewPollInFlight = false; },
+    });
   }
 
   private restorePreviewJob(): void {
@@ -481,8 +784,32 @@ export class Planning implements AfterViewInit, OnDestroy {
         }));
       }
       const preview = this.preview() ?? data.preview_job?.result;
+      if (preview && this.previewCanvas) {
+        const slots = this.previewWindowSlots(preview);
+        const fullLabels = slots.map((slot) => this.previewSlotLabel(slot));
+        const colors = ['#2457a6', '#d46b28', '#3b8c68', '#8a4f9e', '#9b7a21'];
+        this.charts.push(new Chart(this.previewCanvas.nativeElement, {
+          type: 'line',
+          data: {
+            labels: this.intervalLabels(fullLabels),
+            datasets: data.heaters.map((heater, index) => ({
+              label: heater.name,
+              data: slots.map((slot) => this.previewChartPoint(slot, heater.id)),
+              borderColor: colors[index % colors.length],
+              backgroundColor: `${colors[index % colors.length]}22`,
+              tension: 0.2,
+              spanGaps: false,
+            })),
+          },
+          options: this.chartOptions<'line'>(fullLabels, 'Potencia (kW)', (context) => {
+            const point = context.raw as PreviewChartPoint;
+            return `${context.dataset.label ?? 'Acumulador'}: ${point.power_w} W · ${point.energy_delivered_kwh.toFixed(2)} kWh · ${point.capacity_percent.toFixed(1)} % capacidad · SOC ${point.soc_percent.toFixed(1)} %`;
+          }),
+        }) as unknown as Chart);
+        return;
+      }
       if (preview && this.temperatureCanvas && this.heaterCanvas && this.aggregateCanvas && this.cumulativeCanvas) {
-        const slots = preview.slots;
+        const slots = this.previewWindowSlots(preview);
         const fullLabels = slots.map((slot) => this.previewSlotLabel(slot));
         const labels = this.intervalLabels(fullLabels);
         const colors = ['#2457a6', '#d46b28', '#3b8c68', '#8a4f9e', '#9b7a21'];
@@ -584,7 +911,7 @@ export class Planning implements AfterViewInit, OnDestroy {
     }, { injector: this.injector });
   }
 
-  private chartOptions<T extends 'line' | 'bar'>(fullLabels: string[], yAxisTitle?: string): ChartOptions<T> {
+  private chartOptions<T extends 'line' | 'bar'>(fullLabels: string[], yAxisTitle?: string, tooltipLabel?: (context: TooltipItem<T>) => string): ChartOptions<T> {
     const options = {
       responsive: true,
       maintainAspectRatio: false,
@@ -594,7 +921,7 @@ export class Planning implements AfterViewInit, OnDestroy {
         tooltip: {
           callbacks: {
             title: (items: TooltipItem<T>[]) => this.intervalTooltipLabel(fullLabels, items[0]?.dataIndex ?? 0),
-            label: (context: TooltipItem<T>) => `${(context.dataset as unknown as { label?: string }).label ?? 'Valor'}: ${context.formattedValue}`,
+            label: tooltipLabel ?? ((context: TooltipItem<T>) => `${(context.dataset as unknown as { label?: string }).label ?? 'Valor'}: ${context.formattedValue}`),
           },
         },
       },
