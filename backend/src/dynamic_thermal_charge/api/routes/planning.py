@@ -12,10 +12,16 @@ from fastapi import APIRouter, Depends, Request
 from ...persistence.bootstrap import Store
 from ...persistence.history import SqlStatusReader
 from ...charge_planning import (
+    AutomaticPlan,
+    AutomaticPlanSlot,
+    DemandEstimate,
+    HeaterExplanation,
     PLANNING_HORIZON_HOURS,
     DeterministicChargeOptimizer,
     PlanningCancelled,
     PlanningInput,
+    PlanningViolation,
+    input_token,
     resolve_planning_telemetry,
 )
 from ...models import ChargeConstraint, ChargeTelemetry
@@ -357,13 +363,24 @@ def activate_planning(
     if request.expected_revision != site["revision"]:
         raise ConfigValidationError("constraints changed; recalculate before saving")
     constraints = _parse_constraints(request.constraints)
-    plan = _build_automatic_plan(store, app_request.app.state.clock(), constraints, site)
-    if plan.input_token != request.token:
+    observed_at = app_request.app.state.clock()
+    planning_request = _build_automatic_request(store, observed_at, constraints, site)
+    if input_token(planning_request) != request.token:
         raise ConfigValidationError("the preview inputs changed; recalculate before activating")
+    _config, configuration_revision = store.repository.current()
+    plan = _cached_preview_plan(
+        store,
+        planning_request,
+        constraints,
+        configuration_revision=configuration_revision,
+        constraints_revision=int(site["revision"]),
+    )
+    if plan is None:
+        plan = DeterministicChargeOptimizer().build(planning_request)
     if plan.status == "INVALID":
         raise ConfigValidationError("the plan is invalid and cannot be activated", field="planning")
     new_revision = store.planning.replace_constraints(constraints, request.expected_revision)
-    store.planning.save_plan(plan, configuration_revision=store.repository.current()[1], constraints_revision=new_revision, reason="activated", active=True)
+    store.planning.save_plan(plan, configuration_revision=configuration_revision, constraints_revision=new_revision, reason="activated", active=True)
     return _preview_response(plan, constraints, site=site)
 
 
@@ -533,6 +550,25 @@ def _build_automatic_plan(
     progress_callback=None,
     cancellation_probe=None,
 ):
+    return DeterministicChargeOptimizer().build(_build_automatic_request(
+        store,
+        observed_at,
+        constraints,
+        site,
+        progress_callback=progress_callback,
+        cancellation_probe=cancellation_probe,
+    ))
+
+
+def _build_automatic_request(
+    store: Store,
+    observed_at: datetime,
+    constraints: tuple[ChargeConstraint, ...],
+    site: dict[str, int | float],
+    *,
+    progress_callback=None,
+    cancellation_probe=None,
+) -> PlanningInput:
     config, _revision = store.repository.current()
     known_heaters = {heater.id for heater in config.heaters}
     for constraint in constraints:
@@ -575,7 +611,166 @@ def _build_automatic_plan(
         progress_callback=progress_callback,
         cancellation_probe=cancellation_probe,
     )
-    return DeterministicChargeOptimizer().build(request)
+    return request
+
+
+def _cached_preview_plan(
+    store: Store,
+    request: PlanningInput,
+    constraints: tuple[ChargeConstraint, ...],
+    *,
+    configuration_revision: int,
+    constraints_revision: int,
+) -> AutomaticPlan | None:
+    finder = getattr(store.planning, "latest_completed_preview_job", None)
+    if finder is None:
+        return None
+    job = finder(
+        configuration_revision=configuration_revision,
+        constraints_revision=constraints_revision,
+        constraints=_constraint_payload(constraints),
+    )
+    if job is None:
+        return None
+    result = job.get("result")
+    if not isinstance(result, dict) or result.get("token") != input_token(request):
+        return None
+    try:
+        plan = _automatic_plan_from_preview_payload(result)
+    except (KeyError, TypeError, ValueError, IndexError) as exc:
+        logger.debug("Ignoring unusable cached planning preview: job_id=%s error=%s", job.get("id"), exc)
+        return None
+    if plan.input_token != input_token(request):
+        return None
+    logger.info("Reusing completed planning preview: job_id=%s token=%s", job["id"], plan.input_token)
+    return plan
+
+
+def _constraint_payload(constraints: tuple[ChargeConstraint, ...]) -> list[dict[str, Any]]:
+    return [{
+        "heater_id": item.heater_id,
+        "target_charge": item.target_charge,
+        "at_time": item.at.strftime("%H:%M"),
+        "weekdays": list(item.weekdays),
+    } for item in constraints]
+
+
+def _automatic_plan_from_preview_payload(payload: dict[str, Any]) -> AutomaticPlan:
+    """Convert a durable public preview result back to the domain value."""
+    slots = tuple(
+        AutomaticPlanSlot(
+            _preview_datetime(item["start"]),
+            _preview_datetime(item["end"]),
+            tuple(str(value) for value in item.get("heater_ids", [])),
+            int(item.get("power_w", 0)),
+            _preview_float_map(item.get("stored_charge_percent")),
+            _preview_float_map(item.get("required_charge_percent")),
+            _preview_optional_float(item.get("outdoor_temperature_c")),
+            None,
+            _preview_float_map(item.get("initial_soc_percent")),
+            _preview_float_map(item.get("demand_kwh")),
+            _preview_int_map(item.get("heater_power_w")),
+        )
+        for item in _preview_dict_list(payload.get("slots"))
+    )
+    violation_payload = payload.get("violations", payload.get("deficits", []))
+    violations = tuple(
+        PlanningViolation(
+            item.get("heater_id"),
+            str(item.get("requirement", "")),
+            _preview_optional_float(item.get("achievable_value")),
+            _preview_optional_float(item.get("shortfall")),
+            _preview_optional_datetime(item.get("at")),
+            str(item["reason"]),
+        )
+        for item in _preview_dict_list(violation_payload)
+    )
+    explanations = tuple(
+        HeaterExplanation(
+            str(item["heater_id"]),
+            float(item["actual_soc_percent"]),
+            float(item["total_demand_kwh"]),
+            float(item["demand_factor"]),
+            float(item["reserve_percent"]),
+            _preview_optional_datetime(item.get("next_constraint_at")),
+            tuple(
+                (_preview_datetime(period[0]), _preview_datetime(period[1]))
+                for period in item.get("charge_periods", [])
+            ),
+            float(item.get("capacity_kwh", 0.0)),
+        )
+        for item in _preview_dict_list(payload.get("explanations"))
+    )
+    demand = tuple(
+        DemandEstimate(
+            str(item["heater_id"]),
+            _preview_datetime(item["start"]),
+            _preview_datetime(item["end"]),
+            float(item["outdoor_temperature_c"]),
+            float(item["target_temperature_c"]),
+            float(item["feedback_temperature_c"]),
+            float(item["degree_hours"]),
+            float(item["thermal_coefficient"]),
+            float(item["demand_factor"]),
+            float(item["reserve_percent"]),
+            float(item["demand_kwh"]),
+        )
+        for item in _preview_dict_list(payload.get("demand"))
+    )
+    return AutomaticPlan(
+        _preview_datetime(payload["horizon_start"]),
+        _preview_datetime(payload["horizon_end"]),
+        int(payload["slot_minutes"]),
+        slots,
+        violations,
+        str(payload["status"]),
+        tuple(float(value) for value in payload.get("score", [])),
+        str(payload["token"]),
+        _preview_optional_datetime(payload.get("generated_at")),
+        explanations,
+        demand,
+    )
+
+
+def _preview_dict_list(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
+        raise ValueError("preview payload list is invalid")
+    return value
+
+
+def _preview_datetime(value: Any) -> datetime:
+    parsed = _preview_optional_datetime(value)
+    if parsed is None:
+        raise ValueError("preview datetime is missing")
+    return parsed
+
+
+def _preview_optional_datetime(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+
+
+def _preview_optional_float(value: Any) -> float | None:
+    return None if value is None else float(value)
+
+
+def _preview_float_map(value: Any) -> dict[str, float]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError("preview numeric map is invalid")
+    return {str(key): float(item) for key, item in value.items()}
+
+
+def _preview_int_map(value: Any) -> dict[str, int]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError("preview integer map is invalid")
+    return {str(key): int(item) for key, item in value.items()}
 
 
 def _preview_response(plan, constraints, *, site: dict[str, int | float] | None = None) -> PlanningPreviewResponse:

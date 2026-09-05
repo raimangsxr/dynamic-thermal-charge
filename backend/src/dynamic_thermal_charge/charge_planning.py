@@ -343,7 +343,7 @@ class MilpChargePlanner:
         heaters = tuple(sorted((item for item in request.heaters if item.enabled), key=lambda item: item.id))
         slot_hours = request.slot_minutes / 60
         heating_limit_w = request.max_heating_power_w or request.max_total_power_w
-        contracted_limit_w = max(0, request.max_total_power_w - request.base_load_w)
+        contracted_limit_w = request.max_total_power_w - request.base_load_w
         limit_w = min(heating_limit_w, contracted_limit_w)
         oversized = tuple(item for item in heaters if item.power_w > limit_w)
         demand_by_key = {(item.heater_id, item.start): item.demand_kwh for item in demand}
@@ -355,13 +355,30 @@ class MilpChargePlanner:
         unmet = {(h.id, i): pulp.LpVariable(f"unmet_{h.id}_{i:03d}", lowBound=0, upBound=demand_by_key[(h.id, starts[i])]) for h in heaters for i in range(len(starts))}
         c_short = {index: pulp.LpVariable(f"constraint_shortfall_{index:03d}", lowBound=0) for index in range(len(constraints))}
         for h in heaters:
-            model += energy[(h.id, 0)] == h.capacity_kwh * float(request.telemetry[h.id].stored_charge_percent) / 100
+            initial_energy = h.capacity_kwh * float(request.telemetry[h.id].stored_charge_percent) / 100
+            model += energy[(h.id, 0)] == initial_energy
             for i, start in enumerate(starts):
                 model += energy[(h.id, i + 1)] == energy[(h.id, i)] + h.charge_power_kw * slot_hours * on[(h.id, i)] - demand_by_key[(h.id, start)] + unmet[(h.id, i)]
+            if request.horizon_hours <= PLANNING_HORIZON_HOURS:
+                # This prefix bound is implied by the balance equations and
+                # unmet_i >= 0. It tightens the LP relaxation by preventing
+                # energy from drifting below the cumulative state. Keep it
+                # dense only on the standard horizon; its quadratic matrix
+                # growth is counterproductive for the optional 48-hour one.
+                for boundary in range(1, len(starts) + 1):
+                    charge = h.charge_power_kw * slot_hours * pulp.lpSum(
+                        on[(h.id, i)] for i in range(boundary)
+                    )
+                    demand_total = sum(
+                        demand_by_key[(h.id, starts[i])] for i in range(boundary)
+                    )
+                    model += energy[(h.id, boundary)] >= initial_energy + charge - demand_total
         for i in range(len(starts)):
             heating_power = pulp.lpSum(h.power_w * on[(h.id, i)] for h in heaters)
-            model += heating_power <= heating_limit_w
-            model += heating_power + request.base_load_w <= request.max_total_power_w
+            # The original rows impose the minimum of these two raw limits.
+            # Keeping one row also preserves the intentionally infeasible case
+            # where the configured base load exceeds contracted power.
+            model += heating_power <= limit_w
         for h in oversized:
             for i in range(len(starts)):
                 model += on[(h.id, i)] == 0
@@ -382,6 +399,15 @@ class MilpChargePlanner:
             pulp.lpSum((len(starts) - i) * h.charge_power_kw * slot_hours * on[(h.id, i)] for h in heaters for i in range(len(starts))),
             pulp.lpSum((heater_index + 1) * (i + 1) * on[(h.id, i)] for heater_index, h in enumerate(heaters) for i in range(len(starts))),
         ))
+        solver_started = monotonic()
+        logger.debug(
+            "Automatic planning solver model built: variables=%d constraints=%d phases=%d "
+            "budget_seconds=%.6g",
+            len(model.variables()),
+            len(model.constraints),
+            len(phases),
+            solver_time_limit_seconds,
+        )
         time_limited = False
         for phase_index, objective in enumerate(phases):
             _notify(request, f"solver_phase_{phase_index + 1}")
@@ -403,13 +429,21 @@ class MilpChargePlanner:
                 break
             solver.timeLimit = remaining_seconds
             model.setObjective(objective)
+            phase_started = monotonic()
             status = model.solve(solver)
+            phase_duration = monotonic() - phase_started
             _check_cancelled(request)
             logger.debug(
-                "Automatic planning solver phase=%d/%d status=%s",
+                "Automatic planning solver phase=%d/%d status=%s duration_seconds=%.6g "
+                "total_elapsed_seconds=%.6g budget_seconds=%.6g variables=%d constraints=%d",
                 phase_index + 1,
                 len(phases),
                 pulp.LpStatus[status],
+                phase_duration,
+                monotonic() - solver_started,
+                solver_time_limit_seconds,
+                len(model.variables()),
+                len(model.constraints),
             )
             if status == pulp.LpStatusNotSolved:
                 if not _model_solution_is_feasible(model, pulp, on):
@@ -481,11 +515,11 @@ class MilpChargePlanner:
             plan_slots.append(AutomaticPlanSlot(
                 start, start + timedelta(minutes=request.slot_minutes), active,
                 sum(_heater(heaters, heater_id).power_w for heater_id in active),
-                {h.id: round(float(energy[(h.id, i + 1)].value() or 0) / h.capacity_kwh * 100, 6) for h in heaters},
+                {h.id: _charge_percent(energy[(h.id, i + 1)].value(), h.capacity_kwh) for h in heaters},
                 {h.id: round(demand_by_key[(h.id, start)] / h.capacity_kwh * 100, 6) for h in heaters},
                 _weather_at(start, request.forecast),
                 {h.id: float(request.telemetry[h.id].temperature_c) for h in heaters},
-                {h.id: round(float(energy[(h.id, i)].value() or 0) / h.capacity_kwh * 100, 6) for h in heaters},
+                {h.id: _charge_percent(energy[(h.id, i)].value(), h.capacity_kwh) for h in heaters},
                 {h.id: round(demand_by_key[(h.id, start)], 9) for h in heaters},
                 {h.id: (h.power_w if h.id in active else 0) for h in heaters},
             ))
@@ -509,11 +543,14 @@ class MilpChargePlanner:
         _notify(request, "safety")
         _notify(request, "summary")
         logger.debug(
-            "Automatic planning completed: status=%s slots=%d violations=%d token=%s",
+            "Automatic planning completed: status=%s slots=%d violations=%d token=%s "
+            "solver_total_elapsed_seconds=%.6g solver_budget_seconds=%.6g",
             plan.status,
             len(plan.slots),
             len(plan.violations),
             plan.input_token,
+            monotonic() - solver_started,
+            solver_time_limit_seconds,
         )
         return plan
 
@@ -555,6 +592,16 @@ def _json_telemetry(value: ChargeTelemetry) -> dict[str, object]:
         "target_temperature_c": value.target_temperature_c,
         "stored_charge_percent": value.stored_charge_percent,
     }
+
+
+def _charge_percent(value: float | None, capacity_kwh: float) -> float:
+    """Round solver noise away at the physical 0/100% boundaries."""
+    percent = round(float(value or 0) / capacity_kwh * 100, 6)
+    if math.isclose(percent, 0.0, abs_tol=1e-6):
+        return 0.0
+    if math.isclose(percent, 100.0, abs_tol=1e-6):
+        return 100.0
+    return percent
 
 
 def _validate_input(request: PlanningInput) -> None:

@@ -143,6 +143,14 @@ def test_oversized_heater_is_reported_without_breaking_global_limit():
     assert all(slot.power_w == 0 for slot in result.slots)
 
 
+def test_base_load_above_contract_remains_infeasible():
+    result = MilpChargePlanner().build(PlanningInput(**{
+        **request().__dict__,
+        "base_load_w": 6000,
+    }))
+    assert result.status == INVALID
+
+
 def test_planner_completes_within_solver_time_limit_with_full_seed_horizon():
     import shutil
     import time
@@ -217,6 +225,27 @@ def test_constraint_preview_shares_one_solver_time_budget(monkeypatch):
 
     assert wall_clock.monotonic() - started < 5
     assert result.status in {INVALID, DEGRADED}
+
+
+def test_solver_logs_phase_runtime_and_model_size(caplog):
+    import logging
+
+    caplog.set_level(logging.DEBUG, logger="dynamic_thermal_charge.charge_planning")
+    result = MilpChargePlanner().build(request(
+        telemetry={"a": state(soc=100)},
+        points=forecast(API_NOW, 8, 5),
+        hours=2,
+    ))
+
+    assert result.status in {FEASIBLE, DEGRADED}
+    assert "Automatic planning solver model built:" in caplog.text
+    assert "Automatic planning solver phase=1/4" in caplog.text
+    assert "duration_seconds=" in caplog.text
+    assert "total_elapsed_seconds=" in caplog.text
+    assert "budget_seconds=" in caplog.text
+    assert "variables=" in caplog.text
+    assert "constraints=" in caplog.text
+    assert "solver_total_elapsed_seconds=" in caplog.text
 
 
 def test_preview_uses_mqtt_fixed_telemetry_when_broker_disabled(client, initialised_store):

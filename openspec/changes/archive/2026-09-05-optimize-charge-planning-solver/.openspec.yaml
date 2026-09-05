@@ -1,0 +1,5 @@
+schema: aes-complex
+created: 2026-09-05
+goal: Reducir drásticamente la latencia del solver de planificación sin cambiar
+  la semántica de los planes ni resolver dos veces el mismo preview
+skip_specs: true

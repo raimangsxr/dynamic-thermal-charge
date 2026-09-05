@@ -32,6 +32,25 @@ al expirar el límite de tiempo será `DEGRADED` con la violación
 - **THEN** el controlador no publica un plan factible salvo que la solución se
   haya verificado, y en tal caso informa `solver_time_limit`
 
+### Requirement: Activación segura de previews completados
+
+La activación debe poder reutilizar un preview durable completado cuando el
+token de entrada vigente, las revisiones de configuración y constraints y el
+payload de constraints coinciden. En cualquier otro caso debe mantener la
+validación normal y nunca activar un resultado obsoleto o `INVALID`.
+
+#### Scenario: Activación inmediata de un preview válido
+
+- **WHEN** se activa un preview completado y todas sus entradas siguen
+  coincidiendo
+- **THEN** se persiste ese mismo plan sin ejecutar una segunda resolución
+
+#### Scenario: Entrada modificada después del preview
+
+- **WHEN** cambia la telemetría, previsión, configuración o constraints desde
+  que terminó el preview
+- **THEN** el token deja de coincidir y el resultado anterior no se activa
+
 ### Requirement: Límite de tiempo configurable del solver
 
 La configuración de planificación debe exponer y persistir
