@@ -9,6 +9,7 @@ from dynamic_thermal_charge.charge_planning import (
     INVALID,
     DegreeHoursDemandEstimator,
     MilpChargePlanner,
+    PLANNING_HORIZON_HOURS,
     PlanningInput,
     materialize_constraints,
 )
@@ -68,6 +69,27 @@ def test_forecast_continuity_truncates_horizon_and_missing_or_fallback_is_invali
     assert result.horizon_end == API_NOW + timedelta(hours=2)
     assert MilpChargePlanner().build(request(points=(), hours=2)).status == INVALID
     assert MilpChargePlanner().build(PlanningInput(**{**request(points=points).__dict__, "forecast_automatic_eligible": False})).status == INVALID
+
+
+def test_planner_anchors_the_24_hour_horizon_at_recalculation_time():
+    start = datetime(2026, 1, 16, 23, 45, tzinfo=timezone.utc)
+    forecast = tuple(
+        HourlyForecastPoint(datetime(2026, 1, 16, 23, tzinfo=timezone.utc) + timedelta(hours=index), 5)
+        for index in range(25)
+    )
+
+    result = MilpChargePlanner().build(PlanningInput(
+        heaters=(heater(),), telemetry={"a": state(soc=100, at=start)}, constraints=(), forecast=forecast,
+        horizon_start=start, horizon_hours=PLANNING_HORIZON_HOURS,
+        slot_minutes=30,
+    ))
+
+    assert result.status == FEASIBLE
+    assert result.horizon_start == start
+    assert result.horizon_end == start + timedelta(hours=PLANNING_HORIZON_HOURS)
+    assert len(result.slots) == 48
+    assert result.slots[0].start == start
+    assert result.slots[-1].end == result.horizon_end
 
 
 def test_planner_starts_at_first_available_forecast_hour_when_now_is_uncovered():

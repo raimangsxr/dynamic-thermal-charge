@@ -288,7 +288,10 @@ class MilpChargePlanner:
         )
         try:
             _validate_input(request)
-            horizon_start = _ceil_align(request.horizon_start, request.slot_minutes)
+            # The rolling horizon is anchored to the instant at which the
+            # recalculation was requested. Slot duration controls the plan
+            # resolution, not when the 24-hour window starts.
+            horizon_start = request.horizon_start
         except (ValueError, ArithmeticError) as exc:
             return _invalid_plan(request, request.horizon_start, (), str(exc), "invalid_configuration", generated_at)
         _notify(request, "coverage")
@@ -572,8 +575,8 @@ def _continuous_forecast_slots(start: datetime, forecast: Sequence[HourlyForecas
             cursor += timedelta(minutes=slot_minutes)
         return tuple(result)
     result = []
-    cursor = _ceil_align(start, slot_minutes)
-    configured_end = cursor + timedelta(hours=horizon_hours)
+    cursor = start
+    configured_end = start + timedelta(hours=horizon_hours)
     while cursor < configured_end:
         if _weather_at(cursor, forecast) is None:
             logger.debug("Forecast coverage is not continuous: missing_at=%s", cursor.isoformat())

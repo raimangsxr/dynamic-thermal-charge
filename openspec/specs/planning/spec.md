@@ -35,7 +35,7 @@ al expirar el límite de tiempo será `DEGRADED` con la violación
 ### Requirement: Horizonte operativo completo
 
 La planificación automática y sus vistas previas deben cubrir exactamente las
-24 horas continuas desde el siguiente límite de intervalo configurado. Si falta
+24 horas continuas desde el instante en que se recalculan. Si falta
 cobertura AEMET horaria utilizable en cualquier parte de esa ventana, el
 resultado es explícitamente no planificable y no contiene un plan parcial.
 
