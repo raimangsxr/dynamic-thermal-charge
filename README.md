@@ -78,7 +78,7 @@ y permite editar constraints recurrentes. La vista previa se inicia con
 `POST /api/v1/planning/preview/jobs/{job_id}/cancel`; el trabajo y sus checks
 se conservan al recargar. `POST /api/v1/planning/activate` valida el token de
 inputs y guarda constraints y plan conjuntamente. El horizonte automático es
-siempre de 24 horas desde el siguiente límite de intervalo: sin cobertura AEMET
+siempre de 24 horas desde el instante en que se recalcula: sin cobertura AEMET
 horaria continua no se publica un plan parcial. La
 telemetría MQTT de cada acumulador se valida por separado y una muestra
 incompleta o de más de 15 minutos se marca como caducada y deja ese acumulador

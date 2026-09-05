@@ -76,4 +76,6 @@ def test_service_keeps_outputs_off_without_any_valid_plan(tmp_path, caplog) -> N
 
     assert service.run(max_cycles=1) == 0
     assert not any(change.enabled for change in driver.changes)
+    assert "Plan refresh failed; retaining persisted plan and retrying in 60 seconds: forecast unavailable" in caplog.text
+    assert "Traceback" not in caplog.text
     assert "all outputs remain off" in caplog.text
