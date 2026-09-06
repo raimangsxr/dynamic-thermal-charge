@@ -1,59 +1,170 @@
-<section class="status">
+<main class="status">
   <header class="page-header">
-    <div><p class="eyebrow">Panel operativo</p><h1>Estado</h1></div>
-    @if (snapshot()) { <p class="observed">Consultado {{ instant(snapshot()!.observed_at) }}</p> }
+    <div>
+      <p class="eyebrow">Panel operativo</p>
+      <h1>Estado</h1>
+      <p class="intro">Comprueba de un vistazo si la instalación está respondiendo, qué acumuladores están activos y qué información puede confirmarse ahora mismo.</p>
+      @if (snapshot(); as data) {
+        <p class="observed">Última lectura: {{ instant(data.observed_at) }}</p>
+      }
+    </div>
+    <button mat-stroked-button type="button" (click)="refresh()" [disabled]="refreshing()" aria-label="Volver a leer el estado de la instalación" data-testid="refresh-status">
+      <mat-icon aria-hidden="true">refresh</mat-icon>
+      {{ refreshing() ? 'Actualizando…' : 'Actualizar' }}
+    </button>
   </header>
 
-  @if (loading() && !snapshot()) { <p class="loading">Consultando…</p> }
+  @if (loading() && !snapshot()) {
+    <section class="workspace-panel loading-panel" role="status" aria-live="polite" data-testid="status-loading">
+      <mat-icon aria-hidden="true">hourglass_empty</mat-icon>
+      <div><h2>Comprobando la instalación</h2><p>Consultando el controlador, los acumuladores y la telemetría…</p></div>
+    </section>
+  }
 
-  @if (failure()) {
+  @if (failure(); as message) {
     <div class="banner alert" role="alert" data-testid="failure">
-      <strong>{{ failure()!.title }}</strong><p>{{ failure()!.action }}</p>
-      @if (showingStaleSnapshot()) { <p class="warning"><strong>Lo que se muestra debajo ya no es actual.</strong> Es la última información que se pudo leer.</p> }
+      <div class="banner-content">
+        <mat-icon aria-hidden="true">error_outline</mat-icon>
+        <div>
+          <strong>{{ message.title }}</strong>
+          <p>{{ message.action }}</p>
+          @if (showingStaleSnapshot()) {
+            <p class="warning"><strong>Lo que se muestra debajo ya no es actual.</strong> Es la última información que se pudo leer.</p>
+          }
+        </div>
+      </div>
+      <button mat-stroked-button type="button" (click)="refresh()" [disabled]="refreshing()" data-testid="retry-status">
+        {{ refreshing() ? 'Consultando…' : 'Volver a intentar' }}
+      </button>
     </div>
   }
 
   @if (snapshot(); as data) {
     <dtc-controller-health [health]="data.controller" />
-    <div class="dashboard-grid" aria-label="Indicadores operativos">
-      <section class="metric-card power" data-testid="power" aria-labelledby="power-title">
-        <p class="card-label" id="power-title">Potencia confirmada</p>
-        @if (data.power) { <p class="figure">{{ (data.power.instant_w / 1000).toFixed(1) }} kW</p><p class="muted">de {{ (data.power.limit_w / 1000).toFixed(1) }} kW · {{ data.power.percent_of_limit }} %</p> }
-        @else { <p class="unavailable" data-testid="power-unavailable">No se puede confirmar; no se muestra una cifra actual.</p> }
-      </section>
-      <section class="metric-card" aria-labelledby="activity-title">
-        <p class="card-label" id="activity-title">Actividad confirmada</p>
-        @if (data.controller.state_is_current) { <p class="metric"><span>{{ charging().length }}</span> cargando</p><p class="muted"><span>{{ resting().length }}</span> en reposo</p> }
-        @else { <p class="unavailable">Sin confirmar; no se muestra actividad actual.</p> }
-      </section>
-      <section class="metric-card" aria-labelledby="plan-status-title">
-        <p class="card-label" id="plan-status-title">Cumplimiento del plan</p><p class="metric" [class.warning-text]="unmet().length > 0">{{ planStatus(data.plan_status) }}</p>
-        @if (unmet().length > 0) { <p class="muted">{{ unmet().length }} acumulador(es) con déficit</p> } @else if (data.plan) { <p class="muted">Sin déficit detectado</p> } @else { <p class="muted">No hay plan en curso</p> }
-      </section>
-      <section class="metric-card" data-testid="telemetry-summary" aria-labelledby="telemetry-summary-title">
-        <p class="card-label" id="telemetry-summary-title">Telemetría disponible</p><p class="metric">{{ telemetryReady() }} / {{ telemetryTotal() }}</p><p class="muted">acumuladores con datos completos</p>
-      </section>
+
+    <div class="summary-grid" aria-label="Indicadores operativos">
+      <article class="summary-card metric-card power" data-testid="power" aria-labelledby="power-title">
+        <div class="summary-card-heading"><mat-icon aria-hidden="true">bolt</mat-icon><h2 id="power-title">Potencia confirmada</h2></div>
+        @if (data.power) {
+          <strong class="summary-value">{{ (data.power.instant_w / 1000).toFixed(1) }} kW</strong>
+          <p>{{ (data.power.limit_w / 1000).toFixed(1) }} kW de límite · {{ data.power.percent_of_limit }} %</p>
+        } @else {
+          <p class="unavailable" data-testid="power-unavailable">No se puede confirmar la potencia actual.</p>
+        }
+      </article>
+
+      <article class="summary-card metric-card" data-testid="activity" aria-labelledby="activity-title">
+        <div class="summary-card-heading"><mat-icon aria-hidden="true">device_thermostat</mat-icon><h2 id="activity-title">Actividad confirmada</h2></div>
+        @if (data.controller.state_is_current) {
+          <strong class="summary-value">{{ charging().length }} <span>cargando</span></strong>
+          <p>{{ resting().length }} en reposo</p>
+        } @else {
+          <p class="unavailable">No se puede confirmar la actividad actual.</p>
+        }
+      </article>
+
+      <article class="summary-card metric-card" data-testid="plan-summary" aria-labelledby="plan-status-title">
+        <div class="summary-card-heading"><mat-icon aria-hidden="true">schedule</mat-icon><h2 id="plan-status-title">Cumplimiento del plan</h2></div>
+        <strong class="summary-value" [class.warning-text]="unmet().length > 0">{{ planStatus(data.plan_status) }}</strong>
+        @if (unmet().length > 0) {
+          <p>{{ unmet().length }} acumulador(es) con déficit</p>
+        } @else if (data.plan) {
+          <p>Sin déficit detectado</p>
+        } @else {
+          <p>No hay plan en curso</p>
+        }
+      </article>
+
+      <article class="summary-card metric-card" data-testid="telemetry-summary" aria-labelledby="telemetry-summary-title">
+        <div class="summary-card-heading"><mat-icon aria-hidden="true">sensors</mat-icon><h2 id="telemetry-summary-title">Telemetría disponible</h2></div>
+        <strong class="summary-value">{{ telemetryReady() }} / {{ telemetryTotal() }}</strong>
+        <p>acumuladores con datos completos</p>
+      </article>
     </div>
 
-    <section class="panel" aria-labelledby="heaters-title">
-      <div class="section-heading"><div><p class="eyebrow">Equipos</p><h2 id="heaters-title">Acumuladores</h2></div><p class="muted">{{ charging().length }} cargando · {{ resting().length }} en reposo</p></div>
-      @if (heaters().length === 0) { <p class="empty">La instalación no tiene ningún acumulador configurado.</p> } @else {
-        <ul class="heaters">@for (item of heaters(); track item.dto.id) { <li [class.disabled]="!item.dto.enabled" [attr.data-heater]="item.dto.id"><span class="name">{{ item.dto.name }}</span><span class="power">{{ (item.dto.power_w / 1000).toFixed(1) }} kW</span><dtc-output-indicator [state]="item.state" /> @if (!item.dto.enabled) { <span class="tag">deshabilitado</span> }</li> }</ul>
+    <section class="workspace-panel" aria-labelledby="heaters-title">
+      <div class="section-heading">
+        <div><p class="eyebrow">Equipos</p><h2 id="heaters-title">Acumuladores</h2><p class="section-lead">Estado de las salidas según la última confirmación del controlador.</p></div>
+        <span class="revision-chip">{{ charging().length }} cargando · {{ resting().length }} en reposo</span>
+      </div>
+      @if (heaters().length === 0) {
+        <p class="empty" data-testid="status-empty">La instalación no tiene ningún acumulador configurado.</p>
+      } @else {
+        <ul class="heater-list">
+          @for (item of heaters(); track item.dto.id) {
+            <li class="heater-card" [class.disabled]="!item.dto.enabled" [attr.data-heater]="item.dto.id">
+              <div class="heater-card-heading">
+                <span class="heater-avatar" aria-hidden="true"><mat-icon>electrical_services</mat-icon></span>
+                <div><h3>{{ item.dto.name }}</h3><p>{{ (item.dto.power_w / 1000).toFixed(1) }} kW</p></div>
+                @if (!item.dto.enabled) { <span class="status-chip">Deshabilitado</span> }
+              </div>
+              <dtc-output-indicator [state]="item.state" />
+            </li>
+          }
+        </ul>
       }
     </section>
 
-    @if (unmet().length > 0) { <div class="banner warn" data-testid="unmet"><strong>Carga solicitada sin atender</strong><ul>@for (allocation of unmet(); track allocation.heater_id) { <li>{{ allocation.heater_id }}: faltan {{ hours(allocation.unmet_minutes) }} h de {{ hours(allocation.requested_minutes) }} h solicitadas</li> }</ul><p>El plan no cabe en la ventana o en el límite de potencia.</p></div> }
+    @if (unmet().length > 0) {
+      <div class="banner warn" role="status" data-testid="unmet">
+        <div class="banner-content"><mat-icon aria-hidden="true">warning</mat-icon><div><strong>Carga solicitada sin atender</strong><ul>@for (allocation of unmet(); track allocation.heater_id) { <li>{{ allocation.heater_id }}: faltan {{ hours(allocation.unmet_minutes) }} h de {{ hours(allocation.requested_minutes) }} h solicitadas</li> }</ul><p>El plan no cabe en la ventana o en el límite de potencia.</p></div></div>
+      </div>
+    }
 
-    <section class="panel" aria-labelledby="plan-title"><div class="section-heading"><h2 id="plan-title">Plan en curso</h2>@if (data.plan_status) { <span class="status-chip">{{ planStatus(data.plan_status) }}</span> }</div>
-      @if (data.plan; as plan) { <p data-testid="plan">{{ instant(plan.window_start) }} — {{ instant(plan.window_end) }}, intervalos de {{ plan.slot_minutes }} min <span class="revision">(configuración rev. {{ plan.installation_revision }})</span></p> } @else { <p class="empty" data-testid="no-plan">No hay ningún plan en curso ahora mismo.</p> }
+    <section class="workspace-panel" aria-labelledby="plan-title">
+      <div class="section-heading">
+        <div><p class="eyebrow">Automatización</p><h2 id="plan-title">Plan en curso</h2></div>
+        @if (data.plan_status) { <span class="status-chip active-chip">{{ planStatus(data.plan_status) }}</span> }
+      </div>
+      @if (data.plan; as plan) {
+        <dl class="summary-list" data-testid="plan">
+          <div><dt>Ventana</dt><dd>{{ instant(plan.window_start) }} — {{ instant(plan.window_end) }}</dd></div>
+          <div><dt>Intervalos</dt><dd>{{ plan.slot_minutes }} minutos</dd></div>
+          <div><dt>Configuración</dt><dd>Revisión {{ plan.installation_revision }}</dd></div>
+        </dl>
+      } @else {
+        <p class="empty" data-testid="no-plan">No hay ningún plan en curso ahora mismo.</p>
+      }
     </section>
 
-    <section class="panel" aria-labelledby="telemetry-title"><div class="section-heading"><h2 id="telemetry-title">Telemetría</h2><span class="muted">{{ telemetryReady() }} de {{ telemetryTotal() }} completa</span></div>
-      @if (data.telemetry?.length) { <div class="table-scroll"><table><caption class="sr-only">Telemetría independiente por acumulador</caption><thead><tr><th>Acumulador</th><th>Temperatura</th><th>Objetivo</th><th>Carga almacenada</th><th>Estado</th></tr></thead><tbody>@for (item of data.telemetry; track item.heater_id) { <tr [class.stale]="item.state === 'telemetry_stale'"><th scope="row">{{ item.heater_id }}</th><td>{{ temperature(item.temperature_c) }}</td><td>{{ temperature(item.target_temperature_c) }}</td><td>{{ item.stored_charge_percent === null ? 'sin dato' : item.stored_charge_percent + ' %' }}</td><td>@if (item.state === 'telemetry_stale') { <strong>Caducada o incompleta</strong> } @else { válida }</td></tr> }</tbody></table></div> } @else { <p class="empty">No hay telemetría recibida.</p> }
+    <section class="workspace-panel" aria-labelledby="telemetry-title">
+      <div class="section-heading">
+        <div><p class="eyebrow">Lecturas</p><h2 id="telemetry-title">Telemetría</h2></div>
+        <span class="revision-chip">{{ telemetryReady() }} de {{ telemetryTotal() }} completa</span>
+      </div>
+      @if (data.telemetry?.length) {
+        <div class="table-scroll">
+          <table>
+            <caption class="sr-only">Telemetría independiente por acumulador</caption>
+            <thead><tr><th scope="col">Acumulador</th><th scope="col">Temperatura</th><th scope="col">Objetivo</th><th scope="col">Carga almacenada</th><th scope="col">Estado</th></tr></thead>
+            <tbody>
+              @for (item of data.telemetry; track item.heater_id) {
+                <tr [class.stale]="item.state === 'telemetry_stale'">
+                  <th scope="row">{{ item.heater_id }}</th>
+                  <td>{{ temperature(item.temperature_c) }}</td>
+                  <td>{{ temperature(item.target_temperature_c) }}</td>
+                  <td>{{ item.stored_charge_percent === null ? 'sin dato' : item.stored_charge_percent + ' %' }}</td>
+                  <td>@if (item.state === 'telemetry_stale') { <span class="state-chip state-warning"><mat-icon aria-hidden="true">warning</mat-icon>Caducada o incompleta</span> } @else { <span class="state-chip state-ok"><mat-icon aria-hidden="true">check_circle</mat-icon>Válida</span> }</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      } @else {
+        <p class="empty">No hay telemetría recibida.</p>
+      }
     </section>
 
-    <section class="panel" aria-labelledby="forecast-title"><div class="section-heading"><h2 id="forecast-title">Previsión</h2></div>
-      @if (data.forecast; as forecast) { <p data-testid="forecast">{{ forecast.date }}: media {{ temperature(forecast.average_temperature_c) }} <span class="source" [attr.data-source]="forecast.source">@switch (forecast.source) { @case ('aemet') { origen: proveedor real } @case ('fallback') { origen: valor de reserva } @default { origen: simulado } }</span>@if (forecast.municipality) { <span class="place">{{ forecast.municipality }}</span> }</p> } @else { <p class="empty">Sin previsión asociada.</p> }
+    <section class="workspace-panel" aria-labelledby="forecast-title">
+      <div class="section-heading"><div><p class="eyebrow">Datos de contexto</p><h2 id="forecast-title">Previsión</h2></div></div>
+      @if (data.forecast; as forecast) {
+        <div class="forecast-summary" data-testid="forecast">
+          <div class="forecast-icon" aria-hidden="true"><mat-icon>cloud</mat-icon></div>
+          <div><strong>{{ forecast.date }}</strong><p>Temperatura media: {{ temperature(forecast.average_temperature_c) }}</p><p class="muted">@switch (forecast.source) { @case ('aemet') { Origen: proveedor real } @case ('fallback') { Origen: valor de reserva } @default { Origen: simulado } }@if (forecast.municipality) { · {{ forecast.municipality }} }</p></div>
+        </div>
+      } @else {
+        <p class="empty">Sin previsión asociada.</p>
+      }
     </section>
   }
-</section>
+</main>

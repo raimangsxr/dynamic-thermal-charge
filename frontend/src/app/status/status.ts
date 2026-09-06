@@ -11,6 +11,8 @@
  */
 
 import { HttpErrorResponse } from '@angular/common/http';
+import { MatButtonModule } from '@angular/material/button';
+import { MatIconModule } from '@angular/material/icon';
 import {
   Component,
   DestroyRef,
@@ -31,7 +33,7 @@ import { formatTemperature } from '../shared/temperature/temperature';
 
 @Component({
   selector: 'dtc-status',
-  imports: [ControllerHealth, OutputIndicator],
+  imports: [MatButtonModule, MatIconModule, ControllerHealth, OutputIndicator],
   templateUrl: './status.html',
   styleUrl: './status.css',
 })
@@ -43,6 +45,8 @@ export class Status {
   /** Set when the last attempt failed. The snapshot above is then stale. */
   readonly failure = signal<Explained | null>(null);
   readonly loading = signal(true);
+  readonly refreshing = signal(false);
+  private refreshInFlight = false;
 
   readonly heaters = computed(() => {
     const current = this.snapshot();
@@ -89,17 +93,29 @@ export class Status {
   }
 
   refresh(): void {
+    if (this.refreshInFlight) {
+      return;
+    }
+    this.refreshInFlight = true;
+    this.refreshing.set(true);
     this.api.status().subscribe({
       next: (dto) => {
         this.snapshot.set(dto);
         this.failure.set(null);
         this.loading.set(false);
+        this.finishRefresh();
       },
       error: (error: unknown) => {
         this.loading.set(false);
         this.failure.set(this.describe(error));
+        this.finishRefresh();
       },
     });
+  }
+
+  private finishRefresh(): void {
+    this.refreshInFlight = false;
+    this.refreshing.set(false);
   }
 
   hours(minutes: number): string {

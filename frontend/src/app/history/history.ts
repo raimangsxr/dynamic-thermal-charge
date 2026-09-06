@@ -8,6 +8,12 @@
 
 import { HttpErrorResponse } from '@angular/common/http';
 import { JsonPipe } from '@angular/common';
+import { MatButtonModule } from '@angular/material/button';
+import { MatFormFieldModule } from '@angular/material/form-field';
+import { MatIconModule } from '@angular/material/icon';
+import { MatInputModule } from '@angular/material/input';
+import { MatSelectModule } from '@angular/material/select';
+import { MatTabsModule } from '@angular/material/tabs';
 import { Component, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 
@@ -27,9 +33,19 @@ import { formatTemperature } from '../shared/temperature/temperature';
 
 type Tab = 'plans' | 'forecasts' | 'transitions' | 'planning';
 
+const HISTORY_TABS: readonly { id: Tab; label: string; description: string }[] = [
+  { id: 'plans', label: 'Planes', description: 'Planificaciones generadas' },
+  { id: 'forecasts', label: 'Previsiones', description: 'Datos meteorológicos guardados' },
+  { id: 'transitions', label: 'Transiciones', description: 'Cambios de las salidas' },
+  { id: 'planning', label: 'Decisiones de planificación', description: 'Motivos del automático' },
+];
+
 @Component({
   selector: 'dtc-history',
-  imports: [FormsModule, JsonPipe],
+  imports: [
+    FormsModule, JsonPipe, MatButtonModule, MatFormFieldModule, MatIconModule,
+    MatInputModule, MatSelectModule, MatTabsModule,
+  ],
   templateUrl: './history.html',
   styleUrl: './history.css',
 })
@@ -37,11 +53,15 @@ export class History {
   private readonly api = inject(Api);
 
   readonly tab = signal<Tab>('plans');
+  readonly tabs = HISTORY_TABS;
+  readonly selectedIndex = computed(() => this.tabs.findIndex((item) => item.id === this.tab()));
+  readonly activeTab = computed(() => this.tabs.find((item) => item.id === this.tab()) ?? this.tabs[0]);
   readonly from = signal('');
   readonly to = signal('');
   readonly heaterId = signal('');
   readonly banner = signal<Explained | null>(null);
   readonly rangeError = signal('');
+  readonly loading = signal(false);
 
   readonly plans = signal<PageDto<PlanHistoryDto> | null>(null);
   readonly forecasts = signal<PageDto<ForecastHistoryDto> | null>(null);
@@ -73,6 +93,10 @@ export class History {
     return current !== null && current.items.length === 0;
   });
 
+  readonly currentLoaded = computed(() =>
+    this.tab() === 'planning' ? this.planningAudit() !== null : this.page() !== null,
+  );
+
   constructor() {
     this.api.config().subscribe({
       next: (config: ConfigDto) =>
@@ -88,22 +112,35 @@ export class History {
     this.load();
   }
 
+  onTabChange(index: number): void {
+    const selected = this.tabs[index];
+    if (selected && selected.id !== this.tab()) {
+      this.select(selected.id);
+    }
+  }
+
   /** FR-027: an inverted range is refused before asking the API. */
   load(cursor?: string): void {
     this.rangeError.set('');
+    this.banner.set(null);
     if (this.from() && this.to() && this.from() > this.to()) {
       this.rangeError.set(
         'El inicio del rango es posterior al fin. Corrígelo antes de consultar.',
       );
       return;
     }
+    this.loading.set(true);
     const query: HistoryQuery = {
       from: this.from() ? new Date(this.from()).toISOString() : undefined,
       to: this.to() ? new Date(this.to()).toISOString() : undefined,
       cursor,
     };
-    const onError = (error: unknown) => this.banner.set(this.describe(error));
+    const onError = (error: unknown) => {
+      this.banner.set(this.describe(error));
+      this.loading.set(false);
+    };
     const clear = () => this.banner.set(null);
+    const finish = () => this.loading.set(false);
 
     switch (this.tab()) {
       case 'plans':
@@ -111,6 +148,7 @@ export class History {
           next: (page) => {
             this.plans.set(page);
             clear();
+            finish();
           },
           error: onError,
         });
@@ -120,6 +158,7 @@ export class History {
           next: (page) => {
             this.forecasts.set(page);
             clear();
+            finish();
           },
           error: onError,
         });
@@ -134,12 +173,13 @@ export class History {
             next: (page) => {
               this.transitions.set(page);
               clear();
+              finish();
             },
             error: onError,
           });
         return;
       case 'planning':
-        this.api.planningAudit({ from: query.from, to: query.to, limit: query.limit }).subscribe({ next: (page) => { this.planningAudit.set(page); clear(); }, error: onError });
+        this.api.planningAudit({ from: query.from, to: query.to, limit: query.limit }).subscribe({ next: (page) => { this.planningAudit.set(page); clear(); finish(); }, error: onError });
         return;
     }
   }

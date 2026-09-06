@@ -136,6 +136,11 @@ describe('Status', () => {
 
   /* ---------------------------------------------------------------- current */
 
+  it('shows an explicit loading state before the first snapshot', () => {
+    fixture.detectChanges();
+    expect(testId(fixture.nativeElement as HTMLElement, 'status-loading')).not.toBeNull();
+  });
+
   it('shows the power, the plan and the forecast when the state is current', () => {
     const element = load(statusDto());
     expect(testId(element, 'power')?.textContent).toContain('2.8 kW');
@@ -219,7 +224,20 @@ describe('Status', () => {
 
   it('says the installation has no heaters instead of showing an empty list', () => {
     const element = load({ ...statusDto(), heaters: [], allocations: [] });
+    expect(testId(element, 'status-empty')).not.toBeNull();
     expect(element.textContent).toContain('ningún acumulador');
+  });
+
+  it('offers a manual refresh while retaining the automatic poller', () => {
+    const element = load(statusDto());
+    const button = element.querySelector<HTMLButtonElement>('[data-testid="refresh-status"]');
+
+    button?.click();
+    fixture.detectChanges();
+    expect(button?.disabled).toBe(true);
+    backend.expectOne('/api/v1/status').flush(statusDto({ observed_at: '2026-01-16T01:05:00Z' }));
+    fixture.detectChanges();
+    expect(button?.disabled).toBe(false);
   });
 
   /* ------------------------------------------------------------------ unmet */
