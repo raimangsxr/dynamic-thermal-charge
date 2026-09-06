@@ -40,7 +40,7 @@ const HEATER: Record<string, string> = {
     'Si está desactivado, el acumulador no participa en nuevos planes ni recibe asignación de potencia.',
   output:
     'Tipo de salida del relé: simulada (sin GPIO) o GPIO en el dispositivo donde corre el controlador.',
-  pin: 'Número de pin BCM del GPIO que controla el relé de este acumulador.',
+  pin: 'Número de pin GPIO que controla el relé de este acumulador.',
   active_high:
     'Nivel lógico que energiza el relé: alto (3,3 V) o bajo (0 V). Debe coincidir con el cableado.',
   indoor_topic:

@@ -149,7 +149,7 @@ const HEATER_FORM_FIELDS: readonly HeaterFormFieldMeta[] = [
     key: 'output', label: 'Tipo de salida del acumulador', type: 'select', helpField: 'output',
     selectOptions: [{ value: 'simulated', label: 'Simulada' }, { value: 'gpio', label: 'GPIO' }],
   },
-  { key: 'pin', label: 'Pin BCM', type: 'number' },
+  { key: 'pin', label: 'Pin GPIO', type: 'number' },
   {
     key: 'active_high', label: 'Nivel activo', type: 'select',
     selectOptions: [{ value: true, label: 'Alto' }, { value: false, label: 'Bajo' }],
@@ -607,7 +607,16 @@ export class Config {
     const sensitive = edits.find((edit) => needsConfirmation(edit.field));
     if (sensitive) {
       this.heaterSaving.set(false);
-      this.confirming.set({ field: sensitive.field, value: sensitive.value, heaterId: original.id, formEdits: edits });
+      this.dialog.open(ConfirmDialog, {
+        width: 'min(28rem, calc(100vw - 2rem))',
+        data: {
+          title: `Confirmar cambios en ${original.name}`,
+          message: 'Se aplicarán los cambios del acumulador. Revisa especialmente los valores eléctricos.',
+          confirmLabel: 'Sí, guardar',
+        },
+      }).afterClosed().subscribe((confirmed: boolean) => {
+        if (confirmed) this.applyHeaterEdits(original.id);
+      });
       return;
     }
     this.applyHeaterEdits(original.id);

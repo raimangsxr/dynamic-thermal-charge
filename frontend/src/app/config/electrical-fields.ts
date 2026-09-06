@@ -27,7 +27,7 @@ export function confirmationText(field: string, value: string): string {
       );
     case 'pin':
       return (
-        `Vas a cambiar el pin BCM a ${value}. Un pin equivocado gobierna el relé ` +
+        `Vas a cambiar el pin GPIO a ${value}. Un pin equivocado gobierna el relé ` +
         'equivocado. ¿Continuar?'
       );
     case 'active_high':
