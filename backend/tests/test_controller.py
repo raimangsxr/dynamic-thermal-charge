@@ -7,6 +7,7 @@ from dynamic_thermal_charge.runtime import (
     _run_output_self_test,
 )
 from dynamic_thermal_charge.controller import ChargeController
+from dynamic_thermal_charge.api.security import relay_test_credential_digest
 from dynamic_thermal_charge.scheduler import ScheduleResult, ScheduleSlot
 
 
@@ -134,6 +135,36 @@ def test_ignores_unknown_heaters_from_persisted_plan(caplog) -> None:
 
     assert not any(call[0] == "removed-heater" for call in driver.calls)
     assert "Ignoring unknown heater ids" in caplog.text
+
+
+def test_active_relay_test_ends_when_lease_expires_without_a_pending_command(initialised_store, clock) -> None:
+    from dynamic_thermal_charge.persistence.heartbeat import SqlHeartbeatPublisher
+
+    relay_tests = initialised_store.relay_tests
+    session_id = relay_tests.claim(relay_test_credential_digest("owner"), clock(), 1)["session"]["id"]
+    publisher = SqlHeartbeatPublisher(
+        initialised_store.application_engine or initialised_store.engine,
+        initialised_store.repository.installation_id(),
+        poll_seconds=5,
+        driver_kind="gpio",
+        started_at=clock(),
+        runner_id="runner-a",
+        location=initialised_store.location,
+    )
+    publisher.publish(clock(), degraded=False)
+    heater_ids = tuple(heater.id for heater in initialised_store.repository.current()[0].heaters)
+    driver = RecordingDriver()
+    controller = ChargeController(heater_ids, driver, relay_tests=relay_tests, runner_id="runner-a")
+
+    controller.apply(None, clock())
+    assert relay_tests.current()["session"]["status"] == "active"
+
+    clock.advance(seconds=2)
+    controller.apply(None, clock())
+
+    terminal = relay_tests.get(session_id)
+    assert terminal["session"]["status"] == "ended"
+    assert all(output["confirmed_state"] is False for output in terminal["heaters"])
 
 
 def test_sigterm_is_converted_to_controlled_shutdown() -> None:
