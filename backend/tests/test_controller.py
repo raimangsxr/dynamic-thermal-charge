@@ -333,7 +333,12 @@ class CoordinationStub:
         self.raise_on = set(raise_on)
         self.armed: list[tuple[str | None, str]] = []
         self.ended: list[tuple[str, bool, str | None]] = []
+        self.recovered: list[int] = []
+        self.confirmed: list[tuple[str, str, int, bool]] = []
         self.can_switch_calls = 0
+        self.can_switch_result = True
+        self.can_switch_results: list[bool] = []
+        self.activate_result = True
 
     def _maybe_raise(self, key: str) -> None:
         if key in self.raise_on:
@@ -346,14 +351,17 @@ class CoordinationStub:
     def controller_can_switch(self, session_id, runner_id, now) -> bool:
         self.can_switch_calls += 1
         self._maybe_raise(f"can_switch:{self.can_switch_calls}")
-        return True
+        if self.can_switch_results:
+            return self.can_switch_results.pop(0)
+        return self.can_switch_result
 
     def activate(self, session_id, runner_id, now) -> bool:
         self._maybe_raise("activate")
-        return True
+        return self.activate_result
 
     def confirm(self, session_id, heater_id, sequence, state, now) -> None:
         self._maybe_raise("confirm")
+        self.confirmed.append((session_id, heater_id, sequence, state))
 
     def unknown(self, session_id, heater_id, sequence, now, code="driver_failed") -> None:
         self._maybe_raise("unknown")
@@ -363,6 +371,7 @@ class CoordinationStub:
 
     def recover_latch(self, generation, now) -> bool:
         self._maybe_raise("recover_latch")
+        self.recovered.append(generation)
         return True
 
     def arm_latch(self, session_id, now, reason) -> None:
@@ -431,3 +440,379 @@ def test_partial_off_is_durable_when_a_driver_failure_cannot_be_recorded() -> No
     controller.apply(None, datetime(2026, 1, 1))
 
     assert relay_tests.durable_latches() == ["off_sweep_failed"]
+
+
+# --------------------------------------------------------------------------- #
+# The relay-test coordination state machine, path by path.
+#
+# `_apply_relay_test` decides, on every poll cycle, whether the controller is
+# owned by a manual test and what to do when coordination misbehaves. Every
+# branch is a safety decision, so each one gets a test that states what the
+# operator gets out of it.
+# --------------------------------------------------------------------------- #
+
+
+def _view(
+    status: str | None = "active",
+    *,
+    pending: bool = False,
+    desired_state: bool = True,
+    safety: dict | None = None,
+    heater_id: str = "b",
+) -> dict:
+    """A coordination view. `status=None` means "no session at all"."""
+    return {
+        "session": None if status is None else {"id": "session-1", "status": status},
+        "safety": safety or {},
+        "heaters": [
+            {
+                "heater_id": heater_id,
+                "command_seq": 2 if pending else 1,
+                "confirmed_seq": 1,
+                "desired_state": desired_state,
+            }
+        ],
+    }
+
+
+def _arm_local_latch(controller, relay_tests, at) -> None:
+    """Drive the controller through a coordination read failure."""
+    relay_tests.raise_on.add("current")
+    controller.apply(None, at)
+    relay_tests.raise_on.discard("current")
+
+
+AT = datetime(2026, 1, 1)
+
+
+# --- the local latch, and how it is released ------------------------------- #
+
+
+def test_local_latch_is_released_durably_once_every_output_is_off() -> None:
+    driver = RecordingDriver()
+    relay_tests = CoordinationStub(_view())
+    controller = ChargeController(("a", "b"), driver, relay_tests=relay_tests)
+    _arm_local_latch(controller, relay_tests, AT)
+
+    controller.apply(None, AT)
+
+    assert relay_tests.armed == [(None, "store_unavailable")]
+
+
+def test_local_latch_release_ends_the_session_it_had_owned() -> None:
+    driver = RecordingDriver()
+    relay_tests = CoordinationStub(_view("active"))
+    controller = ChargeController(("a", "b"), driver, relay_tests=relay_tests)
+    # Own a session first, so the release has something to close.
+    controller.apply(None, AT)
+    _arm_local_latch(controller, relay_tests, AT)
+
+    controller.apply(None, AT)
+
+    assert relay_tests.ended == [("session-1", False, "store_unavailable")]
+
+
+def test_local_latch_survives_a_store_that_cannot_record_its_release() -> None:
+    driver = RecordingDriver()
+    relay_tests = CoordinationStub(_view())
+    controller = ChargeController(("a", "b"), driver, relay_tests=relay_tests)
+    _arm_local_latch(controller, relay_tests, AT)
+    relay_tests.raise_on.add("arm_latch")
+
+    controller.apply(None, AT)
+    relay_tests.raise_on.discard("arm_latch")
+    driver.calls.clear()
+    # Still latched: a readable store must not re-enable automatic control.
+    controller.apply(plan(AT), AT)
+
+    assert not any(enabled for _, enabled, _ in driver.calls)
+
+
+def test_local_latch_is_retained_while_an_output_still_refuses_to_open() -> None:
+    relay_tests = CoordinationStub(_view())
+    controller = ChargeController(("a", "b"), DeadRelayDriver(), relay_tests=relay_tests)
+    _arm_local_latch(controller, relay_tests, AT)
+
+    controller.apply(None, AT)
+
+    # Nothing new to persist: the latch was already armed durably on entry, and
+    # the retained latch must not write a second time on every cycle.
+    assert relay_tests.armed == [(None, "off_sweep_failed")]
+
+
+# --- automatic control resumes when nothing owns the controller ------------ #
+
+
+def test_automatic_control_proceeds_without_any_coordination_view() -> None:
+    driver = RecordingDriver()
+    relay_tests = CoordinationStub(None)
+    controller = ChargeController(("a", "b"), driver, relay_tests=relay_tests)
+
+    controller.apply(plan(AT), AT)
+
+    assert ("a", True) in [(heater, enabled) for heater, enabled, _ in driver.calls]
+
+
+def test_automatic_control_proceeds_when_the_view_carries_no_session() -> None:
+    driver = RecordingDriver()
+    relay_tests = CoordinationStub(_view(None))
+    controller = ChargeController(("a", "b"), driver, relay_tests=relay_tests)
+
+    controller.apply(plan(AT), AT)
+
+    assert ("a", True) in [(heater, enabled) for heater, enabled, _ in driver.calls]
+
+
+def test_an_unknown_session_status_does_not_own_the_controller() -> None:
+    driver = RecordingDriver()
+    relay_tests = CoordinationStub(_view("unrecognised"))
+    controller = ChargeController(("a", "b"), driver, relay_tests=relay_tests)
+
+    controller.apply(plan(AT), AT)
+
+    assert ("a", True) in [(heater, enabled) for heater, enabled, _ in driver.calls]
+
+
+# --- a persisted fault latch ----------------------------------------------- #
+
+
+def test_a_persisted_fault_is_recovered_once_every_output_is_off() -> None:
+    relay_tests = CoordinationStub(
+        _view(safety={"fault_latched": True, "fault_generation": 7})
+    )
+    controller = ChargeController(("a", "b"), RecordingDriver(), relay_tests=relay_tests)
+
+    controller.apply(plan(AT), AT)
+
+    assert relay_tests.recovered == [7]
+
+
+def test_a_persisted_fault_is_re_armed_when_an_output_will_not_open() -> None:
+    relay_tests = CoordinationStub(
+        _view(safety={"fault_latched": True, "fault_session_id": "session-9"})
+    )
+    controller = ChargeController(("a", "b"), DeadRelayDriver(), relay_tests=relay_tests)
+
+    controller.apply(plan(AT), AT)
+
+    assert relay_tests.armed == [("session-9", "off_sweep_failed")]
+    assert relay_tests.recovered == []
+
+
+def test_a_fault_recovery_that_cannot_be_persisted_keeps_control_blocked() -> None:
+    driver = RecordingDriver()
+    relay_tests = CoordinationStub(_view(safety={"fault_latched": True}))
+    controller = ChargeController(("a", "b"), driver, relay_tests=relay_tests)
+    relay_tests.raise_on.add("recover_latch")
+
+    controller.apply(plan(AT), AT)
+    relay_tests.raise_on.discard("recover_latch")
+    relay_tests.view = None
+    driver.calls.clear()
+    controller.apply(plan(AT), AT)
+
+    assert not any(enabled for _, enabled, _ in driver.calls)
+
+
+# --- session preparation --------------------------------------------------- #
+
+
+def test_a_starting_session_is_activated_after_a_complete_off_sweep() -> None:
+    relay_tests = CoordinationStub(_view("starting"))
+    controller = ChargeController(("a", "b"), RecordingDriver(), relay_tests=relay_tests)
+
+    controller.apply(plan(AT), AT)
+
+    assert relay_tests.ended == []
+
+
+def test_a_starting_session_that_cannot_be_activated_is_closed_as_invalid() -> None:
+    relay_tests = CoordinationStub(_view("starting"))
+    relay_tests.activate_result = False
+    controller = ChargeController(("a", "b"), RecordingDriver(), relay_tests=relay_tests)
+
+    controller.apply(plan(AT), AT)
+
+    assert relay_tests.ended == [("session-1", False, "session_invalid")]
+
+
+def test_a_starting_session_fails_when_an_output_will_not_open() -> None:
+    relay_tests = CoordinationStub(_view("starting"))
+    controller = ChargeController(("a", "b"), DeadRelayDriver(), relay_tests=relay_tests)
+
+    controller.apply(plan(AT), AT)
+
+    assert relay_tests.ended == [("session-1", True, "off_sweep_failed")]
+
+
+def test_a_starting_session_whose_outcome_cannot_be_stored_blocks_control() -> None:
+    driver = RecordingDriver()
+    relay_tests = CoordinationStub(_view("starting"))
+    relay_tests.raise_on.add("activate")
+    controller = ChargeController(("a", "b"), driver, relay_tests=relay_tests)
+
+    controller.apply(plan(AT), AT)
+    relay_tests.raise_on.discard("activate")
+    relay_tests.view = None
+    driver.calls.clear()
+    controller.apply(plan(AT), AT)
+
+    assert not any(enabled for _, enabled, _ in driver.calls)
+
+
+# --- an active session ----------------------------------------------------- #
+
+
+def test_an_active_session_that_lost_its_lease_is_closed_as_invalid() -> None:
+    relay_tests = CoordinationStub(_view("active"))
+    relay_tests.can_switch_result = False
+    controller = ChargeController(("a", "b"), RecordingDriver(), relay_tests=relay_tests)
+
+    controller.apply(plan(AT), AT)
+
+    assert relay_tests.ended == [("session-1", False, "session_invalid")]
+
+
+def test_a_pending_command_is_applied_and_confirmed() -> None:
+    driver = RecordingDriver()
+    relay_tests = CoordinationStub(_view("active", pending=True))
+    controller = ChargeController(("a", "b"), driver, relay_tests=relay_tests)
+
+    controller.apply(plan(AT), AT)
+
+    assert ("b", True) in [(heater, enabled) for heater, enabled, _ in driver.calls]
+    assert relay_tests.confirmed == [("session-1", "b", 2, True)]
+    assert controller.active_outputs == {"b"}
+
+
+def test_a_pending_off_command_stops_counting_the_output_as_active() -> None:
+    driver = RecordingDriver()
+    relay_tests = CoordinationStub(
+        _view("active", pending=True, desired_state=False)
+    )
+    controller = ChargeController(("a", "b"), driver, relay_tests=relay_tests)
+
+    controller.apply(plan(AT), AT)
+
+    assert relay_tests.confirmed == [("session-1", "b", 2, False)]
+    assert controller.active_outputs == set()
+
+
+def test_an_already_confirmed_command_is_not_reapplied() -> None:
+    driver = RecordingDriver()
+    relay_tests = CoordinationStub(_view("active", pending=False))
+    controller = ChargeController(("a", "b"), driver, relay_tests=relay_tests)
+
+    controller.apply(plan(AT), AT)
+
+    assert driver.calls == []
+    assert relay_tests.confirmed == []
+
+
+# --- closing a session ----------------------------------------------------- #
+
+
+def test_an_ending_session_is_closed_as_finished_by_its_owner() -> None:
+    relay_tests = CoordinationStub(_view("ending"))
+    controller = ChargeController(("a", "b"), RecordingDriver(), relay_tests=relay_tests)
+
+    controller.apply(plan(AT), AT)
+
+    assert relay_tests.ended == [("session-1", False, "owner_finished")]
+
+
+def test_an_ending_session_fails_when_an_output_will_not_open() -> None:
+    relay_tests = CoordinationStub(_view("ending"))
+    controller = ChargeController(("a", "b"), DeadRelayDriver(), relay_tests=relay_tests)
+
+    controller.apply(plan(AT), AT)
+
+    assert relay_tests.ended == [("session-1", True, "off_sweep_failed")]
+
+
+def test_an_ending_session_whose_closure_cannot_be_stored_blocks_control() -> None:
+    driver = RecordingDriver()
+    relay_tests = CoordinationStub(_view("ending"))
+    relay_tests.raise_on.add("end")
+    controller = ChargeController(("a", "b"), driver, relay_tests=relay_tests)
+
+    controller.apply(plan(AT), AT)
+    relay_tests.raise_on.discard("end")
+    relay_tests.view = None
+    driver.calls.clear()
+    controller.apply(plan(AT), AT)
+
+    assert not any(enabled for _, enabled, _ in driver.calls)
+
+
+@pytest.mark.parametrize("status", ["ended", "failed"])
+def test_a_terminal_session_releases_the_controller_without_switching(status) -> None:
+    driver = RecordingDriver()
+    relay_tests = CoordinationStub(_view(status))
+    controller = ChargeController(("a", "b"), driver, relay_tests=relay_tests)
+
+    controller.apply(plan(AT), AT)
+
+    assert driver.calls == []
+
+
+# --- shutdown -------------------------------------------------------------- #
+
+
+def test_shutdown_reports_a_driver_that_cannot_be_closed(caplog) -> None:
+    class UncloseableDriver(RecordingDriver):
+        def close(self):
+            raise RuntimeError("driver busy")
+
+    controller = ChargeController(("a",), UncloseableDriver())
+
+    controller.shutdown(AT)
+
+    assert "Failed to close output driver" in caplog.text
+
+
+def test_a_lease_lost_between_commands_closes_the_session_as_invalid() -> None:
+    relay_tests = CoordinationStub(_view("active", pending=True))
+    # The lease is checked once for the session and again for each command; only
+    # the second check fails here.
+    relay_tests.can_switch_results = [True, False]
+    driver = RecordingDriver()
+    controller = ChargeController(("a", "b"), driver, relay_tests=relay_tests)
+
+    controller.apply(plan(AT), AT)
+
+    assert relay_tests.ended == [("session-1", False, "session_invalid")]
+    assert not any(enabled for _, enabled, _ in driver.calls)
+
+
+def test_an_unconfirmable_command_is_marked_unknown_and_ends_the_session() -> None:
+    relay_tests = CoordinationStub(_view("active", pending=True, heater_id="a"))
+    controller = ChargeController(("a", "b"), DeadRelayDriver(), relay_tests=relay_tests)
+
+    controller.apply(plan(AT), AT)
+
+    # The driver refused the command, so nothing is confirmed and the owner is
+    # asked to end the session; the safety latch is left to that closure.
+    assert relay_tests.confirmed == []
+    assert relay_tests.armed == []
+    assert relay_tests.ended == []
+
+
+def test_a_partial_off_that_cannot_be_persisted_is_reported(caplog) -> None:
+    relay_tests = CoordinationStub(_view(), raise_on={"current", "arm_latch"})
+    controller = ChargeController(("a", "b"), DeadRelayDriver(), relay_tests=relay_tests)
+
+    controller.apply(plan(AT), AT)
+
+    assert "Could not persist relay-test safety latch after partial OFF" in caplog.text
+
+
+def test_no_output_is_desired_outside_every_slot_of_the_plan() -> None:
+    driver = RecordingDriver()
+    controller = ChargeController(("a", "b"), driver)
+
+    # The plan covers one hour from AT; ask for an instant beyond its last slot.
+    controller.apply(plan(AT), AT + timedelta(hours=3))
+
+    assert controller.active_outputs == set()
+    assert driver.calls == []
