@@ -35,6 +35,8 @@ api = ["fastapi>=0.115,<1", "uvicorn>=0.30,<1"]
 mqtt = ["paho-mqtt>=2.1,<3"]
 dev = [
     "pytest>=8,<10",
+    # Property-based tests for the planner invariants. Dev-only and pure Python.
+    "hypothesis>=6.100,<7",
     "SQLAlchemy>=2,<3",
     "alembic>=1.13",
     "fastapi>=0.115,<1",
