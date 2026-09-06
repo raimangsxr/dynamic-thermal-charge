@@ -25,8 +25,8 @@ export const routes: Routes = [
   },
   {
     path: 'configuracion-sistema',
-    canActivate: [requireCredential],
-    loadComponent: () => import('./system-config/system-config').then((m) => m.SystemConfig),
+    redirectTo: 'configuracion',
+    pathMatch: 'full',
   },
   {
     path: 'historico',

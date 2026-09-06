@@ -182,6 +182,7 @@ def get_planning(
             cycle_status=cycle_status,
             horizon_hours=int(planning_site["forecast_horizon_hours"]),
             planning_window_hours=int(planning_site["planning_window_hours"]),
+            max_total_power_w=int(planning_site.get("contracted_power_w", config.site.max_total_power_w)),
         )
         return _enrich(response, store, observed_at)
 
@@ -189,7 +190,7 @@ def get_planning(
     if snapshot is None:
         response = PlanningResponse(
             observed_at=observed_at,
-            max_total_power_w=config.site.max_total_power_w,
+            max_total_power_w=int(planning_site.get("contracted_power_w", config.site.max_total_power_w)),
             heaters=heaters,
             absence_reason="no_current_or_next_plan",
             forecast=_forecast_view(latest_forecast),
@@ -274,7 +275,7 @@ def get_planning(
 
     response = PlanningResponse(
         observed_at=observed_at,
-        max_total_power_w=config.site.max_total_power_w,
+        max_total_power_w=int(planning_site.get("contracted_power_w", config.site.max_total_power_w)),
         plan=PlanningPlanView(
             **{**plan_data, "window_start": horizon_start, "window_end": visible_window_end},
             slots=slots,
@@ -433,6 +434,7 @@ def _automatic_planning_response(
     cycle_status: dict,
     horizon_hours: int,
     planning_window_hours: int,
+    max_total_power_w: int,
 ) -> PlanningResponse:
     power_by_id = {heater.id: heater.power_w for heater in config.heaters}
     slot_delta = timedelta(minutes=automatic["slot_minutes"])
@@ -461,7 +463,7 @@ def _automatic_planning_response(
     )
     return PlanningResponse(
         observed_at=observed_at,
-        max_total_power_w=config.site.max_total_power_w,
+        max_total_power_w=max_total_power_w,
         heaters=heaters,
         forecast=_forecast_view(latest_forecast),
         forecast_status=cycle_status.get("forecast_status"),

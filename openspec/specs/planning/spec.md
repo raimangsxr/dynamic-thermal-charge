@@ -91,6 +91,20 @@ el resultado es explícitamente no planificable y no contiene un plan parcial.
 - **THEN** ambos comienzan a las 12:15, la ventana termina a las 00:15 y el
   horizonte termina a las 12:15 del día siguiente
 
+### Requirement: Fuente canónica del límite total
+
+La potencia total contratada debe tener una única fuente editable:
+`contracted_power_w` en la configuración de Planificación. La planificación
+automática, el indicador de Estado y cualquier plan de respaldo deben usar ese
+mismo valor; el campo de instalación heredado solo se conserva por
+compatibilidad y no puede sobrescribirlo.
+
+#### Scenario: Potencias heredada y canónica diferentes
+
+- **WHEN** `contracted_power_w` difiere de `max_total_power_w`
+- **THEN** Estado y la respuesta de planificación muestran y aplican
+  `contracted_power_w`
+
 ### Requirement: Vista previa durable y cancelable
 
 Cada vista previa se ejecuta como un trabajo persistente con pasos ordenados y

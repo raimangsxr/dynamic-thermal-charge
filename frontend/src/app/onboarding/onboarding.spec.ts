@@ -8,7 +8,7 @@ import { Onboarding } from './onboarding';
 
 describe('Onboarding', () => {
   it('clears both one-use credentials after completion', async () => {
-    await TestBed.configureTestingModule({ imports: [Onboarding], providers: [provideHttpClient(), provideHttpClientTesting(), provideRouter([{ path: 'configuracion-sistema', component: Onboarding }])] }).compileComponents();
+    await TestBed.configureTestingModule({ imports: [Onboarding], providers: [provideHttpClient(), provideHttpClientTesting(), provideRouter([{ path: 'configuracion', component: Onboarding }])] }).compileComponents();
     const backend = TestBed.inject(HttpTestingController);
     const fixture = TestBed.createComponent(Onboarding); fixture.detectChanges();
     backend.expectOne('/api/v1/onboarding/status').flush({ required: true, state: 'unconfigured' });

@@ -82,6 +82,24 @@ def test_the_active_heaters_and_the_power_are_reported(client, heartbeat, record
     )
 
 
+def test_status_uses_the_canonical_planning_power_limit(client, initialised_store, heartbeat, recorded_night):
+    site = initialised_store.planning.site()
+    initialised_store.planning.update_site({"contracted_power_w": 6100}, site["revision"])
+    heartbeat.publish(API_NOW, degraded=False)
+
+    assert _status(client)["power"]["limit_w"] == 6100
+
+
+def test_planning_projection_uses_the_same_canonical_power_limit(client, initialised_store):
+    site = initialised_store.planning.site()
+    initialised_store.planning.update_site({"contracted_power_w": 6100}, site["revision"])
+
+    response = client.get("/api/v1/planning", headers=AUTH)
+
+    assert response.status_code == 200
+    assert response.json()["max_total_power_w"] == 6100
+
+
 def test_the_plan_in_progress_is_reported_with_its_window(client, heartbeat, recorded_night):
     heartbeat.publish(API_NOW, degraded=False)
     plan = _status(client)["plan"]
@@ -143,7 +161,7 @@ def test_planning_endpoint_returns_hourly_series_and_all_intervals(
     assert len(body["plan"]["slots"]) > 0
     assert len(body["timeline"]) == 24 * 60 // config.site.slot_minutes
     assert body["horizon_end"]
-    assert body["max_total_power_w"] == config.site.max_total_power_w
+    assert body["max_total_power_w"] == initialised_store.planning.site()["contracted_power_w"]
     salon_minutes = [slot["charge_minutes_by_heater"]["salon"] for slot in body["timeline"][:4]]
     assert salon_minutes[0] >= salon_minutes[-1]
 

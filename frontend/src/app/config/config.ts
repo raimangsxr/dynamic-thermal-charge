@@ -1,9 +1,11 @@
 /**
- * Reading and editing the configuration.
+ * Unified configuration workspace.
  *
- * Every write sends the revision that was read. Conflicts stay visible and the
- * form keeps what the operator typed, so a concurrent change is never silently
- * overwritten.
+ * The page deliberately keeps installation, automatic planning and runtime
+ * settings in one route, while using task-oriented areas so an operator does
+ * not have to know which backend module owns a setting. Every write still
+ * carries the revision that was read and sensitive values never return to the
+ * browser after they are saved.
  */
 
 import { HttpErrorResponse } from '@angular/common/http';
@@ -18,12 +20,28 @@ import { MatTooltipModule } from '@angular/material/tooltip';
 import { Component, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
+import { forkJoin } from 'rxjs';
 
 import { Api } from '../core/api';
-import type { AddHeaterRequest, ApiErrorDto, ChangeDto, ConfigDto, UpdateHeaterRequest } from '../core/api.types';
+import type {
+  AddHeaterRequest,
+  ApiErrorDto,
+  ConfigDto,
+  DatabaseCandidateDto,
+  PlanningSiteConfigDto,
+  SecretEditDto,
+  SystemConfigurationDto,
+  SystemSection,
+  TopologyDto,
+  UpdateHeaterRequest,
+} from '../core/api.types';
 import { type Explained, UNREACHABLE, explain, messageFor } from '../core/errors';
 import { confirmationText, needsConfirmation } from './electrical-fields';
 import { ParamHelp } from '../shared/param-help/param-help';
+
+type ConfigArea = 'summary' | 'installation' | 'heaters' | 'planning' | 'integrations' | 'service';
+type IntegrationSection = 'mqtt' | 'weather';
+type ServiceSection = 'database' | 'api' | 'output' | 'logging' | 'operations';
 
 interface FormEdit { readonly field: string; readonly value: string; }
 interface PendingEdit {
@@ -32,6 +50,24 @@ interface PendingEdit {
   readonly heaterId: string | null;
   readonly formEdits?: readonly FormEdit[];
   readonly batchEdits?: readonly FormEdit[];
+}
+
+interface Option { readonly value: string; readonly label: string; }
+interface FieldDefinition {
+  readonly name: string;
+  readonly label: string;
+  readonly type: 'text' | 'number' | 'boolean' | 'select';
+  readonly options?: readonly Option[];
+  readonly helpField?: string;
+  readonly hint?: string;
+  readonly min?: string;
+  readonly max?: string;
+  readonly step?: string;
+}
+interface FieldGroup {
+  readonly title: string;
+  readonly description?: string;
+  readonly fields: readonly FieldDefinition[];
 }
 
 export interface HeaterForm {
@@ -61,36 +97,56 @@ const HEATER_EDIT_FIELDS = [
 ] as const;
 
 const INSTALLATION_GROUPS = [
-  { title: 'Parámetros de carga', fields: ['max_total_power_kw', 'slot_minutes', 'retention_days', 'poll_seconds', 'log_level'] },
-  { title: 'Política de temperatura interior', fields: ['indoor_max_age_minutes', 'indoor_min_plausible_c', 'indoor_max_plausible_c'] },
+  {
+    title: 'Intervalos de carga',
+    description: 'Cómo se divide la ventana de carga en intervalos operativos.',
+    fields: ['slot_minutes'],
+  },
+  {
+    title: 'Calidad de temperatura interior',
+    description: 'Límites para descartar lecturas MQTT que no sean plausibles.',
+    fields: ['indoor_max_age_minutes', 'indoor_min_plausible_c', 'indoor_max_plausible_c'],
+  },
 ] as const;
 
+// Kept only so old callers of the component continue to receive the same
+// optimistic-lock behavior. These values intentionally have no input in the
+// unified UI; their editable source is now the planning/system configuration.
+const LEGACY_INSTALLATION_FIELDS = ['max_total_power_kw', 'poll_seconds', 'log_level', 'retention_days'] as const;
+
 interface HeaterFormFieldMeta {
-  key: keyof HeaterForm;
-  label: string;
-  type: 'text' | 'number' | 'select';
-  helpField?: string;
-  step?: string;
-  min?: string;
-  max?: string;
-  required?: boolean;
-  readonlyOnEdit?: boolean;
-  hint?: string;
-  selectOptions?: ReadonlyArray<{ value: string | boolean; label: string }>;
+  readonly key: keyof HeaterForm;
+  readonly label: string;
+  readonly type: 'text' | 'number' | 'select';
+  readonly helpField?: string;
+  readonly step?: string;
+  readonly min?: string;
+  readonly max?: string;
+  readonly required?: boolean;
+  readonly readonlyOnEdit?: boolean;
+  readonly hint?: string;
+  readonly selectOptions?: ReadonlyArray<{ value: string | boolean; label: string }>;
 }
 
 const HEATER_FORM_FIELDS: readonly HeaterFormFieldMeta[] = [
   { key: 'id', label: 'Identificador', type: 'text', required: true, readonlyOnEdit: true },
-  { key: 'name', label: 'Nombre', type: 'text' },
+  { key: 'name', label: 'Nombre visible', type: 'text' },
   { key: 'model', label: 'Modelo', type: 'text' },
-  { key: 'power_kw', label: 'Potencia (kW)', type: 'number', step: '0.1', required: true },
+  { key: 'power_kw', label: 'Potencia nominal (kW)', type: 'number', step: '0.1', required: true },
   { key: 'full_charge_hours', label: 'Carga completa (horas)', type: 'number', step: '0.1', required: true },
-  { key: 'target_charge', label: 'Carga objetivo (0–1)', type: 'number', min: '0', max: '1', step: '0.01' },
-  { key: 'reserve_percent', label: 'Reserva de demanda (%)', type: 'number', min: '0', step: '1', hint: 'Margen multiplicativo sobre la demanda estimada' },
-  { key: 'demand_factor', label: 'Factor de demanda', type: 'number', min: '0.01', step: '0.05' },
-  { key: 'priority', label: 'Prioridad', type: 'number' },
   {
-    key: 'output', label: 'Salida', type: 'select', helpField: 'output',
+    key: 'target_charge', label: 'Objetivo base (0–1)', type: 'number', min: '0', max: '1', step: '0.01',
+    hint: 'Valor por defecto; las necesidades programadas se definen en Planificación.',
+  },
+  { key: 'reserve_percent', label: 'Reserva de demanda (%)', type: 'number', min: '0', step: '1', hint: 'Margen sobre la demanda estimada.' },
+  { key: 'demand_factor', label: 'Factor de demanda', type: 'number', min: '0.01', step: '0.05' },
+  { key: 'priority', label: 'Prioridad', type: 'number', hint: 'Un número menor significa mayor prioridad.' },
+  {
+    key: 'enabled', label: 'Estado', type: 'select',
+    selectOptions: [{ value: true, label: 'Activo' }, { value: false, label: 'Desactivado' }],
+  },
+  {
+    key: 'output', label: 'Tipo de salida del acumulador', type: 'select', helpField: 'output',
     selectOptions: [{ value: 'simulated', label: 'Simulada' }, { value: 'gpio', label: 'GPIO' }],
   },
   { key: 'pin', label: 'Pin BCM', type: 'number' },
@@ -98,15 +154,124 @@ const HEATER_FORM_FIELDS: readonly HeaterFormFieldMeta[] = [
     key: 'active_high', label: 'Nivel activo', type: 'select',
     selectOptions: [{ value: true, label: 'Alto' }, { value: false, label: 'Bajo' }],
   },
-  { key: 'indoor_topic', label: 'Tópico interior', type: 'text' },
+  { key: 'indoor_topic', label: 'Tópico de temperatura interior', type: 'text' },
   { key: 'temperature_topic', label: 'Tópico de temperatura', type: 'text' },
   { key: 'target_temperature_topic', label: 'Tópico de objetivo', type: 'text' },
   { key: 'stored_charge_topic', label: 'Tópico de carga almacenada', type: 'text' },
-  {
-    key: 'enabled', label: 'Estado', type: 'select',
-    selectOptions: [{ value: true, label: 'Activo' }, { value: false, label: 'Desactivado' }],
-  },
 ];
+
+const HEATER_FORM_GROUPS = [
+  { title: 'Identificación y capacidad', fields: ['id', 'name', 'model', 'power_kw', 'full_charge_hours'] },
+  { title: 'Comportamiento de carga', fields: ['target_charge', 'reserve_percent', 'demand_factor', 'priority', 'enabled'] },
+  { title: 'Salida y telemetría', fields: ['output', 'pin', 'active_high', 'indoor_topic', 'temperature_topic', 'target_temperature_topic', 'stored_charge_topic'] },
+] as const;
+
+const WEATHER_PROVIDERS: readonly Option[] = [
+  { value: 'aemet', label: 'AEMET' },
+  { value: 'simulated', label: 'Simulada' },
+];
+const DATABASE_DRIVERS: readonly Option[] = [
+  { value: 'sqlite', label: 'SQLite local' },
+  { value: 'postgresql', label: 'PostgreSQL' },
+];
+const OUTPUT_DRIVERS: readonly Option[] = [
+  { value: 'simulated', label: 'Simulada' },
+  { value: 'gpio', label: 'GPIO' },
+];
+const LOG_LEVELS: readonly Option[] = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'].map((value) => ({ value, label: value }));
+
+const PLANNING_FIELDS: readonly FieldDefinition[] = [
+  { name: 'replan_minutes', label: 'Frecuencia de replanificación (min)', type: 'number', min: '1', step: '1' },
+  { name: 'planning_window_hours', label: 'Ventana visible (horas)', type: 'number', min: '1', step: '1' },
+  { name: 'forecast_horizon_hours', label: 'Horizonte de previsión (horas)', type: 'number', min: '1', step: '1' },
+  { name: 'solver_time_limit_seconds', label: 'Tiempo máximo del optimizador (s)', type: 'number', min: '1', step: '1' },
+  { name: 'aemet_query_hour', label: 'Hora de consulta AEMET (0–23)', type: 'number', min: '0', max: '23', step: '1' },
+  { name: 'contracted_power_w', label: 'Potencia total contratada (W)', type: 'number', min: '1', step: '100', hint: 'Fuente única para el optimizador y el indicador de Estado.' },
+  { name: 'max_heating_power_w', label: 'Límite de calefacción (W)', type: 'number', min: '1', step: '100' },
+  { name: 'base_load_w', label: 'Consumo base estimado (W)', type: 'number', min: '0', step: '100' },
+  { name: 'design_indoor_temperature_c', label: 'Temperatura interior de diseño (°C)', type: 'number', step: '0.1' },
+  { name: 'design_outdoor_temperature_c', label: 'Temperatura exterior de diseño (°C)', type: 'number', step: '0.1' },
+  { name: 'feedback_horizon_hours', label: 'Histórico para feedback (horas)', type: 'number', min: '0', step: '1' },
+  { name: 'mqtt_simulation_enabled', label: 'Activar simulación MQTT', type: 'boolean' },
+  { name: 'mqtt_simulation_initial_temperature_c', label: 'Temperatura inicial simulada (°C)', type: 'number', step: '0.1' },
+  { name: 'mqtt_simulation_publish_seconds', label: 'Publicación simulada (s)', type: 'number', min: '1', step: '1' },
+  { name: 'mqtt_simulation_topic_prefix', label: 'Prefijo de tópicos simulados', type: 'text' },
+  { name: 'mqtt_simulation_thermal_loss_c_per_hour', label: 'Pérdida térmica simulada (°C/h)', type: 'number', min: '0', step: '0.1' },
+];
+
+const SYSTEM_FIELDS: Record<SystemSection, readonly FieldDefinition[]> = {
+  database: [
+    { name: 'driver', label: 'Motor de base de datos', type: 'select', options: DATABASE_DRIVERS },
+    { name: 'host', label: 'Servidor PostgreSQL', type: 'text', hint: 'No se usa con SQLite.' },
+    { name: 'port', label: 'Puerto PostgreSQL', type: 'number', min: '1', max: '65535', step: '1' },
+    { name: 'database', label: 'Nombre de la base de datos', type: 'text' },
+    { name: 'tls', label: 'Exigir TLS', type: 'boolean' },
+    { name: 'trusted_no_tls', label: 'Permitir PostgreSQL sin TLS', type: 'boolean', hint: 'Solo en redes de confianza.' },
+  ],
+  api: [
+    { name: 'host', label: 'Interfaz de escucha', type: 'text' },
+    { name: 'port', label: 'Puerto HTTP', type: 'number', min: '1', max: '65535', step: '1' },
+    { name: 'cors_origins', label: 'Orígenes CORS', type: 'text', hint: 'Separa varios orígenes con comas.' },
+    { name: 'stale_seconds', label: 'Umbral de estado no actualizado (s)', type: 'number', min: '0', step: '1' },
+  ],
+  mqtt: [
+    { name: 'enabled', label: 'Activar MQTT', type: 'boolean' },
+    { name: 'host', label: 'Servidor MQTT', type: 'text' },
+    { name: 'port', label: 'Puerto MQTT', type: 'number', min: '1', max: '65535', step: '1' },
+    { name: 'tls', label: 'Usar TLS', type: 'boolean' },
+    { name: 'prefix', label: 'Prefijo de tópicos', type: 'text' },
+    { name: 'discovery_prefix', label: 'Prefijo de descubrimiento', type: 'text' },
+    { name: 'publish_seconds', label: 'Publicación de estado (s)', type: 'number', min: '1', step: '1' },
+    { name: 'fixed_temperature_c', label: 'Temperatura fija del acumulador (°C)', type: 'number', step: '0.1' },
+    { name: 'fixed_target_temperature_c', label: 'Objetivo fijo del acumulador (°C)', type: 'number', step: '0.1' },
+    { name: 'fixed_stored_charge_percent', label: 'Carga almacenada fija (%)', type: 'number', min: '0', max: '100', step: '1' },
+    { name: 'fixed_indoor_temperature_c', label: 'Temperatura interior fija (°C)', type: 'number', step: '0.1' },
+  ],
+  weather: [
+    { name: 'provider', label: 'Proveedor meteorológico', type: 'select', options: WEATHER_PROVIDERS },
+    { name: 'municipality_code', label: 'Código de municipio AEMET', type: 'text', hint: 'Código INE de 5 dígitos.' },
+    { name: 'timeout_seconds', label: 'Tiempo de espera (s)', type: 'number', min: '1', step: '1' },
+    { name: 'simulated_average_temperature_c', label: 'Media simulada (°C)', type: 'number', step: '0.1' },
+    { name: 'simulated_minimum_temperature_c', label: 'Mínima simulada (°C)', type: 'number', step: '0.1' },
+    { name: 'fallback_average_temperature_c', label: 'Media de respaldo (°C)', type: 'number', step: '0.1' },
+    { name: 'fallback_minimum_temperature_c', label: 'Mínima de respaldo (°C)', type: 'number', step: '0.1' },
+    { name: 'retry_minutes', label: 'Reintento tras error (min)', type: 'number', min: '1', step: '1' },
+    { name: 'refresh_minutes', label: 'Actualización automática (min)', type: 'number', min: '1', step: '1' },
+  ],
+  output: [{ name: 'driver', label: 'Modo global de salida', type: 'select', options: OUTPUT_DRIVERS, hint: 'Define si el controlador usa salidas simuladas o GPIO.' }],
+  logging: [
+    { name: 'level', label: 'Nivel mínimo de registro', type: 'select', options: LOG_LEVELS },
+    { name: 'max_events', label: 'Eventos retenidos', type: 'number', min: '1', step: '1' },
+  ],
+  operations: [
+    { name: 'controller_poll_seconds', label: 'Intervalo del controlador (s)', type: 'number', min: '1', step: '1' },
+    { name: 'heartbeat_stale_multiplier', label: 'Multiplicador de estado obsoleto', type: 'number', min: '1', step: '0.1' },
+    { name: 'relay_test_lease_seconds', label: 'Duración de prueba de relés (s)', type: 'number', min: '1', step: '1' },
+    { name: 'relay_test_state_poll_seconds', label: 'Lectura durante prueba (s)', type: 'number', min: '1', step: '1' },
+    { name: 'relay_test_lease_renew_seconds', label: 'Renovación de prueba (s)', type: 'number', min: '1', step: '1' },
+    { name: 'retention_days', label: 'Retención de históricos (días)', type: 'number', min: '1', step: '1', hint: 'Deja vacío para conservarlos indefinidamente.' },
+    { name: 'fallback_max_age_minutes', label: 'Antigüedad máxima del fallback (min)', type: 'number', min: '1', step: '1' },
+  ],
+};
+
+const SECTION_LABELS: Record<SystemSection, string> = {
+  database: 'Almacenamiento',
+  api: 'Acceso al panel',
+  mqtt: 'MQTT',
+  weather: 'Meteorología',
+  output: 'Salidas físicas',
+  logging: 'Registros',
+  operations: 'Operación',
+};
+
+const SECRET_LABELS: Record<string, string> = {
+  admin_token_digest: 'Credencial de administrador',
+  postgres_username: 'Usuario PostgreSQL',
+  postgres_password: 'Contraseña PostgreSQL',
+  mqtt_username: 'Usuario MQTT',
+  mqtt_password: 'Contraseña MQTT',
+  aemet_api_key: 'Clave API de AEMET',
+};
 
 @Component({
   selector: 'dtc-confirm-dialog',
@@ -139,26 +304,76 @@ export class Config {
   private readonly api = inject(Api);
   private readonly dialog = inject(MatDialog);
 
+  readonly areas = [
+    { id: 'summary', label: 'Resumen', description: 'Estado general y accesos rápidos' },
+    { id: 'installation', label: 'Instalación', description: 'Intervalos y calidad de lecturas' },
+    { id: 'heaters', label: 'Acumuladores', description: 'Equipos, salidas y telemetría' },
+    { id: 'planning', label: 'Planificación', description: 'Potencia y optimizador automático' },
+    { id: 'integrations', label: 'Integraciones', description: 'MQTT y meteorología' },
+    { id: 'service', label: 'Servicio', description: 'Acceso, datos y operación' },
+  ] as const;
+  readonly integrationSections: readonly IntegrationSection[] = ['mqtt', 'weather'];
+  readonly serviceSections: readonly ServiceSection[] = ['database', 'api', 'output', 'logging', 'operations'];
+  readonly heaterFormGroups = HEATER_FORM_GROUPS;
+  readonly installationGroups = INSTALLATION_GROUPS;
+  readonly heaterFormFields = HEATER_FORM_FIELDS;
+  readonly planningFields = PLANNING_FIELDS;
+
+  readonly activeArea = signal<ConfigArea>('summary');
+  readonly activeIntegrationSection = signal<IntegrationSection>('mqtt');
+  readonly activeServiceSection = signal<ServiceSection>('database');
   readonly config = signal<ConfigDto | null>(null);
+  readonly configuration = signal<SystemConfigurationDto | null>(null);
+  readonly planningConfig = signal<PlanningSiteConfigDto | null>(null);
+  readonly topology = signal<TopologyDto | null>(null);
   readonly banner = signal<Explained | null>(null);
+  readonly systemError = signal('');
   readonly fieldErrors = signal<Record<string, string>>({});
   private readonly rendered = new Set<string>();
   readonly pending = signal<Record<string, string>>({});
+  readonly systemDraft = signal<Record<string, unknown>>({});
+  readonly planningDraft = signal<Record<string, unknown>>({});
+  readonly secretActions = signal<Record<string, SecretEditDto['action']>>({});
+  readonly secretValues = signal<Record<string, string>>({});
   readonly confirming = signal<PendingEdit | null>(null);
-  readonly saved = signal<string>('');
+  readonly systemConfirming = signal<SystemSection | null>(null);
+  readonly saved = signal('');
+  readonly systemMessage = signal('');
   readonly relayConflict = signal(false);
   readonly heaterForm = signal<HeaterForm | null>(null);
   readonly heaterFormMode = signal<'add' | 'edit' | null>(null);
   readonly heaterFormError = signal('');
   readonly heaterSaving = signal(false);
   readonly installationSaving = signal(false);
-  readonly installationGroups = INSTALLATION_GROUPS;
-  readonly heaterFormFields = HEATER_FORM_FIELDS;
+  readonly planningSaving = signal(false);
+  readonly systemSaving = signal(false);
+  readonly configLoading = signal(true);
+  readonly systemLoading = signal(true);
+  readonly operation = signal('');
+  readonly weatherRefreshLoading = signal(false);
+  readonly weatherRefreshMessage = signal('');
+  readonly weatherRefreshError = signal('');
   readonly dirty = computed(() => Object.keys(this.pending()).length > 0);
+  readonly planningDirty = computed(() => Object.keys(this.planningDraft()).length > 0);
+  readonly loading = computed(() => this.configLoading() || this.systemLoading());
 
   constructor() { this.load(); }
 
-  load(): void {
+  chooseArea(area: ConfigArea): void { this.activeArea.set(area); }
+  chooseIntegration(section: IntegrationSection): void { this.activeIntegrationSection.set(section); }
+  chooseService(section: ServiceSection): void { this.activeServiceSection.set(section); }
+
+  areaIs(area: ConfigArea): boolean { return this.activeArea() === area; }
+  sectionLabel(section: SystemSection): string { return SECTION_LABELS[section]; }
+  secretLabel(secret: string): string { return SECRET_LABELS[secret] ?? secret; }
+  activationLabel(value: string | undefined): string {
+    return ({ hot: 'inmediato', next_cycle: 'próximo ciclo', restart: 'requiere reinicio' } as Record<string, string>)[value ?? ''] ?? '';
+  }
+
+  load(preserveWorkspaceDrafts = false): void {
+    this.configLoading.set(true);
+    this.systemLoading.set(true);
+    this.systemError.set('');
     this.api.config().subscribe({
       next: (dto) => {
         this.config.set(dto);
@@ -166,54 +381,121 @@ export class Config {
         this.fieldErrors.set({});
         this.pending.set({});
         this.relayConflict.set(false);
+        this.configLoading.set(false);
       },
-      error: (error: unknown) => this.banner.set(this.describe(error)),
+      error: (error: unknown) => {
+        this.configLoading.set(false);
+        this.banner.set(this.describe(error));
+      },
+    });
+    forkJoin({
+      configuration: this.api.systemConfiguration(),
+      topology: this.api.topology(),
+      planningConfig: this.api.planningConfig(),
+    }).subscribe({
+      next: ({ configuration, topology, planningConfig }) => {
+        this.configuration.set(configuration);
+        this.topology.set(topology);
+        this.planningConfig.set(planningConfig);
+        if (!preserveWorkspaceDrafts) {
+          this.systemDraft.set({});
+          this.planningDraft.set({});
+          this.secretActions.set({});
+          this.secretValues.set({});
+        }
+        this.systemLoading.set(false);
+      },
+      error: () => {
+        this.systemLoading.set(false);
+        this.systemError.set('No se pudo cargar la configuración del sistema. Puedes seguir consultando la instalación.');
+      },
     });
   }
 
-  key(field: string, heaterId: string | null): string {
-    return heaterId === null ? field : `${heaterId}.${field}`;
+  writable(): boolean { return this.topology()?.administrative_writes_allowed === true; }
+  topologyMode(): string {
+    const mode = this.topology()?.mode;
+    return ({ bootstrap: 'inicialización', normal: 'normal', fallback: 'respaldo', migrating: 'migración', incompatible: 'incompatible' } as Record<string, string>)[mode ?? ''] ?? 'desconocido';
+  }
+  topologyDriver(): string { return this.topology()?.canonical_driver === 'postgresql' ? 'PostgreSQL' : this.topology()?.canonical_driver === 'sqlite' ? 'SQLite' : 'Sin determinar'; }
+  formatPower(value: number | null | undefined): string { return value === null || value === undefined ? '—' : `${(value / 1000).toLocaleString('es-ES', { maximumFractionDigits: 1 })} kW`; }
+  canonicalPower(): number | null { return this.planningConfig()?.contracted_power_w ?? null; }
+  enabledText(value: unknown): string { return value === true || value === 'true' ? 'Activado' : 'Desactivado'; }
+  systemValue(section: SystemSection, field: string): unknown {
+    const key = this.systemKey(section, field);
+    return this.systemDraft()[key] ?? this.configuration()?.sections[section]?.[field] ?? '';
+  }
+  planningValue(field: string): unknown {
+    return this.planningDraft()[field] ?? this.planningConfig()?.[field as keyof PlanningSiteConfigDto] ?? '';
+  }
+  systemKey(section: SystemSection, field: string): string { return `${section}.${field}`; }
+  systemEdit(section: SystemSection, field: string, value: unknown): void {
+    this.systemDraft.update((draft) => ({ ...draft, [this.systemKey(section, field)]: value }));
+  }
+  planningEdit(field: string, value: unknown): void { this.planningDraft.update((draft) => ({ ...draft, [field]: value })); }
+  systemFields(section: SystemSection): readonly FieldDefinition[] { return SYSTEM_FIELDS[section]; }
+  systemGroups(section: SystemSection): readonly FieldGroup[] {
+    const fields = SYSTEM_FIELDS[section];
+    if (section === 'mqtt') {
+      const enabled = fields[0];
+      return this.mqttEnabled()
+        ? [{ title: 'Conexión MQTT', description: 'Broker y publicación de estados de los acumuladores.', fields: [enabled, ...fields.slice(1, 7)] }, { title: 'Valores fijos de prueba', description: 'Se conservan para pruebas cuando MQTT está desactivado.', fields: fields.slice(7) }]
+        : [{ title: 'Modo de integración', fields: [enabled] }, { title: 'Valores fijos de prueba', description: 'Se usan para todos los acumuladores mientras MQTT está desactivado.', fields: fields.slice(7) }];
+    }
+    if (section === 'weather') {
+      return [
+        { title: 'Proveedor y ubicación', fields: fields.slice(0, 3) },
+        { title: 'Temperaturas simuladas y respaldo', fields: fields.slice(3, 7) },
+        { title: 'Actualización', fields: fields.slice(7) },
+      ];
+    }
+    return [{ title: 'Parámetros', fields }];
+  }
+  planningGroups(): readonly FieldGroup[] {
+    return [
+      { title: 'Cadencia y horizonte', description: 'Define cuánto mira el optimizador y cuándo vuelve a calcular.', fields: PLANNING_FIELDS.slice(0, 5) },
+      { title: 'Límites de potencia', description: 'La potencia contratada total es la fuente única que usa el optimizador y Estado.', fields: PLANNING_FIELDS.slice(5, 7) },
+      { title: 'Modelo de demanda', fields: PLANNING_FIELDS.slice(7, 11) },
+      { title: 'Simulación MQTT de acumuladores', description: 'Solo se usa para pruebas controladas.', fields: PLANNING_FIELDS.slice(11) },
+    ];
+  }
+  mqttEnabled(): boolean {
+    const value = this.systemValue('mqtt', 'enabled');
+    return value === true || value === 'true';
+  }
+  secrets(section: SystemSection): string[] {
+    if (section === 'mqtt' && !this.mqttEnabled()) return [];
+    return ({ api: ['admin_token_digest'], database: ['postgres_username', 'postgres_password'], mqtt: ['mqtt_username', 'mqtt_password'], weather: ['aemet_api_key'] } as Partial<Record<SystemSection, string[]>>)[section] ?? [];
+  }
+  secretAction(name: string): SecretEditDto['action'] { return this.secretActions()[name] ?? 'keep'; }
+  setSecretAction(name: string, action: SecretEditDto['action']): void {
+    this.secretActions.update((current) => ({ ...current, [name]: action }));
+    if (action !== 'replace') this.setSecretValue(name, '');
+  }
+  setSecretValue(name: string, value: string): void { this.secretValues.update((current) => ({ ...current, [name]: value })); }
+  systemHasChanges(section: SystemSection): boolean {
+    const draft = this.systemDraft();
+    return SYSTEM_FIELDS[section].some((field) => this.systemKey(section, field.name) in draft) || this.secrets(section).some((secret) => this.secretAction(secret) !== 'keep');
   }
 
-  register(field: string, heaterId: string | null): string {
-    this.rendered.add(this.key(field, heaterId));
-    return '';
-  }
-
+  key(field: string, heaterId: string | null): string { return heaterId === null ? field : `${heaterId}.${field}`; }
+  register(field: string, heaterId: string | null): string { this.rendered.add(this.key(field, heaterId)); return ''; }
   label(field: string): string {
     const labels: Record<string, string> = {
-      max_total_power_kw: 'Potencia máxima simultánea (kW)', slot_minutes: 'Duración de intervalo (min)',
-      retention_days: 'Retención de históricos (días)', poll_seconds: 'Intervalo de sondeo (s)',
-      log_level: 'Nivel de registro', indoor_max_age_minutes: 'Antigüedad máxima interior (min)',
-      indoor_min_plausible_c: 'Temperatura interior mínima (°C)', indoor_max_plausible_c: 'Temperatura interior máxima (°C)',
-      reserve_percent: 'Reserva de demanda (%)', demand_factor: 'Factor de demanda',
-      temperature_topic: 'Tópico de temperatura',
-      target_temperature_topic: 'Tópico de objetivo',
-      stored_charge_topic: 'Tópico de carga almacenada',
+      max_total_power_kw: 'Potencia máxima simultánea (kW)', slot_minutes: 'Duración de intervalo (min)', retention_days: 'Retención de históricos (días)', poll_seconds: 'Intervalo de sondeo (s)', log_level: 'Nivel de registro',
+      indoor_max_age_minutes: 'Antigüedad máxima interior (min)', indoor_min_plausible_c: 'Temperatura interior mínima (°C)', indoor_max_plausible_c: 'Temperatura interior máxima (°C)',
     };
     return labels[field] ?? field;
   }
-
-  helpField(meta: HeaterFormFieldMeta): string {
-    return meta.helpField ?? meta.key;
-  }
-
-  edit(field: string, heaterId: string | null, value: string): void {
-    this.pending.update((current) => ({ ...current, [this.key(field, heaterId)]: value }));
-  }
+  helpField(meta: HeaterFormFieldMeta): string { return meta.helpField ?? meta.key; }
+  heaterMeta(key: string): HeaterFormFieldMeta | undefined { return HEATER_FORM_FIELDS.find((field) => field.key === key); }
+  edit(field: string, heaterId: string | null, value: string): void { this.pending.update((current) => ({ ...current, [this.key(field, heaterId)]: value })); }
 
   installationEdits(): readonly FormEdit[] {
     const pending = this.pending();
-    const edits: FormEdit[] = [];
-    for (const group of INSTALLATION_GROUPS) {
-      for (const field of group.fields) {
-        const target = this.key(field, null);
-        if (target in pending) edits.push({ field, value: pending[target] });
-      }
-    }
-    return edits;
+    const fields = [...INSTALLATION_GROUPS.flatMap((group) => group.fields), ...LEGACY_INSTALLATION_FIELDS];
+    return fields.filter((field) => this.key(field, null) in pending).map((field) => ({ field, value: pending[this.key(field, null)] }));
   }
-
   saveInstallation(): void {
     const edits = this.installationEdits();
     if (edits.length === 0 || this.installationSaving()) return;
@@ -223,7 +505,6 @@ export class Config {
     }
     this.applyInstallation(edits);
   }
-
   submit(field: string, heaterId: string | null): void {
     const value = this.pending()[this.key(field, heaterId)];
     if (value === undefined) return;
@@ -233,36 +514,31 @@ export class Config {
     }
     this.apply({ field, value, heaterId });
   }
-
   confirmationMessage(): string {
     const edit = this.confirming();
     if (edit === null) return '';
     if (edit.batchEdits?.length) {
       const electrical = edit.batchEdits.filter((item) => needsConfirmation(item.field));
       if (electrical.length === 1) return confirmationText(electrical[0].field, electrical[0].value);
-      if (electrical.length > 1) {
-        return 'Se aplicarán varios cambios, incluidos parámetros eléctricos. Revisa los valores antes de continuar.';
-      }
+      if (electrical.length > 1) return 'Se aplicarán varios cambios, incluidos parámetros eléctricos. Revisa los valores antes de continuar.';
       return `Se aplicarán ${edit.batchEdits.length} cambios en la instalación. ¿Continuar?`;
     }
     return edit.formEdits ? 'Se aplicarán los cambios del acumulador. Revisa especialmente los valores eléctricos.' : confirmationText(edit.field, edit.value);
   }
-
   confirm(): void {
     const edit = this.confirming();
     this.confirming.set(null);
     if (edit === null) return;
-    if (edit.formEdits) {
-      this.applyHeaterEdits(edit.heaterId!);
-    } else if (edit.batchEdits) {
-      this.applyInstallation(edit.batchEdits);
-    } else {
-      this.apply(edit);
-    }
+    if (edit.formEdits) this.applyHeaterEdits(edit.heaterId!);
+    else if (edit.batchEdits) this.applyInstallation(edit.batchEdits);
+    else this.apply(edit);
   }
-
   cancelConfirmation(): void { this.confirming.set(null); }
-
+  confirmSystemSave(): void {
+    const section = this.systemConfirming();
+    this.systemConfirming.set(null);
+    if (section !== null) this.saveSystem(section);
+  }
   discard(field: string, heaterId: string | null): void {
     const target = this.key(field, heaterId);
     this.pending.update((current) => {
@@ -271,13 +547,11 @@ export class Config {
       return next;
     });
   }
-
   asText(config: ConfigDto, field: string): string {
     const value = (config as unknown as Record<string, unknown>)[field];
     if (value === null || value === undefined) return field === 'retention_days' ? 'none' : '';
     return String(value);
   }
-
   heaterText(heater: ConfigDto['heaters'][number], field: string): string {
     if (field === 'pin') return heater.output.pin === null ? '' : String(heater.output.pin);
     if (field === 'active_high') return String(heater.output.active_high);
@@ -287,28 +561,22 @@ export class Config {
   }
 
   openAddHeater(): void {
+    this.activeArea.set('heaters');
     this.heaterFormMode.set('add');
     this.heaterFormError.set('');
     this.heaterForm.set({ id: '', name: '', model: '', power_kw: '1', full_charge_hours: '8', target_charge: '1', reserve_percent: '0', demand_factor: '1', priority: '0', enabled: true, indoor_topic: '', temperature_topic: '', target_temperature_topic: '', stored_charge_topic: '', output: 'simulated', pin: '', active_high: true });
   }
-
   openEditHeater(heater: ConfigDto['heaters'][number]): void {
+    this.activeArea.set('heaters');
     this.heaterFormMode.set('edit');
     this.heaterFormError.set('');
     this.heaterForm.set({
-      id: heater.id, name: heater.name, model: heater.model ?? '', power_kw: String(heater.power_kw), full_charge_hours: String(heater.full_charge_hours),
-      target_charge: String(heater.target_charge), reserve_percent: String(heater.reserve_percent), demand_factor: String(heater.demand_factor), priority: String(heater.priority), enabled: heater.enabled, indoor_topic: heater.indoor_topic ?? '',
-      temperature_topic: heater.temperature_topic ?? '', target_temperature_topic: heater.target_temperature_topic ?? '', stored_charge_topic: heater.stored_charge_topic ?? '',
-      output: heater.output.kind, pin: heater.output.pin === null ? '' : String(heater.output.pin), active_high: heater.output.active_high,
+      id: heater.id, name: heater.name, model: heater.model ?? '', power_kw: String(heater.power_kw), full_charge_hours: String(heater.full_charge_hours), target_charge: String(heater.target_charge), reserve_percent: String(heater.reserve_percent), demand_factor: String(heater.demand_factor), priority: String(heater.priority), enabled: heater.enabled, indoor_topic: heater.indoor_topic ?? '',
+      temperature_topic: heater.temperature_topic ?? '', target_temperature_topic: heater.target_temperature_topic ?? '', stored_charge_topic: heater.stored_charge_topic ?? '', output: heater.output.kind, pin: heater.output.pin === null ? '' : String(heater.output.pin), active_high: heater.output.active_high,
     });
   }
-
   cancelHeaterForm(): void { this.heaterForm.set(null); this.heaterFormMode.set(null); this.heaterFormError.set(''); }
-
-  updateHeaterForm(field: keyof HeaterForm, value: unknown): void {
-    this.heaterForm.update((current) => current ? { ...current, [field]: value } : current);
-  }
-
+  updateHeaterForm(field: keyof HeaterForm, value: unknown): void { this.heaterForm.update((current) => current ? { ...current, [field]: value } : current); }
   saveHeater(): void {
     const form = this.heaterForm();
     const snapshot = this.config();
@@ -326,8 +594,8 @@ export class Config {
     if (this.heaterFormMode() === 'add') {
       const payload: AddHeaterRequest = {
         revision: snapshot.config_revision, id: form.id.trim(), name: form.name.trim() || undefined, model: form.model.trim() || undefined,
-        power_kw: Number(form.power_kw), full_charge_hours: Number(form.full_charge_hours), target_charge: Number(form.target_charge), reserve_percent: Number(form.reserve_percent), demand_factor: Number(form.demand_factor), priority: Number(form.priority),
-        enabled: form.enabled, indoor_topic: form.indoor_topic.trim() || null, temperature_topic: form.temperature_topic.trim() || null, target_temperature_topic: form.target_temperature_topic.trim() || null, stored_charge_topic: form.stored_charge_topic.trim() || null, output: form.output, pin: form.pin.trim() ? Number(form.pin) : null, active_high: form.active_high,
+        power_kw: Number(form.power_kw), full_charge_hours: Number(form.full_charge_hours), target_charge: Number(form.target_charge), reserve_percent: Number(form.reserve_percent), demand_factor: Number(form.demand_factor), priority: Number(form.priority), enabled: form.enabled,
+        indoor_topic: form.indoor_topic.trim() || null, temperature_topic: form.temperature_topic.trim() || null, target_temperature_topic: form.target_temperature_topic.trim() || null, stored_charge_topic: form.stored_charge_topic.trim() || null, output: form.output, pin: form.pin.trim() ? Number(form.pin) : null, active_high: form.active_high,
       };
       this.api.addHeater(payload).subscribe({ next: (change) => this.finishHeaterSave(`Acumulador creado: ${change.entity_key ?? form.id}`), error: (error: unknown) => this.rejectHeater(error) });
       return;
@@ -344,31 +612,26 @@ export class Config {
     }
     this.applyHeaterEdits(original.id);
   }
-
   requestRemoveHeater(heater: ConfigDto['heaters'][number]): void {
     this.dialog.open(ConfirmDialog, { width: 'min(28rem, calc(100vw - 2rem))', data: { title: `Eliminar ${heater.name}`, message: 'Se eliminará el acumulador de la configuración. Su histórico se conservará.', confirmLabel: 'Eliminar acumulador' } }).afterClosed().subscribe((confirmed: boolean) => {
       if (confirmed) this.removeHeater(heater.id);
     });
   }
-
   removeHeater(heaterId: string): void {
     const snapshot = this.config();
     if (!snapshot || this.heaterSaving()) return;
     this.heaterSaving.set(true);
     this.api.removeHeater(heaterId, snapshot.config_revision).subscribe({
-      next: (change) => { this.heaterSaving.set(false); this.saved.set(`Acumulador eliminado: ${change.entity_key ?? heaterId}`); this.cancelHeaterForm(); this.load(); },
+      next: (change) => { this.heaterSaving.set(false); this.saved.set(`Acumulador eliminado: ${change.entity_key ?? heaterId}`); this.cancelHeaterForm(); this.load(true); },
       error: (error: unknown) => { this.heaterSaving.set(false); this.banner.set(this.describe(error)); },
     });
   }
-
   private formValue(form: HeaterForm, field: typeof HEATER_EDIT_FIELDS[number]): string {
     if (field === 'output_type') return form.output;
     const value = form[field as keyof HeaterForm];
     return typeof value === 'boolean' ? String(value) : String(value ?? '');
   }
-
   private validNumber(value: string): boolean { return value.trim() !== '' && Number.isFinite(Number(value)); }
-
   private apply(edit: PendingEdit): void {
     const current = this.config();
     if (!current) return;
@@ -376,11 +639,10 @@ export class Config {
     const call = edit.heaterId === null ? this.api.setField(body) : this.api.setHeaterField(edit.heaterId, body);
     const target = this.key(edit.field, edit.heaterId);
     call.subscribe({
-      next: (change) => { this.saved.set(`${edit.field}: ${change.old_value ?? '—'} → ${change.new_value ?? '—'}`); this.fieldErrors.update((errors) => { const next = { ...errors }; delete next[target]; return next; }); this.discard(edit.field, edit.heaterId); this.load(); },
+      next: (change) => { this.saved.set(`${edit.field}: ${change.old_value ?? '—'} → ${change.new_value ?? '—'}`); this.fieldErrors.update((errors) => { const next = { ...errors }; delete next[target]; return next; }); this.discard(edit.field, edit.heaterId); this.load(true); },
       error: (error: unknown) => this.reject(target, error),
     });
   }
-
   private applyInstallation(edits: readonly FormEdit[]): void {
     const current = this.config();
     if (!current || edits.length === 0) return;
@@ -393,45 +655,25 @@ export class Config {
         if (count === 1 && response.changes[0].field) {
           const change = response.changes[0];
           this.saved.set(`${change.field}: ${change.old_value ?? '—'} → ${change.new_value ?? '—'}`);
-        } else {
-          this.saved.set(`Configuración guardada (${count} cambios).`);
-        }
-        this.fieldErrors.update((errors) => {
-          const next = { ...errors };
-          for (const edit of edits) delete next[this.key(edit.field, null)];
-          return next;
-        });
+        } else this.saved.set(`Configuración guardada (${count} cambios).`);
+        this.fieldErrors.update((errors) => { const next = { ...errors }; for (const edit of edits) delete next[this.key(edit.field, null)]; return next; });
         for (const edit of edits) this.discard(edit.field, null);
-        this.load();
+        this.load(true);
       },
       error: (error: unknown) => {
         this.installationSaving.set(false);
-        const field = error instanceof HttpErrorResponse
-          && error.error !== null
-          && typeof error.error === 'object'
-          && 'field' in error.error
-          && typeof error.error.field === 'string'
-          ? error.error.field
-          : null;
+        const field = error instanceof HttpErrorResponse && error.error !== null && typeof error.error === 'object' && 'field' in error.error && typeof error.error.field === 'string' ? error.error.field : null;
         this.reject(field === null ? 'installation' : this.key(field, null), error);
       },
     });
   }
-
   private applyHeaterEdits(heaterId: string): void {
     const form = this.heaterForm();
     const revision = this.config()?.config_revision;
     if (!form || revision === undefined) return;
     const payload: UpdateHeaterRequest = {
-      revision,
-      name: form.name.trim(), model: form.model.trim() || null,
-      power_kw: Number(form.power_kw), full_charge_hours: Number(form.full_charge_hours),
-      target_charge: Number(form.target_charge), reserve_percent: Number(form.reserve_percent), demand_factor: Number(form.demand_factor), priority: Number(form.priority),
-      enabled: form.enabled, indoor_topic: form.indoor_topic.trim() || null,
-      temperature_topic: form.temperature_topic.trim() || null,
-      target_temperature_topic: form.target_temperature_topic.trim() || null,
-      stored_charge_topic: form.stored_charge_topic.trim() || null,
-      output: form.output, pin: form.pin.trim() ? Number(form.pin) : null, active_high: form.active_high,
+      revision, name: form.name.trim(), model: form.model.trim() || null, power_kw: Number(form.power_kw), full_charge_hours: Number(form.full_charge_hours), target_charge: Number(form.target_charge), reserve_percent: Number(form.reserve_percent), demand_factor: Number(form.demand_factor), priority: Number(form.priority), enabled: form.enabled,
+      indoor_topic: form.indoor_topic.trim() || null, temperature_topic: form.temperature_topic.trim() || null, target_temperature_topic: form.target_temperature_topic.trim() || null, stored_charge_topic: form.stored_charge_topic.trim() || null, output: form.output, pin: form.pin.trim() ? Number(form.pin) : null, active_high: form.active_high,
     };
     this.heaterSaving.set(true);
     this.api.updateHeater(heaterId, payload).subscribe({
@@ -439,11 +681,8 @@ export class Config {
       error: (error: unknown) => { this.heaterSaving.set(false); this.reject(this.key('form', heaterId), error); this.heaterFormError.set('No se pudo guardar el acumulador. El formulario conserva tus cambios.'); },
     });
   }
-
-  private finishHeaterSave(message: string): void { this.heaterSaving.set(false); this.saved.set(message); this.cancelHeaterForm(); this.load(); }
-
+  private finishHeaterSave(message: string): void { this.heaterSaving.set(false); this.saved.set(message); this.cancelHeaterForm(); this.load(true); }
   private rejectHeater(error: unknown): void { this.heaterSaving.set(false); this.heaterFormError.set(error instanceof HttpErrorResponse ? this.describe(error).title : 'No se pudo guardar el acumulador. Revisa los campos.'); }
-
   private reject(target: string, error: unknown): void {
     if (!(error instanceof HttpErrorResponse)) { this.banner.set(UNREACHABLE); return; }
     const body = error.error as ApiErrorDto | null;
@@ -455,6 +694,111 @@ export class Config {
     this.banner.set(explained);
   }
 
+  requestSystemSave(section: SystemSection): void {
+    if (!this.writable() || !this.systemHasChanges(section) || this.systemSaving()) return;
+    if (section === 'database' || section === 'output' || this.secrets(section).some((secret) => this.secretAction(secret) !== 'keep')) this.systemConfirming.set(section);
+    else this.saveSystem(section);
+  }
+  savePlanning(): void {
+    this.systemError.set('');
+    if (!this.writable() || !this.planningDirty() || this.planningSaving()) return;
+    const snapshot = this.planningConfig();
+    if (!snapshot) return;
+    const number = (name: string): number => Number(this.planningValue(name));
+    const values = {
+      replan_minutes: number('replan_minutes'), planning_window_hours: number('planning_window_hours'), forecast_horizon_hours: number('forecast_horizon_hours'), aemet_query_hour: number('aemet_query_hour'), solver_time_limit_seconds: number('solver_time_limit_seconds'),
+      contracted_power_w: number('contracted_power_w'), max_heating_power_w: number('max_heating_power_w'), base_load_w: number('base_load_w'), design_indoor_temperature_c: number('design_indoor_temperature_c'), design_outdoor_temperature_c: number('design_outdoor_temperature_c'), feedback_horizon_hours: number('feedback_horizon_hours'),
+      mqtt_simulation_enabled: this.planningValue('mqtt_simulation_enabled') === true || this.planningValue('mqtt_simulation_enabled') === 'true', mqtt_simulation_initial_temperature_c: number('mqtt_simulation_initial_temperature_c'), mqtt_simulation_publish_seconds: number('mqtt_simulation_publish_seconds'), mqtt_simulation_topic_prefix: String(this.planningValue('mqtt_simulation_topic_prefix')), mqtt_simulation_thermal_loss_c_per_hour: number('mqtt_simulation_thermal_loss_c_per_hour'),
+    };
+    this.planningSaving.set(true);
+    this.api.patchPlanningConfig(snapshot.revision, values).subscribe({
+      next: (updated) => { this.planningSaving.set(false); this.planningConfig.set(updated); this.planningDraft.set({}); this.saved.set('Parámetros de planificación guardados.'); },
+      error: (error: unknown) => { this.planningSaving.set(false); this.systemError.set(error instanceof HttpErrorResponse && error.status === 409 ? 'La configuración de planificación cambió. Tus valores siguen aquí; vuelve a leer antes de guardar.' : 'No se pudo guardar la planificación. Revisa los campos.'); },
+    });
+  }
+  private saveSystem(section: SystemSection): void {
+    this.systemError.set('');
+    if (!this.writable() || this.systemSaving()) return;
+    const snapshot = this.configuration();
+    if (!snapshot) return;
+    const values: Record<string, unknown> = {};
+    for (const field of SYSTEM_FIELDS[section]) {
+      const key = this.systemKey(section, field.name);
+      if (key in this.systemDraft()) values[field.name] = this.coerce(field, this.systemDraft()[key]);
+    }
+    const secrets: Record<string, SecretEditDto> = {};
+    const sectionSecrets = this.secrets(section);
+    for (const name of sectionSecrets) {
+      const action = this.secretAction(name);
+      secrets[name] = action === 'replace' ? { action, value: this.secretValues()[name] ?? '' } : { action };
+    }
+    this.systemSaving.set(true);
+    this.api.patchSystem(section, snapshot.revision, values, secrets).subscribe({
+      next: (updated) => {
+        this.systemSaving.set(false);
+        this.configuration.set(updated);
+        this.systemDraft.update((draft) => { const next = { ...draft }; for (const field of SYSTEM_FIELDS[section]) delete next[this.systemKey(section, field.name)]; return next; });
+        this.secretValues.update((values) => { const next = { ...values }; for (const secret of sectionSecrets) delete next[secret]; return next; });
+        this.secretActions.update((actions) => { const next = { ...actions }; for (const secret of sectionSecrets) delete next[secret]; return next; });
+        this.saved.set(updated.pending_restart?.length ? 'Guardado. Reinicia el proceso indicado para aplicar todos los cambios.' : `${SECTION_LABELS[section]} actualizado.`);
+      },
+      error: (error: unknown) => { this.systemSaving.set(false); this.systemError.set(error instanceof HttpErrorResponse && error.status === 409 ? 'La configuración cambió. Tus valores siguen aquí; vuelve a leer antes de guardar.' : 'No se pudo guardar. Tus cambios siguen en pantalla.'); },
+    });
+  }
+  testDatabase(): void {
+    this.api.testDatabase(this.databaseCandidate()).subscribe({
+      next: () => { this.systemMessage.set('Conexión de base de datos verificada sin guardar cambios.'); this.systemError.set(''); },
+      error: () => this.systemError.set('No se pudo conectar con el destino; no se guardó ningún cambio.'),
+    });
+  }
+  migrateDatabase(): void {
+    const topology = this.topology();
+    if (!topology?.locator_revision || !this.writable()) return;
+    this.systemConfirming.set(null);
+    this.operation.set('Migración en curso…');
+    this.api.migrateDatabase(topology.locator_revision, this.databaseCandidate()).subscribe({
+      next: (operation) => this.operation.set(`Migración ${operation.status}: ${operation.phase}`),
+      error: () => { this.operation.set(''); this.systemError.set('La migración no se pudo completar; el backend activo no ha cambiado.'); },
+    });
+  }
+  refreshWeather(): void {
+    if (this.weatherRefreshLoading() || !this.writable()) return;
+    this.weatherRefreshLoading.set(true);
+    this.weatherRefreshMessage.set('Consultando AEMET…');
+    this.weatherRefreshError.set('');
+    this.api.refreshWeather().subscribe({
+      next: (result) => {
+        this.weatherRefreshLoading.set(false);
+        this.weatherRefreshMessage.set('Consulta AEMET completada correctamente.');
+        this.configuration.update((current) => current ? ({ ...current, sections: { ...current.sections, weather: { ...current.sections.weather, forecast_status: result.forecast_status, forecast_last_attempt_at: result.forecast_last_attempt_at, forecast_last_error: result.forecast_last_error, forecast_next_run_at: result.forecast_next_run_at } } }) : current);
+      },
+      error: (error: unknown) => {
+        this.weatherRefreshLoading.set(false);
+        this.weatherRefreshMessage.set('');
+        const body = error instanceof HttpErrorResponse ? error.error as { message?: unknown } : null;
+        this.weatherRefreshError.set(typeof body?.message === 'string' ? body.message : 'No se pudo consultar AEMET.');
+      },
+    });
+  }
+  private coerce(field: FieldDefinition, value: unknown): unknown {
+    if (field.name === 'cors_origins') return String(value).split(',').map((item) => item.trim()).filter(Boolean);
+    if (value === '' && ['host', 'database', 'municipality_code', 'stale_seconds', 'retention_days'].includes(field.name)) return null;
+    if (field.type === 'number') return Number(value);
+    if (field.type === 'boolean') return value === true || value === 'true';
+    return String(value);
+  }
+  private databaseCandidate(): DatabaseCandidateDto {
+    const section = this.configuration()?.sections.database ?? {};
+    const draft = this.systemDraft();
+    const value = (name: string): unknown => {
+      const key = this.systemKey('database', name);
+      return key in draft ? draft[key] : section[name];
+    };
+    return {
+      driver: String(value('driver') || 'sqlite') as 'sqlite' | 'postgresql', host: String(value('host') || '') || undefined, port: Number(value('port')) || undefined, database: String(value('database') || '') || undefined,
+      username: this.secretValues()['postgres_username'], password: this.secretValues()['postgres_password'], tls: Boolean(value('tls')), trusted_no_tls: Boolean(value('trusted_no_tls')),
+    };
+  }
   private describe(error: unknown): Explained {
     if (error instanceof HttpErrorResponse) {
       const body = error.error as ApiErrorDto | null;

@@ -43,6 +43,8 @@ describe('App shell', () => {
 
     const element = fixture.nativeElement as HTMLElement;
     expect(element.querySelector('mat-toolbar')?.classList.contains('app-toolbar')).toBe(true);
+    expect(element.querySelectorAll('a[routerLink="/configuracion"]')).toHaveLength(1);
+    expect(element.querySelector('a[routerLink="/configuracion-sistema"]')).toBeNull();
     expect(element.querySelector('[data-testid="navigation-toggle"]')).not.toBeNull();
     expect(fixture.componentInstance.navigationOpen()).toBe(true);
 

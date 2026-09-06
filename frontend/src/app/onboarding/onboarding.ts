@@ -44,7 +44,7 @@ export class Onboarding {
         this.administratorToken = '';
         this.confirmation = '';
         this.auth.signIn(token);
-        void this.router.navigateByUrl('/configuracion-sistema');
+        void this.router.navigateByUrl('/configuracion');
       },
       error: (error: unknown) => {
         this.busy.set(false);

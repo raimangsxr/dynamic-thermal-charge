@@ -209,17 +209,20 @@ def get_relay_tests(
 )
 def post_prune(request: Request, store: Store = Depends(usable_store)) -> PruneResponse:
     config, _ = store.repository.current()
+    retention_days = config.retention_days
+    if store.system_configuration is not None:
+        retention_days = store.system_configuration.current().configuration.operations.retention_days
     recorder = SqlHistoryRecorder(
         store.application_engine or store.engine,
         store.repository.installation_id(),
         store.location,
     )
-    report = recorder.prune(request.app.state.clock(), config.retention_days)
+    report = recorder.prune(request.app.state.clock(), retention_days)
     return PruneResponse(
         deleted=report.deleted,
         total=report.total,
-        retention_days=config.retention_days,
-        unlimited=config.retention_days is None,
+        retention_days=retention_days,
+        unlimited=retention_days is None,
     )
 
 
