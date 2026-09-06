@@ -62,6 +62,12 @@ const TWO_HEATER_PLANNING: PlanningDto = {
   ],
 };
 
+const SAVED_PLANNING: PlanningDto = {
+  ...PLANNING,
+  constraints: [{ id: 1, heater_id: 'salon', target_charge: 0.6, at_time: '08:30', weekdays: [1, 3], enabled: true }],
+  constraints_revision: 4,
+};
+
 const PREVIEW: PlanningPreviewDto = {
   token: 'preview-token', status: 'DEGRADED', score: [],
   window_start: '2026-01-16T00:00:00Z', window_end: '2026-01-16T01:00:00Z',
@@ -483,8 +489,12 @@ describe('Planning', () => {
     fixture.componentInstance.preview.set({ ...PREVIEW, status: 'FEASIBLE', deficits: [], violations: [] });
     fixture.detectChanges();
 
-    expect((fixture.nativeElement as HTMLElement).textContent).toContain('Guardar y activar');
-    (Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>('button')).find((item) => item.textContent?.includes('Guardar y activar')))?.click();
+    const activateButton = (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('[data-testid="activate-button"]');
+    expect(activateButton?.disabled).toBe(false);
+    activateButton?.click();
+    fixture.detectChanges();
+    expect(activateButton?.disabled).toBe(true);
+    expect(fixture.componentInstance.actionMessage()).toBe('Guardando y activando…');
     const request = backend.expectOne('/api/v1/planning/activate');
     expect(request.request.body).toEqual({
       token: 'preview-token',
@@ -492,8 +502,74 @@ describe('Planning', () => {
       expected_revision: 4,
     });
     request.flush({ ...PREVIEW, status: 'FEASIBLE', deficits: [], violations: [] });
+    const refresh = backend.expectOne('/api/v1/planning');
+    refresh.flush({ ...PLANNING, preview_job: PREVIEW_JOB(PREVIEW) });
+    fixture.detectChanges();
+    expect(fixture.componentInstance.actionMessage()).toBe('Planificación guardada y activada correctamente.');
+    expect(fixture.componentInstance.activationInFlight()).toBe(false);
+    expect(fixture.componentInstance.preview()).toBeNull();
+    expect(fixture.componentInstance.previewJob()).toBeNull();
+    expect(sessionStorage.getItem('dtc.planning.preview-job')).toBeNull();
+    expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="planning-action-status"]')?.textContent).toContain('Planificación guardada y activada correctamente.');
+  });
+
+  it('shows an actionable error and allows retry when activation fails', async () => {
     backend.expectOne('/api/v1/planning').flush(PLANNING);
-    expect(fixture.componentInstance.actionMessage()).toBe('Constraints y plan activados.');
+    await fixture.whenStable();
+    fixture.detectChanges();
+    await selectPlanningTab(fixture, 1);
+
+    fixture.componentInstance.snapshot.set({ ...PLANNING, constraints_revision: 4 });
+    fixture.componentInstance.preview.set({ ...PREVIEW, status: 'FEASIBLE', deficits: [], violations: [] });
+    fixture.detectChanges();
+    const activateButton = (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('[data-testid="activate-button"]');
+    activateButton?.click();
+    fixture.detectChanges();
+    expect(activateButton?.disabled).toBe(true);
+
+    const request = backend.expectOne('/api/v1/planning/activate');
+    request.flush({ code: 'config_conflict', message: 'constraints changed' }, { status: 409, statusText: 'Conflict' });
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.activationInFlight()).toBe(false);
+    expect(fixture.componentInstance.actionMessage()).toBe('');
+    expect(fixture.componentInstance.actionError()).toContain('No se pudo guardar y activar');
+    expect(fixture.componentInstance.actionError()).toContain('La configuración cambió mientras editabas');
+    expect(fixture.componentInstance.preview()).not.toBeNull();
+    expect(activateButton?.disabled).toBe(false);
+    expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="planning-action-error"]')?.getAttribute('role')).toBe('alert');
+  });
+
+  it('discards local edits and preview state without reloading the planning projection', async () => {
+    backend.expectOne('/api/v1/planning').flush(SAVED_PLANNING);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    await selectPlanningTab(fixture, 1);
+
+    fixture.componentInstance.draftConstraints.set([
+      { heater_id: 'salon', target_charge: 25, at_time: '07:00', weekdays: [0, 1, 2, 3, 4, 5, 6] },
+    ]);
+    fixture.componentInstance.preview.set({ ...PREVIEW, status: 'FEASIBLE', deficits: [], violations: [] });
+    fixture.componentInstance.previewJob.set(PREVIEW_JOB(PREVIEW));
+    fixture.componentInstance.actionError.set('Mensaje anterior');
+    sessionStorage.setItem('dtc.planning.preview-job', 'preview-job');
+    fixture.detectChanges();
+
+    (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('[data-testid="discard-button"]')?.click();
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.draftConstraints()).toEqual([
+      { heater_id: 'salon', target_charge: 60, at_time: '08:30', weekdays: [1, 3] },
+    ]);
+    expect((fixture.nativeElement as HTMLElement).querySelector<HTMLInputElement>('[data-testid="constraint-charge-input"]')?.value).toBe('60');
+    expect(fixture.componentInstance.preview()).toBeNull();
+    expect(fixture.componentInstance.previewJob()).toBeNull();
+    expect(sessionStorage.getItem('dtc.planning.preview-job')).toBeNull();
+    expect(fixture.componentInstance.actionError()).toBe('');
+    expect(fixture.componentInstance.actionMessage()).toBe('Cambios descartados. Se han restaurado las constraints guardadas.');
+    expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="preview-job"]')).toBeNull();
+    expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="planning-action-status"]')?.textContent).toContain('Cambios descartados');
+    backend.expectNone('/api/v1/planning');
   });
 
   it('uses the received hourly temperatures and exposes sparse labels with complete tooltips', () => {

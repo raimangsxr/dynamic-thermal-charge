@@ -30,6 +30,8 @@ fieldset { border: 0; padding: 0; display: flex; gap: .25rem; flex-wrap: wrap; }
 .secondary { background: var(--muted); }
 .constraint-actions { justify-content: flex-start; margin-top: .75rem; padding-top: .85rem; border-top: 1px solid var(--border); }
 .constraint-actions button:disabled { opacity: .5; cursor: not-allowed; }
+.action-feedback { margin: .75rem 0 0; padding: .65rem .75rem; border-left: 4px solid var(--primary); background: #eef6ff; }
+.action-feedback.error { border-color: var(--danger); background: #fff0f0; }
 .preview { margin-top: .75rem; padding: .65rem; border-left: 4px solid var(--primary); }
 .preview-job { margin-top: 1rem; padding: 1rem; border: 1px solid var(--border); border-radius: .5rem; background: var(--surface); }
 .preview-job h3 { margin: 0 0 .35rem; font-size: 1rem; }

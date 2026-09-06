@@ -54,6 +54,10 @@ interface ConstraintDraft extends Omit<PlanningConstraintRequest, 'target_charge
   target_charge: number;
 }
 
+interface PlanningRefreshOptions {
+  restorePreview?: boolean;
+}
+
 interface PreviewChartPoint {
   x: number;
   y: number;
@@ -397,6 +401,7 @@ export class Planning implements AfterViewInit, OnDestroy {
   readonly preview = signal<PlanningPreviewDto | null>(null);
   readonly actionMessage = signal('');
   readonly actionError = signal('');
+  readonly activationInFlight = signal(false);
   readonly previewJob = signal<PlanningPreviewJobDto | null>(null);
   readonly selectedTab = signal(0);
 
@@ -410,6 +415,7 @@ export class Planning implements AfterViewInit, OnDestroy {
   private readonly previewPoller = new Poller(() => this.pollPreviewJob());
   private readonly previewStorageKey = 'dtc.planning.preview-job';
   private previewPollInFlight = false;
+  private dismissedPreviewJobId: string | null = null;
 
   constructor() {
     this.refresh();
@@ -430,14 +436,16 @@ export class Planning implements AfterViewInit, OnDestroy {
     this.scheduleChartRender();
   }
 
-  refresh(): void {
+  refresh(options: PlanningRefreshOptions = {}): void {
+    const restorePreview = options.restorePreview ?? true;
     this.api.planning().subscribe({
       next: (planning) => {
         this.snapshot.set(planning);
-        this.draftConstraints.set((planning.constraints ?? []).map((item) => ({ heater_id: item.heater_id, target_charge: item.target_charge * 100, at_time: item.at_time, weekdays: item.weekdays })));
+        this.draftConstraints.set(this.draftConstraintsFrom(planning));
         this.failure.set(null);
         this.loading.set(false);
-        if (planning.preview_job) this.acceptPreviewJob(planning.preview_job);
+        if (restorePreview && planning.preview_job) this.acceptPreviewJob(planning.preview_job);
+        if (!restorePreview) this.clearPreviewState();
         this.scheduleChartRender();
       },
       error: (error: unknown) => {
@@ -445,6 +453,10 @@ export class Planning implements AfterViewInit, OnDestroy {
         this.failure.set(this.describe(error));
       },
     });
+  }
+
+  private draftConstraintsFrom(planning: PlanningDto): ConstraintDraft[] {
+    return (planning.constraints ?? []).map((item) => ({ heater_id: item.heater_id, target_charge: item.target_charge * 100, at_time: item.at_time, weekdays: item.weekdays }));
   }
 
   addConstraint(heaterId = ''): void { this.draftConstraints.update((items) => [...items, { heater_id: heaterId || this.snapshot()?.heaters[0]?.id || '', target_charge: 100, at_time: '07:00', weekdays: [0, 1, 2, 3, 4, 5, 6] }]); }
@@ -460,6 +472,7 @@ export class Planning implements AfterViewInit, OnDestroy {
     }));
   }
   recalculate(): void {
+    this.dismissedPreviewJobId = null;
     this.actionError.set(''); this.actionMessage.set('Iniciando vista previa…'); this.preview.set(null);
     this.api.planningPreviewJobStart(this.apiConstraints(), this.snapshot()?.constraints_revision).subscribe({
       next: (job) => { this.acceptPreviewJob(job); this.actionMessage.set('Vista previa en curso. Puedes seguir sus comprobaciones o cancelarla.'); },
@@ -477,12 +490,32 @@ export class Planning implements AfterViewInit, OnDestroy {
   }
   activate(): void {
     const preview = this.preview(); const revision = this.snapshot()?.constraints_revision;
-    if (!preview || revision === undefined) return;
+    if (!preview || revision === undefined || this.activationInFlight()) return;
+    this.activationInFlight.set(true);
     this.actionError.set(''); this.actionMessage.set('Guardando y activando…');
     this.api.planningActivate(preview.token, this.apiConstraints(), revision).subscribe({
-      next: () => { this.actionMessage.set('Constraints y plan activados.'); this.preview.set(null); this.refresh(); },
-      error: () => { this.actionMessage.set(''); this.actionError.set('Los datos cambiaron o el plan ya no es válido. Calcula una nueva vista previa.'); },
+      next: () => {
+        this.activationInFlight.set(false);
+        this.clearPreviewState();
+        this.refresh({ restorePreview: false });
+        this.actionMessage.set('Planificación guardada y activada correctamente.');
+      },
+      error: (error: unknown) => {
+        this.activationInFlight.set(false);
+        this.actionMessage.set('');
+        this.actionError.set(this.activationError(error));
+      },
     });
+  }
+
+  discardChanges(): void {
+    if (this.activationInFlight()) return;
+    const planning = this.snapshot();
+    if (!planning) return;
+    this.draftConstraints.set(this.draftConstraintsFrom(planning));
+    this.clearPreviewState();
+    this.actionError.set('');
+    this.actionMessage.set('Cambios descartados. Se han restaurado las constraints guardadas.');
   }
 
   private apiConstraints(): PlanningConstraintRequest[] {
@@ -849,7 +882,17 @@ export class Planning implements AfterViewInit, OnDestroy {
     }));
   }
 
+  private clearPreviewState(): void {
+    const job = this.previewJob();
+    if (job) this.dismissedPreviewJobId = job.job_id;
+    this.preview.set(null);
+    this.previewJob.set(null);
+    this.previewPoller.stop();
+    try { sessionStorage.removeItem(this.previewStorageKey); } catch { /* storage may be disabled */ }
+  }
+
   private acceptPreviewJob(job: PlanningPreviewJobDto): void {
+    if (job.job_id === this.dismissedPreviewJobId) return;
     this.previewJob.set(job);
     try { sessionStorage.setItem(this.previewStorageKey, job.job_id); } catch { /* storage may be disabled */ }
     if (job.result) {
@@ -1037,5 +1080,11 @@ export class Planning implements AfterViewInit, OnDestroy {
       if (body && typeof body === 'object' && 'code' in body) return explain(body);
     }
     return UNREACHABLE;
+  }
+
+  private activationError(error: unknown): string {
+    const explained = this.describe(error);
+    const detail = explained.action ? `${explained.title}. ${explained.action}` : explained.title;
+    return `No se pudo guardar y activar: ${detail}`;
   }
 }

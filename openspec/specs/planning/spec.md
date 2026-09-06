@@ -169,6 +169,27 @@ cuando el número de columnas lo requiera.
 - **THEN** la celda correspondiente muestra “sin dato” y conserva el resto de
   columnas e intervalos consultables
 
+### Requirement: Feedback de las acciones del editor de planificación
+
+El editor de Nueva planificación debe hacer visible el resultado de sus
+acciones. Descartar debe restaurar inmediatamente las constraints guardadas y
+retirar la preview local; Guardar y activar debe indicar el estado en curso, el
+éxito o el error sin confundir una preview persistida con el resultado de la
+activación.
+
+#### Scenario: Descartar cambios locales
+
+- **WHEN** el operador modifica una constraint y pulsa “Descartar”
+- **THEN** los controles recuperan los valores guardados, se limpia la preview
+  local y se muestra una confirmación sin una nueva petición de lectura
+
+#### Scenario: Activación correcta o fallida
+
+- **WHEN** el operador pulsa “Guardar y activar” con una preview válida
+- **THEN** el botón se bloquea mientras espera y después muestra un éxito
+  explícito si la API confirma la activación, o una alerta accionable si la API
+  la rechaza, manteniendo la preview para poder corregirla y reintentar
+
 ### Requirement: Protección de salidas GPIO
 
 El controlador no debe arrancar salidas GPIO cuando MQTT está deshabilitado o
