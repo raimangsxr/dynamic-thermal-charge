@@ -1,5 +1,4 @@
 import { HttpErrorResponse } from '@angular/common/http';
-import { JsonPipe } from '@angular/common';
 import { AfterViewInit, Component, ElementRef, Injector, OnDestroy, ViewChild, afterNextRender, inject, signal } from '@angular/core';
 import { MAT_DIALOG_DATA, MatDialog, MatDialogModule } from '@angular/material/dialog';
 import { MatButtonModule } from '@angular/material/button';
@@ -15,12 +14,20 @@ import { type Explained, UNREACHABLE, explain } from '../core/errors';
 import { formatTemperature, truncateTemperature } from '../shared/temperature/temperature';
 
 interface PlanningDetailDialogData {
-  kind: 'forecast' | 'planning' | 'failure' | 'problems' | 'preview' | 'chart';
+  kind: 'forecast' | 'planning' | 'failure' | 'problems' | 'preview' | 'planning-table' | 'chart';
   planning?: PlanningDto;
   check?: PlanningCheckDto;
   job?: PlanningPreviewJobDto;
   preview?: PlanningPreviewDto;
+  table?: PlanningTableDetail;
   chart?: ChartDetail;
+}
+
+interface PlanningTableDetail {
+  title: string;
+  ariaLabel: string;
+  headers: string[];
+  rows: string[][];
 }
 
 interface ChartDetailDataset {
@@ -45,6 +52,10 @@ interface ChartDetail {
 
 interface ConstraintDraft extends Omit<PlanningConstraintRequest, 'target_charge'> {
   target_charge: number;
+}
+
+interface PlanningRefreshOptions {
+  restorePreview?: boolean;
 }
 
 interface PreviewChartPoint {
@@ -86,7 +97,7 @@ function recommendedPlanningAction(cause: string): string | null {
   selector: 'dtc-planning-detail-dialog',
   imports: [MatButtonModule, MatDialogModule, MatTabsModule],
   template: `
-    <h2 mat-dialog-title>{{ data.kind === 'forecast' ? 'Detalle de la previsión' : data.kind === 'failure' ? 'Detalle del fallo de la vista previa' : data.kind === 'problems' ? 'Problemas de la vista previa' : data.kind === 'preview' ? 'Detalle de la vista previa' : data.kind === 'chart' ? data.chart?.title : 'Detalle de la planificación' }}</h2>
+    <h2 mat-dialog-title>{{ data.kind === 'forecast' ? 'Detalle de la previsión' : data.kind === 'failure' ? 'Detalle del fallo de la vista previa' : data.kind === 'problems' ? 'Problemas de la vista previa' : data.kind === 'preview' ? 'Detalle de la vista previa' : data.kind === 'planning-table' ? data.table?.title : data.kind === 'chart' ? data.chart?.title : 'Detalle de la planificación' }}</h2>
     <mat-dialog-content>
       @if (data.kind === 'failure') {
         <dl class="detail-list">
@@ -141,6 +152,14 @@ function recommendedPlanningAction(cause: string): string | null {
             <p>No hay acumuladores configurados.</p>
           }
         }
+      } @else if (data.kind === 'planning-table' && data.table; as table) {
+        <div class="table-scroll planning-detail-table-scroll" data-testid="planning-detail-table-scroll">
+          <table class="planning-detail-table" [attr.aria-label]="table.ariaLabel" data-testid="planning-detail-table">
+            <caption>{{ table.title }}</caption>
+            <thead><tr>@for (header of table.headers; track $index) { <th scope="col">{{ header }}</th> }</tr></thead>
+            <tbody>@for (row of table.rows; track $index) { <tr>@for (cell of row; track $index) { @if ($index === 0) { <th scope="row">{{ cell }}</th> } @else { <td>{{ cell }}</td> } }</tr> }</tbody>
+          </table>
+        </div>
       } @else if (data.kind === 'chart' && data.chart; as chart) {
         <div class="detail-chart-wrap"><canvas #detailChart [attr.aria-label]="chart.ariaLabel"></canvas></div>
       } @else if (data.kind === 'forecast' && data.planning?.forecast; as forecast) {
@@ -205,6 +224,12 @@ function recommendedPlanningAction(cause: string): string | null {
     .preview-detail-table table { min-width: 42rem; }
     .preview-slot-summary table { min-width: 36rem; }
     .table-scroll { overflow-x: auto; margin-top: 1.25rem; }
+    .planning-detail-table-scroll { max-height: min(70vh, 52rem); overflow: auto; margin-top: 0; }
+    .planning-detail-table { width: max-content; min-width: 100%; }
+    .planning-detail-table th, .planning-detail-table td { padding: .4rem .55rem; white-space: nowrap; }
+    .planning-detail-table thead th { position: sticky; top: 0; z-index: 2; background: var(--surface); }
+    .planning-detail-table tbody th { position: sticky; left: 0; z-index: 1; background: var(--surface); }
+    .planning-detail-table thead th:first-child { left: 0; z-index: 3; }
     table { border-collapse: collapse; width: 100%; min-width: 30rem; }
     th, td { padding: .5rem .65rem; border-bottom: 1px solid var(--border); text-align: left; }
     caption { text-align: left; padding: .5rem 0; font-weight: 600; }
@@ -361,7 +386,7 @@ export class PlanningDetailDialog implements AfterViewInit, OnDestroy {
 
 @Component({
   selector: 'dtc-planning',
-  imports: [FormsModule, JsonPipe],
+  imports: [FormsModule, MatTabsModule],
   templateUrl: './planning.html',
   styleUrl: './planning.css',
 })
@@ -376,7 +401,9 @@ export class Planning implements AfterViewInit, OnDestroy {
   readonly preview = signal<PlanningPreviewDto | null>(null);
   readonly actionMessage = signal('');
   readonly actionError = signal('');
+  readonly activationInFlight = signal(false);
   readonly previewJob = signal<PlanningPreviewJobDto | null>(null);
+  readonly selectedTab = signal(0);
 
   @ViewChild('temperatureChart') private temperatureCanvas?: ElementRef<HTMLCanvasElement>;
   @ViewChild('forecastChart') private forecastCanvas?: ElementRef<HTMLCanvasElement>;
@@ -388,6 +415,7 @@ export class Planning implements AfterViewInit, OnDestroy {
   private readonly previewPoller = new Poller(() => this.pollPreviewJob());
   private readonly previewStorageKey = 'dtc.planning.preview-job';
   private previewPollInFlight = false;
+  private dismissedPreviewJobId: string | null = null;
 
   constructor() {
     this.refresh();
@@ -403,14 +431,21 @@ export class Planning implements AfterViewInit, OnDestroy {
     this.previewPoller.stop();
   }
 
-  refresh(): void {
+  onTabChange(index: number): void {
+    this.selectedTab.set(index);
+    this.scheduleChartRender();
+  }
+
+  refresh(options: PlanningRefreshOptions = {}): void {
+    const restorePreview = options.restorePreview ?? true;
     this.api.planning().subscribe({
       next: (planning) => {
         this.snapshot.set(planning);
-        this.draftConstraints.set((planning.constraints ?? []).map((item) => ({ heater_id: item.heater_id, target_charge: item.target_charge * 100, at_time: item.at_time, weekdays: item.weekdays })));
+        this.draftConstraints.set(this.draftConstraintsFrom(planning));
         this.failure.set(null);
         this.loading.set(false);
-        if (planning.preview_job) this.acceptPreviewJob(planning.preview_job);
+        if (restorePreview && planning.preview_job) this.acceptPreviewJob(planning.preview_job);
+        if (!restorePreview) this.clearPreviewState();
         this.scheduleChartRender();
       },
       error: (error: unknown) => {
@@ -418,6 +453,10 @@ export class Planning implements AfterViewInit, OnDestroy {
         this.failure.set(this.describe(error));
       },
     });
+  }
+
+  private draftConstraintsFrom(planning: PlanningDto): ConstraintDraft[] {
+    return (planning.constraints ?? []).map((item) => ({ heater_id: item.heater_id, target_charge: item.target_charge * 100, at_time: item.at_time, weekdays: item.weekdays }));
   }
 
   addConstraint(heaterId = ''): void { this.draftConstraints.update((items) => [...items, { heater_id: heaterId || this.snapshot()?.heaters[0]?.id || '', target_charge: 100, at_time: '07:00', weekdays: [0, 1, 2, 3, 4, 5, 6] }]); }
@@ -433,6 +472,7 @@ export class Planning implements AfterViewInit, OnDestroy {
     }));
   }
   recalculate(): void {
+    this.dismissedPreviewJobId = null;
     this.actionError.set(''); this.actionMessage.set('Iniciando vista previa…'); this.preview.set(null);
     this.api.planningPreviewJobStart(this.apiConstraints(), this.snapshot()?.constraints_revision).subscribe({
       next: (job) => { this.acceptPreviewJob(job); this.actionMessage.set('Vista previa en curso. Puedes seguir sus comprobaciones o cancelarla.'); },
@@ -450,12 +490,32 @@ export class Planning implements AfterViewInit, OnDestroy {
   }
   activate(): void {
     const preview = this.preview(); const revision = this.snapshot()?.constraints_revision;
-    if (!preview || revision === undefined) return;
+    if (!preview || revision === undefined || this.activationInFlight()) return;
+    this.activationInFlight.set(true);
     this.actionError.set(''); this.actionMessage.set('Guardando y activando…');
     this.api.planningActivate(preview.token, this.apiConstraints(), revision).subscribe({
-      next: () => { this.actionMessage.set('Constraints y plan activados.'); this.preview.set(null); this.refresh(); },
-      error: () => { this.actionMessage.set(''); this.actionError.set('Los datos cambiaron o el plan ya no es válido. Calcula una nueva vista previa.'); },
+      next: () => {
+        this.activationInFlight.set(false);
+        this.clearPreviewState();
+        this.refresh({ restorePreview: false });
+        this.actionMessage.set('Planificación guardada y activada correctamente.');
+      },
+      error: (error: unknown) => {
+        this.activationInFlight.set(false);
+        this.actionMessage.set('');
+        this.actionError.set(this.activationError(error));
+      },
     });
+  }
+
+  discardChanges(): void {
+    if (this.activationInFlight()) return;
+    const planning = this.snapshot();
+    if (!planning) return;
+    this.draftConstraints.set(this.draftConstraintsFrom(planning));
+    this.clearPreviewState();
+    this.actionError.set('');
+    this.actionMessage.set('Cambios descartados. Se han restaurado las constraints guardadas.');
   }
 
   private apiConstraints(): PlanningConstraintRequest[] {
@@ -494,10 +554,6 @@ export class Planning implements AfterViewInit, OnDestroy {
 
   formatTemperature(value: number | null | undefined): string {
     return formatTemperature(value);
-  }
-
-  temperatureMap(values: Record<string, number>): string {
-    return Object.entries(values).map(([heaterId, value]) => `${heaterId}: ${formatTemperature(value)} °C`).join(' · ');
   }
 
   openForecastDetails(): void {
@@ -547,31 +603,68 @@ export class Planning implements AfterViewInit, OnDestroy {
   }
 
   openTemperatureChartDetails(): void {
-    const chart = this.acceptedChart('Temperatura estimada por acumulador', 'Gráfico ampliado de temperatura estimada por acumulador y previsión exterior', '°C', (data, slots, colors) => [
-      ...data.heaters.map((heater, index) => ({ label: `${heater.name} estimada (°C)`, data: slots.map((slot) => slot.estimated_temperature_c_by_heater?.[heater.id] ?? null), borderColor: colors[index % colors.length], tension: 0.25 })),
-      { label: 'Previsión exterior (°C)', data: slots.map((slot) => slot.temperature_c), borderColor: '#6b7280', borderDash: [6, 4], tension: 0.25 },
-    ]);
-    if (chart) this.openChartDetails(chart);
+    const active = this.activeTimeline();
+    if (!active) return;
+    const { data, slots } = active;
+    this.openPlanningTableDetails({
+      title: 'Temperatura estimada por acumulador',
+      ariaLabel: 'Valores de temperatura estimada por acumulador y temperatura exterior por intervalo',
+      headers: ['Intervalo', ...data.heaters.map((heater) => `${heater.name} (°C)`), 'Exterior (°C)'],
+      rows: slots.map((slot) => [
+        this.slotLabel(slot),
+        ...data.heaters.map((heater) => this.formatTemperature(slot.estimated_temperature_c_by_heater?.[heater.id])),
+        this.formatTemperature(slot.temperature_c),
+      ]),
+    });
   }
 
   openHeaterChartDetails(): void {
-    const chart = this.acceptedChart('Carga por acumulador', 'Gráfico ampliado de carga por acumulador', 'kW', (data, slots, colors) => data.heaters.map((heater, index) => ({ label: heater.name, data: slots.map((slot) => slot.heater_ids.includes(heater.id) ? this.kilowatts(heater.power_w) : 0), backgroundColor: `${colors[index % colors.length]}cc` })));
-    if (chart) this.openChartDetails({ ...chart, type: 'bar' });
+    const active = this.activeTimeline();
+    if (!active) return;
+    const { data, slots } = active;
+    this.openPlanningTableDetails({
+      title: 'Carga por acumulador',
+      ariaLabel: 'Potencia por acumulador y potencia total por intervalo',
+      headers: ['Intervalo', ...data.heaters.map((heater) => `${heater.name} (W)`), 'Total (W)'],
+      rows: slots.map((slot, index) => [
+        this.slotLabel(slot),
+        ...data.heaters.map((heater) => this.powerValue(this.heaterActiveInSlot(data, index, heater.id) ? heater.power_w : 0)),
+        this.powerValue(this.aggregatePowerKw(data, index) * 1000),
+      ]),
+    });
   }
 
   openAggregateChartDetails(): void {
-    const chart = this.acceptedChart('Potencia agregada frente al límite', 'Gráfico ampliado de potencia agregada y límites', 'kW', (data, slots) => [
-      { label: 'Potencia agregada (kW)', data: slots.map((slot) => this.kilowatts(slot.total_power_w)), borderColor: '#2457a6' },
-      { label: 'Carga base (kW)', data: slots.map(() => this.kilowatts(data.base_load_w)), borderColor: '#6b7280', borderDash: [3, 3], pointRadius: 0 },
-      { label: 'Límite contratado (kW)', data: slots.map(() => this.kilowatts(data.max_total_power_w)), borderColor: '#b33a3a', pointRadius: 0 },
-      { label: 'Límite calefacción (kW)', data: slots.map(() => this.kilowatts(data.max_heating_power_w || data.max_total_power_w)), borderColor: '#d46b28', pointRadius: 0 },
-    ]);
-    if (chart) this.openChartDetails(chart);
+    const active = this.activeTimeline();
+    if (!active) return;
+    const { data, slots } = active;
+    this.openPlanningTableDetails({
+      title: 'Potencia agregada frente al límite',
+      ariaLabel: 'Potencia agregada, carga base y límites por intervalo',
+      headers: ['Intervalo', 'Total (W)', 'Carga base (W)', 'Límite contratado (W)', 'Límite calefacción (W)'],
+      rows: slots.map((slot, index) => [
+        this.slotLabel(slot),
+        this.powerValue(this.aggregatePowerKw(data, index) * 1000),
+        this.powerValue(data.base_load_w),
+        this.powerValue(data.max_total_power_w),
+        this.powerValue(data.max_heating_power_w || data.max_total_power_w),
+      ]),
+    });
   }
 
   openCumulativeChartDetails(): void {
-    const chart = this.acceptedChart('Carga acumulada por acumulador', 'Gráfico ampliado de carga acumulada por acumulador', 'Carga (%)', (data, slots, colors) => data.heaters.map((heater, index) => ({ label: `${heater.name} (%)`, data: slots.map((slot) => slot.stored_charge_percent_by_heater[heater.id]), borderColor: colors[index % colors.length], stepped: true })));
-    if (chart) this.openChartDetails(chart);
+    const active = this.activeTimeline();
+    if (!active) return;
+    const { data, slots } = active;
+    this.openPlanningTableDetails({
+      title: 'Carga acumulada por acumulador',
+      ariaLabel: 'Porcentaje de carga acumulada por acumulador y por intervalo',
+      headers: ['Intervalo', ...data.heaters.map((heater) => `${heater.name} (%)`)],
+      rows: slots.map((slot, index) => [
+        this.slotLabel(slot),
+        ...data.heaters.map((heater) => `${this.storedChargePercent(data, heater.id, index).toFixed(1)} %`),
+      ]),
+    });
   }
 
   openForecastChartDetails(): void {
@@ -587,16 +680,25 @@ export class Planning implements AfterViewInit, OnDestroy {
     });
   }
 
-  private acceptedChart(
-    title: string,
-    ariaLabel: string,
-    yAxisTitle: string,
-    datasets: (data: PlanningDto, slots: PlanningTimelineSlotDto[], colors: string[]) => ChartDetailDataset[],
-  ): ChartDetail | null {
+  private activeTimeline(): { data: PlanningDto; slots: PlanningTimelineSlotDto[] } | null {
     const data = this.snapshot();
     const slots = data ? this.displayTimeline(data) : [];
-    if (!data || !data.plan || !slots.length) return null;
-    return { title, ariaLabel, type: 'line', labels: slots.map((slot) => this.slotLabel(slot)), datasets: datasets(data, slots, ['#2457a6', '#d46b28', '#3b8c68', '#8a4f9e', '#9b7a21']), yAxisTitle };
+    if (!data?.plan || !slots.length) return null;
+    return { data, slots };
+  }
+
+  private powerValue(value: number): string {
+    return String(Math.round(value));
+  }
+
+  private openPlanningTableDetails(table: PlanningTableDetail): void {
+    this.dialog.open(PlanningDetailDialog, {
+      width: 'min(98vw, 192rem)',
+      maxWidth: '98vw',
+      data: { kind: 'planning-table', table },
+      ariaLabel: `Detalle tabular: ${table.title}`,
+      ariaModal: true,
+    });
   }
 
   private openChartDetails(chart: ChartDetail): void {
@@ -773,26 +875,24 @@ export class Planning implements AfterViewInit, OnDestroy {
   }
 
   displayTimeline(data: PlanningDto): PlanningTimelineSlotDto[] {
-    const result = this.preview() ?? data.preview_job?.result;
-    if (!result) return data.timeline.map((slot) => ({
+    return data.timeline.map((slot) => ({
       ...slot,
       temperature_c: slot.temperature_c === null ? null : truncateTemperature(slot.temperature_c),
       estimated_temperature_c_by_heater: Object.fromEntries(Object.entries(slot.estimated_temperature_c_by_heater).map(([id, value]) => [id, truncateTemperature(value)])),
     }));
-    return this.previewWindowSlots(result).map((slot) => {
-      const soc = (slot['stored_charge_percent'] as Record<string, number> | undefined) ?? {};
-      const indoor = (slot['indoor_temperature_c'] as Record<string, number> | undefined) ?? {};
-      const heaters = Array.isArray(slot['heater_ids']) ? slot['heater_ids'] as string[] : [];
-      return {
-        start: String(slot['start'] ?? ''), end: String(slot['end'] ?? ''), heater_ids: heaters,
-        total_power_w: Number(slot['power_w'] ?? 0), temperature_c: typeof slot['outdoor_temperature_c'] === 'number' ? truncateTemperature(Number(slot['outdoor_temperature_c'])) : null,
-        temperature_interpolated: false, charge_minutes_by_heater: {}, stored_charge_percent_by_heater: soc,
-        estimated_temperature_c_by_heater: Object.fromEntries(Object.entries(indoor).map(([id, value]) => [id, truncateTemperature(value)])),
-      };
-    });
+  }
+
+  private clearPreviewState(): void {
+    const job = this.previewJob();
+    if (job) this.dismissedPreviewJobId = job.job_id;
+    this.preview.set(null);
+    this.previewJob.set(null);
+    this.previewPoller.stop();
+    try { sessionStorage.removeItem(this.previewStorageKey); } catch { /* storage may be disabled */ }
   }
 
   private acceptPreviewJob(job: PlanningPreviewJobDto): void {
+    if (job.job_id === this.dismissedPreviewJobId) return;
     this.previewJob.set(job);
     try { sessionStorage.setItem(this.previewStorageKey, job.job_id); } catch { /* storage may be disabled */ }
     if (job.result) {
@@ -831,17 +931,21 @@ export class Planning implements AfterViewInit, OnDestroy {
     const timeline = this.displayTimeline(data);
     this.destroyCharts();
     try {
-      if (data.forecast?.hourly_points.length && this.forecastCanvas) {
-        const points = data.forecast.hourly_points;
-        const fullLabels = points.map((point) => this.dateTime(point.timestamp));
-        this.charts.push(new Chart(this.forecastCanvas.nativeElement, {
-          type: 'line',
-          data: { labels: this.intervalLabels(fullLabels), datasets: [{ label: 'Temperatura exterior (°C)', data: this.forecastTemperatures(points), borderColor: '#2457a6', backgroundColor: '#2457a622', tension: 0.25, spanGaps: false }] },
-          options: this.chartOptions<'line'>(fullLabels),
-        }));
+      if (this.selectedTab() === 2) {
+        if (data.forecast?.hourly_points.length && this.forecastCanvas) {
+          const points = data.forecast.hourly_points;
+          const fullLabels = points.map((point) => this.dateTime(point.timestamp));
+          this.charts.push(new Chart(this.forecastCanvas.nativeElement, {
+            type: 'line',
+            data: { labels: this.intervalLabels(fullLabels), datasets: [{ label: 'Temperatura exterior (°C)', data: this.forecastTemperatures(points), borderColor: '#2457a6', backgroundColor: '#2457a622', tension: 0.25, spanGaps: false }] },
+            options: this.chartOptions<'line'>(fullLabels),
+          }));
+        }
+        return;
       }
       const preview = this.preview() ?? data.preview_job?.result;
-      if (preview && this.previewCanvas) {
+      if (this.selectedTab() === 1) {
+        if (!preview || !this.previewCanvas) return;
         const slots = this.previewWindowSlots(preview);
         const fullLabels = slots.map((slot) => this.previewSlotLabel(slot));
         const colors = ['#2457a6', '#d46b28', '#3b8c68', '#8a4f9e', '#9b7a21'];
@@ -864,27 +968,6 @@ export class Planning implements AfterViewInit, OnDestroy {
             return `${context.dataset.label ?? 'Acumulador'}: ${point.power_w} W · ${point.energy_delivered_kwh.toFixed(2)} kWh · ${point.capacity_percent.toFixed(1)} % capacidad · SOC ${point.soc_percent.toFixed(1)} %`;
           }),
         }) as unknown as Chart);
-        return;
-      }
-      if (preview && this.temperatureCanvas && this.heaterCanvas && this.aggregateCanvas && this.cumulativeCanvas) {
-        const slots = this.previewWindowSlots(preview);
-        const fullLabels = slots.map((slot) => this.previewSlotLabel(slot));
-        const labels = this.intervalLabels(fullLabels);
-        const colors = ['#2457a6', '#d46b28', '#3b8c68', '#8a4f9e', '#9b7a21'];
-        const numberMap = (slot: Record<string, unknown>, key: string, heaterId: string): number | null => {
-          const values = slot[key] as Record<string, number> | undefined;
-          return values && typeof values[heaterId] === 'number' ? truncateTemperature(values[heaterId]) : null;
-        };
-        this.charts.push(new Chart(this.temperatureCanvas.nativeElement, { type: 'line', data: { labels, datasets: [
-          ...data.heaters.map((heater, index) => ({ label: `${heater.name} estimada (°C)`, data: slots.map((slot) => numberMap(slot, 'indoor_temperature_c', heater.id)), borderColor: colors[index % colors.length], tension: 0.25 })),
-          { label: 'Previsión exterior (°C)', data: slots.map((slot) => typeof slot['outdoor_temperature_c'] === 'number' ? truncateTemperature(Number(slot['outdoor_temperature_c'])) : null), borderColor: '#6b7280', borderDash: [6, 4], tension: 0.25 },
-        ] }, options: this.chartOptions<'line'>(fullLabels, '°C') }));
-        this.charts.push(new Chart(this.heaterCanvas.nativeElement, { type: 'bar', data: { labels, datasets: data.heaters.map((heater, index) => ({ label: heater.name, data: slots.map((slot) => Array.isArray(slot['heater_ids']) && (slot['heater_ids'] as string[]).includes(heater.id) ? this.kilowatts(heater.power_w) : 0), backgroundColor: `${colors[index % colors.length]}cc` })) }, options: this.chartOptions<'bar'>(fullLabels, 'kW') }));
-        const limits = preview.operator_summary['power_limits'] as Record<string, number | null> | undefined;
-        const contracted = limits?.['contracted_w'] ?? data.max_total_power_w;
-        const heating = limits?.['heating_w'];
-        this.charts.push(new Chart(this.aggregateCanvas.nativeElement, { type: 'line', data: { labels, datasets: [{ label: 'Potencia agregada (kW)', data: slots.map((slot) => this.kilowatts(this.previewSlotPower(slot))), borderColor: '#2457a6' }, { label: 'Carga base (kW)', data: slots.map(() => this.kilowatts(data.base_load_w)), borderColor: '#6b7280', borderDash: [3, 3], pointRadius: 0 }, { label: 'Límite contratado (kW)', data: slots.map(() => this.kilowatts(contracted)), borderColor: '#b33a3a', pointRadius: 0 }, ...(heating === null || heating === undefined ? [] : [{ label: 'Límite calefacción (kW)', data: slots.map(() => this.kilowatts(heating)), borderColor: '#d46b28', pointRadius: 0 }]) ] }, options: this.chartOptions<'line'>(fullLabels, 'kW') }));
-        this.charts.push(new Chart(this.cumulativeCanvas.nativeElement, { type: 'line', data: { labels, datasets: data.heaters.map((heater, index) => ({ label: `${heater.name} (%)`, data: slots.map((slot) => numberMap(slot, 'stored_charge_percent', heater.id)), borderColor: colors[index % colors.length], stepped: true })) }, options: this.chartOptions<'line'>(fullLabels, 'Carga (%)') }));
         return;
       }
       if (!data.plan || !timeline.length || !this.temperatureCanvas || !this.heaterCanvas || !this.aggregateCanvas || !this.cumulativeCanvas) return;
@@ -997,5 +1080,11 @@ export class Planning implements AfterViewInit, OnDestroy {
       if (body && typeof body === 'object' && 'code' in body) return explain(body);
     }
     return UNREACHABLE;
+  }
+
+  private activationError(error: unknown): string {
+    const explained = this.describe(error);
+    const detail = explained.action ? `${explained.title}. ${explained.action}` : explained.title;
+    return `No se pudo guardar y activar: ${detail}`;
   }
 }

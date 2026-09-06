@@ -126,6 +126,70 @@ fuente de problemas.
 - **WHEN** una vista previa `FEASIBLE` no contiene déficits ni violaciones
 - **THEN** no se muestra el botón de problemas
 
+### Requirement: Separación de contextos en la vista de planificación
+
+La vista de Planificación debe ofrecer tres pestañas accesibles, en este orden:
+Planificación activa, Nueva planificación y Previsión meteorológica. Debe abrir
+en Planificación activa; esta pestaña solo muestra el plan aceptado y sus
+gráficos, Nueva planificación concentra constraints y preview, y Previsión
+meteorológica concentra el resumen y gráfico meteorológico. Cambiar de pestaña
+no debe perder la edición ni el trabajo de preview en curso.
+
+#### Scenario: Llegada a la vista de planificación
+
+- **WHEN** el operador entra en Planificación
+- **THEN** se selecciona Planificación activa y no se mezcla su contenido con
+  constraints, preview o detalle meteorológico
+
+#### Scenario: Consulta o edición separada
+
+- **WHEN** el operador selecciona Nueva planificación o Previsión meteorológica
+- **THEN** ve únicamente el ámbito correspondiente y puede volver al plan
+  activo conservando el estado de edición y de preview
+
+### Requirement: Detalle tabular de la planificación activa
+
+La pestaña Planificación activa debe reservar sus tarjetas para las gráficas y
+ofrecer el detalle de cada una mediante su botón “Ver detalle”. Cada diálogo de
+detalle de gráfica debe mostrar únicamente una tabla accesible, con el intervalo
+como cabecera de fila y una columna por acumulador cuando aplique. El diálogo
+debe aprovechar el ancho disponible y limitar el scroll al contenedor de la tabla
+cuando el número de columnas lo requiera.
+
+#### Scenario: Consulta del detalle de una gráfica activa
+
+- **WHEN** el operador pulsa “Ver detalle” en una de las cuatro gráficas de
+  Planificación activa
+- **THEN** se abre un diálogo amplio con la tabla correspondiente, sin volver a
+  mostrar la gráfica ni añadir una tabla inline a la tarjeta
+
+#### Scenario: Datos ausentes en el detalle tabular
+
+- **WHEN** un intervalo no tiene un valor de temperatura utilizable
+- **THEN** la celda correspondiente muestra “sin dato” y conserva el resto de
+  columnas e intervalos consultables
+
+### Requirement: Feedback de las acciones del editor de planificación
+
+El editor de Nueva planificación debe hacer visible el resultado de sus
+acciones. Descartar debe restaurar inmediatamente las constraints guardadas y
+retirar la preview local; Guardar y activar debe indicar el estado en curso, el
+éxito o el error sin confundir una preview persistida con el resultado de la
+activación.
+
+#### Scenario: Descartar cambios locales
+
+- **WHEN** el operador modifica una constraint y pulsa “Descartar”
+- **THEN** los controles recuperan los valores guardados, se limpia la preview
+  local y se muestra una confirmación sin una nueva petición de lectura
+
+#### Scenario: Activación correcta o fallida
+
+- **WHEN** el operador pulsa “Guardar y activar” con una preview válida
+- **THEN** el botón se bloquea mientras espera y después muestra un éxito
+  explícito si la API confirma la activación, o una alerta accionable si la API
+  la rechaza, manteniendo la preview para poder corregirla y reintentar
+
 ### Requirement: Protección de salidas GPIO
 
 El controlador no debe arrancar salidas GPIO cuando MQTT está deshabilitado o
