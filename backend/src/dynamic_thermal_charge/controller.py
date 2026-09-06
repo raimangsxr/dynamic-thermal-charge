@@ -22,6 +22,17 @@ class ChargeController:
         self._runner_id = runner_id
         self._relay_test_latch_local = False
         self._relay_test_session_id: str | None = None
+        self._failed_outputs: set[str] = set()
+
+    @property
+    def active_outputs(self) -> set[str]:
+        """The outputs the controller believes are closed right now."""
+        return set(self._active)
+
+    @property
+    def outputs_degraded(self) -> bool:
+        """Whether any output refused its command in the last applied cycle."""
+        return bool(self._failed_outputs)
 
     def initialize(self, at: datetime) -> None:
         logger.info("Initializing controller with all outputs off")
@@ -36,13 +47,61 @@ class ChargeController:
         if self._relay_tests is not None and self._apply_relay_test(at):
             return
         desired = self._desired_outputs(plan, at)
-        for heater_id in sorted(self._active - desired):
-            self._driver.set_state(heater_id, False, at)
-        for heater_id in sorted(desired - self._active):
-            self._driver.set_state(heater_id, True, at)
-        if desired != self._active:
-            logger.info("Controller outputs at %s: %s", at.isoformat(), sorted(desired))
-        self._active = desired
+        # One unresponsive relay must not deny the others their slot, and it must
+        # not make the controller claim a state the driver refused.  `_sweep_off`
+        # has always tolerated a failure per output; a normal transition did not,
+        # so a single stuck relay aborted the rest of the cycle and escaped the
+        # service loop.
+        applied = set(self._active)
+        failed: set[str] = set()
+        for heater_id in sorted(applied - desired):
+            if self._switch(heater_id, False, at):
+                applied.discard(heater_id)
+            else:
+                # Presumed still closed: an output that would not open is worse
+                # reported as open, because instantaneous power is derived from
+                # what the controller believes is active.
+                failed.add(heater_id)
+        for heater_id in sorted(desired - applied):
+            if self._switch(heater_id, True, at):
+                applied.add(heater_id)
+            else:
+                failed.add(heater_id)
+        if applied != self._active:
+            logger.info("Controller outputs at %s: %s", at.isoformat(), sorted(applied))
+        self._active = applied
+        self._note_output_failures(failed)
+
+    def _switch(self, heater_id: str, enabled: bool, at: datetime) -> bool:
+        """Drive one output, reporting whether the driver accepted it."""
+        try:
+            self._driver.set_state(heater_id, enabled, at)
+            return True
+        except Exception:
+            # The operator-facing message is emitted once per transition by
+            # `_note_output_failures`; this cycle-by-cycle detail stays at DEBUG
+            # so a permanently stuck relay does not flood the log every poll.
+            logger.debug(
+                "Output %s refused to switch %s",
+                heater_id,
+                "ON" if enabled else "OFF",
+                exc_info=True,
+            )
+            return False
+
+    def _note_output_failures(self, failed: set[str]) -> None:
+        """Log the degraded condition once per transition, as the service does."""
+        if failed == self._failed_outputs:
+            return
+        if failed:
+            logger.critical(
+                "Outputs refused to switch and stay excluded until they accept a "
+                "command again; every poll cycle retries them: %s",
+                sorted(failed),
+            )
+        else:
+            logger.info("Every output accepted its command again")
+        self._failed_outputs = failed
 
     def _apply_relay_test(self, at: datetime) -> bool:
         """Apply DB intentions only while test coordination owns the controller."""
@@ -51,7 +110,7 @@ class ChargeController:
         except Exception:
             # Loss of coordination is ambiguous: immediately go safe and never
             # fall through to automatic output in this cycle.
-            self._sweep_off(at)
+            self._sweep_off_safely(at)
             self._relay_test_latch_local = True
             return True
         # A local latch is authoritative until it has been durably reconciled;
@@ -126,7 +185,7 @@ class ChargeController:
                     self._relay_test_session_id = None
                     return True
             except Exception:
-                self._sweep_off(at)
+                self._sweep_off_safely(at)
                 self._relay_test_latch_local = True
                 return True
             for output in view["heaters"]:
@@ -145,7 +204,7 @@ class ChargeController:
                         self._relay_test_session_id = None
                         return True
                 except Exception:
-                    self._sweep_off(at)
+                    self._sweep_off_safely(at)
                     self._relay_test_latch_local = True
                     return True
                 try:
@@ -159,7 +218,7 @@ class ChargeController:
                         self._relay_tests.unknown(session["id"], output["heater_id"], output["command_seq"], at)
                         self._relay_tests.request_controller_end(session["id"], at, "driver_failed")
                     except Exception:
-                        self._sweep_off(at)
+                        self._sweep_off_safely(at)
                         self._relay_test_latch_local = True
                         return True
                     return True
@@ -182,6 +241,19 @@ class ChargeController:
             self._relay_test_session_id = None
             return True
         return False
+
+    def _sweep_off_safely(self, at: datetime) -> dict[str, bool]:
+        """Sweep OFF and make an incomplete sweep durable before returning.
+
+        The relay-test contract requires that any partial OFF arms a *persistent*
+        safety lock.  These recovery paths used to sweep and discard the result,
+        so a relay that may have stayed closed left no trace for the next
+        process.  The caller still arms its own in-memory latch afterwards.
+        """
+        results = self._sweep_off(at)
+        if not all(results.values()):
+            self._latch_partial_off(at, "off_sweep_failed", results)
+        return results
 
     def _sweep_off(self, at: datetime) -> dict[str, bool]:
         results: dict[str, bool] = {}

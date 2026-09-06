@@ -45,6 +45,11 @@ persistente.
 - **WHEN** una o más salidas no aceptan el apagado
 - **THEN** esas salidas quedan desconocidas, la sesión falla y el automático permanece bloqueado
 
+#### Scenario: Apagado parcial al perderse la coordinación
+
+- **WHEN** la coordinación deja de ser legible o escribible y el barrido de apagado resulta parcial
+- **THEN** el bloqueo de seguridad se hace durable, no solo en memoria del proceso
+
 ### Requirement: Consulta operativa y propiedad
 
 Solo la pestaña propietaria puede enviar órdenes, renovar o solicitar el fin.
