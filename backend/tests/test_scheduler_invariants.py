@@ -27,7 +27,7 @@ UTC = ZoneInfo("UTC")
 def _wall_plus(value: datetime, minutes: int) -> datetime:
     """Advance a wall clock by `minutes`, then resolve back to an instant."""
     naive = value.replace(tzinfo=None) + timedelta(minutes=minutes)
-    return naive.replace(tzinfo=value.tzinfo)
+    return naive.replace(tzinfo=value.tzinfo, fold=value.fold)
 
 #: Divisors of 60 keep slots aligned to the wall clock, which is what the
 #: installation actually configures.

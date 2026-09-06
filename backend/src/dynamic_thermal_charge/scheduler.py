@@ -305,7 +305,12 @@ def slot_boundaries(
     forward, with one slot more or two fewer respectively.
     """
     naive_end = aligned_start.replace(tzinfo=None) + timedelta(minutes=window_minutes)
-    window_end = _normalize(naive_end.replace(tzinfo=aligned_start.tzinfo))
+    # Keep the same pass through an ambiguous hour. Without this, a window
+    # starting in the second 02:00 on the fall-back day gets an end in the
+    # first 02:00, which is earlier in real time than its start.
+    window_end = _normalize(
+        naive_end.replace(tzinfo=aligned_start.tzinfo, fold=aligned_start.fold)
+    )
     boundaries = [aligned_start]
     while _earlier(boundaries[-1], window_end):
         boundaries.append(next_slot_boundary(boundaries[-1], slot_minutes))

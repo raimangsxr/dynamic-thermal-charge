@@ -101,6 +101,17 @@ def test_alignment_never_looks_back_during_the_repeated_hour() -> None:
     assert _real(aligned) >= _real(second_pass)
 
 
+def test_a_window_starting_in_the_second_pass_is_still_planned() -> None:
+    # The end must stay in the second pass too; otherwise it resolves to an
+    # earlier instant and the scheduler sees an empty window.
+    second_pass = datetime(2026, 10, 25, 2, 0, fold=1, tzinfo=MADRID)
+
+    slots = _plan(second_pass)
+
+    assert slots[0].start == second_pass
+    assert _real(slots[-1].end) - _real(slots[0].start) == timedelta(hours=24)
+
+
 @pytest.mark.parametrize("start", [BEFORE_SPRING_FORWARD, BEFORE_FALL_BACK])
 def test_every_slot_lasts_one_slot_of_real_time(start) -> None:
     for slot in _plan(start):
