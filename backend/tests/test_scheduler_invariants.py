@@ -21,10 +21,26 @@ from dynamic_thermal_charge.scheduler import ChargeScheduler, align_to_slot
 
 
 MADRID = ZoneInfo("Europe/Madrid")
+UTC = ZoneInfo("UTC")
+
+
+def _wall_plus(value: datetime, minutes: int) -> datetime:
+    """Advance a wall clock by `minutes`, then resolve back to an instant."""
+    naive = value.replace(tzinfo=None) + timedelta(minutes=minutes)
+    return naive.replace(tzinfo=value.tzinfo)
 
 #: Divisors of 60 keep slots aligned to the wall clock, which is what the
 #: installation actually configures.
 SLOT_MINUTES = st.sampled_from([15, 20, 30, 60])
+
+#: Spain 2026: clocks go forward on 29 March and back on 25 October. The day
+#: before each is included so a 24-hour window contains the transition.
+TRANSITION_DAYS = [
+    datetime(2026, 3, 28).date(),
+    datetime(2026, 3, 29).date(),
+    datetime(2026, 10, 24).date(),
+    datetime(2026, 10, 25).date(),
+]
 
 
 def _heater(index: int, power_w: int, minutes: int, priority: int) -> Heater:
@@ -59,14 +75,21 @@ def installations(draw):
         slot_minutes=slot_minutes,
         window_minutes=slot_minutes * slots_in_window,
     )
-    # A summer date: the DST transitions have their own tests, because the
-    # scheduler does not currently hold these invariants across them.
-    start = draw(
-        st.datetimes(
-            min_value=datetime(2026, 6, 1),
-            max_value=datetime(2026, 8, 31),
+    # Two days out of 365 are the interesting ones, and uniform sampling finds
+    # them only by luck. The transition days are drawn explicitly so every
+    # property actually exercises them, alongside ordinary dates.
+    day = draw(
+        st.one_of(
+            st.sampled_from(TRANSITION_DAYS),
+            st.dates(
+                min_value=datetime(2026, 1, 1).date(),
+                max_value=datetime(2026, 12, 31).date(),
+            ),
         )
-    ).replace(tzinfo=MADRID)
+    )
+    start = datetime.combine(
+        day, draw(st.times()).replace(microsecond=0), tzinfo=MADRID
+    )
     return site, heaters, start
 
 
@@ -95,16 +118,26 @@ def test_the_window_is_tiled_exactly_once_in_chronological_order(installation) -
 
     result = ChargeScheduler().build(site, heaters, start)
 
-    expected_slots = site.window_minutes // site.slot_minutes
-    assert len(result.slots) == expected_slots
     aligned = align_to_slot(start, site.slot_minutes)
     assert result.slots[0].start == aligned
-    for index, slot in enumerate(result.slots):
-        assert slot.start == aligned + timedelta(minutes=index * site.slot_minutes)
-        assert slot.end == slot.start + timedelta(minutes=site.slot_minutes)
-    # Contiguous and non-overlapping: every slot begins where the previous ended.
+    for slot in result.slots:
+        # Real duration, not wall-clock: across a transition the two differ.
+        assert slot.end.astimezone(UTC) - slot.start.astimezone(UTC) == timedelta(
+            minutes=site.slot_minutes
+        )
+        minutes_since_midnight = slot.start.hour * 60 + slot.start.minute
+        assert minutes_since_midnight % site.slot_minutes == 0
+    # Contiguous, non-overlapping and strictly increasing in real time.
     for previous, following in zip(result.slots, result.slots[1:]):
         assert previous.end == following.start
+        assert following.start.astimezone(UTC) > previous.start.astimezone(UTC)
+    # The horizon is counted on the wall clock, so it ends where wall-clock
+    # arithmetic says it does even when that spans 23 or 25 real hours. The
+    # comparison is by instant: when wall-clock arithmetic lands on a time that
+    # never existed, the scheduler labels the same moment with the wall clock
+    # that does exist (02:00 CET becomes 03:00 CEST).
+    expected_end = _wall_plus(aligned, site.window_minutes)
+    assert result.slots[-1].end.astimezone(UTC) == expected_end.astimezone(UTC)
 
 
 @given(installations())

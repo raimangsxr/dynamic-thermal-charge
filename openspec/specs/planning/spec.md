@@ -73,10 +73,30 @@ usar el valor vigente como presupuesto total compartido del solver.
 La planificación automática y sus vistas previas deben comenzar en el primer
 límite de slot que no haya quedado atrás: el límite exacto se conserva y un
 instante intermedio se redondea hacia arriba, descartando segundos y
-microsegundos. Deben cubrir exactamente el horizonte configurado, mientras
+microsegundos. "No haber quedado atrás" se decide en tiempo real, no sobre el
+reloj de pared. Deben cubrir exactamente el horizonte configurado, mientras
 que la ventana visible inicial comparte ese comienzo y usa su propia duración.
 Si falta cobertura AEMET horaria utilizable en cualquier parte del horizonte,
 el resultado es explícitamente no planificable y no contiene un plan parcial.
+
+La ventana y el horizonte se cuentan en horas de reloj de pared y sus límites
+caen en múltiplos de la duración de slot. Cada slot dura exactamente esa
+duración de tiempo real y los límites son estrictamente crecientes, así que el
+número de slots del horizonte no es fijo: los dos días del año en que cambia la
+hora, un horizonte de 24 horas cubre 25 o 23 horas reales.
+
+#### Scenario: Horizonte que cruza un cambio de hora
+
+- **WHEN** un horizonte de 24 horas con slots de 30 minutos cruza el retroceso
+  de octubre o el adelanto de marzo
+- **THEN** publica 50 o 46 slots respectivamente, todos de 30 minutos reales,
+  contiguos y sin solapes, y ninguna hora del día queda sin planificar
+
+#### Scenario: Previsión de la hora que se repite
+
+- **WHEN** una hora de pared ocurre dos veces por el retroceso de octubre
+- **THEN** las dos pasadas usan el valor horario de previsión de esa hora de
+  pared y el horizonte sigue considerándose cubierto
 
 #### Scenario: Cobertura meteorológica incompleta
 

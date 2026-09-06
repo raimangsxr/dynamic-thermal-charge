@@ -6,9 +6,11 @@ scheduler builds slots with wall-clock arithmetic (`aligned_start + timedelta`),
 which keeps the wall clock tidy and makes the *real* duration of one slot per
 transition wrong.
 
-The tests that pass state what the scheduler does hold. The `xfail(strict=True)`
-tests record defects that are demonstrated, not hypothetical: remove the marker
-when the behaviour is fixed and the suite will tell you it no longer fails.
+Boundaries advance in absolute time, so they stay strictly increasing and every
+slot lasts exactly `slot_minutes` of real time. The wall clock stays tidy because
+the offset shift is a whole hour, a multiple of every configurable slot length.
+The consequence, accepted deliberately: a 24-hour window covers 25 real hours on
+the day the clocks go back and 23 on the day they go forward.
 
 Spain, both transitions in 2026:
 
@@ -73,11 +75,6 @@ def _real(value: datetime) -> datetime:
 
 
 @pytest.mark.parametrize("start", [BEFORE_SPRING_FORWARD, BEFORE_FALL_BACK])
-def test_the_window_always_produces_the_configured_number_of_slots(start) -> None:
-    assert len(_plan(start)) == 24 * 60 // SLOT_MINUTES
-
-
-@pytest.mark.parametrize("start", [BEFORE_SPRING_FORWARD, BEFORE_FALL_BACK])
 def test_slots_stay_contiguous_on_the_wall_clock(start) -> None:
     slots = _plan(start)
 
@@ -95,15 +92,6 @@ def test_the_first_slot_is_the_aligned_start(start) -> None:
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "align_to_slot rounds up on the wall clock and returns fold=0, so during "
-        "the repeated hour it answers with an instant 45 minutes in the past. The "
-        "horizon is then anchored before the current instant, which contradicts "
-        "'the window starts at the first slot boundary that has not passed'."
-    ),
-)
 def test_alignment_never_looks_back_during_the_repeated_hour() -> None:
     # 02:15 exists twice on 25 October; fold=1 is the second, CET pass.
     second_pass = datetime(2026, 10, 25, 2, 15, fold=1, tzinfo=MADRID)
@@ -113,41 +101,12 @@ def test_alignment_never_looks_back_during_the_repeated_hour() -> None:
     assert _real(aligned) >= _real(second_pass)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Slots are built with wall-clock arithmetic, so the slot containing the "
-        "fall-back lasts 90 real minutes while allocated_minutes accounts 30. A "
-        "heater scheduled there charges for an hour longer than the plan claims."
-    ),
-)
-def test_every_slot_lasts_one_slot_of_real_time_across_the_fall_back() -> None:
-    for slot in _plan(BEFORE_FALL_BACK):
+@pytest.mark.parametrize("start", [BEFORE_SPRING_FORWARD, BEFORE_FALL_BACK])
+def test_every_slot_lasts_one_slot_of_real_time(start) -> None:
+    for slot in _plan(start):
         assert _real(slot.end) - _real(slot.start) == timedelta(minutes=SLOT_MINUTES)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Across the spring forward jump the slot containing the transition ends "
-        "before it starts in real time, so it can never be active, and it "
-        "overlaps the following slot for half an hour. `_desired_outputs` returns "
-        "the first matching slot, so which heaters run during that half hour "
-        "depends on tuple order rather than on the plan."
-    ),
-)
-def test_every_slot_lasts_one_slot_of_real_time_across_the_spring_forward() -> None:
-    for slot in _plan(BEFORE_SPRING_FORWARD):
-        assert _real(slot.end) - _real(slot.start) == timedelta(minutes=SLOT_MINUTES)
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Two slots overlap in real time across the spring forward jump; see the "
-        "test above. The controller resolves the overlap by tuple order."
-    ),
-)
 def test_no_two_slots_cover_the_same_real_instant() -> None:
     slots = _plan(BEFORE_SPRING_FORWARD)
     cursor = _real(slots[0].start)
@@ -163,16 +122,108 @@ def test_no_two_slots_cover_the_same_real_instant() -> None:
         cursor += timedelta(minutes=10)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "A 24-hour window spans 25 real hours across the fall-back and 23 across "
-        "the spring forward jump, so the horizon the operator configured is not "
-        "the horizon that is planned."
-    ),
+@pytest.mark.parametrize(
+    "start,expected_slots,real_hours",
+    [(BEFORE_SPRING_FORWARD, 46, 23), (BEFORE_FALL_BACK, 50, 25)],
 )
-@pytest.mark.parametrize("start", [BEFORE_SPRING_FORWARD, BEFORE_FALL_BACK])
-def test_a_24_hour_window_spans_24_real_hours(start) -> None:
+def test_a_24_wall_clock_hour_window_covers_the_real_length_of_the_day(
+    start, expected_slots, real_hours
+) -> None:
     slots = _plan(start)
 
-    assert _real(slots[-1].end) - _real(slots[0].start) == timedelta(hours=24)
+    assert len(slots) == expected_slots
+    assert _real(slots[-1].end) - _real(slots[0].start) == timedelta(hours=real_hours)
+
+
+# --------------------------------------------------------------------------- #
+# The MILP planner, which is the one that plans in production.
+# --------------------------------------------------------------------------- #
+
+
+def _hourly_wall_clock_forecast(
+    first_wall: datetime, hours: int, temperature: float = 4.0
+) -> tuple:
+    """One point per wall-clock hour, the way an hourly provider publishes.
+
+    On the day the clocks go back the repeated hour therefore has a single
+    point, which both of its passes have to share.
+    """
+    from dynamic_thermal_charge.weather import HourlyForecastPoint
+
+    points = []
+    seen = set()
+    wall = first_wall.replace(tzinfo=None)
+    for _ in range(hours + 4):
+        marker = (wall.date(), wall.hour)
+        if marker not in seen:
+            seen.add(marker)
+            points.append(
+                HourlyForecastPoint(
+                    timestamp=wall.replace(tzinfo=MADRID), temperature_c=temperature
+                )
+            )
+        wall += timedelta(hours=1)
+    return tuple(points)
+
+
+def _planning_request(start: datetime, horizon_hours: int = 24):
+    from dynamic_thermal_charge.charge_planning import PlanningInput
+    from dynamic_thermal_charge.models import ChargeTelemetry, Heater, OutputConfig
+
+    item = Heater(
+        id="a",
+        name="a",
+        power_w=2000,
+        full_charge_minutes=4 * 60,
+        target_charge=1,
+        priority=1,
+        output=OutputConfig(),
+    )
+    telemetry = ChargeTelemetry("a", 19.0, 21.0, 0.0, start, start, start)
+    return PlanningInput(
+        heaters=(item,),
+        telemetry={"a": telemetry},
+        constraints=(),
+        forecast=_hourly_wall_clock_forecast(start, horizon_hours),
+        horizon_start=start,
+        horizon_hours=horizon_hours,
+        slot_minutes=SLOT_MINUTES,
+        max_total_power_w=5200,
+        timezone_name="Europe/Madrid",
+    )
+
+
+@pytest.mark.parametrize(
+    "start,expected_slots",
+    [(BEFORE_SPRING_FORWARD, 46), (BEFORE_FALL_BACK, 50)],
+)
+def test_the_optimizer_plans_the_real_length_of_a_transition_day(
+    start, expected_slots
+) -> None:
+    from dynamic_thermal_charge.charge_planning import INVALID, MilpChargePlanner
+
+    plan = MilpChargePlanner().build(_planning_request(start))
+
+    # A fixed slot-count guard used to reject exactly these two days, which left
+    # the installation with no plan at all once a year.
+    assert plan.status != INVALID
+    assert len(plan.slots) == expected_slots
+    for slot in plan.slots:
+        assert _real(slot.end) - _real(slot.start) == timedelta(minutes=SLOT_MINUTES)
+    for previous, following in zip(plan.slots, plan.slots[1:]):
+        assert previous.end == following.start
+
+
+def test_both_passes_of_the_repeated_hour_get_that_hours_forecast() -> None:
+    from dynamic_thermal_charge.charge_planning import MilpChargePlanner
+
+    plan = MilpChargePlanner().build(_planning_request(BEFORE_FALL_BACK))
+
+    repeated = [
+        slot
+        for slot in plan.slots
+        if slot.start.hour == 2 and slot.start.date() == datetime(2026, 10, 25).date()
+    ]
+    # 02:00 and 02:30 each happen twice, so four slots share two forecast hours.
+    assert len(repeated) == 4
+    assert all(slot.outdoor_temperature_c is not None for slot in repeated)
