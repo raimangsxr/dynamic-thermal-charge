@@ -18,7 +18,6 @@ from dynamic_thermal_charge.persistence.canonical_engines import (
     initialise_canonical_schemas,
 )
 from dynamic_thermal_charge.persistence.history import SqlHistoryRecorder
-from dynamic_thermal_charge.persistence.local_schema import fallback_metadata
 from dynamic_thermal_charge.persistence.locator import DatabaseLocator
 from dynamic_thermal_charge.persistence.paths import StorePaths
 from dynamic_thermal_charge.persistence.relay_test import SqlRelayTestRepository

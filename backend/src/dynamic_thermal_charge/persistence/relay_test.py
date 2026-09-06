@@ -9,14 +9,14 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import and_, delete, insert, select, update
+from sqlalchemy import and_, insert, select, update
 from sqlalchemy.engine import Engine
 
 from . import ConfigConflictError, RelayTestError
 from .engine import transaction
 from .mapping import to_utc
 from .repository import SqlConfigRepository
-from .schema import controller_heartbeat, heater, installation, relay_test_control, relay_test_event, relay_test_output, relay_test_session
+from .schema import controller_heartbeat, installation, relay_test_control, relay_test_event, relay_test_output, relay_test_session
 from .mapping import from_utc
 from .url import StoreLocation
 

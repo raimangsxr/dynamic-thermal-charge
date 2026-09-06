@@ -6,7 +6,6 @@ from dynamic_thermal_charge.charge_planning import (
     DeterministicChargeOptimizer,
     PlanningInput,
 )
-from dynamic_thermal_charge.models import ChargeTelemetry
 from dynamic_thermal_charge.persistence.history import SqlHistoryRecorder
 from dynamic_thermal_charge.weather import HourlyForecastPoint
 from tests.conftest import API_NOW, AUTH

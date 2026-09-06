@@ -12,7 +12,6 @@ from . import (
     ConnectionHandler,
     IncomingMessage,
     MessageHandler,
-    MqttAuthenticationError,
     MqttConfigurationError,
     MqttPublishError,
 )

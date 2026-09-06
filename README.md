@@ -13,11 +13,22 @@ instalación soportada es Docker Compose.
 ## Desarrollo
 
 ```sh
-python -m pip install -e 'backend[dev]'
-python -m pytest backend/tests -q
-cd frontend && npm install && npm test
-cd frontend && npm run build
+make setup   # entorno de backend en backend/.venv y dependencias del panel
+make test    # pruebas de backend y de frontend
+make lint    # ruff sobre el backend
+make check   # test + lint + build del panel + validación de los Compose
+make dev     # valida la configuración persistida
 ```
+
+`make check` es la misma puerta que ejecuta CI, así que un test de frontend en
+rojo o un hallazgo del linter impiden mezclar. La suite informa del porcentaje
+de cobertura total y trata como error cualquier advertencia emitida por el
+propio proyecto; las deprecaciones de terceros toleradas están enumeradas una a
+una en `backend/pyproject.toml`.
+
+El backend se instala en `backend/.venv`, que es el intérprete que usan `make
+test` y `make lint` cuando existe. El panel se compila siempre fuera del
+dispositivo.
 
 ## Despliegue en Docker
 

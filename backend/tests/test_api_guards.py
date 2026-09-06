@@ -92,7 +92,7 @@ def test_every_route_handler_is_synchronous():
     from dynamic_thermal_charge.api.settings import ApiSettings
     from dynamic_thermal_charge.api.routes import config, docs, health, history, status
 
-    app = create_app(settings=ApiSettings(token="g" * 40))
+    create_app(settings=ApiSettings(token="g" * 40))
     # Collected from the routers, because app.routes wraps included routers and
     # iterating it naively finds nothing -- which would make this guard vacuous.
     handlers = [
@@ -157,7 +157,7 @@ def test_the_control_loop_runs_without_the_api_installed(tmp_path):
     fails if the web stack turns out to be loaded. The other half -- stopping the
     API while a plan is in progress -- is the manual check on the device.
     """
-    code = f'''
+    code = '''
 import sys
 from datetime import datetime, timedelta, timezone
 from dynamic_thermal_charge.controller import ChargeController
@@ -186,7 +186,7 @@ slots = tuple(
     )
     for i in range(16)
 )
-plan = ScheduleResult(slots=slots, allocated_minutes={{"salon": 480}}, unmet_minutes={{}})
+plan = ScheduleResult(slots=slots, allocated_minutes={"salon": 480}, unmet_minutes={})
 driver = SimulatedOutputDriver()
 now = [start + timedelta(minutes=5)]
 service = ControllerService(

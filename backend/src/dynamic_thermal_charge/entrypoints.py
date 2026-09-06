@@ -47,7 +47,7 @@ def initialise_dev_storage() -> None:
     from .models import SimulatedForecastConfig
     from .api.settings import ApiSettings
     from .persistence.bootstrap_store import BootstrapRepository
-    from .persistence.locator import DatabaseDriver, DatabaseLocator
+    from .persistence.locator import DatabaseDriver
     from .persistence.seed import example_installation
     from .persistence.secret_digest import digest_secret
     from .persistence.system_configuration import SecretAction, SecretMutation

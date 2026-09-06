@@ -7,7 +7,6 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 from sqlalchemy import select
 
-from dynamic_thermal_charge.models import SiteConfig
 from dynamic_thermal_charge.persistence.mapping import from_utc
 from dynamic_thermal_charge.persistence.schema import (
     forecast as forecast_table,

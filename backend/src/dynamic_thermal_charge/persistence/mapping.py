@@ -19,7 +19,6 @@ from ..models import (
     AemetConfig,
     AppConfig,
     Heater,
-    IndoorReading,
     LoggingConfig,
     OutputConfig,
     RuntimeConfig,

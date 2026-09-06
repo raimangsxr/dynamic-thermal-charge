@@ -20,7 +20,7 @@ from .controller import ChargeController
 from .drivers import OutputDriver, RecordingOutputDriver, SimulatedOutputDriver
 from .gpio_driver import GpioOutputDriver
 from .charge_planning import PLANNING_HORIZON_HOURS, DeterministicChargeOptimizer, PlanningInput, resolve_planning_telemetry
-from .models import AppConfig, ChargeTelemetry
+from .models import AppConfig
 from .persistence import ConfigStoreError
 from .persistence.active_plan import SqlActivePlanRepository
 from .scheduler import (

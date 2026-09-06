@@ -8,7 +8,7 @@ function rather than through an HTTP request.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from ..persistence import Heartbeat, Liveness
 

@@ -113,13 +113,6 @@ def test_heater_telemetry_topics_use_simulation_prefix_when_enabled():
 
 
 def test_simulation_subscription_topics_include_all_enabled_heaters():
-    config = MqttSimulationConfig(
-        enabled=True,
-        initial_temperature_c=45.0,
-        publish_seconds=30.0,
-        topic_prefix="dtc/sim",
-        thermal_loss_c_per_hour=2.0,
-    )
     site = {
         "mqtt_simulation_enabled": True,
         "mqtt_simulation_topic_prefix": "dtc/sim",

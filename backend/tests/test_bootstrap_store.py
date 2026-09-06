@@ -1,6 +1,5 @@
 from datetime import datetime, timedelta, timezone
 import json
-import os
 import sqlite3
 
 import pytest
@@ -13,10 +12,8 @@ from dynamic_thermal_charge.persistence.bootstrap_store import (
 )
 from dynamic_thermal_charge.persistence.local_schema import (
     BOOTSTRAP_SCHEMA_REVISION,
-    active_locator,
     bootstrap_metadata,
     bootstrap_schema_version,
-    bootstrap_state,
 )
 from dynamic_thermal_charge.persistence.locator import DatabaseDriver, DatabaseLocator
 from dynamic_thermal_charge.persistence.paths import StorePaths

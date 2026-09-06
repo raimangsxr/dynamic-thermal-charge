@@ -12,9 +12,8 @@ from dynamic_thermal_charge.models import Heater, OutputConfig, ThermalProfile
 from dynamic_thermal_charge.persistence import (
     ConfigConflictError,
     ConfigValidationError,
-    SecretRejectedError,
 )
-from dynamic_thermal_charge.persistence.schema import config_change, heater as heater_table
+from dynamic_thermal_charge.persistence.schema import config_change
 from dynamic_thermal_charge.scheduler import ChargeScheduler
 
 

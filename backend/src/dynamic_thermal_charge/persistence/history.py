@@ -32,7 +32,6 @@ from .schema import (
     plan_slot,
     relay_test_control,
     relay_test_event,
-    relay_test_output,
     relay_test_session,
 )
 from .url import StoreLocation

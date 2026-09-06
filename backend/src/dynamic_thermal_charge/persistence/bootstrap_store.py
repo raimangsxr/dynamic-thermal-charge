@@ -17,7 +17,6 @@ from .engine import build_engine
 from .local_schema import (
     BOOTSTRAP_SCHEMA_REVISION,
     active_locator,
-    bootstrap_schema_version,
     bootstrap_state,
     upgrade_bootstrap_schema,
 )

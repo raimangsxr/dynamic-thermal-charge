@@ -19,16 +19,14 @@ jobs:
         with: { python-version: '3.12' }
       - uses: actions/setup-node@v6
         with: { node-version: '24', cache: npm, cache-dependency-path: frontend/package-lock.json }
-      - name: Install backend test dependencies
-        run: pip install -e 'backend[dev]'
-      - name: Run backend checks
+      # The same two commands a developer runs, so CI cannot drift from the
+      # local gate. `make check` covers both components: pytest and ruff for the
+      # backend, vitest and the production build for the panel, plus the Compose
+      # descriptors.
+      - name: Install dependencies
+        run: make setup
+      - name: Quality gate
         run: make check
-      - name: Install frontend dependencies
-        run: npm ci
-        working-directory: frontend
-      - name: Compile frontend
-        run: npm run build
-        working-directory: frontend
       - uses: docker/setup-buildx-action@v4
       - name: Build backend image without publishing
         uses: docker/build-push-action@v7

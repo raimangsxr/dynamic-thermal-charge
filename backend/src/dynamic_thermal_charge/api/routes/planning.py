@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
@@ -24,7 +24,7 @@ from ...charge_planning import (
     input_token,
     resolve_planning_telemetry,
 )
-from ...models import ChargeConstraint, ChargeTelemetry
+from ...models import ChargeConstraint
 from ...persistence import ConfigValidationError
 from ..dependencies import usable_store
 from ..schemas import (
