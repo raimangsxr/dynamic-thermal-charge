@@ -170,7 +170,10 @@ def run_controller() -> None:
     _run_controller(store, config, revision, provider, system.output.driver, system)
 
 
-def run_api() -> None:
+def run_api(
+    *, bind_host: str | None = None, bind_port: int | None = None
+) -> None:
+    """Serve the API, with optional deployment-specific bind overrides."""
     import uvicorn
 
     from .api import create_app
@@ -180,16 +183,18 @@ def run_api() -> None:
 
     store = _configured_store()
     settings = settings_from_repository(store.system_configuration)
+    host = settings.host if bind_host is None else bind_host
+    port = settings.port if bind_port is None else bind_port
     system = store.system_configuration.current().configuration
     configure_logging(system.logging.level)
     if store.context is not None:
         store.context.publish_process_revision("api")
     app = create_app(settings, store_factory=lambda: store)
-    logger.info("Serving the HTTP API on %s:%d", settings.host, settings.port)
+    logger.info("Serving the HTTP API on %s:%d", host, port)
     uvicorn.run(
         app,
-        host=settings.host,
-        port=settings.port,
+        host=host,
+        port=port,
         log_level=system.logging.level.lower(),
         log_config=uvicorn_log_config(),
     )

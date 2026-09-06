@@ -15,6 +15,7 @@ def test_docker_compose_contains_the_runtime_services_and_persistent_state() -> 
         assert service in compose
     assert "/srv/app/data:/var/lib/dynamic-thermal-charge" in compose
     assert "condition: service_healthy" in compose
+    assert "run_api(bind_host='0.0.0.0', bind_port=8080)" in compose
 
 
 def test_backend_image_runs_idempotent_initialisation_before_its_process() -> None:

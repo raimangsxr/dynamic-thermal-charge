@@ -236,6 +236,24 @@ def test_the_api_entrypoint_builds_no_output_driver(monkeypatch, tmp_path, capsy
     assert "log_config" in served
 
 
+def test_the_api_entrypoint_accepts_a_container_bind_override(monkeypatch, tmp_path):
+    from dynamic_thermal_charge.entrypoints import run_api
+    from dynamic_thermal_charge.persistence.bootstrap import initialise_at
+    from dynamic_thermal_charge.persistence.paths import StorePaths
+    import uvicorn
+
+    paths = StorePaths.in_directory(tmp_path / "api-container-command")
+    initialise_at(paths)
+    monkeypatch.setattr(StorePaths, "production", classmethod(lambda cls: paths))
+    served: dict = {}
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: served.update(kw))
+
+    run_api(bind_host="0.0.0.0", bind_port=8080)
+
+    assert served["host"] == "0.0.0.0"
+    assert served["port"] == 8080
+
+
 def test_the_api_entrypoint_starts_safe_onboarding_without_an_admin_token(monkeypatch, tmp_path, capsys):
     from dynamic_thermal_charge.entrypoints import run_api
     from dynamic_thermal_charge.persistence.bootstrap import initialise_at
