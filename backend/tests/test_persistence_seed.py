@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from dynamic_thermal_charge.config import validate_config
 from dynamic_thermal_charge.persistence import SchemaStatus

@@ -157,7 +157,7 @@ def test_no_configuration_at_all_is_distinguishable(store_env, api_settings, api
     from dynamic_thermal_charge.api import create_app
     from dynamic_thermal_charge.persistence.bootstrap import initialise_at, open_store
 
-    store = initialise_at(store_env, allow_seed=False)[0]
+    initialise_at(store_env, allow_seed=False)
     app = create_app(
         settings=api_settings,
         store_factory=lambda: open_store(store_env),
@@ -175,7 +175,6 @@ def test_no_configuration_at_all_is_distinguishable(store_env, api_settings, api
 
 def test_no_error_body_leaks_internals(client, initialised_store):
     """Walks every error code in the contract."""
-    from dynamic_thermal_charge.persistence.url import DATABASE_URL_ENV
 
     responses = [
         client.get("/api/v1/status"),  # 401

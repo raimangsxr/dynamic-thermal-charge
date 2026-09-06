@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, timezone
 import json
 from typing import Any, Mapping
 from uuid import uuid4
@@ -10,7 +10,7 @@ from uuid import uuid4
 from sqlalchemy import delete, insert, select, update
 from sqlalchemy.engine import Engine
 
-from ..charge_planning import AutomaticPlan, AutomaticPlanSlot, PlanningDeficit
+from ..charge_planning import AutomaticPlan
 from ..models import ChargeConstraint, ChargeTelemetry
 from ..weather import ForecastCycleState, HourlyForecastPoint, future_forecast_points
 from . import ConfigConflictError, ConfigValidationError, ForecastRef
@@ -405,7 +405,6 @@ class SqlPlanningRepository:
             ).values(status="error", finished_at=to_utc(now), detail="interrupted"))
 
     def request_preview_cancel(self, job_id: str) -> dict[str, Any] | None:
-        now = datetime.now(timezone.utc)
         with transaction(self._application, self._application_location) as connection:
             row = connection.execute(select(preview_job).where(
                 (preview_job.c.id == job_id) &

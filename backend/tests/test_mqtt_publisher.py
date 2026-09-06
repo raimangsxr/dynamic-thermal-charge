@@ -9,7 +9,6 @@ import json
 import pytest
 
 from dynamic_thermal_charge.api.liveness import evaluate
-from dynamic_thermal_charge.models import AppConfig
 from dynamic_thermal_charge.mqtt.discovery import discovery_entities
 from dynamic_thermal_charge.mqtt.publisher import MqttPublisher, project_state
 from dynamic_thermal_charge.mqtt.service import MqttService
@@ -149,12 +148,14 @@ def test_complete_state_is_deterministic_and_retained(mqtt_client):
             }
         },
     }
-    snapshot = lambda: project_state(
-        example_installation(),
-        evaluate(_heartbeat(), NOW),
-        {"salon": True},
-        plan=plan,
-    )
+    def snapshot():
+        return project_state(
+            example_installation(),
+            evaluate(_heartbeat(), NOW),
+            {"salon": True},
+            plan=plan,
+        )
+
     publisher = MqttPublisher(mqtt_client, TopicLayout(), snapshot)
     publisher.refresh()
 

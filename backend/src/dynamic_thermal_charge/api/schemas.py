@@ -13,7 +13,7 @@ decision.
 
 from __future__ import annotations
 
-from datetime import date, datetime, time
+from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 

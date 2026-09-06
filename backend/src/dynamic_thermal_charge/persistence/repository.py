@@ -20,7 +20,7 @@ from sqlalchemy import MetaData, Table, delete, insert, inspect, select, update
 from sqlalchemy.engine import Connection, Engine
 
 from ..config import validate_config
-from ..models import AppConfig, Heater, IndoorReading, OutputConfig, ThermalProfile
+from ..models import AppConfig, Heater, IndoorReading
 from . import (
     ConfigChange,
     ConfigConflictError,

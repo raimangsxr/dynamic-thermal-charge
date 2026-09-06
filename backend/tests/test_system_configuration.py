@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 import json
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import select
 
 from dynamic_thermal_charge.persistence import ConfigConflictError, ConfigValidationError
 from dynamic_thermal_charge.persistence.canonical_engines import (

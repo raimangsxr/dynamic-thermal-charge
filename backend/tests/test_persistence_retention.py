@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
-import pytest
 from sqlalchemy import func, insert, select
 
 from dynamic_thermal_charge.persistence.mapping import to_utc
@@ -257,7 +256,6 @@ def test_a_year_of_history_stays_within_a_known_bound(initialised_store, recorde
     # The estimate was ~27 000; hold it to the right order of magnitude.
     assert 20_000 <= total_rows <= 40_000, f"row estimate is off: {counts}"
 
-    database = tmp_path / "dtc.db"
     size_mb = sum(
         path.stat().st_size
         for path in tmp_path.glob("dtc.db*")

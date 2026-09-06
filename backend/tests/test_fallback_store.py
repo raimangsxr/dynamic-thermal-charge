@@ -1,8 +1,7 @@
 from datetime import datetime, timezone
-import sqlite3
 
 import pytest
-from sqlalchemy import inspect, text, update
+from sqlalchemy import inspect, update
 
 from dynamic_thermal_charge.persistence.fallback_store import FallbackRepository
 from dynamic_thermal_charge.persistence.local_schema import (

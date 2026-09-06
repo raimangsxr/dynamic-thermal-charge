@@ -4,7 +4,6 @@ Revision ID: 0008_automatic_charge_planning
 Revises: 0007_thermal_loss
 """
 
-from alembic import op
 
 revision = "0008_automatic_charge_planning"
 down_revision = "0007_thermal_loss"

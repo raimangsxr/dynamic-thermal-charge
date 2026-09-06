@@ -1,7 +1,7 @@
 """Indoor MQTT inputs use the local receive clock and invalidate bad data."""
 
 from dataclasses import replace
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import pytest
 

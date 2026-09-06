@@ -261,7 +261,7 @@ def test_a_heater_can_be_added(client):
 
 
 def test_a_heater_can_be_removed_keeping_its_history(client, recorder, initialised_store):
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timezone
 
     from dynamic_thermal_charge.scheduler import ChargeScheduler
 
@@ -419,7 +419,7 @@ def test_two_clients_on_the_same_revision_do_not_both_win(client):
 # --------------------------------------------------------------------------- #
 
 def test_an_edit_does_not_alter_the_plan_in_progress(client, heartbeat, recorder, initialised_store):
-    from datetime import datetime, timedelta, timezone
+    from datetime import timedelta
 
     from dynamic_thermal_charge.scheduler import ChargeScheduler
     from tests.conftest import API_NOW

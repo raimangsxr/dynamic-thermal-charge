@@ -3,9 +3,6 @@ from datetime import datetime, timezone
 
 import pytest
 
-from dynamic_thermal_charge.persistence.applied_revision import (
-    AppliedRevisionRepository,
-)
 from dynamic_thermal_charge.persistence.canonical_engines import (
     build_canonical_engines,
 )

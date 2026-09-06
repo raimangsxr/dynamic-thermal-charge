@@ -1,16 +1,15 @@
-.PHONY: setup dev test lint check build compose-check
-setup:
-	python3 -m pip install -e 'backend[dev]'
-dev:
-	python -c 'from dynamic_thermal_charge.entrypoints import check_configuration; check_configuration()'
-test:
-	python -m pytest backend/tests
-lint:
-	python -m compileall -q backend/src backend/tests
-check: test lint compose-check
+# The five contract targets -- setup, dev, test, lint, check -- come from the
+# AI Engineering Standard harness, which runs both components: pytest and ruff
+# for the backend, vitest and the production build for the panel. See
+# .ai-standard/project.mk for what is wired to what.
+include .ai-standard/make/entry.mk
+
+.PHONY: build compose-check
+
 build:
 	docker build -t dynamic-thermal-charge-backend:local -f backend/Dockerfile backend
 	docker build -t dynamic-thermal-charge-frontend:local -f frontend/Dockerfile .
+
 compose-check:
 	DOCKERHUB_USERNAME=local APP_VERSION=check docker compose -f deploy/compose.yaml config --quiet
 	docker compose -f deploy/compose.dev.yaml config --quiet

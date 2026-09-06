@@ -37,6 +37,12 @@ dev = [
     "pytest>=8,<10",
     # Property-based tests for the planner invariants. Dev-only and pure Python.
     "hypothesis>=6.100,<7",
+    # Quality gate. Both pure Python and dev-only, so neither reaches the device.
+    # ruff is pinned exactly: its default rule set grows between minor versions,
+    # so a range would let CI fail on a change that passed locally. Bump it
+    # deliberately, with the new findings in the same commit.
+    "ruff==0.16.6",
+    "pytest-cov>=6,<8",
     "SQLAlchemy>=2,<3",
     "alembic>=1.13",
     "fastapi>=0.115,<1",
@@ -49,7 +55,57 @@ gpio = ["gpiozero>=2.0.1,<3", "lgpio>=0.2.2.0"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+addopts = "-q --cov=dynamic_thermal_charge --cov-report=term:skip-covered"
 markers = [
     "postgres: requires a real PostgreSQL server; skipped unless DTC_TEST_POSTGRES_URL is set",
 ]
+# A warning emitted by this project is a defect, so it fails the suite. Third
+# party deprecations are silenced one at a time, each with the reason it is
+# tolerated, so a new one is never hidden by a blanket rule.
+filterwarnings = [
+    "error",
+    # PuLP 4.0 changes these three APIs. The dependency is pinned below 4 until
+    # the planner is migrated, so each is expected until that happens. Listed
+    # one by one so a fourth deprecation shows up as a failure instead of
+    # disappearing into a blanket rule.
+    "ignore:Using LpProblem.constraints as a dict mapping is deprecated:DeprecationWarning",
+    "ignore:PULP_CBC_CMD is deprecated:DeprecationWarning",
+    "ignore:Constructing LpVariable\\(name, ...\\) directly is deprecated:DeprecationWarning",
+    # Starlette's test client still reaches for a deprecated anyio alias, so the
+    # warning fires on import and nothing in this project can avoid it. Only
+    # visible with recent anyio, which is why it appears in a fresh environment
+    # and not necessarily in an older one.
+    "ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["dynamic_thermal_charge"]
+
+[tool.coverage.report]
+show_missing = false
+skip_covered = true
+
+[tool.ruff]
+target-version = "py312"
+
+[tool.ruff.lint]
+# Declared explicitly rather than inherited: ruff's implicit default set changes
+# between minor versions, and a linter that silently gains rules turns an
+# unrelated dependency bump into a red build. This is pyflakes plus the
+# pycodestyle errors worth failing a build over. Import sorting and formatting
+# stay out of scope for now; see the `activate-quality-gate` change, R7.
+select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+# Compact one-liners are the local style of the relay-test coordination and of
+# these persistence helpers. Splitting them by hand would be reformatting, which
+# this batch deliberately excludes; enabling `ruff format` later resolves them.
+"src/dynamic_thermal_charge/api/routes/relay_test.py" = ["E701"]
+"src/dynamic_thermal_charge/persistence/relay_test.py" = ["E701"]
+"src/dynamic_thermal_charge/persistence/controller_log.py" = ["E701"]
+"src/dynamic_thermal_charge/persistence/legacy_import.py" = ["E701"]
+"src/dynamic_thermal_charge/controller.py" = ["E701"]
+# This suite groups each import with the commented section it serves, so imports
+# deliberately appear mid-file as documentation of what each block exercises.
+"tests/test_persistence_failures.py" = ["E402"]

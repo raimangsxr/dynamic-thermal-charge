@@ -38,7 +38,7 @@ def test_legacy_import_dry_run_is_sanitized_and_non_mutating(tmp_path):
 def test_legacy_import_preserves_configuration_and_is_idempotent(tmp_path):
     source, environment = _legacy_installation(tmp_path)
     paths = StorePaths.in_directory(tmp_path / "target")
-    report = import_legacy(environment, paths, apply=True)
+    import_legacy(environment, paths, apply=True)
     target = open_store(paths)
     assert target.repository.current() == source.repository.current()
     public = target.system_configuration.public_snapshot()
