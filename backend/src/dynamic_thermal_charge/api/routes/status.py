@@ -90,7 +90,11 @@ def get_status(
     power = None
     if current:
         instant_w = sum(h.power_w for h in heaters if h.last_known_output_on)
-        limit_w = config.site.max_total_power_w
+        # Automatic planning owns the canonical site power limit. The legacy
+        # installation column remains for compatibility, but must not make the
+        # status panel disagree with the plan when both values differ.
+        planning_site = store.planning.site()
+        limit_w = int(planning_site.get("contracted_power_w", config.site.max_total_power_w))
         power = PowerSnapshot(
             instant_w=instant_w,
             limit_w=limit_w,

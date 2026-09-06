@@ -52,9 +52,6 @@ declare const __APP_VERSION__: string;
             <a class="nav-link" routerLink="/configuracion" routerLinkActive="active" (click)="closeDrawer(drawer)">
               <mat-icon aria-hidden="true">tune</mat-icon><span>Configuración</span>
             </a>
-            <a class="nav-link" routerLink="/configuracion-sistema" routerLinkActive="active" (click)="closeDrawer(drawer)">
-              <mat-icon aria-hidden="true">settings</mat-icon><span>Sistema</span>
-            </a>
             <a class="nav-link" routerLink="/historico" routerLinkActive="active" (click)="closeDrawer(drawer)">
               <mat-icon aria-hidden="true">history</mat-icon><span>Histórico</span>
             </a>

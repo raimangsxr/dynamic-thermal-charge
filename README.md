@@ -47,8 +47,12 @@ inicialización ni instalar Python, Node o servicios systemd en la Raspberry.
 El frontend se publica en el puerto `80`. La API solo se expone dentro de la
 red Docker y el panel la consume mediante nginx.
 
-La configuración de previsión se administra exclusivamente en `Sistema →
-weather`: allí se guardan proveedor, municipio AEMET, temperaturas simuladas y
+La configuración se concentra en `/configuracion`, organizada por tareas. La
+URL anterior `/configuracion-sistema` se conserva como alias y redirige a la
+experiencia unificada.
+
+La configuración de previsión se administra exclusivamente en `Configuración →
+Integraciones → Meteorología`: allí se guardan proveedor, municipio AEMET, temperaturas simuladas y
 de fallback, timeout y política de actualización. La clave AEMET se reemplaza
 como secreto gestionado y la API solo informa si está configurada; nunca
 devuelve su valor.
@@ -61,7 +65,7 @@ una previsión simulada o de respaldo. `replan_minutes` marca la cadencia de
 replanificación y se ajusta siempre a un límite de intervalo, sin ser menor que
 un intervalo de carga.
 
-La sección `Sistema → mqtt` permite desactivar el broker para instalaciones de
+La sección `Configuración → Integraciones → MQTT` permite desactivar el broker para instalaciones de
 prueba. Mientras MQTT está deshabilitado, el controlador usa los cuatro valores
 fijos globales de esa sección (temperatura, temperatura objetivo, carga
 almacenada y temperatura interior); al habilitarlo vuelve a exigir telemetría
@@ -71,7 +75,7 @@ Como medida de seguridad, el controlador no arranca salidas GPIO si MQTT está
 deshabilitado o si está activa la simulación de acumuladores: ambas situaciones
 proporcionan telemetría no real y se registran como un error crítico.
 
-La sección `Sistema → planning` permite configurar la ventana visible y el
+La sección `Configuración → Planificación` permite configurar la ventana visible y el
 horizonte completo, ambos entre 1 y 48 horas, con ventana no mayor que el
 horizonte, además del límite total de tiempo del optimizador en segundos
 (entero positivo; por defecto 120). La sección `Planificación` consulta el plan aceptado en `GET /api/v1/planning`

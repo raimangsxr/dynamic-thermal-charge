@@ -272,8 +272,19 @@ def _run_controller(
                         else live_mqtt.fixed_indoor_temperature_c
                     ),
                 )
-                plan = _build_plan(
+                # Keep the legacy fallback aligned with the same canonical
+                # site limit used by automatic planning and the status API.
+                canonical_config = replace(
                     live_config,
+                    site=replace(
+                        live_config.site,
+                        max_total_power_w=int(
+                            planning_site.get("contracted_power_w", live_config.site.max_total_power_w)
+                        ),
+                    ),
+                )
+                plan = _build_plan(
+                    canonical_config,
                     start,
                     cycle.forecast,
                     indoor_temperatures=indoor_temperatures,

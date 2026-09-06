@@ -1,10 +1,14 @@
 <main class="config">
   <header class="page-header">
     <div>
-      <p class="eyebrow">Panel de control</p>
+      <p class="eyebrow">Administración</p>
       <h1>Configuración</h1>
-      @if (config(); as data) { <p class="revisions">Configuración rev. {{ data.config_revision }} · esquema {{ data.schema_revision }}</p> }
+      <p class="intro">Todo lo necesario para poner en marcha la instalación y mantener el servicio, ordenado por tarea.</p>
+      @if (config(); as data) { <p class="revisions">Instalación rev. {{ data.config_revision }} · esquema {{ data.schema_revision }}@if (configuration(); as system) { · sistema rev. {{ system.revision }} }</p> }
     </div>
+    <button mat-stroked-button type="button" (click)="load()" [disabled]="loading()" aria-label="Volver a leer la configuración" data-testid="reload-config">
+      <mat-icon aria-hidden="true">refresh</mat-icon> {{ loading() ? 'Cargando…' : 'Volver a leer' }}
+    </button>
   </header>
 
   @if (banner(); as message) {
@@ -15,54 +19,88 @@
       }
     </div>
   }
+  @if (systemError()) { <div class="banner alert" role="alert" data-testid="system-error">{{ systemError() }}</div> }
   @if (relayConflict()) {
     <p class="banner alert" role="alert">La configuración está bloqueada por una prueba o recuperación de seguridad. <a routerLink="/prueba-reles">Abrir prueba de relés</a></p>
   }
   @if (saved(); as text) { <p class="saved" role="status" data-testid="saved"><mat-icon aria-hidden="true">check_circle</mat-icon> {{ text }}</p> }
+  @if (systemMessage()) { <p class="saved" role="status">{{ systemMessage() }}</p> }
 
-  @if (confirming(); as edit) {
-    <div class="banner warn" role="alertdialog" data-testid="confirm" aria-live="assertive">
-      <strong>Confirma el cambio</strong><p>{{ confirmationMessage() }}</p>
-      <div class="banner-actions">
-        <button mat-flat-button color="warn" type="button" (click)="confirm()" data-testid="confirm-yes">Sí, cambiar</button>
-        <button mat-button type="button" (click)="cancelConfirmation()" data-testid="confirm-no">Cancelar</button>
-      </div>
-    </div>
+  @if (config() || configuration()) {
+    <nav class="area-nav" aria-label="Áreas de configuración">
+      @for (area of areas; track area.id) {
+        <button type="button" class="area-tab" [class.active]="areaIs(area.id)" [attr.aria-current]="areaIs(area.id) ? 'page' : null" (click)="chooseArea(area.id)">
+          <span class="area-tab-title">{{ area.label }}</span><span class="area-tab-description">{{ area.description }}</span>
+        </button>
+      }
+    </nav>
   }
 
-  @if (config(); as data) {
-    <section class="surface configuration-section installation-section" aria-labelledby="installation-title">
-      <div class="section-heading installation-heading">
-        <div>
-          <p class="eyebrow">Parámetros</p>
-          <h2 id="installation-title">Instalación</h2>
-        </div>
-        <button mat-flat-button color="primary" type="button" (click)="saveInstallation()" [disabled]="!dirty() || installationSaving()" data-testid="save-installation">
+  @if (areaIs('summary')) {
+    <section class="workspace-panel" aria-labelledby="summary-title">
+      <div class="section-heading">
+        <div><p class="eyebrow">Vista general</p><h2 id="summary-title">Resumen de la instalación</h2><p class="section-lead">Consulta lo importante de un vistazo y entra directamente en el área que quieras ajustar.</p></div>
+      </div>
+      @if (loading() && !config() && !configuration()) { <p class="loading" role="status">Cargando configuración…</p> }
+      <div class="summary-grid">
+        @if (config(); as data) {
+          <article class="summary-card">
+            <div class="summary-card-heading"><mat-icon aria-hidden="true">device_thermostat</mat-icon><h3>Acumuladores</h3></div>
+            <strong class="summary-value">{{ data.heaters.length }}</strong>
+            <p>equipos configurados</p>
+            <button mat-button type="button" (click)="chooseArea('heaters')">Gestionar acumuladores <mat-icon aria-hidden="true">arrow_forward</mat-icon></button>
+          </article>
+        }
+        @if (planningConfig(); as planning) {
+          <article class="summary-card">
+            <div class="summary-card-heading"><mat-icon aria-hidden="true">bolt</mat-icon><h3>Potencia total</h3></div>
+            <strong class="summary-value">{{ formatPower(planning.contracted_power_w) }}</strong>
+            <p>límite común de planificación y Estado</p>
+            <button mat-button type="button" (click)="chooseArea('planning')">Revisar planificación <mat-icon aria-hidden="true">arrow_forward</mat-icon></button>
+          </article>
+        }
+        @if (configuration(); as system) {
+          <article class="summary-card">
+            <div class="summary-card-heading"><mat-icon aria-hidden="true">hub</mat-icon><h3>Integraciones</h3></div>
+            <strong class="summary-value">{{ enabledText(systemValue('mqtt', 'enabled')) }}</strong>
+            <p>MQTT {{ systemValue('mqtt', 'enabled') === true || systemValue('mqtt', 'enabled') === 'true' ? 'activo' : 'en modo de prueba' }}</p>
+            <button mat-button type="button" (click)="chooseArea('integrations')">Revisar integraciones <mat-icon aria-hidden="true">arrow_forward</mat-icon></button>
+          </article>
+          <article class="summary-card">
+            <div class="summary-card-heading"><mat-icon aria-hidden="true">storage</mat-icon><h3>Servicio</h3></div>
+            <strong class="summary-value">{{ topologyDriver() }}</strong>
+            <p>almacenamiento · modo {{ topologyMode() }}</p>
+            <button mat-button type="button" (click)="chooseArea('service')">Ver servicio <mat-icon aria-hidden="true">arrow_forward</mat-icon></button>
+          </article>
+        }
+      </div>
+      <aside class="info-note" aria-label="Criterio de configuración">
+        <mat-icon aria-hidden="true">info</mat-icon>
+        <p><strong>Una fuente para cada concepto.</strong> La potencia total se edita en Planificación; el sondeo, los registros y la retención se editan en Servicio. Los valores antiguos equivalentes ya no aparecen como alternativas.</p>
+      </aside>
+    </section>
+  }
+
+  @if (areaIs('installation') && config(); as data) {
+    <section class="workspace-panel" aria-labelledby="installation-title">
+      <div class="section-heading">
+        <div><p class="eyebrow">Base de la instalación</p><h2 id="installation-title">Intervalos y calidad de lecturas</h2><p class="section-lead">Ajusta cómo se interpreta la telemetría y cómo se divide la carga. La potencia, el sondeo y la retención están en sus fuentes canónicas.</p></div>
+        <button mat-flat-button color="primary" type="button" (click)="saveInstallation()" [disabled]="!dirty() || installationSaving() || !writable()" data-testid="save-installation">
           {{ installationSaving() ? 'Guardando…' : 'Guardar cambios' }}
         </button>
       </div>
       <div class="installation-grid">
         @for (group of installationGroups; track group.title) {
-          <div class="field-group installation-panel">
+          <div class="field-group">
             <h3>{{ group.title }}</h3>
+            @if (group.description) { <p class="group-description">{{ group.description }}</p> }
             <div class="installation-fields">
               @for (field of group.fields; track field) {
                 <div class="installation-field" [attr.data-field]="field">
                   <span hidden>{{ register(field, null) }}</span>
-                  <div class="field-label-row">
-                    <label [for]="field">{{ label(field) }}</label>
-                    <dtc-param-help [field]="field" [label]="label(field)" />
-                  </div>
-                  <input
-                    class="installation-input"
-                    [id]="field"
-                    [ngModel]="pending()[key(field, null)] ?? asText(data, field)"
-                    (ngModelChange)="edit(field, null, $event)"
-                    [name]="field"
-                  />
-                  @if (fieldErrors()[key(field, null)]; as error) {
-                    <p class="field-error" role="alert" [attr.data-error]="field">{{ error }}</p>
-                  }
+                  <div class="field-label-row"><label [for]="'installation-' + field">{{ label(field) }}</label><dtc-param-help [field]="field" [label]="label(field)" /></div>
+                  <input class="installation-input" [id]="'installation-' + field" [ngModel]="pending()[key(field, null)] ?? asText(data, field)" (ngModelChange)="edit(field, null, $event)" [name]="field" [disabled]="!writable()" />
+                  @if (fieldErrors()[key(field, null)]; as error) { <p class="field-error" role="alert" [attr.data-error]="field">{{ error }}</p> }
                 </div>
               }
             </div>
@@ -70,79 +108,161 @@
         }
       </div>
     </section>
+  }
 
-    <section class="surface configuration-section heaters-section" aria-labelledby="heaters-title">
+  @if (areaIs('heaters') && config(); as data) {
+    <section class="workspace-panel" aria-labelledby="heaters-title">
       <div class="section-heading">
-        <div><p class="eyebrow">Equipos</p><h2 id="heaters-title">Acumuladores</h2></div>
-        <button mat-flat-button color="primary" type="button" (click)="openAddHeater()" data-testid="add-heater"><mat-icon aria-hidden="true">add</mat-icon> Nuevo acumulador</button>
+        <div><p class="eyebrow">Equipos</p><h2 id="heaters-title">Acumuladores</h2><p class="section-lead">Define la capacidad, el comportamiento y la conexión de cada equipo. El objetivo base es el valor por defecto; las necesidades por horario se gestionan en Planificación.</p></div>
+        <button mat-flat-button color="primary" type="button" (click)="openAddHeater()" [disabled]="!writable()" data-testid="add-heater"><mat-icon aria-hidden="true">add</mat-icon> Nuevo acumulador</button>
       </div>
 
       @if (heaterForm(); as form) {
         <form class="heater-form" (ngSubmit)="saveHeater()" data-testid="heater-form">
           <div class="form-heading"><div><h3>{{ heaterFormMode() === 'add' ? 'Nuevo acumulador' : 'Editar acumulador' }}</h3><p>Los cambios se validan en el backend usando la revisión actual.</p></div><button mat-icon-button type="button" (click)="cancelHeaterForm()" aria-label="Cancelar formulario" matTooltip="Cancelar"><mat-icon aria-hidden="true">close</mat-icon></button></div>
-          <div class="fields form-grid">
-            @for (meta of heaterFormFields; track meta.key) {
-              <div class="form-field-cell">
-                <div class="field-label-row">
-                  <label [for]="'heater-' + meta.key">{{ meta.label }}</label>
-                  <dtc-param-help [field]="helpField(meta)" [label]="meta.label" />
-                </div>
-                <mat-form-field appearance="outline" subscriptSizing="dynamic">
-                  @if (meta.type === 'select') {
-                    <mat-select [id]="'heater-' + meta.key" [name]="meta.key" [ngModel]="form[meta.key]" (ngModelChange)="updateHeaterForm(meta.key, $event)">
-                      @for (option of meta.selectOptions ?? []; track option.label) {
-                        <mat-option [value]="option.value">{{ option.label }}</mat-option>
+          @for (formGroup of heaterFormGroups; track formGroup.title) {
+            <div class="field-group form-group"><h4>{{ formGroup.title }}</h4><div class="fields form-grid">
+              @for (fieldKey of formGroup.fields; track fieldKey) {
+                @if (heaterMeta(fieldKey); as meta) {
+                  <div class="form-field-cell">
+                    <div class="field-label-row"><label [for]="'heater-' + meta.key">{{ meta.label }}</label><dtc-param-help [field]="helpField(meta)" [label]="meta.label" /></div>
+                    <mat-form-field appearance="outline" subscriptSizing="dynamic">
+                      @if (meta.type === 'select') {
+                        <mat-select [id]="'heater-' + meta.key" [name]="meta.key" [ngModel]="form[meta.key]" (ngModelChange)="updateHeaterForm(meta.key, $event)" [disabled]="!writable()">
+                          @for (option of meta.selectOptions ?? []; track option.label) { <mat-option [value]="option.value">{{ option.label }}</mat-option> }
+                        </mat-select>
+                      } @else {
+                        <input matInput [id]="'heater-' + meta.key" [name]="meta.key" [type]="meta.type" [step]="meta.step" [min]="meta.min" [max]="meta.max" [required]="meta.required ?? false" [readonly]="meta.readonlyOnEdit && heaterFormMode() === 'edit'" [ngModel]="form[meta.key]" (ngModelChange)="updateHeaterForm(meta.key, $event)" [disabled]="!writable()" />
                       }
-                    </mat-select>
-                  } @else {
-                    <input
-                      matInput
-                      [id]="'heater-' + meta.key"
-                      [name]="meta.key"
-                      [type]="meta.type"
-                      [step]="meta.step"
-                      [min]="meta.min"
-                      [max]="meta.max"
-                      [required]="meta.required ?? false"
-                      [readonly]="meta.readonlyOnEdit && heaterFormMode() === 'edit'"
-                      [ngModel]="form[meta.key]"
-                      (ngModelChange)="updateHeaterForm(meta.key, $event)"
-                    />
-                  }
-                  @if (meta.hint) { <mat-hint>{{ meta.hint }}</mat-hint> }
-                </mat-form-field>
-              </div>
-            }
-          </div>
+                      @if (meta.hint) { <mat-hint>{{ meta.hint }}</mat-hint> }
+                    </mat-form-field>
+                  </div>
+                }
+              }
+            </div></div>
+          }
           @if (heaterFormError()) { <p class="field-error" role="alert" data-testid="heater-form-error">{{ heaterFormError() }}</p> }
-          <div class="form-actions"><button mat-flat-button color="primary" type="submit" [disabled]="heaterSaving()">{{ heaterFormMode() === 'add' ? 'Crear acumulador' : 'Guardar cambios' }}</button><button mat-button type="button" (click)="cancelHeaterForm()">Cancelar</button></div>
+          <div class="form-actions"><button mat-flat-button color="primary" type="submit" [disabled]="heaterSaving() || !writable()">{{ heaterFormMode() === 'add' ? 'Crear acumulador' : 'Guardar cambios' }}</button><button mat-button type="button" (click)="cancelHeaterForm()">Cancelar</button></div>
         </form>
       }
 
       <div class="heater-list">
         @for (heater of data.heaters; track heater.id) {
           <mat-card class="heater-card" [attr.data-heater]="heater.id">
-            <mat-card-header><mat-card-title>{{ heater.name }}</mat-card-title><mat-card-subtitle>{{ heater.id }} · {{ heater.power_kw }} kW · {{ heater.output.kind === 'gpio' ? 'GPIO' : 'Simulada' }}</mat-card-subtitle></mat-card-header>
+            <mat-card-header><mat-card-title>{{ heater.name }}</mat-card-title><mat-card-subtitle>{{ heater.id }} · {{ heater.power_kw }} kW · {{ heater.output.kind === 'gpio' ? 'GPIO' : 'Simulada' }} · {{ heater.enabled ? 'Activo' : 'Desactivado' }}</mat-card-subtitle></mat-card-header>
             <mat-card-content>
               <dl class="heater-summary">
-                <div>
-                  <dt class="summary-term">Carga objetivo<dtc-param-help field="target_charge" label="Carga objetivo" /></dt>
-                  <dd>{{ heater.target_charge * 100 }}%</dd>
-                </div>
-                <div>
-                  <dt class="summary-term">Reserva<dtc-param-help field="reserve_percent" label="Reserva de demanda" /></dt>
-                  <dd>{{ heater.reserve_percent }}%</dd>
-                </div>
-                <div>
-                  <dt class="summary-term">Prioridad<dtc-param-help field="priority" label="Prioridad" /></dt>
-                  <dd>{{ heater.priority }}</dd>
-                </div>
+                <div><dt class="summary-term">Objetivo base<dtc-param-help field="target_charge" label="Objetivo base" /></dt><dd>{{ heater.target_charge * 100 }}%</dd></div>
+                <div><dt class="summary-term">Reserva<dtc-param-help field="reserve_percent" label="Reserva de demanda" /></dt><dd>{{ heater.reserve_percent }}%</dd></div>
+                <div><dt class="summary-term">Prioridad<dtc-param-help field="priority" label="Prioridad" /></dt><dd>{{ heater.priority }}</dd></div>
               </dl>
             </mat-card-content>
-            <mat-card-actions align="end"><button mat-button type="button" (click)="openEditHeater(heater)" [attr.data-edit-heater]="heater.id"><mat-icon aria-hidden="true">edit</mat-icon> Editar acumulador</button><button mat-button color="warn" type="button" (click)="requestRemoveHeater(heater)" [attr.data-delete-heater]="heater.id"><mat-icon aria-hidden="true">delete</mat-icon> Eliminar</button></mat-card-actions>
+            <mat-card-actions align="end"><button mat-button type="button" (click)="openEditHeater(heater)" [disabled]="!writable()" [attr.data-edit-heater]="heater.id"><mat-icon aria-hidden="true">edit</mat-icon> Editar acumulador</button><button mat-button color="warn" type="button" (click)="requestRemoveHeater(heater)" [disabled]="!writable()" [attr.data-delete-heater]="heater.id"><mat-icon aria-hidden="true">delete</mat-icon> Eliminar</button></mat-card-actions>
           </mat-card>
         } @empty { <p class="empty">No hay acumuladores configurados.</p> }
       </div>
     </section>
+  }
+
+  @if (areaIs('planning') && planningConfig(); as planning) {
+    <section class="workspace-panel" aria-labelledby="planning-title">
+      <div class="section-heading"><div><p class="eyebrow">Optimización automática</p><h2 id="planning-title">Planificación</h2><p class="section-lead">Aquí se define la capacidad y el modelo que usa el optimizador. Las restricciones por acumulador y horario siguen en el módulo Planificación.</p></div><span class="revision-chip">Rev. {{ planning.revision }}</span></div>
+      <div class="canonical-note"><mat-icon aria-hidden="true">bolt</mat-icon><p><strong>Potencia total canónica:</strong> {{ formatPower(canonicalPower()) }}. Este mismo valor alimenta el optimizador automático y el indicador de Estado.</p></div>
+      <form (ngSubmit)="savePlanning()" aria-label="Parámetros de planificación">
+        @for (group of planningGroups(); track group.title) {
+          <div class="field-group"><h3>{{ group.title }}</h3>@if (group.description) { <p class="group-description">{{ group.description }}</p> }<div class="fields form-grid">
+            @for (field of group.fields; track field.name) {
+              <div class="form-field-cell"><div class="field-label-row"><label [for]="'planning-' + field.name">{{ field.label }}</label><dtc-param-help [field]="field.helpField ?? field.name" section="planning" [label]="field.label" /></div>
+                @if (field.type === 'boolean') {
+                  <select class="native-input" [id]="'planning-' + field.name" [name]="field.name" [ngModel]="planningValue(field.name)" (ngModelChange)="planningEdit(field.name, $event)" [disabled]="!writable()"><option [ngValue]="true">Sí</option><option [ngValue]="false">No</option></select>
+                } @else {
+                  <input class="native-input" [id]="'planning-' + field.name" [name]="field.name" [type]="field.type" [attr.min]="field.min ?? null" [attr.max]="field.max ?? null" [attr.step]="field.step ?? null" [ngModel]="planningValue(field.name)" (ngModelChange)="planningEdit(field.name, $event)" [disabled]="!writable()" />
+                }
+                @if (field.hint) { <p class="field-hint">{{ field.hint }}</p> }
+              </div>
+            }
+          </div></div>
+        }
+        <div class="form-actions"><button mat-flat-button color="primary" type="submit" [disabled]="!planningDirty() || planningSaving() || !writable()">{{ planningSaving() ? 'Guardando…' : 'Guardar planificación' }}</button></div>
+      </form>
+    </section>
+  }
+
+  @if (areaIs('integrations') && configuration(); as system) {
+    <section class="workspace-panel" aria-labelledby="integrations-title">
+      <div class="section-heading"><div><p class="eyebrow">Conexiones</p><h2 id="integrations-title">Integraciones</h2><p class="section-lead">Configura cómo entran los datos de los acumuladores y de dónde procede la previsión meteorológica.</p></div></div>
+      <nav class="subnav" aria-label="Integraciones">@for (section of integrationSections; track section) { <button type="button" [class.active]="activeIntegrationSection() === section" [attr.aria-current]="activeIntegrationSection() === section ? 'page' : null" (click)="chooseIntegration(section)">{{ sectionLabel(section) }}</button> }</nav>
+      <form (ngSubmit)="requestSystemSave(activeIntegrationSection())" [attr.aria-label]="'Configuración de ' + sectionLabel(activeIntegrationSection())">
+        <p class="revision-line">Revisión global {{ system.revision }} · los cambios se aplican según el estado indicado junto a cada campo.</p>
+        @for (group of systemGroups(activeIntegrationSection()); track group.title) {
+          <div class="field-group"><h3>{{ group.title }}</h3>@if (group.description) { <p class="group-description">{{ group.description }}</p> }<div class="fields form-grid">
+            @for (field of group.fields; track field.name) {
+              <div class="form-field-cell"><div class="field-label-row"><label [for]="activeIntegrationSection() + '-' + field.name">{{ field.label }}</label><dtc-param-help [field]="field.helpField ?? field.name" [section]="activeIntegrationSection()" [label]="field.label" />@if (activationLabel(system.activation[activeIntegrationSection() + '.' + field.name]); as activation) { <small class="activation">{{ activation }}</small> }</div>
+                @if (field.type === 'boolean') {
+                  <select class="native-input" [id]="activeIntegrationSection() + '-' + field.name" [name]="field.name" [ngModel]="systemValue(activeIntegrationSection(), field.name)" (ngModelChange)="systemEdit(activeIntegrationSection(), field.name, $event)" [disabled]="!writable()"><option [ngValue]="true">Sí</option><option [ngValue]="false">No</option></select>
+                } @else if (field.type === 'select') {
+                  <select class="native-input" [id]="activeIntegrationSection() + '-' + field.name" [name]="field.name" [ngModel]="systemValue(activeIntegrationSection(), field.name)" (ngModelChange)="systemEdit(activeIntegrationSection(), field.name, $event)" [disabled]="!writable()">@for (option of field.options ?? []; track option.value) { <option [value]="option.value">{{ option.label }}</option> }</select>
+                } @else {
+                  <input class="native-input" [id]="activeIntegrationSection() + '-' + field.name" [name]="field.name" [type]="field.type" [attr.min]="field.min ?? null" [attr.max]="field.max ?? null" [attr.step]="field.step ?? null" [ngModel]="systemValue(activeIntegrationSection(), field.name)" (ngModelChange)="systemEdit(activeIntegrationSection(), field.name, $event)" [disabled]="!writable()" />
+                }
+                @if (field.hint) { <p class="field-hint">{{ field.hint }}</p> }
+              </div>
+            }
+          </div></div>
+        }
+        @if (secrets(activeIntegrationSection()).length) {
+          <div class="secret-group"><h3>Secretos</h3><p class="group-description">Los valores guardados nunca vuelven al navegador. Solo se conserva el estado de cada secreto.</p>
+            @for (secret of secrets(activeIntegrationSection()); track secret) { <div class="secret"><label [for]="secret + '-action'">{{ secretLabel(secret) }} <dtc-param-help [field]="secret" [label]="secretLabel(secret)" /> <span class="secret-status">· {{ system.secrets[secret]?.configured ? 'configurado' : 'sin configurar' }}</span></label><select class="native-input" [id]="secret + '-action'" [name]="secret + '-action'" [ngModel]="secretAction(secret)" (ngModelChange)="setSecretAction(secret, $event)" [disabled]="!writable()"><option value="keep">Conservar</option><option value="replace">Reemplazar</option><option value="clear">Eliminar</option></select>@if (secretAction(secret) === 'replace') { <input class="native-input secret-input" type="password" autocomplete="new-password" [name]="secret + '-value'" [ngModel]="secretValues()[secret] ?? ''" (ngModelChange)="setSecretValue(secret, $event)" aria-label="Valor nuevo" [disabled]="!writable()" /> }</div> }
+          </div>
+        }
+        <div class="form-actions"><button mat-flat-button color="primary" type="submit" [disabled]="!systemHasChanges(activeIntegrationSection()) || systemSaving() || !writable()">{{ systemSaving() ? 'Guardando…' : 'Guardar integración' }}</button></div>
+      </form>
+      @if (activeIntegrationSection() === 'weather') {
+        <section class="status-card" aria-labelledby="weather-status-title"><div><h3 id="weather-status-title">Estado de la previsión</h3><p>Última consulta: {{ systemValue('weather', 'forecast_last_attempt_at') || 'sin consultas' }} · resultado: {{ systemValue('weather', 'forecast_status') || 'pendiente' }}</p><p>Próxima consulta automática: {{ systemValue('weather', 'forecast_next_run_at') || 'no programada' }}</p></div><button mat-stroked-button type="button" (click)="refreshWeather()" [disabled]="weatherRefreshLoading() || !writable() || systemValue('weather', 'provider') !== 'aemet'">{{ weatherRefreshLoading() ? 'Consultando AEMET…' : 'Consultar AEMET ahora' }}</button>@if (systemValue('weather', 'forecast_last_error')) { <p class="field-error" role="alert">{{ systemValue('weather', 'forecast_last_error') }}</p> }@if (weatherRefreshMessage()) { <p class="saved" role="status">{{ weatherRefreshMessage() }}</p> }@if (weatherRefreshError()) { <p class="field-error" role="alert">{{ weatherRefreshError() }}</p> }</section>
+      }
+    </section>
+  }
+
+  @if (areaIs('service') && configuration(); as system) {
+    <section class="workspace-panel" aria-labelledby="service-title">
+      <div class="section-heading"><div><p class="eyebrow">Operación y mantenimiento</p><h2 id="service-title">Servicio</h2><p class="section-lead">Administra el almacenamiento, el acceso al panel, las salidas físicas, los registros y la operación diaria.</p></div></div>
+      <nav class="subnav" aria-label="Servicio">@for (section of serviceSections; track section) { <button type="button" [class.active]="activeServiceSection() === section" [attr.aria-current]="activeServiceSection() === section ? 'page' : null" (click)="chooseService(section)">{{ sectionLabel(section) }}</button> }</nav>
+      <form (ngSubmit)="requestSystemSave(activeServiceSection())" [attr.aria-label]="'Configuración de ' + sectionLabel(activeServiceSection())">
+        <p class="revision-line">Revisión global {{ system.revision }} · los cambios se aplican según el estado indicado junto a cada campo.</p>
+        @for (group of systemGroups(activeServiceSection()); track group.title) {
+          <div class="field-group"><h3>{{ group.title }}</h3>@if (group.description) { <p class="group-description">{{ group.description }}</p> }<div class="fields form-grid">
+            @for (field of group.fields; track field.name) {
+              <div class="form-field-cell"><div class="field-label-row"><label [for]="activeServiceSection() + '-' + field.name">{{ field.label }}</label><dtc-param-help [field]="field.helpField ?? field.name" [section]="activeServiceSection()" [label]="field.label" />@if (activationLabel(system.activation[activeServiceSection() + '.' + field.name]); as activation) { <small class="activation">{{ activation }}</small> }</div>
+                @if (field.type === 'boolean') {
+                  <select class="native-input" [id]="activeServiceSection() + '-' + field.name" [name]="field.name" [ngModel]="systemValue(activeServiceSection(), field.name)" (ngModelChange)="systemEdit(activeServiceSection(), field.name, $event)" [disabled]="!writable()"><option [ngValue]="true">Sí</option><option [ngValue]="false">No</option></select>
+                } @else if (field.type === 'select') {
+                  <select class="native-input" [id]="activeServiceSection() + '-' + field.name" [name]="field.name" [ngModel]="systemValue(activeServiceSection(), field.name)" (ngModelChange)="systemEdit(activeServiceSection(), field.name, $event)" [disabled]="!writable()">@for (option of field.options ?? []; track option.value) { <option [value]="option.value">{{ option.label }}</option> }</select>
+                } @else {
+                  <input class="native-input" [id]="activeServiceSection() + '-' + field.name" [name]="field.name" [type]="field.type" [attr.min]="field.min ?? null" [attr.max]="field.max ?? null" [attr.step]="field.step ?? null" [ngModel]="systemValue(activeServiceSection(), field.name)" (ngModelChange)="systemEdit(activeServiceSection(), field.name, $event)" [disabled]="!writable()" />
+                }
+                @if (field.hint) { <p class="field-hint">{{ field.hint }}</p> }
+              </div>
+            }
+          </div></div>
+        }
+        @if (activeServiceSection() === 'output') {
+          <div class="info-note output-note"><mat-icon aria-hidden="true">tune</mat-icon><p><strong>Dos niveles distintos:</strong> este modo global define el driver disponible para el controlador; la asignación física de cada acumulador (GPIO, pin y nivel activo) se configura en Acumuladores.</p></div>
+        }
+        @if (secrets(activeServiceSection()).length) {
+          <div class="secret-group"><h3>Secretos</h3><p class="group-description">Los valores guardados nunca vuelven al navegador.</p>
+            @for (secret of secrets(activeServiceSection()); track secret) { <div class="secret"><label [for]="secret + '-action'">{{ secretLabel(secret) }} <dtc-param-help [field]="secret" [label]="secretLabel(secret)" /> <span class="secret-status">· {{ system.secrets[secret]?.configured ? 'configurado' : 'sin configurar' }}</span></label><select class="native-input" [id]="secret + '-action'" [name]="secret + '-action'" [ngModel]="secretAction(secret)" (ngModelChange)="setSecretAction(secret, $event)" [disabled]="!writable()"><option value="keep">Conservar</option><option value="replace">Reemplazar</option><option value="clear">Eliminar</option></select>@if (secretAction(secret) === 'replace') { <input class="native-input secret-input" type="password" autocomplete="new-password" [name]="secret + '-value'" [ngModel]="secretValues()[secret] ?? ''" (ngModelChange)="setSecretValue(secret, $event)" aria-label="Valor nuevo" [disabled]="!writable()" /> }</div> }
+          </div>
+        }
+        <div class="form-actions"><button mat-flat-button color="primary" type="submit" [disabled]="!systemHasChanges(activeServiceSection()) || systemSaving() || !writable()">{{ systemSaving() ? 'Guardando…' : 'Guardar configuración' }}</button></div>
+        @if (activeServiceSection() === 'database') { <div class="action-card"><h3>Comprobaciones de base de datos</h3><p>Prueba el destino sin guardar cambios y, si corresponde, confirma la migración.</p><div class="form-actions"><button mat-stroked-button type="button" (click)="testDatabase()" [disabled]="!writable()">Probar conexión</button>@if (systemValue('database', 'driver') === 'postgresql') { <button mat-flat-button color="warn" type="button" (click)="migrateDatabase()" [disabled]="!writable()">Confirmar migración a PostgreSQL</button> }</div>@if (operation()) { <p role="status">{{ operation() }}</p> }</div> }
+      </form>
+    </section>
+  }
+
+  @if (confirming(); as edit) {
+    <div class="banner warn" role="alertdialog" data-testid="confirm" aria-live="assertive"><strong>Confirma el cambio</strong><p>{{ confirmationMessage() }}</p><div class="banner-actions"><button mat-flat-button color="warn" type="button" (click)="confirm()" data-testid="confirm-yes">Sí, cambiar</button><button mat-button type="button" (click)="cancelConfirmation()" data-testid="confirm-no">Cancelar</button></div></div>
+  }
+  @if (systemConfirming(); as section) {
+    <div class="banner warn" role="alertdialog" data-testid="confirm-system" aria-live="assertive"><strong>Confirma el cambio sensible</strong><p>{{ sectionLabel(section) }} puede afectar al servicio activo. Comprueba los datos antes de continuar.</p><div class="banner-actions"><button mat-flat-button color="warn" type="button" (click)="confirmSystemSave()" data-testid="confirm-system-yes">Sí, guardar</button><button mat-button type="button" (click)="systemConfirming.set(null)" data-testid="confirm-system-no">Cancelar</button></div></div>
   }
 </main>

@@ -178,12 +178,13 @@ def test_prune_reports_what_it_deleted(client, initialised_store, api_clock):
 
 
 def test_prune_says_when_retention_is_unlimited(client):
-    revision = client.get("/api/v1/config", headers=AUTH).json()["config_revision"]
-    client.patch(
-        "/api/v1/config",
+    snapshot = client.get("/api/v1/system/configuration", headers=AUTH).json()
+    changed = client.patch(
+        "/api/v1/system/configuration/operations",
         headers=AUTH,
-        json={"revision": revision, "field": "retention_days", "value": "none"},
+        json={"expected_revision": snapshot["revision"], "values": {"retention_days": None}},
     )
+    assert changed.status_code == 200, changed.text
     body = client.post("/api/v1/history/prune", headers=AUTH).json()
     assert body["unlimited"] is True
     assert body["total"] == 0

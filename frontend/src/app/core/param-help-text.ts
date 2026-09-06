@@ -2,7 +2,7 @@
 
 const INSTALLATION: Record<string, string> = {
   max_total_power_kw:
-    'Potencia máxima que puede consumir la instalación en un intervalo. El planificador legado y la vista de estado usan este límite; el optimizador automático usa contracted_power_w en Sistema → planning.',
+    'Potencia máxima del campo heredado de compatibilidad. La potencia que se puede editar en el panel es la potencia total contratada de Configuración → Planificación.',
   slot_minutes:
     'Duración de cada intervalo del plan de carga (minutos). Alinea restricciones, slots del plan automático y el planificador legado.',
   retention_days:
@@ -29,7 +29,7 @@ const HEATER: Record<string, string> = {
   full_charge_hours:
     'Horas necesarias a potencia plena para llenar el acumulador. Define la capacidad energética (kWh) junto con la potencia.',
   target_charge:
-    'Fracción de carga deseada (0–1) que el planificador legado intenta alcanzar al final de la ventana de carga.',
+    'Objetivo base (0–1) del acumulador. Las necesidades concretas por hora y día se configuran como restricciones en Planificación.',
   reserve_percent:
     'Margen multiplicativo (%) sobre la demanda estimada del modelo degree-hours. Aumenta la energía objetivo sin cambiar el factor base.',
   demand_factor:
@@ -126,7 +126,7 @@ const SYSTEM: Record<string, Record<string, string>> = {
     feedback_horizon_hours:
       'Horas de histórico de temperatura interior usadas para ajustar la demanda estimada.',
     mqtt_simulation_enabled:
-      'Activa un cliente MQTT que publica telemetría simulada de acumuladores. Requiere MQTT habilitado en la sección mqtt.',
+      'Activa un cliente MQTT que publica telemetría simulada de acumuladores. Requiere MQTT habilitado en Configuración → Integraciones.',
     mqtt_simulation_initial_temperature_c:
       'Temperatura inicial (°C) de todos los acumuladores al arrancar o reiniciar la simulación.',
     mqtt_simulation_publish_seconds:
