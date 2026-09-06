@@ -97,7 +97,7 @@ def create_app(
             allow_origins=list(resolved.cors_origins),
             allow_credentials=True,
             allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE"],
-            allow_headers=["Authorization", "Content-Type"],
+            allow_headers=["Authorization", "Content-Type", "X-Relay-Test-Credential"],
         )
 
     from .routes import config as config_routes

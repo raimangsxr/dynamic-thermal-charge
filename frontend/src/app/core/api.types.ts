@@ -357,7 +357,7 @@ export interface PruneDto {
 }
 
 export interface RelayTestHeaterDto { id: string; name: string; position: number; power_w: number; desired_state: boolean; confirmed_state: boolean | null; result: 'idle' | 'pending' | 'confirmed' | 'rejected' | 'unknown'; result_code: string | null; confirmed_at: string | null; }
-export interface RelayTestViewDto { session: { id: string; status: 'starting' | 'active' | 'ending' | 'ended' | 'failed'; owner: boolean; requested_at: string; activated_at: string | null; ended_at: string | null; lease_expires_at: string | null; end_reason: string | null } | null; controller: { state_is_current: boolean; last_seen_at: string | null }; safety: { automatic_control_blocked: boolean; fault_latched: boolean; fault_session_id: string | null; fault_reason: string | null; fault_latched_at: string | null; fault_recovery_attempted_at: string | null; fault_recovered_at: string | null }; audit: { degraded: boolean; degraded_since: string | null }; heaters: RelayTestHeaterDto[]; }
+export interface RelayTestViewDto { session: { id: string; status: 'starting' | 'active' | 'ending' | 'ended' | 'failed'; owner: boolean; requested_at: string; activated_at: string | null; ended_at: string | null; lease_expires_at: string | null; end_reason: string | null } | null; controller: { state_is_current: boolean; last_seen_at: string | null }; safety: { automatic_control_blocked: boolean; fault_latched: boolean; fault_session_id: string | null; fault_reason: string | null; fault_latched_at: string | null; fault_recovery_attempted_at: string | null; fault_recovered_at: string | null }; audit: { degraded: boolean; degraded_since: string | null }; state_poll_seconds?: number; lease_renew_seconds?: number; heaters: RelayTestHeaterDto[]; }
 export interface RelayTestStartDto { session_id: string; client_credential: string; status: string; lease_expires_at: string; state_poll_seconds: number; lease_renew_seconds: number; }
 
 export type SystemSection = 'database' | 'api' | 'mqtt' | 'weather' | 'output' | 'logging' | 'operations';
@@ -415,7 +415,14 @@ export type ApiErrorCode =
   | 'no_configuration'
   | 'schema_unusable'
   | 'store_unavailable'
+  | 'controller_unavailable'
+  | 'no_heaters'
   | 'relay_test_active'
+  | 'relay_test_not_owner'
+  | 'relay_test_not_active'
+  | 'relay_test_expired'
+  | 'relay_test_configuration_changed'
+  | 'relay_test_power_limit'
   | 'relay_test_fault_latched'
   | 'degraded_mode'
   | 'operation_in_progress'

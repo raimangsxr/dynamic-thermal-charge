@@ -30,7 +30,7 @@ class ChargeController:
         # process instead of forgetting it when this controller exits.
         results = self._sweep_off(at)
         if not all(results.values()):
-            self._latch_partial_off(at, "off_sweep_failed")
+            self._latch_partial_off(at, "off_sweep_failed", results)
 
     def apply(self, plan: ScheduleResult | None, at: datetime) -> None:
         if self._relay_tests is not None and self._apply_relay_test(at):
@@ -60,7 +60,16 @@ class ChargeController:
             results = self._sweep_off(at)
             if all(results.values()):
                 try:
-                    self._relay_tests.arm_latch(None, at, "store_unavailable")
+                    if self._relay_test_session_id:
+                        self._relay_tests.end(
+                            self._relay_test_session_id,
+                            at,
+                            reason="store_unavailable",
+                            off_results=results,
+                        )
+                        self._relay_test_session_id = None
+                    else:
+                        self._relay_tests.arm_latch(None, at, "store_unavailable")
                     self._relay_test_latch_local = False
                 except Exception:
                     return True
@@ -89,19 +98,51 @@ class ChargeController:
         if status == "starting":
             results = self._sweep_off(at)
             try:
-                if all(results.values()): self._relay_tests.activate(session["id"], self._runner_id, at)
-                else: self._relay_tests.end(session["id"], at, failed=True, reason="off_sweep_failed")
+                if all(results.values()) and self._relay_tests.activate(session["id"], self._runner_id, at):
+                    pass
+                else:
+                    self._relay_tests.end(
+                        session["id"],
+                        at,
+                        failed=not all(results.values()),
+                        reason="session_invalid" if all(results.values()) else "off_sweep_failed",
+                        off_results=results,
+                    )
+                    self._relay_test_session_id = None
             except Exception:
                 self._relay_test_latch_local = True
             return True
         if status == "active":
+            try:
+                if not self._relay_tests.controller_can_switch(session["id"], self._runner_id, at):
+                    results = self._sweep_off(at)
+                    self._relay_tests.end(
+                        session["id"],
+                        at,
+                        failed=not all(results.values()),
+                        reason="session_invalid" if all(results.values()) else "off_sweep_failed",
+                        off_results=results,
+                    )
+                    self._relay_test_session_id = None
+                    return True
+            except Exception:
+                self._sweep_off(at)
+                self._relay_test_latch_local = True
+                return True
             for output in view["heaters"]:
                 if output["confirmed_seq"] == output["command_seq"]:
                     continue
                 try:
                     if not self._relay_tests.controller_can_switch(session["id"], self._runner_id, at):
-                        self._relay_tests.unknown(session["id"], output["heater_id"], output["command_seq"], at, "session_invalid")
-                        self._relay_tests.request_controller_end(session["id"], at, "configuration_changed")
+                        results = self._sweep_off(at)
+                        self._relay_tests.end(
+                            session["id"],
+                            at,
+                            failed=not all(results.values()),
+                            reason="session_invalid" if all(results.values()) else "off_sweep_failed",
+                            off_results=results,
+                        )
+                        self._relay_test_session_id = None
                         return True
                 except Exception:
                     self._sweep_off(at)
@@ -116,19 +157,31 @@ class ChargeController:
                     logger.exception("Relay-test output %s could not be confirmed", output["heater_id"])
                     try:
                         self._relay_tests.unknown(session["id"], output["heater_id"], output["command_seq"], at)
-                        if not bool(output["desired_state"]):
-                            self._relay_tests.arm_latch(session["id"], at, "driver_failed")
+                        self._relay_tests.request_controller_end(session["id"], at, "driver_failed")
                     except Exception:
+                        self._sweep_off(at)
                         self._relay_test_latch_local = True
+                        return True
+                    return True
             return True
         if status == "ending":
             results = self._sweep_off(at)
             try:
-                self._relay_tests.end(session["id"], at, failed=not all(results.values()), reason="owner_finished" if all(results.values()) else "off_sweep_failed")
+                self._relay_tests.end(
+                    session["id"],
+                    at,
+                    failed=not all(results.values()),
+                    reason="owner_finished" if all(results.values()) else "off_sweep_failed",
+                    off_results=results,
+                )
+                self._relay_test_session_id = None
             except Exception:
                 self._relay_test_latch_local = True
             return True
-        return status in ("ended", "failed")
+        if status in ("ended", "failed"):
+            self._relay_test_session_id = None
+            return True
+        return False
 
     def _sweep_off(self, at: datetime) -> dict[str, bool]:
         results: dict[str, bool] = {}
@@ -146,14 +199,14 @@ class ChargeController:
         logger.info("Shutting down controller outputs")
         results = self._sweep_off(at)
         if not all(results.values()):
-            self._latch_partial_off(at, "off_sweep_failed")
+            self._latch_partial_off(at, "off_sweep_failed", results)
         try:
             self._driver.close()
         except Exception:
             logger.exception("Failed to close output driver")
         self._active.clear()
 
-    def _latch_partial_off(self, at: datetime, reason: str) -> None:
+    def _latch_partial_off(self, at: datetime, reason: str, results: dict[str, bool]) -> None:
         """Make an incomplete safety sweep durable, while retaining a local guard.
 
         The store may be unavailable precisely when shutdown happens.  The
@@ -164,7 +217,17 @@ class ChargeController:
         if self._relay_tests is None:
             return
         try:
-            self._relay_tests.arm_latch(self._relay_test_session_id, at, reason)
+            if self._relay_test_session_id:
+                self._relay_tests.end(
+                    self._relay_test_session_id,
+                    at,
+                    failed=True,
+                    reason=reason,
+                    off_results=results,
+                )
+                self._relay_test_session_id = None
+            else:
+                self._relay_tests.arm_latch(None, at, reason)
         except Exception:
             logger.exception("Could not persist relay-test safety latch after partial OFF")
             return

@@ -51,6 +51,13 @@ La configuración se concentra en `/configuracion`, organizada por tareas. La
 URL anterior `/configuracion-sistema` se conserva como alias y redirige a la
 experiencia unificada.
 
+La ruta `/prueba-reles` permite comprobar las salidas de los acumuladores con
+una sesión exclusiva y temporal. Solo se puede iniciar con el controlador vivo
+y una configuración válida; el panel muestra una salida como confirmada
+únicamente cuando el controlador lo acredita, y mantiene la recuperación de
+seguridad como responsabilidad del dispositivo. La duración, el sondeo y la
+renovación de la sesión se ajustan en `Configuración → Servicio → Operación`.
+
 La configuración de previsión se administra exclusivamente en `Configuración →
 Integraciones → Meteorología`: allí se guardan proveedor, municipio AEMET, temperaturas simuladas y
 de fallback, timeout y política de actualización. La clave AEMET se reemplaza

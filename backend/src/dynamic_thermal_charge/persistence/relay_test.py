@@ -5,7 +5,8 @@ the controller, in its own process, is the sole component that confirms GPIO.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from collections.abc import Mapping
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from sqlalchemy import and_, delete, insert, select, update
@@ -76,7 +77,7 @@ class SqlRelayTestRepository:
         with self._engine.connect() as connection:
             return self._view(connection, session_id, credential_digest)
 
-    def claim(self, credential_digest: str, now: datetime, lease_seconds: int) -> dict:
+    def claim(self, credential_digest: str, now: datetime, lease_seconds: float) -> dict:
         from datetime import timedelta
         now = self._at(now)
         config, revision = self._configuration.current()
@@ -117,11 +118,15 @@ class SqlRelayTestRepository:
         if active and now > row["lease_expires_at"]: raise RelayTestError("relay_test_expired", "the relay-test lease expired")
         return row
 
-    def renew(self, session_id: str, credential_digest: str, now: datetime, lease_seconds: int) -> dict:
+    def renew(self, session_id: str, credential_digest: str, now: datetime, lease_seconds: float) -> dict:
         from datetime import timedelta
         now = self._at(now)
         with transaction(self._engine, self._location) as connection:
-            self._owner(connection, session_id, credential_digest, now)
+            row = self._owner(connection, session_id, credential_digest, now, active=False)
+            if row["status"] not in ("starting", "active"):
+                raise RelayTestError("relay_test_not_active", "the relay-test session is not active")
+            if now > row["lease_expires_at"]:
+                raise RelayTestError("relay_test_expired", "the relay-test lease expired")
             connection.execute(update(relay_test_session).where(relay_test_session.c.id == session_id).values(lease_expires_at=now + timedelta(seconds=lease_seconds), last_owner_seen_at=now))
             return self._view(connection, session_id, credential_digest) or {}
 
@@ -163,11 +168,22 @@ class SqlRelayTestRepository:
         with transaction(self._engine, self._location) as connection:
             connection.execute(update(relay_test_session).where(and_(relay_test_session.c.id == session_id, relay_test_session.c.status.in_(("starting", "active")))).values(status="ending", ending_requested_at=self._at(now), failure_detail=reason))
 
-    def activate(self, session_id: str, runner_id: str, now: datetime) -> None:
+    def activate(self, session_id: str, runner_id: str, now: datetime) -> bool:
         with transaction(self._engine, self._location) as c:
-            updated = c.execute(update(relay_test_session).where(and_(relay_test_session.c.id == session_id, relay_test_session.c.status == "starting")).values(status="active", activated_at=self._at(now), controller_runner_id=runner_id)).rowcount
+            observed_now = now
+            now = self._at(now)
+            row = c.execute(select(relay_test_session).where(relay_test_session.c.id == session_id)).mappings().first()
+            if row is None or row["status"] != "starting" or now > row["lease_expires_at"]:
+                return False
+            if not self._controller_heartbeat_is_current(c, row, runner_id, observed_now):
+                return False
+            _, revision = self._configuration.current()
+            if revision != row["installation_revision"]:
+                return False
+            updated = c.execute(update(relay_test_session).where(and_(relay_test_session.c.id == session_id, relay_test_session.c.status == "starting")).values(status="active", activated_at=now, controller_runner_id=runner_id)).rowcount
             if updated:
-                self._event(c, self._installation_id(c), session_id, "session_activated", now, "confirmed")
+                self._event(c, self._installation_id(c), session_id, "session_activated", observed_now, "confirmed")
+            return bool(updated)
 
     def confirm(self, session_id: str, heater_id: str, sequence: int, state: bool, now: datetime) -> None:
         with transaction(self._engine, self._location) as c:
@@ -182,13 +198,18 @@ class SqlRelayTestRepository:
             row = c.execute(select(relay_test_session).where(relay_test_session.c.id == session_id)).mappings().first()
             if row is None or row["status"] != "active" or row["controller_runner_id"] != runner_id or now > row["lease_expires_at"]:
                 return False
-            heartbeat = c.execute(select(controller_heartbeat).where(controller_heartbeat.c.installation_id == row["installation_id"])).mappings().first()
-            if heartbeat is None or heartbeat["runner_id"] != runner_id:
-                return False
-            if (now - from_utc(heartbeat["updated_at"])).total_seconds() > max(3 * float(heartbeat["poll_seconds"]), 30):
+            if not self._controller_heartbeat_is_current(c, row, runner_id, now):
                 return False
             _, revision = self._configuration.current()
             return revision == row["installation_revision"]
+
+    def _controller_heartbeat_is_current(self, connection, session, runner_id: str, now: datetime) -> bool:
+        heartbeat = connection.execute(select(controller_heartbeat).where(controller_heartbeat.c.installation_id == session["installation_id"])).mappings().first()
+        if heartbeat is None or heartbeat["runner_id"] != runner_id:
+            return False
+        observed_now = now if now.tzinfo is not None else now.replace(tzinfo=timezone.utc)
+        age = (observed_now - from_utc(heartbeat["updated_at"])).total_seconds()
+        return -5.0 <= age <= max(3 * float(heartbeat["poll_seconds"]), 30.0)
 
     def unknown(self, session_id: str, heater_id: str, sequence: int, now: datetime, code: str = "driver_failed") -> None:
         with transaction(self._engine, self._location) as c:
@@ -209,9 +230,87 @@ class SqlRelayTestRepository:
                 self._event(c, iid, "recovery", "fault_recovered", now, "recovered")
             return bool(updated)
 
-    def end(self, session_id: str, now: datetime, failed: bool = False, reason: str = "owner_finished") -> None:
+    def end(
+        self,
+        session_id: str,
+        now: datetime,
+        failed: bool = False,
+        reason: str = "owner_finished",
+        off_results: Mapping[str, bool] | None = None,
+    ) -> None:
         with transaction(self._engine, self._location) as c:
             iid = self._installation_id(c)
+            if off_results is not None:
+                output_rows = c.execute(
+                    select(relay_test_output)
+                    .where(relay_test_output.c.session_id == session_id)
+                ).mappings().all()
+                sweep_ok = True
+                for output in output_rows:
+                    confirmed_off = bool(off_results.get(output["heater_id"], False))
+                    sweep_ok = sweep_ok and confirmed_off
+                    if confirmed_off:
+                        c.execute(
+                            update(relay_test_output)
+                            .where(
+                                and_(
+                                    relay_test_output.c.session_id == session_id,
+                                    relay_test_output.c.heater_id == output["heater_id"],
+                                )
+                            )
+                            .values(
+                                desired_state=False,
+                                confirmed_state=False,
+                                confirmed_seq=relay_test_output.c.command_seq,
+                                confirmed_at=self._at(now),
+                                result="confirmed",
+                                result_code=None,
+                                result_detail=None,
+                            )
+                        )
+                        self._event(
+                            c,
+                            iid,
+                            session_id,
+                            "output_confirmed",
+                            now,
+                            "confirmed",
+                            output["heater_id"],
+                            False,
+                        )
+                    else:
+                        c.execute(
+                            update(relay_test_output)
+                            .where(
+                                and_(
+                                    relay_test_output.c.session_id == session_id,
+                                    relay_test_output.c.heater_id == output["heater_id"],
+                                )
+                            )
+                            .values(
+                                desired_state=False,
+                                confirmed_state=None,
+                                confirmed_seq=None,
+                                confirmed_at=None,
+                                result="unknown",
+                                result_code="off_sweep_failed",
+                                result_detail=None,
+                            )
+                        )
+                        self._event(
+                            c,
+                            iid,
+                            session_id,
+                            "output_unknown",
+                            now,
+                            "unknown",
+                            output["heater_id"],
+                            False,
+                            "off_sweep_failed",
+                        )
+                if not sweep_ok:
+                    failed = True
+                    reason = "off_sweep_failed"
             c.execute(update(relay_test_session).where(relay_test_session.c.id == session_id).values(status="failed" if failed else "ended", ended_at=self._at(now), end_reason=reason))
             values = {"session_id": None, "updated_at": self._at(now)}
             if failed: values.update(fault_latched=True, fault_generation=relay_test_control.c.fault_generation + 1, fault_session_id=session_id, fault_reason=reason, fault_latched_at=self._at(now))

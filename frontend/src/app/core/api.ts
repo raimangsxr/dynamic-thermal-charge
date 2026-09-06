@@ -190,7 +190,7 @@ export class Api {
   relayTest(credential?: string | null): Observable<RelayTestViewDto | null> { return this.http.get<RelayTestViewDto | null>(`${BASE}/relay-test`, credential ? { headers: { 'X-Relay-Test-Credential': credential } } : {}); }
   relayTestById(id: string, credential?: string | null): Observable<RelayTestViewDto> { return this.http.get<RelayTestViewDto>(`${BASE}/relay-test/${encodeURIComponent(id)}`, credential ? { headers: { 'X-Relay-Test-Credential': credential } } : {}); }
   relayTestSet(id: string, heaterId: string, state: boolean, credential: string): Observable<unknown> { return this.http.put(`${BASE}/relay-test/${encodeURIComponent(id)}/heaters/${encodeURIComponent(heaterId)}`, { state }, { headers: { 'X-Relay-Test-Credential': credential } }); }
-  relayTestLease(id: string, credential: string): Observable<unknown> { return this.http.post(`${BASE}/relay-test/${encodeURIComponent(id)}/lease`, {}, { headers: { 'X-Relay-Test-Credential': credential } }); }
+  relayTestLease(id: string, credential: string): Observable<RelayTestViewDto> { return this.http.post<RelayTestViewDto>(`${BASE}/relay-test/${encodeURIComponent(id)}/lease`, {}, { headers: { 'X-Relay-Test-Credential': credential } }); }
   relayTestEnd(id: string, credential: string): Observable<unknown> { return this.http.delete(`${BASE}/relay-test/${encodeURIComponent(id)}`, { headers: { 'X-Relay-Test-Credential': credential } }); }
 
   private historyParams(query: HistoryQuery): Record<string, string | number> {

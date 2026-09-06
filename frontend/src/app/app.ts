@@ -2,7 +2,7 @@ import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { MatSidenav, MatSidenavModule } from '@angular/material/sidenav';
 import { MatToolbarModule } from '@angular/material/toolbar';
-import { Component, DestroyRef, inject, signal } from '@angular/core';
+import { Component, computed, DestroyRef, inject, signal } from '@angular/core';
 import { Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 
 import { Auth } from './core/auth';
@@ -61,7 +61,7 @@ declare const __APP_VERSION__: string;
             <a class="nav-link" routerLink="/prueba-reles" routerLinkActive="active" (click)="closeDrawer(drawer)">
               <mat-icon aria-hidden="true">electrical_services</mat-icon><span>Prueba de relés</span>
             </a>
-            @if (relay.view()?.session || relay.view()?.safety?.fault_latched || relay.id()) {
+            @if (relayAttention()) {
               <a class="nav-link relay-alert" routerLink="/prueba-reles" (click)="closeDrawer(drawer)">
                 <mat-icon aria-hidden="true">warning</mat-icon><span>Prueba/recovery activa</span>
               </a>
@@ -117,6 +117,14 @@ export class App {
   readonly mobile = signal(false);
   readonly navigationOpen = signal(true);
   readonly topology = signal<import('./core/api.types').TopologyDto | null>(null);
+  readonly relayAttention = computed(() => {
+    const state = this.relay.view();
+    const session = state?.session;
+    return Boolean(
+      state?.safety.fault_latched
+      || (session && ['starting', 'active', 'ending'].includes(session.status)),
+    );
+  });
   private navigationChangeRequested: boolean | null = null;
 
   constructor() {

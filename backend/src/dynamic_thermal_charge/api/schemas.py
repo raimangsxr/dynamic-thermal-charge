@@ -527,8 +527,8 @@ class RelayTestStartResponse(BaseModel):
     client_credential: str
     status: str
     lease_expires_at: datetime
-    state_poll_seconds: int = 1
-    lease_renew_seconds: int = 5
+    state_poll_seconds: float = 1
+    lease_renew_seconds: float = 5
 
 class RelayTestCommandRequest(BaseModel):
     state: bool
@@ -588,6 +588,8 @@ class RelayTestView(BaseModel):
     controller: RelayTestControllerView
     safety: RelayTestSafetyView
     audit: RelayTestAuditView
+    state_poll_seconds: float = 1
+    lease_renew_seconds: float = 5
     heaters: list[RelayTestHeaterView] = Field(default_factory=list)
 
 

@@ -92,11 +92,53 @@ const TABLE: Record<ApiErrorCode, Omit<Explained, 'action'> & { action: string }
     onDevice: true,
     fieldScoped: false,
   },
+  controller_unavailable: {
+    title: 'El controlador no está disponible',
+    action: 'Espera a que publique un estado reciente y vuelve a intentarlo desde el panel.',
+    onDevice: true,
+    fieldScoped: false,
+  },
+  no_heaters: {
+    title: 'No hay acumuladores habilitados para probar',
+    action: 'Activa al menos un acumulador en Configuración → Acumuladores.',
+    onDevice: false,
+    fieldScoped: false,
+  },
   relay_test_active: {
     title: 'La configuración está protegida por una prueba de relés',
     action: 'Abre la prueba de relés para terminarla antes de cambiar el cableado.',
     onDevice: false,
     fieldScoped: false,
+  },
+  relay_test_not_owner: {
+    title: 'Esta pestaña no tiene el control de la prueba',
+    action: 'La prueba queda en modo consulta. Vuelve a iniciarla desde una pestaña propietaria.',
+    onDevice: false,
+    fieldScoped: false,
+  },
+  relay_test_not_active: {
+    title: 'La prueba ya no acepta órdenes',
+    action: 'Vuelve a leer el estado para conocer el desenlace.',
+    onDevice: false,
+    fieldScoped: false,
+  },
+  relay_test_expired: {
+    title: 'La sesión de prueba ha caducado',
+    action: 'El controlador debe dejar todas las salidas seguras antes de iniciar otra prueba.',
+    onDevice: true,
+    fieldScoped: false,
+  },
+  relay_test_configuration_changed: {
+    title: 'La configuración cambió durante la prueba',
+    action: 'La sesión se cerrará por seguridad. Vuelve a leer el estado antes de continuar.',
+    onDevice: false,
+    fieldScoped: false,
+  },
+  relay_test_power_limit: {
+    title: 'Se supera el límite de potencia',
+    action: 'Apaga otra salida confirmada antes de volver a solicitar esta orden.',
+    onDevice: false,
+    fieldScoped: true,
   },
   relay_test_fault_latched: {
     title: 'La recuperación de seguridad sigue pendiente',
