@@ -258,6 +258,30 @@ describe('Config', () => {
     backend.expectOne('/api/v1/config').flush(configDto());
   });
 
+  it('opens electrical accumulator changes in a popup dialog', async () => {
+    load();
+    fixture.componentInstance.openEditHeater(fixture.componentInstance.config()!.heaters[0]);
+    expect(el().querySelector('label[for="heater-pin"]')?.textContent).toContain('Pin GPIO');
+    expect(el().querySelector('label[for="heater-pin"]')?.textContent).not.toContain('BCM');
+    fixture.componentInstance.updateHeaterForm('pin', '24');
+    fixture.componentInstance.saveHeater();
+    await fixture.whenStable();
+
+    const dialog = document.querySelector('mat-dialog-container');
+    expect(dialog).not.toBeNull();
+    expect(dialog?.textContent).toContain('Confirmar cambios en Salón');
+    expect(dialog?.textContent).toContain('valores eléctricos');
+    expect(dialog?.querySelector('[data-testid="confirm-delete"]')).not.toBeNull();
+    expect(testId('confirm')).toBeNull();
+
+    dialog?.querySelector<HTMLButtonElement>('[data-testid="confirm-delete"]')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const request = backend.expectOne('/api/v1/config/heaters/salon');
+    expect(request.request.body).toMatchObject({ revision: 3, pin: 24 });
+    request.flush(change({ entity: 'heater', entity_key: 'salon' }));
+    backend.expectOne('/api/v1/config').flush(configDto());
+  });
+
   it('renders all indoor policy fields and the per-heater topic', () => {
     const element = load(
       configDto({

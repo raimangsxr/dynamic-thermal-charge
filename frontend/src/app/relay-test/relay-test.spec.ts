@@ -100,6 +100,22 @@ describe('RelayTest', () => {
     backend.expectOne('/api/v1/relay-test/session-1').flush(view({ session: ACTIVE_SESSION, state_poll_seconds: 2, lease_renew_seconds: 7, heaters: [HEATER] }));
   });
 
+  it('keeps relay controls stable while the active test is polled in the background', () => {
+    sessionStorage.setItem('dtc.relay-test.id', ACTIVE_SESSION.id);
+    sessionStorage.setItem('dtc.relay-test.credential', 'credential');
+    const element = create(view({ session: ACTIVE_SESSION, heaters: [HEATER] }));
+    const button = element.querySelector<HTMLButtonElement>('[data-command="salon"]');
+
+    expect(button?.disabled).toBe(false);
+    vi.advanceTimersByTime(1000);
+    fixture.detectChanges();
+
+    const poll = backend.expectOne('/api/v1/relay-test/session-1');
+    expect(fixture.componentInstance.refreshing()).toBe(false);
+    expect(button?.disabled).toBe(false);
+    poll.flush(view({ session: ACTIVE_SESSION, heaters: [HEATER] }));
+  });
+
   it('keeps lease renewal independent and uses its configured interval', () => {
     sessionStorage.setItem('dtc.relay-test.id', ACTIVE_SESSION.id);
     sessionStorage.setItem('dtc.relay-test.credential', 'credential');

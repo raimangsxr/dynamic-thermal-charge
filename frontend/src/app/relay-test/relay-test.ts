@@ -39,6 +39,7 @@ export class RelayTest implements OnDestroy {
   private leaseTimerMs: number | null = null;
   private refreshInFlight = false;
   private refreshQueued = false;
+  private refreshQueuedInBackground = false;
   private leaseInFlight = false;
   private leaseRenewalDisabled = false;
 
@@ -122,14 +123,21 @@ export class RelayTest implements OnDestroy {
     });
   }
 
-  refresh(keepError = false): void {
+  refresh(keepError = false, background = false): void {
     if (this.refreshInFlight) {
-      this.refreshQueued = true;
+      if (!this.refreshQueued) {
+        this.refreshQueued = true;
+        this.refreshQueuedInBackground = background;
+      } else {
+        this.refreshQueuedInBackground = this.refreshQueuedInBackground && background;
+      }
       return;
     }
 
     this.refreshInFlight = true;
-    this.refreshing.set(true);
+    if (!background) {
+      this.refreshing.set(true);
+    }
     if (this.view() === null) {
       this.loading.set(true);
     }
@@ -452,7 +460,7 @@ export class RelayTest implements OnDestroy {
     }
     this.stopStateTimer();
     this.stateTimerMs = intervalMs;
-    this.stateTimer = window.setInterval(() => this.refresh(), intervalMs);
+    this.stateTimer = window.setInterval(() => this.refresh(false, true), intervalMs);
   }
 
   private ensureLeaseTimer(intervalMs: number): void {
@@ -485,7 +493,9 @@ export class RelayTest implements OnDestroy {
     this.refreshing.set(false);
     if (this.refreshQueued) {
       this.refreshQueued = false;
-      this.refresh(true);
+      const background = this.refreshQueuedInBackground;
+      this.refreshQueuedInBackground = false;
+      this.refresh(true, background);
     }
   }
 

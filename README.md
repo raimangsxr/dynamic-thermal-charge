@@ -58,6 +58,17 @@ inicialización ni instalar Python, Node o servicios systemd en la Raspberry.
 El frontend se publica en el puerto `80`. La API solo se expone dentro de la
 red Docker y el panel la consume mediante nginx.
 
+El servicio `backend` recibe `/dev/gpiochip0`, que es el dispositivo utilizado
+por el driver `lgpio` para controlar las salidas. En `Configuración → Servicio
+→ Salidas físicas` selecciona `GPIO` como modo global y reinicia el controlador;
+este cambio no se aplica a un proceso ya arrancado.
+
+Los pines del acumulador se introducen como número GPIO, no como número físico
+del conector ni como función alternativa. Por ejemplo, el pin físico 12 aparece
+en muchos esquemas como `GPIO18 / PCM_CLK`: en la aplicación se debe configurar
+como `18`. Para un LED que se enciende al llevar el GPIO a GND, el nivel activo
+del acumulador debe ser `Bajo` (`active_high=false`).
+
 La configuración se concentra en `/configuracion`, organizada por tareas. La
 URL anterior `/configuracion-sistema` se conserva como alias y redirige a la
 experiencia unificada.
