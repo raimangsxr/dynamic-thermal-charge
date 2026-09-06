@@ -82,6 +82,14 @@ Como medida de seguridad, el controlador no arranca salidas GPIO si MQTT está
 deshabilitado o si está activa la simulación de acumuladores: ambas situaciones
 proporcionan telemetría no real y se registran como un error crítico.
 
+Si una salida rechaza una conmutación, el controlador degrada únicamente esa
+salida: aplica el resto de las transiciones del ciclo, la reintenta en cada
+sondeo y no persiste ninguna exclusión. Una salida cuyo apagado falla se sigue
+considerando cerrada, de modo que la potencia instantánea no afirma un estado
+que el driver no aceptó. Mientras alguna salida esté en esa situación el
+controlador se publica como degradado y el fallo se registra como crítico una
+sola vez por transición.
+
 La sección `Configuración → Planificación` permite configurar la ventana visible y el
 horizonte completo, ambos entre 1 y 48 horas, con ventana no mayor que el
 horizonte, además del límite total de tiempo del optimizador en segundos

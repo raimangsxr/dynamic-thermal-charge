@@ -14,6 +14,11 @@ Failure policy, straight from constitution principle IV and
   never once per loop iteration.
 * History writes can never break any of this: the recorder swallows its own
   failures by contract.
+* A driver that refuses to switch one output degrades **that output only**. The
+  remaining transitions of the cycle are still applied, the output is retried on
+  every following cycle, and no exclusion is persisted. The process never ends
+  for this reason, and the published heartbeat is degraded for as long as any
+  output is refusing its command.
 """
 
 from __future__ import annotations
@@ -184,7 +189,11 @@ class ControllerService:
             return
         self._heartbeat.publish(
             now,
-            degraded=self._degraded or self._refresh_abandoned,
+            degraded=(
+                self._degraded
+                or self._refresh_abandoned
+                or self._controller.outputs_degraded
+            ),
             plan_ref=self._current_plan_ref,
         )
 

@@ -79,3 +79,42 @@ def test_service_keeps_outputs_off_without_any_valid_plan(tmp_path, caplog) -> N
     assert "Plan refresh failed; retaining persisted plan and retrying in 60 seconds: forecast unavailable" in caplog.text
     assert "Traceback" not in caplog.text
     assert "all outputs remain off" in caplog.text
+
+
+class RecordingHeartbeat:
+    def __init__(self) -> None:
+        self.published: list[bool] = []
+
+    def publish(self, now, *, degraded, plan_ref=None) -> None:
+        self.published.append(degraded)
+
+
+class RefusingOffDriver(SimulatedOutputDriver):
+    """Relay "a" never opens, which is what ends the first slot."""
+
+    def set_state(self, heater_id, enabled, at):
+        if heater_id == "a" and not enabled:
+            raise RuntimeError("relay a unavailable")
+        return super().set_state(heater_id, enabled, at)
+
+
+def test_service_publishes_a_degraded_heartbeat_while_a_relay_is_failing() -> None:
+    start = datetime(2026, 1, 1)
+    middle = start + timedelta(minutes=30)
+    times = iter((start, start, middle, middle, middle, middle))
+    heartbeat = RecordingHeartbeat()
+    service = ControllerService(
+        controller=ChargeController(("a", "b"), RefusingOffDriver()),
+        store=MemoryActivePlanStore(),
+        refresh_plan=lambda now: PlanRefresh(service_plan(start), 3600),
+        poll_seconds=1,
+        error_retry_seconds=60,
+        clock=lambda: next(times),
+        wait=lambda _: None,
+        heartbeat=heartbeat,
+    )
+
+    # The relay refuses to open at the slot boundary; the loop must survive it
+    # and say so in the proof of life the panel reads.
+    assert service.run(max_cycles=2) == 0
+    assert heartbeat.published == [False, True]
