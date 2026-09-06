@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import replace
-from datetime import datetime, time as clock_time, timedelta
+from datetime import datetime, time as clock_time, timedelta, timezone
 import logging
 import math
 import signal
@@ -23,7 +23,13 @@ from .charge_planning import PLANNING_HORIZON_HOURS, DeterministicChargeOptimize
 from .models import AppConfig, ChargeTelemetry
 from .persistence import ConfigStoreError
 from .persistence.active_plan import SqlActivePlanRepository
-from .scheduler import ChargeScheduler, ScheduleResult, ScheduleSlot
+from .scheduler import (
+    ChargeScheduler,
+    ScheduleResult,
+    ScheduleSlot,
+    _floor_to_wall_boundary,
+    next_slot_boundary,
+)
 from .service import ControllerService, PlanRefresh
 from .system_settings import MqttSystemSettings
 from .thermal import ThermalDemandEngine, select_indoor_temperatures
@@ -368,7 +374,16 @@ def _build_automatic_runtime_plan(
         ScheduleSlot(slot.start, slot.end, slot.heater_ids, slot.power_w, slot.outdoor_temperature_c, False)
         for slot in plan.slots
     )
-    allocated = {heater.id: sum(config.site.slot_minutes for slot in plan.slots if heater.id in slot.heater_ids) for heater in config.heaters}
+    # Real duration per occupied slot, so the published figure stays right when a
+    # day is 23 or 25 hours long.
+    allocated = {
+        heater.id: sum(
+            round((slot.end - slot.start).total_seconds() / 60)
+            for slot in plan.slots
+            if heater.id in slot.heater_ids
+        )
+        for heater in config.heaters
+    }
     return plan, ScheduleResult(
         legacy_slots,
         allocated,
@@ -390,10 +405,16 @@ def _aggregate_unmet_minutes(config: AppConfig, violations) -> dict[str, int]:
     return unmet
 
 
+def _instant(value: datetime) -> datetime:
+    """Comparable in real time: same-zone aware datetimes compare wall clocks."""
+    return value if value.tzinfo is None else value.astimezone(timezone.utc)
+
+
 def _seconds_to_next_slot(now: datetime, slot_minutes: int) -> int:
-    floor = now.replace(second=0, microsecond=0, minute=(now.minute // slot_minutes) * slot_minutes)
-    boundary = floor + timedelta(minutes=slot_minutes)
-    return max(1, math.ceil((boundary - now).total_seconds()))
+    boundary = _floor_to_wall_boundary(now, slot_minutes)
+    while _instant(boundary) <= _instant(now):
+        boundary = next_slot_boundary(boundary, slot_minutes)
+    return max(1, math.ceil((_instant(boundary) - _instant(now)).total_seconds()))
 
 
 def _seconds_to_next_replan(

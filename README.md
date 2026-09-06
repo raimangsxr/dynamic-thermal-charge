@@ -108,6 +108,14 @@ telemetría MQTT de cada acumulador se valida por separado y una muestra
 incompleta o de más de 15 minutos se marca como caducada y deja ese acumulador
 fuera del plan.
 
+La ventana y el horizonte se cuentan en horas de reloj de pared, y los límites de
+slot caen siempre en múltiplos de la duración de slot configurada. Los dos días
+del año en que cambia la hora, un horizonte de 24 horas cubre por tanto 25 horas
+reales en octubre y 23 en marzo: con slots de 30 minutos son 50 y 46 slots en vez
+de 48. Cada slot dura exactamente su duración configurada de tiempo real, los
+límites nunca se solapan y la hora que se repite en octubre usa la previsión
+horaria de esa hora de pared en sus dos pasadas.
+
 Las constraints se editan como porcentajes de 0 a 100 en el panel y se envían a
 la API como fracciones de 0 a 1. La reserva de cada acumulador es un
 porcentaje multiplicativo sobre la demanda estimada (no puntos extra de SOC).

@@ -13,7 +13,7 @@ from typing import Callable, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
 from .models import ChargeConstraint, ChargeTelemetry, Heater
-from .scheduler import align_to_slot
+from .scheduler import _normalize, advance_real, align_to_slot, next_slot_boundary
 from .system_settings import MqttSystemSettings
 from .weather import HourlyForecastPoint
 
@@ -26,6 +26,19 @@ SOLVER_TIME_LIMIT_SECONDS = 30
 PLANNING_HORIZON_HOURS = 24
 
 logger = logging.getLogger(__name__)
+
+
+def _key(at: datetime) -> datetime:
+    """A dictionary key that tells the two passes of a repeated hour apart.
+
+    Two aware datetimes in the same zone compare equal *and hash equal* when
+    their wall clocks match, even when they are an hour apart across a fall-back
+    (Python ignores the shared tzinfo and compares the base datetimes). Keying
+    slots by a zone-local instant would therefore collapse both passes of the
+    repeated hour into one entry and silently lose a slot. The UTC form is
+    unique.
+    """
+    return at.astimezone(timezone.utc)
 
 
 def resolve_planning_telemetry(
@@ -238,7 +251,7 @@ class DegreeHoursDemandEstimator:
                 demand = coefficient * degree_hours * heater.demand_factor
                 demand *= 1 + heater.reserve_percent / 100
                 estimates.append(DemandEstimate(
-                    heater.id, start, start + timedelta(minutes=slot_minutes), outdoor,
+                    heater.id, start, advance_real(start, slot_minutes), outdoor,
                     target, feedback, degree_hours, coefficient, heater.demand_factor,
                     heater.reserve_percent, max(0.0, demand),
                 ))
@@ -254,9 +267,9 @@ def materialize_constraints(
     priorities = {item.id: item.priority for item in heaters}
     boundaries: list[datetime] = []
     cursor = horizon_start
-    while cursor <= horizon_end:
+    while not _key(horizon_end) < _key(cursor):
         boundaries.append(cursor)
-        cursor += timedelta(minutes=slot_minutes)
+        cursor = next_slot_boundary(cursor, slot_minutes)
     result: list[MaterializedConstraint] = []
     for rule in constraints:
         if rule.heater_id not in priorities:
@@ -299,12 +312,13 @@ class MilpChargePlanner:
         except (ValueError, ArithmeticError) as exc:
             return _invalid_plan(request, request.horizon_start, (), str(exc), "invalid_configuration", generated_at)
         _notify(request, "coverage")
-        starts = _continuous_forecast_slots(horizon_start, request.forecast, request.horizon_hours, request.slot_minutes)
+        boundaries = _continuous_forecast_slots(horizon_start, request.forecast, request.horizon_hours, request.slot_minutes)
+        starts = boundaries[:-1] if boundaries else ()
         if not starts or not request.forecast_automatic_eligible:
             reason = "forecast_not_eligible" if not request.forecast_automatic_eligible else "missing_aemet_coverage"
             logger.debug("Automatic planning rejected: reason=%s", reason)
             return _invalid_plan(request, horizon_start, (), reason, reason, generated_at)
-        horizon_end = starts[-1] + timedelta(minutes=request.slot_minutes)
+        horizon_end = boundaries[-1]
         missing = [item.id for item in request.heaters if item.enabled and not _telemetry_usable(request.telemetry.get(item.id))]
         if missing:
             logger.debug("Automatic planning rejected: missing_telemetry=%s", ",".join(sorted(missing)))
@@ -331,12 +345,15 @@ class MilpChargePlanner:
                     item.heater_id, item.at.isoformat(), item.minimum_soc_percent, item.priority,
                 )
             _notify(request, "constraints")
-            return self._solve(request, starts, demand, materialized, generated_at)
+            return self._solve(request, boundaries, demand, materialized, generated_at)
         except (ValueError, ArithmeticError) as exc:
             logger.debug("Automatic planning rejected: %s", exc)
             return _invalid_plan(request, horizon_start, starts, str(exc), "invalid_configuration", generated_at)
 
-    def _solve(self, request: PlanningInput, starts: Sequence[datetime], demand: Sequence[DemandEstimate], constraints: Sequence[MaterializedConstraint], generated_at: datetime) -> AutomaticPlan:
+    def _solve(self, request: PlanningInput, boundaries: Sequence[datetime], demand: Sequence[DemandEstimate], constraints: Sequence[MaterializedConstraint], generated_at: datetime) -> AutomaticPlan:
+        # One source of truth for slot edges: the boundary list carries the end
+        # of the last slot, so no slot end is ever recomputed.
+        starts = tuple(boundaries[:-1])
         try:
             import pulp
         except ImportError:
@@ -347,13 +364,12 @@ class MilpChargePlanner:
         contracted_limit_w = request.max_total_power_w - request.base_load_w
         limit_w = min(heating_limit_w, contracted_limit_w)
         oversized = tuple(item for item in heaters if item.power_w > limit_w)
-        demand_by_key = {(item.heater_id, item.start): item.demand_kwh for item in demand}
-        boundary_index = {start: index for index, start in enumerate(starts)}
-        boundary_index[starts[-1] + timedelta(minutes=request.slot_minutes)] = len(starts)
+        demand_by_key = {(item.heater_id, _key(item.start)): item.demand_kwh for item in demand}
+        boundary_index = {_key(boundary): index for index, boundary in enumerate(boundaries)}
         model = pulp.LpProblem("dynamic_thermal_charge", pulp.LpMinimize)
         on = {(h.id, i): pulp.LpVariable(f"on_{h.id}_{i:03d}", cat="Binary") for h in heaters for i in range(len(starts))}
         energy = {(h.id, i): pulp.LpVariable(f"energy_{h.id}_{i:03d}", lowBound=0, upBound=h.capacity_kwh) for h in heaters for i in range(len(starts) + 1)}
-        unmet = {(h.id, i): pulp.LpVariable(f"unmet_{h.id}_{i:03d}", lowBound=0, upBound=demand_by_key[(h.id, starts[i])]) for h in heaters for i in range(len(starts))}
+        unmet = {(h.id, i): pulp.LpVariable(f"unmet_{h.id}_{i:03d}", lowBound=0, upBound=demand_by_key[(h.id, _key(starts[i]))]) for h in heaters for i in range(len(starts))}
         # A constraint shortfall cannot exceed the energy required by its
         # target.  Keeping this slack bounded also avoids a CBC 2.10.12
         # presolve/postsolve assertion when an exactly feasible 100% target
@@ -371,7 +387,7 @@ class MilpChargePlanner:
             initial_energy = h.capacity_kwh * float(request.telemetry[h.id].stored_charge_percent) / 100
             model += energy[(h.id, 0)] == initial_energy
             for i, start in enumerate(starts):
-                model += energy[(h.id, i + 1)] == energy[(h.id, i)] + h.charge_power_kw * slot_hours * on[(h.id, i)] - demand_by_key[(h.id, start)] + unmet[(h.id, i)]
+                model += energy[(h.id, i + 1)] == energy[(h.id, i)] + h.charge_power_kw * slot_hours * on[(h.id, i)] - demand_by_key[(h.id, _key(start))] + unmet[(h.id, i)]
             if request.horizon_hours <= PLANNING_HORIZON_HOURS:
                 # This prefix bound is implied by the balance equations and
                 # unmet_i >= 0. It tightens the LP relaxation by preventing
@@ -383,7 +399,7 @@ class MilpChargePlanner:
                         on[(h.id, i)] for i in range(boundary)
                     )
                     demand_total = sum(
-                        demand_by_key[(h.id, starts[i])] for i in range(boundary)
+                        demand_by_key[(h.id, _key(starts[i]))] for i in range(boundary)
                     )
                     model += energy[(h.id, boundary)] >= initial_energy + charge - demand_total
         for i in range(len(starts)):
@@ -396,7 +412,7 @@ class MilpChargePlanner:
             for i in range(len(starts)):
                 model += on[(h.id, i)] == 0
         for index, rule in enumerate(constraints):
-            model += energy[(rule.heater_id, boundary_index[rule.at])] + c_short[index] >= _heater(heaters, rule.heater_id).capacity_kwh * rule.minimum_soc_percent / 100
+            model += energy[(rule.heater_id, boundary_index[_key(rule.at)])] + c_short[index] >= _heater(heaters, rule.heater_id).capacity_kwh * rule.minimum_soc_percent / 100
         solver_time_limit_seconds = request.solver_time_limit_seconds or SOLVER_TIME_LIMIT_SECONDS
         solver = _cbc_solver(pulp, time_limit_seconds=solver_time_limit_seconds)
         solver_deadline = monotonic() + solver_time_limit_seconds
@@ -507,13 +523,13 @@ class MilpChargePlanner:
             short_kwh = float(c_short[index].value() or 0.0)
             if short_kwh > 1e-6:
                 h = _heater(heaters, rule.heater_id)
-                achieved = float(energy[(h.id, boundary_index[rule.at])].value() or 0.0) / h.capacity_kwh * 100
+                achieved = float(energy[(h.id, boundary_index[_key(rule.at)])].value() or 0.0) / h.capacity_kwh * 100
                 violations.append(PlanningViolation(h.id, "minimum_soc", achieved, short_kwh / h.capacity_kwh * 100, rule.at, "insufficient_capacity_or_power"))
         for h in heaters:
             for i, start in enumerate(starts):
                 short = float(unmet[(h.id, i)].value() or 0.0)
                 if short > 1e-6:
-                    served = demand_by_key[(h.id, start)] - short
+                    served = demand_by_key[(h.id, _key(start))] - short
                     violations.append(PlanningViolation(h.id, "forecast_demand_kwh", served, short, start, "insufficient_stored_energy_or_power"))
         for violation in violations:
             logger.debug(
@@ -526,14 +542,14 @@ class MilpChargePlanner:
         for i, start in enumerate(starts):
             active = tuple(h.id for h in heaters if float(on[(h.id, i)].value() or 0) > .5)
             plan_slots.append(AutomaticPlanSlot(
-                start, start + timedelta(minutes=request.slot_minutes), active,
+                start, boundaries[i + 1], active,
                 sum(_heater(heaters, heater_id).power_w for heater_id in active),
                 {h.id: _charge_percent(energy[(h.id, i + 1)].value(), h.capacity_kwh) for h in heaters},
-                {h.id: round(demand_by_key[(h.id, start)] / h.capacity_kwh * 100, 6) for h in heaters},
+                {h.id: round(demand_by_key[(h.id, _key(start))] / h.capacity_kwh * 100, 6) for h in heaters},
                 _weather_at(start, request.forecast),
                 {h.id: float(request.telemetry[h.id].temperature_c) for h in heaters},
                 {h.id: _charge_percent(energy[(h.id, i)].value(), h.capacity_kwh) for h in heaters},
-                {h.id: round(demand_by_key[(h.id, start)], 9) for h in heaters},
+                {h.id: round(demand_by_key[(h.id, _key(start))], 9) for h in heaters},
                 {h.id: (h.power_w if h.id in active else 0) for h in heaters},
             ))
             logger.debug(
@@ -549,7 +565,7 @@ class MilpChargePlanner:
             h.capacity_kwh,
         ) for h in heaters)
         plan = AutomaticPlan(
-            starts[0], starts[-1] + timedelta(minutes=request.slot_minutes), request.slot_minutes,
+            starts[0], boundaries[-1], request.slot_minutes,
             tuple(plan_slots), tuple(violations), DEGRADED if violations or time_limited else FEASIBLE,
             tuple(score), input_token(request), generated_at, explanations, tuple(demand),
         )
@@ -640,18 +656,27 @@ def _validate_input(request: PlanningInput) -> None:
 
 
 def _continuous_forecast_slots(start: datetime, forecast: Sequence[HourlyForecastPoint], horizon_hours: int, slot_minutes: int) -> tuple[datetime, ...]:
+    """Every boundary of the covered horizon, including its end.
+
+    The horizon length is counted on the wall clock, so the number of slots is
+    not fixed: a 24-hour horizon holds one slot more on the day the clocks go
+    back and two fewer on the day they go forward. The previous fixed-count
+    guard would have rejected exactly those two days and left the installation
+    without a plan, so coverage is now required per slot instead.
+    """
     if not forecast:
         return ()
-    result = []
-    cursor = start
-    configured_end = start + timedelta(hours=horizon_hours)
-    while cursor < configured_end:
-        if _weather_at(cursor, forecast) is None:
-            logger.debug("Forecast coverage is not continuous: missing_at=%s", cursor.isoformat())
+    naive_end = start.replace(tzinfo=None) + timedelta(hours=horizon_hours)
+    # Normalised: a horizon that ends on a wall clock that never happens would
+    # otherwise resolve to an instant before its own start.
+    configured_end = _normalize(naive_end.replace(tzinfo=start.tzinfo))
+    boundaries = [start]
+    while _key(boundaries[-1]) < _key(configured_end):
+        if _weather_at(boundaries[-1], forecast) is None:
+            logger.debug("Forecast coverage is not continuous: missing_at=%s", boundaries[-1].isoformat())
             return ()
-        result.append(cursor)
-        cursor += timedelta(minutes=slot_minutes)
-    return tuple(result) if len(result) == horizon_hours * 60 // slot_minutes else ()
+        boundaries.append(next_slot_boundary(boundaries[-1], slot_minutes))
+    return tuple(boundaries) if len(boundaries) > 1 else ()
 
 
 def _notify(request: PlanningInput, step: str) -> None:
@@ -671,8 +696,36 @@ def _telemetry_usable(value: ChargeTelemetry | None) -> bool:
 
 
 def _weather_at(at: datetime, points: Sequence[HourlyForecastPoint]) -> float | None:
-    matches = [point.temperature_c for point in points if point.timestamp <= at < point.timestamp + timedelta(hours=1)]
-    return float(matches[-1]) if matches else None
+    """The forecast temperature covering an instant.
+
+    Matching is by real time. The repeated hour of a fall-back then has no
+    absolute coverage, because the provider publishes one value per wall-clock
+    hour, so both of its passes fall back to the value for that wall-clock hour.
+    That value is the right one for both -- it is the forecast for that hour --
+    so it is not marked as degraded the way an interpolated point is.
+
+    Relying instead on ``<=`` between two same-zone aware datetimes would give
+    the same answer today by accident, because that comparison silently uses the
+    wall clock; the fallback is written out so the behaviour is intended.
+    """
+    absolute = [
+        point.temperature_c
+        for point in points
+        if _key(point.timestamp) <= _key(at) < _key(point.timestamp) + timedelta(hours=1)
+    ]
+    if absolute:
+        return float(absolute[-1])
+    wall_hour = at.replace(minute=0, second=0, microsecond=0, tzinfo=None)
+    reused = [
+        point.temperature_c
+        for point in points
+        if point.timestamp.replace(minute=0, second=0, microsecond=0, tzinfo=None)
+        == wall_hour
+    ]
+    if reused:
+        logger.debug("Reusing the forecast for wall-clock hour %s", wall_hour.isoformat())
+        return float(reused[-1])
+    return None
 
 
 def _heater(heaters: Sequence[Heater], heater_id: str) -> Heater:
@@ -734,13 +787,13 @@ def _invalid_plan(request: PlanningInput, start: datetime, starts: Sequence[date
     enabled = tuple(sorted((item for item in request.heaters if item.enabled), key=lambda item: item.id))
     violations = tuple(PlanningViolation(heater_id, "safe_planning_input", None, None, start, reason) for heater_id in heater_ids) or (PlanningViolation(None, "safe_planning_input", None, None, start, f"{reason}: {detail}"),)
     slots = tuple(AutomaticPlanSlot(
-        at, at + timedelta(minutes=request.slot_minutes), (), 0,
+        at, advance_real(at, request.slot_minutes), (), 0,
         {h.id: float(request.telemetry[h.id].stored_charge_percent or 0) if h.id in request.telemetry else 0.0 for h in enabled},
         {h.id: 0.0 for h in enabled}, _weather_at(at, request.forecast), None,
         {h.id: float(request.telemetry[h.id].stored_charge_percent or 0) if h.id in request.telemetry else 0.0 for h in enabled},
         {h.id: 0.0 for h in enabled}, {h.id: 0 for h in enabled},
     ) for at in usable_starts)
-    horizon_end = usable_starts[-1] + timedelta(minutes=request.slot_minutes) if usable_starts else start + timedelta(hours=request.horizon_hours)
+    horizon_end = advance_real(usable_starts[-1], request.slot_minutes) if usable_starts else advance_real(start, request.horizon_hours * 60)
     return AutomaticPlan(start, horizon_end, request.slot_minutes, slots, violations, INVALID, (), input_token(request), generated_at)
 
 
