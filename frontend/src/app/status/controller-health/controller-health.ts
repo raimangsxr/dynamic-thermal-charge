@@ -11,11 +11,13 @@
  */
 
 import { Component, computed, input } from '@angular/core';
+import { MatIconModule } from '@angular/material/icon';
 
 import type { ControllerHealthDto } from '../../core/api.types';
 import { formatAge, formatInstant } from '../../shared/age/age';
 
 interface Presentation {
+  readonly icon: string;
   readonly heading: string;
   readonly detail: string;
   readonly check: string;
@@ -24,41 +26,40 @@ interface Presentation {
 
 @Component({
   selector: 'dtc-controller-health',
+  imports: [MatIconModule],
   template: `
     @if (health().multiple_controllers_suspected) {
       <div class="banner alert" role="alert">
-        <strong>⚠ Parece haber más de un controlador en marcha</strong>
-        <p>
-          Dos procesos conmutando los mismos relés es un riesgo eléctrico.
-          Comprueba el despliegue: debería haber exactamente un servicio del
-          controlador apuntando a esta base de datos.
-        </p>
+        <div class="banner-content"><mat-icon aria-hidden="true">gpp_bad</mat-icon><div>
+          <strong>Parece haber más de un controlador en marcha</strong>
+          <p>Dos procesos conmutando los mismos relés es un riesgo eléctrico. Comprueba el despliegue: debería haber exactamente un servicio del controlador apuntando a esta base de datos.</p>
+        </div></div>
       </div>
     }
 
     <div class="banner {{ presentation().severity }}" [attr.data-liveness]="health().liveness">
-      <strong>{{ presentation().heading }}</strong>
-      <p>{{ presentation().detail }}</p>
-      @if (presentation().check) {
-        <p class="check">Comprueba: {{ presentation().check }}</p>
-      }
-      @if (!health().state_is_current) {
-        <p class="warning">
-          <strong>El estado que se muestra no es actual.</strong>
-          Los valores de cada acumulador son el último dato conocido, no lo que
-          está pasando ahora, y no se muestra potencia instantánea porque nadie
-          puede confirmarla.
-        </p>
-      }
+      <div class="banner-content"><mat-icon aria-hidden="true">{{ presentation().icon }}</mat-icon><div>
+        <strong>{{ presentation().heading }}</strong>
+        <p>{{ presentation().detail }}</p>
+        @if (presentation().check) { <p class="check">Comprueba: {{ presentation().check }}</p> }
+        @if (!health().state_is_current) {
+          <p class="warning"><strong>El estado que se muestra no es actual.</strong> Los valores de cada acumulador son el último dato conocido, no lo que está pasando ahora, y no se muestra potencia instantánea porque nadie puede confirmarla.</p>
+        }
+      </div></div>
     </div>
   `,
   styles: `
-    .banner { padding: 0.75rem 1rem; border-left: 4px solid; margin-bottom: 1rem; }
+    .banner { padding: .8rem 1rem; border-left: 4px solid; margin-bottom: 1rem; }
+    .banner-content { display: flex; align-items: flex-start; gap: .65rem; }
+    .banner-content mat-icon { flex: 0 0 auto; }
     .banner p { margin: 0.35rem 0 0; }
     /* Severity adds colour, but the heading and the text already say it. */
     .ok { border-color: #0a6b2d; background: #f2f9f4; }
+    .ok mat-icon { color: #0a6b2d; }
     .warn { border-color: #7a4a00; background: #fdf7ee; }
+    .warn mat-icon { color: #7a4a00; }
     .alert { border-color: #a00; background: #fdf0f0; }
+    .alert mat-icon { color: #a00; }
     .check { font-size: 0.9em; color: #444; }
     .warning { font-size: 0.95em; }
   `,
@@ -74,6 +75,7 @@ export class ControllerHealth {
     switch (current.liveness) {
       case 'live':
         return {
+          icon: 'check_circle',
           heading: 'El controlador responde con normalidad',
           detail: `Última señal ${age}. Arrancó ${formatInstant(current.started_at)}` +
             (current.driver_kind ? ` con salidas ${this.driverText(current.driver_kind)}.` : '.'),
@@ -82,6 +84,7 @@ export class ControllerHealth {
         };
       case 'live_degraded':
         return {
+          icon: 'warning',
           heading: 'El controlador responde, pero está degradado',
           detail:
             `Última señal ${age}. Sigue ejecutando su plan, pero no alcanza ` +
@@ -91,6 +94,7 @@ export class ControllerHealth {
         };
       case 'stale':
         return {
+          icon: 'sync_problem',
           heading: 'No se sabe qué está pasando ahora',
           detail:
             `El controlador no da señales desde ${seen} (${age}). Puede estar ` +
@@ -100,6 +104,7 @@ export class ControllerHealth {
         };
       case 'never_seen':
         return {
+          icon: 'error_outline',
           heading: 'El controlador no ha arrancado nunca',
           detail:
             'Nunca ha publicado una señal de vida contra esta base de datos, así ' +

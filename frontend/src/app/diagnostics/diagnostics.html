@@ -1,3 +1,85 @@
-<section class="diagnostics"><header><div><p class="eyebrow">Observabilidad</p><h1>Diagnóstico del controller</h1><p>Eventos recientes de solo lectura. No permite operar relés.</p></div><button type="button" (click)="load()">Actualizar</button></header>
-  <form class="filters" (submit)="$event.preventDefault(); apply()"><label>Nivel <select [ngModel]="level()" (ngModelChange)="level.set($event)" name="level"><option value="">Todos</option><option>DEBUG</option><option>INFO</option><option>WARNING</option><option>ERROR</option><option>CRITICAL</option></select></label><label>Buscar <input [ngModel]="query()" (ngModelChange)="query.set($event)" name="query" placeholder="Texto del evento" /></label><button>Aplicar filtros</button></form>
-  @if (error()) { <p class="banner alert" role="alert">{{ error() }}</p> } @else if (loading()) { <p>Cargando eventos…</p> } @else if (!events().length) { <p class="empty">No hay eventos que coincidan con los filtros.</p> } @else { <div class="table-scroll"><table><thead><tr><th>Hora</th><th>Nivel</th><th>Origen</th><th>Evento</th></tr></thead><tbody>@for (event of events(); track event.id) { <tr [class.warning]="event.level === 'WARNING'" [class.error]="event.level === 'ERROR' || event.level === 'CRITICAL'"><td>{{ instant(event.occurred_at) }}</td><td><strong>{{ event.level }}</strong></td><td>{{ event.logger }}</td><td>{{ event.message }}</td></tr> }</tbody></table></div>@if (more()) { <button type="button" (click)="load(more()!)">Cargar anteriores</button> } }</section>
+<main class="diagnostics">
+  <header class="page-header">
+    <div>
+      <p class="eyebrow">Observabilidad</p>
+      <h1>Diagnóstico del controlador</h1>
+      <p class="intro">Consulta los eventos recientes para entender qué está ocurriendo. Esta vista es de solo lectura y no permite operar relés.</p>
+    </div>
+    <button mat-stroked-button type="button" (click)="load()" [disabled]="loading() || loadingMore()" aria-label="Volver a leer los eventos del controlador" data-testid="refresh-diagnostics">
+      <mat-icon aria-hidden="true">refresh</mat-icon>
+      {{ loading() ? 'Actualizando…' : 'Actualizar' }}
+    </button>
+  </header>
+
+  @if (error()) {
+    <div class="banner alert" role="alert" data-testid="diagnostics-error">
+      <div class="banner-content"><mat-icon aria-hidden="true">error_outline</mat-icon><div><strong>{{ error() }}</strong></div></div>
+      <button mat-stroked-button type="button" (click)="load()" [disabled]="loading() || loadingMore()" data-testid="retry-diagnostics">Volver a intentar</button>
+    </div>
+  }
+
+  <section class="workspace-panel filters-panel" aria-labelledby="diagnostics-filters-title">
+    <div class="section-heading">
+      <div><p class="eyebrow">Consulta</p><h2 id="diagnostics-filters-title">Filtrar eventos</h2><p class="section-lead">Busca por nivel o por el texto registrado por el controlador.</p></div>
+    </div>
+    <form class="filters" (submit)="$event.preventDefault(); apply()">
+      <mat-form-field appearance="outline" subscriptSizing="dynamic">
+        <mat-label>Nivel</mat-label>
+        <mat-select [ngModel]="level()" (ngModelChange)="level.set($event)" name="level">
+          <mat-option value="">Todos</mat-option>
+          <mat-option value="DEBUG">DEBUG</mat-option>
+          <mat-option value="INFO">INFO</mat-option>
+          <mat-option value="WARNING">WARNING</mat-option>
+          <mat-option value="ERROR">ERROR</mat-option>
+          <mat-option value="CRITICAL">CRITICAL</mat-option>
+        </mat-select>
+      </mat-form-field>
+      <mat-form-field class="query-field" appearance="outline" subscriptSizing="dynamic">
+        <mat-label>Buscar</mat-label>
+        <input matInput [ngModel]="query()" (ngModelChange)="query.set($event)" name="query" placeholder="Texto del evento" />
+      </mat-form-field>
+      <button mat-flat-button color="primary" type="submit" data-testid="apply-diagnostics"><mat-icon aria-hidden="true">filter_alt</mat-icon>Aplicar filtros</button>
+    </form>
+  </section>
+
+  @if (loading() && !events().length) {
+    <section class="workspace-panel loading-panel" role="status" aria-live="polite" data-testid="diagnostics-loading">
+      <mat-icon aria-hidden="true">hourglass_empty</mat-icon>
+      <div><h2>Cargando eventos</h2><p>Consultando el registro del controlador…</p></div>
+    </section>
+  } @else if (!events().length && !loading() && !error()) {
+    <p class="empty-state" role="status" data-testid="diagnostics-empty"><mat-icon aria-hidden="true">search_off</mat-icon><span>No hay eventos que coincidan con los filtros.</span></p>
+  }
+
+  @if (loading() && events().length) {
+    <p class="inline-loading" role="status" aria-live="polite"><mat-icon aria-hidden="true">sync</mat-icon> Actualizando eventos…</p>
+  }
+
+  @if (events().length) {
+    <section class="workspace-panel events-panel" aria-labelledby="events-title">
+      <div class="section-heading">
+        <div><p class="eyebrow">Registro operativo</p><h2 id="events-title">Eventos recientes</h2><p class="section-lead">Los eventos más nuevos aparecen primero. El refresco automático solo se ejecuta mientras esta vista está visible.</p></div>
+        <span class="revision-chip">{{ events().length }} cargados</span>
+      </div>
+      <div class="table-scroll">
+        <table data-testid="events-table">
+          <caption class="sr-only">Eventos recientes del controlador</caption>
+          <thead><tr><th scope="col">Hora</th><th scope="col">Nivel</th><th scope="col">Origen</th><th scope="col">Evento</th></tr></thead>
+          <tbody>
+            @for (event of events(); track event.id) {
+              <tr [class.warning]="event.level === 'WARNING'" [class.error]="event.level === 'ERROR' || event.level === 'CRITICAL'" [attr.data-level]="event.level">
+                <td>{{ instant(event.occurred_at) }}</td>
+                <td><span class="event-level"><mat-icon aria-hidden="true">{{ levelIcon(event.level) }}</mat-icon><strong>{{ event.level }}</strong></span></td>
+                <td>{{ event.logger }}</td>
+                <td>{{ event.message }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+      @if (more()) {
+        <div class="paging"><span>Hay eventos anteriores disponibles.</span><button mat-stroked-button type="button" (click)="load(more()!)" [disabled]="loadingMore()" data-testid="load-older"><mat-icon aria-hidden="true">history</mat-icon>{{ loadingMore() ? 'Cargando…' : 'Cargar anteriores' }}</button></div>
+      }
+    </section>
+  }
+</main>

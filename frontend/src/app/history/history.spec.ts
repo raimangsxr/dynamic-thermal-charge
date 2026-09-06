@@ -119,6 +119,11 @@ describe('History', () => {
       .flush(page);
   }
 
+  it('shows an explicit loading state before the first history page', () => {
+    expect(testId('history-loading')).not.toBeNull();
+    flushPlans();
+  });
+
   it('lists plans newest first, as the API returned them', () => {
     flushPlans();
     const rows = el().querySelectorAll('[data-table="plans"] tbody tr');

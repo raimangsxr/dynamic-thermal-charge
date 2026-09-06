@@ -1,120 +1,143 @@
-<section class="history">
-  <h1>Histórico</h1>
+<main class="history">
+  <header class="page-header">
+    <div>
+      <p class="eyebrow">Trazabilidad</p>
+      <h1>Histórico</h1>
+      <p class="intro">Consulta cómo ha evolucionado la instalación y qué decisiones tomó el sistema en un periodo concreto.</p>
+    </div>
+    <button mat-stroked-button type="button" (click)="load()" [disabled]="loading()" aria-label="Volver a leer el histórico" data-testid="refresh-history">
+      <mat-icon aria-hidden="true">refresh</mat-icon>
+      {{ loading() ? 'Actualizando…' : 'Actualizar' }}
+    </button>
+  </header>
 
-  <nav class="tabs">
-    <button type="button" [class.active]="tab() === 'plans'" (click)="select('plans')"
-            data-tab="plans">Planes</button>
-    <button type="button" [class.active]="tab() === 'forecasts'" (click)="select('forecasts')"
-            data-tab="forecasts">Previsiones</button>
-    <button type="button" [class.active]="tab() === 'transitions'" (click)="select('transitions')"
-            data-tab="transitions">Transiciones</button>
-    <button type="button" [class.active]="tab() === 'planning'" (click)="select('planning')"
-            data-tab="planning">Decisiones de planificación</button>
-  </nav>
-
-  <form class="filters" (submit)="$event.preventDefault(); load()">
-    <label for="from">Desde</label>
-    <input id="from" type="datetime-local" [ngModel]="from()" (ngModelChange)="from.set($event)" name="from" />
-    <label for="to">Hasta</label>
-    <input id="to" type="datetime-local" [ngModel]="to()" (ngModelChange)="to.set($event)" name="to" />
-    @if (tab() === 'transitions') {
-      <label for="heater">Acumulador</label>
-      <input id="heater" [ngModel]="heaterId()" (ngModelChange)="heaterId.set($event)" name="heater" />
+  <mat-tab-group
+    class="history-tabs"
+    [selectedIndex]="selectedIndex()"
+    (selectedIndexChange)="onTabChange($event)"
+    animationDuration="0ms"
+    aria-label="Tipos de histórico"
+    data-testid="history-tabs">
+    @for (item of tabs; track item.id) {
+      <mat-tab [attr.data-tab]="item.id">
+        <ng-template mat-tab-label><span [attr.data-tab]="item.id">{{ item.label }}</span></ng-template>
+      </mat-tab>
     }
-    <button type="submit" data-testid="apply">Aplicar</button>
-  </form>
+  </mat-tab-group>
+
+  <section class="workspace-panel filters-panel" aria-labelledby="filters-title">
+    <div class="section-heading">
+      <div><p class="eyebrow">Consulta</p><h2 id="filters-title">Filtrar {{ activeTab().label.toLowerCase() }}</h2><p class="section-lead">Acota el periodo y aplica los filtros antes de cargar los registros.</p></div>
+    </div>
+    <form class="filters" (submit)="$event.preventDefault(); load()">
+      <mat-form-field appearance="outline" subscriptSizing="dynamic">
+        <mat-label>Desde</mat-label>
+        <input matInput id="from" type="datetime-local" [ngModel]="from()" (ngModelChange)="from.set($event)" name="from" />
+      </mat-form-field>
+      <mat-form-field appearance="outline" subscriptSizing="dynamic">
+        <mat-label>Hasta</mat-label>
+        <input matInput id="to" type="datetime-local" [ngModel]="to()" (ngModelChange)="to.set($event)" name="to" />
+      </mat-form-field>
+      @if (tab() === 'transitions') {
+        <mat-form-field appearance="outline" subscriptSizing="dynamic">
+          <mat-label>Acumulador</mat-label>
+          <input matInput id="heater" [ngModel]="heaterId()" (ngModelChange)="heaterId.set($event)" name="heater" placeholder="ID del acumulador" />
+        </mat-form-field>
+      }
+      <button mat-flat-button color="primary" type="submit" data-testid="apply"><mat-icon aria-hidden="true">filter_alt</mat-icon>Aplicar filtros</button>
+    </form>
+  </section>
 
   @if (rangeError(); as message) {
-    <p class="error" role="alert" data-testid="range-error">{{ message }}</p>
+    <div class="banner alert" role="alert" data-testid="range-error">
+      <div class="banner-content"><mat-icon aria-hidden="true">event_busy</mat-icon><div><strong>Rango no válido</strong><p>{{ message }}</p></div></div>
+    </div>
   }
 
   @if (banner(); as message) {
     <div class="banner alert" role="alert" data-testid="banner">
-      <strong>{{ message.title }}</strong>
-      <p>{{ message.action }}</p>
+      <div class="banner-content"><mat-icon aria-hidden="true">error_outline</mat-icon><div><strong>{{ message.title }}</strong><p>{{ message.action }}</p></div></div>
+      <button mat-stroked-button type="button" (click)="load()" [disabled]="loading()" data-testid="retry-history">Volver a intentar</button>
     </div>
   }
 
-  @if (empty()) {
-    <p class="empty" data-testid="empty">No hay registros en ese rango.</p>
+  @if (loading() && !currentLoaded()) {
+    <section class="workspace-panel loading-panel" role="status" aria-live="polite" data-testid="history-loading">
+      <mat-icon aria-hidden="true">hourglass_empty</mat-icon>
+      <div><h2>Cargando histórico</h2><p>Consultando {{ activeTab().label.toLowerCase() }}…</p></div>
+    </section>
   }
-  @if (planningEmpty()) { <p class="empty">No hay decisiones de planificación en ese rango.</p> }
 
-  <div class="table-scroll">
-    @switch (tab()) {
-      @case ('plans') {
-        <table data-table="plans">
-          <thead>
-            <tr><th>Creado</th><th>Ventana</th><th>Intervalo</th><th>Config. rev.</th></tr>
-          </thead>
-          <tbody>
-            @for (item of plans()?.items ?? []; track item.id) {
-              <tr>
-                <td>{{ instant(item.created_at) }}</td>
-                <td>{{ instant(item.window_start) }} — {{ instant(item.window_end) }}</td>
-                <td>{{ item.slot_minutes }} min</td>
-                <td>{{ item.installation_revision }}</td>
-              </tr>
-            }
-          </tbody>
-        </table>
+  @if (loading() && currentLoaded()) {
+    <p class="inline-loading" role="status" aria-live="polite"><mat-icon aria-hidden="true">sync</mat-icon> Actualizando resultados…</p>
+  }
+
+  @if (!loading() && currentLoaded()) {
+    @if (empty()) { <p class="empty-state" role="status" data-testid="empty"><mat-icon aria-hidden="true">search_off</mat-icon><span>No hay registros en ese rango.</span></p> }
+    @if (planningEmpty()) { <p class="empty-state" role="status"><mat-icon aria-hidden="true">search_off</mat-icon><span>No hay decisiones de planificación en ese rango.</span></p> }
+
+    @if (!empty() && !(tab() === 'planning' && planningEmpty())) {
+    <section class="workspace-panel results-panel" aria-labelledby="results-title">
+      <div class="section-heading">
+        <div><p class="eyebrow">Resultados</p><h2 id="results-title">{{ activeTab().label }}</h2><p class="section-lead">Los registros se muestran en el orden recibido del servidor.</p></div>
+        @if (page(); as current) { <span class="revision-chip">{{ current.items.length }} registros</span> }
+        @if (tab() === 'planning' && planningAudit(); as audit) { <span class="revision-chip">{{ audit.items.length }} registros</span> }
+      </div>
+
+      <div class="table-scroll">
+        @switch (tab()) {
+          @case ('plans') {
+            <table data-table="plans">
+              <caption class="sr-only">Planes históricos</caption>
+              <thead><tr><th scope="col">Creado</th><th scope="col">Ventana</th><th scope="col">Intervalo</th><th scope="col">Config. rev.</th></tr></thead>
+              <tbody>
+                @for (item of plans()?.items ?? []; track item.id) {
+                  <tr><td>{{ instant(item.created_at) }}</td><td>{{ instant(item.window_start) }} — {{ instant(item.window_end) }}</td><td>{{ item.slot_minutes }} min</td><td>{{ item.installation_revision }}</td></tr>
+                }
+              </tbody>
+            </table>
+          }
+          @case ('forecasts') {
+            <table data-table="forecasts">
+              <caption class="sr-only">Previsiones meteorológicas históricas</caption>
+              <thead><tr><th scope="col">Fecha</th><th scope="col">Origen</th><th scope="col">Media</th><th scope="col">Mín.</th><th scope="col">Máx.</th><th scope="col">Obtenida</th></tr></thead>
+              <tbody>
+                @for (item of forecasts()?.items ?? []; track item.id) {
+                  <tr><td>{{ item.forecast_date }}</td><td [attr.data-source]="item.source"><span class="source-chip" [class.source-fallback]="item.source === 'fallback'"><mat-icon aria-hidden="true">{{ item.source === 'fallback' ? 'cloud_off' : 'cloud' }}</mat-icon>{{ sourceText(item.source) }}</span></td><td>{{ temperature(item.average_temperature_c) }}</td><td>{{ temperature(item.minimum_temperature_c) }}</td><td>{{ temperature(item.maximum_temperature_c) }}</td><td>{{ instant(item.retrieved_at) }}</td></tr>
+                }
+              </tbody>
+            </table>
+          }
+          @case ('transitions') {
+            <table data-table="transitions">
+              <caption class="sr-only">Transiciones de las salidas</caption>
+              <thead><tr><th scope="col">Instante</th><th scope="col">Acumulador</th><th scope="col">Estado</th></tr></thead>
+              <tbody>
+                @for (item of transitions()?.items ?? []; track item.id) {
+                  <tr [attr.data-heater]="item.heater_id"><td>{{ instant(item.occurred_at) }}</td><td>{{ item.heater_id }} @if (isGone(item.heater_id)) { <span class="gone" data-testid="gone">(ya no está en la configuración)</span> }</td><td><span class="state-chip" [class.state-on]="item.state" [class.state-off]="!item.state"><mat-icon aria-hidden="true">{{ item.state ? 'toggle_on' : 'toggle_off' }}</mat-icon>{{ item.state ? 'encendido' : 'apagado' }}</span></td></tr>
+                }
+              </tbody>
+            </table>
+          }
+          @case ('planning') {
+            <table data-table="planning">
+              <caption class="sr-only">Decisiones automáticas de planificación</caption>
+              <thead><tr><th scope="col">Instante</th><th scope="col">Evento</th><th scope="col">Motivo</th><th scope="col">Detalle</th></tr></thead>
+              <tbody>@for (item of planningAudit()?.items ?? []; track item.id) { <tr><td>{{ instant(item.occurred_at) }}</td><td>{{ item.event }}</td><td>{{ item.reason }}</td><td><code>{{ item.details | json }}</code></td></tr> }</tbody>
+            </table>
+          }
+        }
+      </div>
+
+      @if (page(); as current) {
+        <footer class="paging">
+          <span>Mostrando {{ current.items.length }} de un máximo de {{ current.limit_applied }}</span>
+          @if (current.has_more) {
+            <button mat-stroked-button type="button" (click)="next()" [disabled]="loading()" data-testid="next"><mat-icon aria-hidden="true">arrow_downward</mat-icon>Siguiente página</button>
+          } @else { <span class="end">— no hay más resultados</span> }
+        </footer>
       }
-      @case ('forecasts') {
-        <table data-table="forecasts">
-          <thead>
-            <tr><th>Fecha</th><th>Origen</th><th>Media</th><th>Mín.</th><th>Máx.</th><th>Obtenida</th></tr>
-          </thead>
-          <tbody>
-            @for (item of forecasts()?.items ?? []; track item.id) {
-              <tr>
-                <td>{{ item.forecast_date }}</td>
-                <td [attr.data-source]="item.source">{{ sourceText(item.source) }}</td>
-                <td>{{ temperature(item.average_temperature_c) }}</td>
-                <td>{{ temperature(item.minimum_temperature_c) }}</td>
-                <td>{{ temperature(item.maximum_temperature_c) }}</td>
-                <td>{{ instant(item.retrieved_at) }}</td>
-              </tr>
-            }
-          </tbody>
-        </table>
-      }
-      @case ('transitions') {
-        <table data-table="transitions">
-          <thead>
-            <tr><th>Instante</th><th>Acumulador</th><th>Estado</th></tr>
-          </thead>
-          <tbody>
-            @for (item of transitions()?.items ?? []; track item.id) {
-              <tr [attr.data-heater]="item.heater_id">
-                <td>{{ instant(item.occurred_at) }}</td>
-                <td>
-                  {{ item.heater_id }}
-                  @if (isGone(item.heater_id)) {
-                    <span class="gone" data-testid="gone">(ya no está en la configuración)</span>
-                  }
-                </td>
-                <td>{{ item.state ? 'encendido' : 'apagado' }}</td>
-              </tr>
-            }
-          </tbody>
-        </table>
-      }
-      @case ('planning') {
-        <table data-table="planning"><thead><tr><th>Instante</th><th>Evento</th><th>Motivo</th><th>Detalle</th></tr></thead><tbody>
-          @for (item of planningAudit()?.items ?? []; track item.id) { <tr><td>{{ instant(item.occurred_at) }}</td><td>{{ item.event }}</td><td>{{ item.reason }}</td><td><code>{{ item.details | json }}</code></td></tr> }
-        </tbody></table>
-      }
+    </section>
     }
-  </div>
-
-  @if (page(); as current) {
-    <p class="paging">
-      Mostrando {{ current.items.length }} de un máximo de {{ current.limit_applied }}
-      @if (current.has_more) {
-        <button type="button" (click)="next()" data-testid="next">Siguiente página</button>
-      } @else {
-        <span class="end">— no hay más resultados</span>
-      }
-    </p>
   }
-</section>
+</main>
