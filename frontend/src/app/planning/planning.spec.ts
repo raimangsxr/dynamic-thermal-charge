@@ -373,7 +373,7 @@ describe('Planning', () => {
     expect(open.mock.calls.slice(0, 4).every(([, config]) => (config as { width?: string; maxWidth?: string }).width === 'min(98vw, 192rem)' && (config as { maxWidth?: string }).maxWidth === '98vw')).toBe(true);
     expect((open.mock.calls[0][1] as { data?: { table?: { headers: string[]; rows: string[][] } } }).data?.table).toMatchObject({
       headers: ['Intervalo', 'Salón (°C)', 'Exterior (°C)'],
-      rows: [['16 ene 2026, 01:00', '18.5', '3.0'], ['16 ene 2026, 01:30', '18.2', '3.5']],
+      rows: [[fixture.componentInstance.slotLabel(PLANNING.timeline[0]), '18.5', '3.0'], [fixture.componentInstance.slotLabel(PLANNING.timeline[1]), '18.2', '3.5']],
     });
     expect((open.mock.calls[1][1] as { data?: { table?: { headers: string[]; rows: string[][] } } }).data?.table?.headers).toEqual(['Intervalo', 'Salón (W)', 'Total (W)']);
     expect((open.mock.calls[2][1] as { data?: { table?: { headers: string[] } } }).data?.table?.headers).toEqual(['Intervalo', 'Total (W)', 'Carga base (W)', 'Límite contratado (W)', 'Límite calefacción (W)']);
