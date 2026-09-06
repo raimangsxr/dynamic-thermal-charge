@@ -227,3 +227,31 @@ def test_both_passes_of_the_repeated_hour_get_that_hours_forecast() -> None:
     # 02:00 and 02:30 each happen twice, so four slots share two forecast hours.
     assert len(repeated) == 4
     assert all(slot.outdoor_temperature_c is not None for slot in repeated)
+
+
+def test_a_window_starting_on_a_wall_clock_that_never_happens_is_still_planned() -> None:
+    """Found by the property tests: 02:15 does not exist on 29 March.
+
+    Attaching the zone keeps the impossible label while resolving the offset to
+    the pre-jump one, so wall-clock arithmetic from it produced a window end
+    *before* its own start and an empty plan.
+    """
+    from dynamic_thermal_charge.models import Heater, OutputConfig, SiteConfig
+    from dynamic_thermal_charge.scheduler import ChargeScheduler, align_to_slot
+
+    impossible = datetime(2026, 3, 29, 2, 15, tzinfo=MADRID)
+    site = SiteConfig(max_total_power_w=100, slot_minutes=15, window_minutes=45)
+    item = Heater(
+        id="h0", name="h0", power_w=100, full_charge_minutes=60,
+        target_charge=1.0, priority=1, output=OutputConfig(kind="gpio", pin=1),
+    )
+
+    aligned = align_to_slot(impossible, 15)
+    result = ChargeScheduler().build(site, (item,), impossible)
+
+    # The instant is real even though the label was not; it is 03:15 CEST.
+    assert aligned.hour == 3 and aligned.minute == 15
+    assert _real(aligned) == _real(impossible)
+    assert len(result.slots) == 3
+    for slot in result.slots:
+        assert _real(slot.end) - _real(slot.start) == timedelta(minutes=15)

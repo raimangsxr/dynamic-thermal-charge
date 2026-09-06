@@ -236,6 +236,21 @@ def _earlier(left: datetime, right: datetime) -> bool:
     return left.astimezone(timezone.utc) < right.astimezone(timezone.utc)
 
 
+def _normalize(value: datetime) -> datetime:
+    """Give an instant the wall clock it really has.
+
+    Attaching a zone with ``.replace(tzinfo=...)`` can name a time that never
+    happens: on the day the clocks go forward, 02:15 does not exist, and Python
+    keeps the label while resolving the offset to the pre-jump one. Left alone,
+    that label then poisons any later wall-clock arithmetic -- a 45-minute window
+    from a non-existent 02:15 ended up *before* its own start, and produced an
+    empty plan. A round trip through UTC replaces the label with the real one.
+    """
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).astimezone(value.tzinfo)
+
+
 def _wall_minutes(value: datetime) -> int:
     return value.hour * 60 + value.minute
 
@@ -254,7 +269,9 @@ def _floor_to_wall_boundary(value: datetime, slot_minutes: int) -> datetime:
     naive_midnight = value.replace(
         hour=0, minute=0, second=0, microsecond=0, tzinfo=None
     )
-    return (naive_midnight + timedelta(minutes=floored)).replace(tzinfo=value.tzinfo)
+    return _normalize(
+        (naive_midnight + timedelta(minutes=floored)).replace(tzinfo=value.tzinfo)
+    )
 
 
 def next_slot_boundary(current: datetime, slot_minutes: int) -> datetime:
@@ -288,7 +305,7 @@ def slot_boundaries(
     forward, with one slot more or two fewer respectively.
     """
     naive_end = aligned_start.replace(tzinfo=None) + timedelta(minutes=window_minutes)
-    window_end = naive_end.replace(tzinfo=aligned_start.tzinfo)
+    window_end = _normalize(naive_end.replace(tzinfo=aligned_start.tzinfo))
     boundaries = [aligned_start]
     while _earlier(boundaries[-1], window_end):
         boundaries.append(next_slot_boundary(boundaries[-1], slot_minutes))

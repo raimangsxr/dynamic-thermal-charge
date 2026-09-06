@@ -13,7 +13,7 @@ from typing import Callable, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
 from .models import ChargeConstraint, ChargeTelemetry, Heater
-from .scheduler import advance_real, align_to_slot, next_slot_boundary
+from .scheduler import _normalize, advance_real, align_to_slot, next_slot_boundary
 from .system_settings import MqttSystemSettings
 from .weather import HourlyForecastPoint
 
@@ -667,7 +667,9 @@ def _continuous_forecast_slots(start: datetime, forecast: Sequence[HourlyForecas
     if not forecast:
         return ()
     naive_end = start.replace(tzinfo=None) + timedelta(hours=horizon_hours)
-    configured_end = naive_end.replace(tzinfo=start.tzinfo)
+    # Normalised: a horizon that ends on a wall clock that never happens would
+    # otherwise resolve to an instant before its own start.
+    configured_end = _normalize(naive_end.replace(tzinfo=start.tzinfo))
     boundaries = [start]
     while _key(boundaries[-1]) < _key(configured_end):
         if _weather_at(boundaries[-1], forecast) is None:
