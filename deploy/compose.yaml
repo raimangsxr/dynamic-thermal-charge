@@ -14,6 +14,8 @@ services:
     <<: *backend-runtime
     image: ${DOCKERHUB_USERNAME:?set DOCKERHUB_USERNAME}/dynamic-thermal-charge-backend:${APP_VERSION:?set APP_VERSION}
     restart: unless-stopped
+    environment:
+      LG_WD: /tmp
     env_file: [{ path: /etc/app/app.env, required: false }]
     volumes:
       - "/srv/app/data:/var/lib/dynamic-thermal-charge"

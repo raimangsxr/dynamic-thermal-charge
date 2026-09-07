@@ -20,6 +20,7 @@ def test_docker_compose_contains_the_runtime_services_and_persistent_state() -> 
     assert "read_only: true" in compose
     assert 'user: "${DTC_RUNTIME_UID:-1000}:${DTC_RUNTIME_GID:-1000}"' in compose
     assert 'group_add: ["${DTC_GPIO_GID:-997}"]' in compose
+    assert "LG_WD: /tmp" in compose
     assert "condition: service_healthy" in compose
     assert "run_api(bind_host='0.0.0.0', bind_port=8080)" in compose
 
