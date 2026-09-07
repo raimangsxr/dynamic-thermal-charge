@@ -33,7 +33,22 @@ dispositivo.
 ## Despliegue en Docker
 
 En la Raspberry prepara `/srv/app/data` para el estado persistente y configura
-las variables de Compose:
+las variables de Compose. Los servicios backend se ejecutan con una identidad
+numérica no root; por defecto es `1000:1000`, y se puede cambiar mediante
+`DTC_RUNTIME_UID` y `DTC_RUNTIME_GID` si la instalación usa otra identidad:
+
+```sh
+export DTC_RUNTIME_UID=1000
+export DTC_RUNTIME_GID=1000
+export DTC_GPIO_GID="$(stat -c '%g' /dev/gpiochip0)"
+sudo install -d -m 700 -o "$DTC_RUNTIME_UID" -g "$DTC_RUNTIME_GID" /srv/app/data
+sudo chown -R "$DTC_RUNTIME_UID:$DTC_RUNTIME_GID" /srv/app/data
+```
+
+El `chown` solo es necesario al preparar la instalación o al migrar datos que
+fueran creados por una versión anterior ejecutada como root. El reconciliador
+detecta automáticamente el GID de `/dev/gpiochip0`; en un despliegue manual,
+`DTC_GPIO_GID` debe ser el GID que devuelva `stat` para ese dispositivo.
 
 En `/etc/app/app.env` debe existir el token administrativo que usará el panel:
 
@@ -59,7 +74,10 @@ El frontend se publica en el puerto `80`. La API solo se expone dentro de la
 red Docker y el panel la consume mediante nginx.
 
 El servicio `backend` recibe `/dev/gpiochip0`, que es el dispositivo utilizado
-por el driver `lgpio` para controlar las salidas. En `Configuración → Servicio
+por el driver `lgpio` para controlar las salidas, y monta el fichero de modelo
+de la Raspberry en solo lectura. La lectura del modelo no necesita root; el
+grupo adicional `DTC_GPIO_GID` es el que permite al usuario del proceso abrir
+el dispositivo. En `Configuración → Servicio
 → Salidas físicas` selecciona `GPIO` como modo global y reinicia el controlador;
 este cambio no se aplica a un proceso ya arrancado.
 
