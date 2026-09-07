@@ -1,10 +1,10 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import inspect, select, text, update
 
-from dynamic_thermal_charge.models import IndoorReading
+from dynamic_thermal_charge.models import IndoorReading, SimulationSample
 from dynamic_thermal_charge.persistence import ConfigConflictError
 from dynamic_thermal_charge.persistence.active_schema import (
     APPLICATION_SCHEMA_REVISION,
@@ -25,6 +25,7 @@ from dynamic_thermal_charge.persistence.repository import (
     SqlConfigRepository,
     SqlIndoorReadingRepository,
 )
+from dynamic_thermal_charge.persistence.planning import SqlPlanningRepository
 from dynamic_thermal_charge.persistence.schema import (
     APPLICATION_TABLES,
     CONFIG_TABLES,
@@ -113,6 +114,36 @@ def test_history_and_indoor_readings_use_application_engine(split_store):
     assert indoor.read_all()["salon"].celsius == 19.5
     indoor.invalidate("salon")
     assert indoor.read_all() == {}
+
+
+def test_simulation_samples_are_persisted_and_bounded_per_heater(split_store):
+    _paths, engines, repository = split_store
+    planning = SqlPlanningRepository(
+        engines.configuration,
+        engines.application,
+        repository.installation_id(),
+        engines.configuration_location,
+        engines.application_location,
+    )
+    for index in range(241):
+        planning.record_simulation_sample(
+            SimulationSample(
+                at=NOW.replace(microsecond=0) + timedelta(seconds=index),
+                heater_id="salon",
+                temperature_c=45.0,
+                target_temperature_c=55.0,
+                stored_charge_percent=float(index % 100),
+                charging=index % 2 == 0,
+                power_w=1000 if index % 2 == 0 else 0,
+            )
+        )
+
+    samples = planning.simulation_samples()
+    assert len(samples) == 240
+    assert samples[0].at == NOW.replace(microsecond=0) + timedelta(seconds=1)
+    assert samples[-1].stored_charge_percent == 40.0
+    planning.clear_simulation_samples()
+    assert planning.simulation_samples() == ()
 
 
 def test_relay_test_snapshots_config_then_writes_only_application(split_store):

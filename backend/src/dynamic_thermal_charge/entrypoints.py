@@ -316,6 +316,7 @@ def run_mqtt() -> None:
             config_provider=config_provider,
             heaters_provider=heaters_provider,
             charging_state_provider=charging_state_provider,
+            sample_observer=store.planning.record_simulation_sample,
             clock=lambda: datetime.now(timezone.utc),
         )
         return MqttSimulationService(client=client, simulator=simulator)

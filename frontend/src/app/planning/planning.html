@@ -58,6 +58,50 @@
             </section>
           </div>
 
+          @if (data.simulation?.enabled; as simulationEnabled) {
+            @if (data.simulation; as simulation) {
+              <section class="simulation-workspace" data-testid="simulation-workspace" aria-labelledby="simulation-title">
+                <div class="section-header">
+                  <div>
+                    <p class="eyebrow">Prueba acelerada</p>
+                    <h2 id="simulation-title">Simulación en tiempo real</h2>
+                    <p class="hint">{{ simulation.seconds_per_hour }} s reales = 1 h simulada. La descarga usa el factor de demanda de cada acumulador y la carga responde al estado del plan.</p>
+                  </div>
+                  <span class="status-chip" [attr.data-status]="simulation.status">{{ simulationStatusText(simulation.status) }}</span>
+                </div>
+                @if (simulation.status === 'active') {
+                  <p class="simulation-feedback" role="status" data-testid="simulation-active-status">Última muestra: {{ simulationLatestText(simulation) }}. La telemetría simulada vuelve a alimentar la planificación.</p>
+                } @else if (simulation.status === 'stale') {
+                  <p class="simulation-feedback warn" role="status" data-testid="simulation-stale-status">La simulación está configurada, pero la telemetría no se ha actualizado recientemente.</p>
+                } @else if (simulation.status === 'stopped') {
+                  <p class="simulation-feedback" role="status" data-testid="simulation-stopped-status">La simulación está configurada, pero MQTT está deshabilitado. Activa MQTT para iniciar la prueba.</p>
+                } @else if (simulation.status === 'waiting') {
+                  <p class="simulation-feedback" role="status" data-testid="simulation-waiting-status">Esperando la primera muestra simulada.</p>
+                } @else {
+                  <p class="simulation-feedback" role="status" data-testid="simulation-inactive-status">La simulación está detenida.</p>
+                }
+                @if (simulation.samples.length) {
+                  <div class="simulation-chart-grid" data-testid="simulation-charts">
+                    <section class="simulation-chart-card" aria-labelledby="simulation-temperature-title">
+                      <h3 id="simulation-temperature-title">Temperatura real frente a objetivo</h3>
+                      <div class="chart-wrap"><canvas #simulationTemperatureChart aria-label="Gráfico de temperatura real y objetivo de los acumuladores"></canvas></div>
+                    </section>
+                    <section class="simulation-chart-card" aria-labelledby="simulation-soc-title">
+                      <h3 id="simulation-soc-title">Carga almacenada, reserva y objetivo</h3>
+                      <div class="chart-wrap"><canvas #simulationSocChart aria-label="Gráfico de carga almacenada, reserva y objetivo de los acumuladores"></canvas></div>
+                    </section>
+                    <section class="simulation-chart-card simulation-power-card" aria-labelledby="simulation-power-title">
+                      <h3 id="simulation-power-title">Plan frente a ejecución</h3>
+                      <div class="chart-wrap"><canvas #simulationPowerChart aria-label="Gráfico de potencia planificada y potencia ejecutada"></canvas></div>
+                    </section>
+                  </div>
+                } @else {
+                  <p class="empty" data-testid="simulation-empty">Todavía no hay datos para dibujar la simulación.</p>
+                }
+              </section>
+            }
+          }
+
           @if (data.plan; as plan) {
             <p class="window" data-testid="planning-window">Ventana {{ dateTime(plan.window_start) }}–{{ dateTime(plan.window_end) }} · horizonte {{ dateTime(data.horizon_start) }}–{{ dateTime(data.horizon_end) }} · configuración rev. {{ plan.installation_revision }}</p>
             @if (hasUnmet(data)) {

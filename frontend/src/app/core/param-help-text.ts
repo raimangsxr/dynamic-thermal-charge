@@ -135,6 +135,8 @@ const SYSTEM: Record<string, Record<string, string>> = {
       'Prefijo base de los tópicos simulados. Cada acumulador publica en {prefijo}/{id}/temperature (y target/stored_charge) salvo que tenga tópicos propios configurados.',
     mqtt_simulation_thermal_loss_c_per_hour:
       'Pérdida térmica general (°C/h) aplicada a todos los acumuladores en reposo. Se invierte mientras el acumulador está cargando.',
+    mqtt_simulation_seconds_per_hour:
+      'Aceleración del reloj de prueba: cuántos segundos reales representan una hora simulada. El valor recomendado es 10.',
   },
   output: {
     driver: 'Driver de salida física: simulada (sin relés) o GPIO en el dispositivo controlador.',

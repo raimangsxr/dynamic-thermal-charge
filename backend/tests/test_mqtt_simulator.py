@@ -7,9 +7,12 @@ from dynamic_thermal_charge.mqtt.simulator import (
     MqttSimulationService,
     MqttSimulationSupervisor,
     advance_temperature,
+    advance_stored_charge,
     heater_telemetry_topics,
     simulation_subscription_topics,
     simulation_topics,
+    simulated_hours,
+    stored_charge_to_temperature,
     temperature_to_stored_charge_percent,
 )
 
@@ -35,7 +38,7 @@ class RecordingClient:
         self.events.append(("loop_stop",))
 
 
-def _heater(heater_id: str = "salon", **topics: str) -> Heater:
+def _heater(heater_id: str = "salon", demand_factor: float = 1.0, **topics: str) -> Heater:
     return Heater(
         id=heater_id,
         name=heater_id,
@@ -49,7 +52,35 @@ def _heater(heater_id: str = "salon", **topics: str) -> Heater:
         temperature_topic=topics.get("temperature_topic"),
         target_temperature_topic=topics.get("target_temperature_topic"),
         stored_charge_topic=topics.get("stored_charge_topic"),
+        demand_factor=demand_factor,
     )
+
+
+def test_simulation_clock_uses_ten_seconds_per_simulated_hour_by_default():
+    assert simulated_hours(10.0, 10.0) == 1.0
+    assert simulated_hours(5.0, 10.0) == 0.5
+
+
+def test_stored_charge_discharge_uses_demand_factor_and_charge_rate():
+    idle = advance_stored_charge(
+        50.0,
+        charging=False,
+        thermal_loss_c_per_hour=2.0,
+        demand_factor=2.0,
+        full_charge_minutes=480,
+        elapsed_hours=1.0,
+    )
+    charging = advance_stored_charge(
+        50.0,
+        charging=True,
+        thermal_loss_c_per_hour=2.0,
+        demand_factor=2.0,
+        full_charge_minutes=480,
+        elapsed_hours=1.0,
+    )
+    assert idle == 42.0
+    assert charging == 62.5
+    assert stored_charge_to_temperature(idle) == 41.0
 
 
 def test_advance_temperature_cools_when_idle_and_heats_when_charging():
@@ -158,6 +189,80 @@ def test_simulator_logs_and_publishes_three_topics_per_heater(caplog):
     assert "dtc/sim/salon/temperature=45.00" in caplog.text
     assert "dtc/sim/salon/target=55.00" in caplog.text
     assert "dtc/sim/salon/stored_charge=50.0" in caplog.text
+
+
+def test_simulator_advances_one_simulated_hour_and_records_coherent_sample():
+    from datetime import datetime, timedelta, timezone
+
+    client = RecordingClient()
+    config = MqttSimulationConfig(
+        enabled=True,
+        initial_temperature_c=45.0,
+        publish_seconds=10.0,
+        topic_prefix="dtc/sim",
+        thermal_loss_c_per_hour=2.0,
+        seconds_per_hour=10.0,
+    )
+    now = [datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)]
+    charging = [False]
+    simulator = MqttPlanningSimulator(
+        client,
+        config_provider=lambda: config,
+        heaters_provider=lambda: (_heater(demand_factor=2.0),),
+        charging_state_provider=lambda: {"salon": charging[0]},
+        clock=lambda: now[0],
+    )
+    simulator.publish_cycle()
+    now[0] += timedelta(seconds=10)
+    simulator.publish_cycle()
+
+    sample = simulator.samples()[-1]
+    assert sample.heater_id == "salon"
+    assert sample.temperature_c == 41.0
+    assert sample.stored_charge_percent == 42.0
+    assert sample.target_temperature_c == 55.0
+    assert sample.power_w == 0
+
+    charging[0] = True
+    now[0] += timedelta(seconds=10)
+    simulator.publish_cycle()
+    sample = simulator.samples()[-1]
+    assert sample.charging is True
+    assert sample.stored_charge_percent == 54.5
+    assert sample.power_w == 1000
+
+
+def test_simulator_applies_a_changed_clock_ratio_without_restart():
+    from dataclasses import replace
+    from datetime import datetime, timedelta, timezone
+
+    client = RecordingClient()
+    config = [
+        MqttSimulationConfig(
+            enabled=True,
+            initial_temperature_c=45.0,
+            publish_seconds=10.0,
+            topic_prefix="dtc/sim",
+            thermal_loss_c_per_hour=2.0,
+            seconds_per_hour=10.0,
+        )
+    ]
+    now = [datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)]
+    simulator = MqttPlanningSimulator(
+        client,
+        config_provider=lambda: config[0],
+        heaters_provider=lambda: (_heater(),),
+        charging_state_provider=lambda: {"salon": False},
+        clock=lambda: now[0],
+    )
+    simulator.publish_cycle()
+    now[0] += timedelta(seconds=10)
+    simulator.publish_cycle()
+    config[0] = replace(config[0], seconds_per_hour=20.0)
+    now[0] += timedelta(seconds=20)
+    simulator.publish_cycle()
+
+    assert [sample.stored_charge_percent for sample in simulator.samples()] == [50.0, 46.0, 42.0]
 
 
 def test_simulator_supervisor_starts_only_when_enabled_and_mqtt_is_on():

@@ -50,6 +50,8 @@ from ..schemas import (
     PlanningSiteConfigResponse,
     PlanningCheckView,
     PlanningPreviewJobResponse,
+    PlanningSimulationSampleView,
+    PlanningSimulationView,
 )
 from ..errors import not_found
 
@@ -487,6 +489,7 @@ def _automatic_planning_response(
 
 def _enrich(response: PlanningResponse, store: Store, observed_at: datetime) -> PlanningResponse:
     planning = store.planning
+    config, _revision = store.repository.current()
     telemetry = planning.telemetry()
     views = []
     for heater in response.heaters:
@@ -527,6 +530,46 @@ def _enrich(response: PlanningResponse, store: Store, observed_at: datetime) -> 
     response.max_heating_power_w = int(site.get("max_heating_power_w", response.max_total_power_w))
     latest_job = planning.latest_preview_job()
     response.preview_job = _job_response(latest_job, site=site) if latest_job is not None else None
+    simulation_samples = planning.simulation_samples(limit=240)
+    mqtt_configuration = store.system_configuration.current().configuration.mqtt
+    simulation_enabled = bool(site.get("mqtt_simulation_enabled"))
+    if not simulation_enabled:
+        simulation_status = "inactive"
+    elif not mqtt_configuration.enabled:
+        simulation_status = "stopped"
+    elif not simulation_samples:
+        simulation_status = "waiting"
+    else:
+        age_seconds = (observed_at - simulation_samples[-1].at).total_seconds()
+        publish_seconds = float(site["mqtt_simulation_publish_seconds"])
+        simulation_status = "active" if age_seconds <= max(60.0, publish_seconds * 3) else "stale"
+    response.simulation = PlanningSimulationView(
+        enabled=simulation_enabled,
+        status=simulation_status,
+        seconds_per_hour=float(site["mqtt_simulation_seconds_per_hour"]),
+        publish_seconds=float(site["mqtt_simulation_publish_seconds"]),
+        target_charge_percent_by_heater={
+            heater.id: heater.target_charge * 100 for heater in config.heaters if heater.enabled
+        },
+        reserve_percent_by_heater={
+            heater.id: heater.reserve_percent for heater in config.heaters if heater.enabled
+        },
+        demand_factor_by_heater={
+            heater.id: heater.demand_factor for heater in config.heaters if heater.enabled
+        },
+        samples=[
+            PlanningSimulationSampleView(
+                at=sample.at,
+                heater_id=sample.heater_id,
+                temperature_c=sample.temperature_c,
+                target_temperature_c=sample.target_temperature_c,
+                stored_charge_percent=sample.stored_charge_percent,
+                charging=sample.charging,
+                power_w=sample.power_w,
+            )
+            for sample in simulation_samples
+        ],
+    )
     return response
 
 

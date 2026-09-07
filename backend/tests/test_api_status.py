@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from dynamic_thermal_charge.scheduler import ChargeScheduler
+from dynamic_thermal_charge.models import SimulationSample
 from dynamic_thermal_charge.weather import HourlyForecastPoint, OutdoorForecast
 from tests.conftest import API_NOW, AUTH
 
@@ -581,6 +582,7 @@ def test_planning_config_endpoint_returns_site_parameters(client):
     assert body["solver_time_limit_seconds"] == 120
     assert body["replan_minutes"] == 30
     assert body["mqtt_simulation_enabled"] is False
+    assert body["mqtt_simulation_seconds_per_hour"] == 10
     assert "revision" in body
 
 
@@ -606,6 +608,7 @@ def test_planning_config_endpoint_updates_site_parameters(client):
             "mqtt_simulation_publish_seconds": 15.0,
             "mqtt_simulation_topic_prefix": "lab/sim",
             "mqtt_simulation_thermal_loss_c_per_hour": 1.5,
+            "mqtt_simulation_seconds_per_hour": 10.0,
         },
     )
     assert response.status_code == 200, response.text
@@ -615,7 +618,62 @@ def test_planning_config_endpoint_updates_site_parameters(client):
     assert body["mqtt_simulation_enabled"] is True
     assert body["mqtt_simulation_initial_temperature_c"] == 42.0
     assert body["mqtt_simulation_topic_prefix"] == "lab/sim"
+    assert body["mqtt_simulation_seconds_per_hour"] == 10.0
     assert body["revision"] == current["revision"] + 1
+
+
+def test_planning_projection_exposes_bounded_simulation_samples(client, initialised_store):
+    site = initialised_store.planning.site()
+    initialised_store.planning.update_site(
+        {"mqtt_simulation_enabled": True}, int(site["revision"])
+    )
+    heater = initialised_store.repository.current()[0].heaters[0]
+    initialised_store.planning.record_simulation_sample(
+        SimulationSample(
+            at=API_NOW,
+            heater_id=heater.id,
+            temperature_c=43.0,
+            target_temperature_c=55.0,
+            stored_charge_percent=46.0,
+            charging=False,
+            power_w=0,
+        )
+    )
+
+    response = client.get("/api/v1/planning", headers=AUTH)
+    assert response.status_code == 200, response.text
+    simulation = response.json()["simulation"]
+    assert simulation["enabled"] is True
+    assert simulation["status"] == "stopped"
+    assert simulation["seconds_per_hour"] == 10.0
+    assert simulation["samples"][-1]["stored_charge_percent"] == 46.0
+
+
+@pytest.mark.parametrize("value", [0, -1])
+def test_planning_config_rejects_non_positive_simulation_clock(client, value):
+    current = client.get("/api/v1/planning/config", headers=AUTH).json()
+    response = client.patch(
+        "/api/v1/planning/config",
+        headers=AUTH,
+        json={
+            "expected_revision": current["revision"],
+            "replan_minutes": current["replan_minutes"],
+            "planning_window_hours": current["planning_window_hours"],
+            "forecast_horizon_hours": current["forecast_horizon_hours"],
+            "aemet_query_hour": current["aemet_query_hour"],
+            "contracted_power_w": current["contracted_power_w"],
+            "max_heating_power_w": current["max_heating_power_w"],
+            "base_load_w": current["base_load_w"],
+            "design_indoor_temperature_c": current["design_indoor_temperature_c"],
+            "design_outdoor_temperature_c": current["design_outdoor_temperature_c"],
+            "feedback_horizon_hours": current["feedback_horizon_hours"],
+            "mqtt_simulation_seconds_per_hour": value,
+        },
+    )
+    assert response.status_code == 422, response.text
+    unchanged = client.get("/api/v1/planning/config", headers=AUTH).json()
+    assert unchanged["revision"] == current["revision"]
+    assert unchanged["mqtt_simulation_seconds_per_hour"] == current["mqtt_simulation_seconds_per_hour"]
 
 
 @pytest.mark.parametrize(

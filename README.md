@@ -150,6 +150,15 @@ telemetría MQTT de cada acumulador se valida por separado y una muestra
 incompleta o de más de 15 minutos se marca como caducada y deja ese acumulador
 fuera del plan.
 
+Para pruebas rápidas, `Configuración → Planificación` permite activar la
+simulación de acumuladores y ajustar `Reloj acelerado (s por hora simulada)`;
+su valor predeterminado es 10, por lo que 10 segundos reales equivalen a una
+hora simulada. MQTT debe estar habilitado. El simulador usa el estado de carga
+indicado por el controlador, aplica el `demand_factor` durante la descarga y
+publica de nuevo temperatura, consigna y SOC por MQTT. La pestaña
+`Planificación activa` muestra la evolución en gráficos de temperatura, SOC y
+potencia planificada frente a ejecutada, y actualiza su estado periódicamente.
+
 La ventana y el horizonte se cuentan en horas de reloj de pared, y los límites de
 slot caen siempre en múltiplos de la duración de slot configurada. Los dos días
 del año en que cambia la hora, un horizonte de 24 horas cubre por tanto 25 horas

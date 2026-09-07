@@ -78,7 +78,7 @@ function planningConfigDto(overrides: Partial<PlanningSiteConfigDto> = {}): Plan
   return {
     revision: 2, replan_minutes: 30, planning_window_hours: 12, forecast_horizon_hours: 48, solver_time_limit_seconds: 120, aemet_query_hour: 12,
     contracted_power_w: 5200, max_heating_power_w: 5200, base_load_w: 0, design_indoor_temperature_c: 21, design_outdoor_temperature_c: 0, feedback_horizon_hours: 6,
-    mqtt_simulation_enabled: false, mqtt_simulation_initial_temperature_c: 45, mqtt_simulation_publish_seconds: 30, mqtt_simulation_topic_prefix: 'dtc/sim', mqtt_simulation_thermal_loss_c_per_hour: 2,
+    mqtt_simulation_enabled: false, mqtt_simulation_initial_temperature_c: 45, mqtt_simulation_publish_seconds: 30, mqtt_simulation_topic_prefix: 'dtc/sim', mqtt_simulation_thermal_loss_c_per_hour: 2, mqtt_simulation_seconds_per_hour: 10,
     ...overrides,
   };
 }

@@ -30,6 +30,13 @@ h3 { margin: 0; color: var(--ink); font-size: 1rem; }
 .summary-list dt { font-size: .86rem; font-weight: 650; }
 .summary-list dd { margin: 0; }
 .workspace-panel, .visualization, .constraints, .preview-job { margin-top: 1rem; padding: 1.35rem; border: 1px solid var(--border); border-radius: .85rem; background: var(--surface); box-shadow: 0 5px 18px #1720330b; }
+.simulation-workspace { margin-top: 1rem; padding: 1.35rem; border: 1px solid #b8d3ed; border-radius: .85rem; background: linear-gradient(145deg, #f8fbff, #fff); box-shadow: 0 5px 18px #1720330b; }
+.simulation-feedback { margin: .9rem 0 0; padding: .7rem .85rem; border-radius: .55rem; background: #eef7f2; color: #225c42; line-height: 1.4; }
+.simulation-feedback.warn { background: #fff8e8; color: #684000; }
+.simulation-chart-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .85rem; margin-top: 1rem; }
+.simulation-chart-card { min-width: 0; padding: .85rem; border: 1px solid var(--border); border-radius: .65rem; background: #fff; }
+.simulation-chart-card h3 { margin-bottom: .65rem; }
+.simulation-power-card { grid-column: 1 / -1; }
 .visualization + .visualization { margin-top: 1rem; }
 .section-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
 .section-header > div { min-width: 0; }
@@ -104,7 +111,7 @@ th, td { padding: .65rem .75rem; border-bottom: 1px solid var(--border); text-al
   .tab-heading, .section-header { flex-direction: column; align-items: stretch; }
   .tab-heading .status-chip, .section-header > button { align-self: flex-start; }
   .section-header > div:last-child { justify-content: flex-start; }
-  .workspace-panel, .visualization, .constraints, .preview-job { padding: 1rem .75rem; }
+  .workspace-panel, .visualization, .constraints, .preview-job, .simulation-workspace { padding: 1rem .75rem; }
   .banner { flex-direction: column; }
   .banner > button { align-self: flex-start; }
   .chart-wrap { height: 13rem; }
@@ -112,6 +119,8 @@ th, td { padding: .65rem .75rem; border-bottom: 1px solid var(--border); text-al
   .constraint-row > label { font-size: .84rem; }
   .constraint-row fieldset, .constraint-row > button { grid-column: 1 / -1; }
   .checks { grid-template-columns: 1fr; }
+  .simulation-chart-grid { grid-template-columns: 1fr; }
+  .simulation-power-card { grid-column: auto; }
 }
 
 @media (max-width: 34rem) {

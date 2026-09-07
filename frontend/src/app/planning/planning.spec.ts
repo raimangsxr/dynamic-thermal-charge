@@ -4,7 +4,7 @@ import { MatDialog } from '@angular/material/dialog';
 import { TestBed, type ComponentFixture } from '@angular/core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { PlanningDto, PlanningPreviewDto, PlanningPreviewJobDto } from '../core/api.types';
+import type { PlanningDto, PlanningPreviewDto, PlanningPreviewJobDto, PlanningSimulationDto } from '../core/api.types';
 import { Planning } from './planning';
 
 const chartState = vi.hoisted(() => ({ configs: [] as Array<{ type: string; data: { labels: unknown[]; datasets: Array<{ label?: string; data?: unknown[] }> } }> }));
@@ -59,6 +59,20 @@ const TWO_HEATER_PLANNING: PlanningDto = {
   heaters: [
     ...PLANNING.heaters,
     { id: 'cocina', name: 'Cocina', power_w: 1800, priority: 80, enabled: true },
+  ],
+};
+
+const ACTIVE_SIMULATION: PlanningSimulationDto = {
+  enabled: true,
+  status: 'active',
+  seconds_per_hour: 10,
+  publish_seconds: 10,
+  target_charge_percent_by_heater: { salon: 100 },
+  reserve_percent_by_heater: { salon: 20 },
+  demand_factor_by_heater: { salon: 1.5 },
+  samples: [
+    { at: '2026-01-16T00:00:00Z', heater_id: 'salon', temperature_c: 45, target_temperature_c: 55, stored_charge_percent: 50, charging: false, power_w: 0 },
+    { at: '2026-01-16T00:00:10Z', heater_id: 'salon', temperature_c: 43, target_temperature_c: 55, stored_charge_percent: 46, charging: true, power_w: 2800 },
   ],
 };
 
@@ -171,6 +185,45 @@ describe('Planning', () => {
     expect(fixture.nativeElement.querySelector('[data-testid="active-planning-tab"]')).toBeNull();
     expect(chartState.configs).toHaveLength(1);
     expect(chartState.configs[0].data.datasets[0].data).toEqual([3, 4]);
+  });
+
+  it('renders the accelerated simulation as charts and exposes its feedback status', async () => {
+    backend.expectOne('/api/v1/planning').flush({ ...PLANNING, simulation: ACTIVE_SIMULATION });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const element = fixture.nativeElement as HTMLElement;
+    expect(element.querySelector('[data-testid="simulation-workspace"]')).not.toBeNull();
+    expect(element.querySelector('[data-testid="simulation-charts"]')).not.toBeNull();
+    expect(element.querySelector('[data-testid="simulation-active-status"]')?.textContent).toContain('Última muestra');
+    expect(element.querySelectorAll('[data-testid="simulation-charts"] table')).toHaveLength(0);
+    expect(chartState.configs).toHaveLength(7);
+    expect(chartState.configs.some((config) => config.data.datasets.some((dataset) => dataset.label === 'Potencia planificada (kW)'))).toBe(true);
+    expect(chartState.configs.some((config) => config.data.datasets.some((dataset) => dataset.label === 'Potencia ejecutada (kW)'))).toBe(true);
+  });
+
+  it('shows the waiting state without inventing simulation series before the first sample', async () => {
+    const waitingSimulation: PlanningSimulationDto = { ...ACTIVE_SIMULATION, status: 'waiting', samples: [] };
+    backend.expectOne('/api/v1/planning').flush({ ...PLANNING, simulation: waitingSimulation });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const element = fixture.nativeElement as HTMLElement;
+    expect(element.querySelector('[data-testid="simulation-waiting-status"]')).not.toBeNull();
+    expect(element.querySelector('[data-testid="simulation-empty"]')).not.toBeNull();
+    expect(element.querySelector('[data-testid="simulation-charts"]')).toBeNull();
+    expect(element.querySelectorAll('[data-testid="simulation-workspace"] table')).toHaveLength(0);
+  });
+
+  it('keeps the simulation charts visible while reporting stale telemetry', async () => {
+    const staleSimulation: PlanningSimulationDto = { ...ACTIVE_SIMULATION, status: 'stale' };
+    backend.expectOne('/api/v1/planning').flush({ ...PLANNING, simulation: staleSimulation });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const element = fixture.nativeElement as HTMLElement;
+    expect(element.querySelector('[data-testid="simulation-stale-status"]')).not.toBeNull();
+    expect(element.querySelector('[data-testid="simulation-charts"]')).not.toBeNull();
   });
 
   it('renders one compact preview chart and keeps preview tables in the detail dialog', async () => {

@@ -10,7 +10,7 @@ import type { ChartOptions, TooltipItem } from 'chart.js';
 
 import { Api } from '../core/api';
 import { Poller } from '../core/poll';
-import type { ApiErrorDto, HourlyForecastPointDto, PlanningCheckDto, PlanningConstraintRequest, PlanningDto, PlanningDeficitDto, PlanningPreviewDto, PlanningPreviewJobDto, PlanningSlotDto, PlanningTimelineSlotDto } from '../core/api.types';
+import type { ApiErrorDto, HourlyForecastPointDto, PlanningCheckDto, PlanningConstraintRequest, PlanningDto, PlanningDeficitDto, PlanningPreviewDto, PlanningPreviewJobDto, PlanningSimulationDto, PlanningSimulationSampleDto, PlanningSlotDto, PlanningTimelineSlotDto } from '../core/api.types';
 import { type Explained, UNREACHABLE, explain } from '../core/errors';
 import { formatTemperature, truncateTemperature } from '../shared/temperature/temperature';
 
@@ -412,8 +412,12 @@ export class Planning implements AfterViewInit, OnDestroy {
   @ViewChild('aggregateChart') private aggregateCanvas?: ElementRef<HTMLCanvasElement>;
   @ViewChild('cumulativeChart') private cumulativeCanvas?: ElementRef<HTMLCanvasElement>;
   @ViewChild('previewChart') private previewCanvas?: ElementRef<HTMLCanvasElement>;
+  @ViewChild('simulationTemperatureChart') private simulationTemperatureCanvas?: ElementRef<HTMLCanvasElement>;
+  @ViewChild('simulationSocChart') private simulationSocCanvas?: ElementRef<HTMLCanvasElement>;
+  @ViewChild('simulationPowerChart') private simulationPowerCanvas?: ElementRef<HTMLCanvasElement>;
   private charts: Chart[] = [];
   private readonly previewPoller = new Poller(() => this.pollPreviewJob());
+  private readonly simulationPoller = new Poller(() => this.refresh());
   private readonly previewStorageKey = 'dtc.planning.preview-job';
   private previewPollInFlight = false;
   private dismissedPreviewJobId: string | null = null;
@@ -430,6 +434,7 @@ export class Planning implements AfterViewInit, OnDestroy {
   ngOnDestroy(): void {
     this.destroyCharts();
     this.previewPoller.stop();
+    this.simulationPoller.stop();
   }
 
   onTabChange(index: number): void {
@@ -441,10 +446,14 @@ export class Planning implements AfterViewInit, OnDestroy {
     const restorePreview = options.restorePreview ?? true;
     this.api.planning().subscribe({
       next: (planning) => {
+        const previous = this.snapshot();
+        const keepDraft = previous !== null && JSON.stringify(this.draftConstraints()) !== JSON.stringify(this.draftConstraintsFrom(previous));
         this.snapshot.set(planning);
-        this.draftConstraints.set(this.draftConstraintsFrom(planning));
+        if (!keepDraft) this.draftConstraints.set(this.draftConstraintsFrom(planning));
         this.failure.set(null);
         this.loading.set(false);
+        if (planning.simulation?.enabled) this.simulationPoller.start(2);
+        else this.simulationPoller.stop();
         if (restorePreview && planning.preview_job) this.acceptPreviewJob(planning.preview_job);
         if (!restorePreview) this.clearPreviewState();
         this.scheduleChartRender();
@@ -525,6 +534,22 @@ export class Planning implements AfterViewInit, OnDestroy {
 
   sourceText(source: string): string {
     return source === 'aemet' ? 'AEMET' : source === 'fallback' ? 'Fallback (última previsión válida)' : 'Simulación local';
+  }
+
+  simulationStatusText(status: PlanningSimulationDto['status']): string {
+    return ({
+      inactive: 'Detenida',
+      stopped: 'MQTT detenido',
+      waiting: 'Esperando datos',
+      active: 'Activa',
+      stale: 'Sin datos recientes',
+    } as Record<PlanningSimulationDto['status'], string>)[status];
+  }
+
+  simulationLatestText(simulation: PlanningSimulationDto): string {
+    const latest = simulation.samples[simulation.samples.length - 1];
+    if (!latest) return 'sin datos';
+    return `${this.dateTime(latest.at)} · ${latest.temperature_c.toFixed(1)} °C · SOC ${latest.stored_charge_percent.toFixed(1)} %`;
   }
 
   slotLabel(slot: PlanningSlotDto): string {
@@ -926,6 +951,139 @@ export class Planning implements AfterViewInit, OnDestroy {
     this.api.planningPreviewJob(jobId).subscribe({ next: (job) => this.acceptPreviewJob(job), error: () => { try { sessionStorage.removeItem(this.previewStorageKey); } catch { /* ignore */ } } });
   }
 
+  private simulationTimePoints(simulation: PlanningSimulationDto): Array<{ at: string; samples: PlanningSimulationSampleDto[] }> {
+    const grouped = new Map<number, { at: string; samples: PlanningSimulationSampleDto[] }>();
+    for (const sample of simulation.samples) {
+      const timestamp = Date.parse(sample.at);
+      if (!Number.isFinite(timestamp)) continue;
+      const point = grouped.get(timestamp) ?? { at: sample.at, samples: [] };
+      point.samples.push(sample);
+      grouped.set(timestamp, point);
+    }
+    return [...grouped.values()].sort((left, right) => Date.parse(left.at) - Date.parse(right.at));
+  }
+
+  private simulationSampleFor(point: { samples: PlanningSimulationSampleDto[] }, heaterId: string): PlanningSimulationSampleDto | undefined {
+    return point.samples.find((sample) => sample.heater_id === heaterId);
+  }
+
+  private simulationPlannedPowerAt(data: PlanningDto, at: string): number | null {
+    const timestamp = Date.parse(at);
+    if (!Number.isFinite(timestamp)) return null;
+    const slot = data.timeline.find((item) => {
+      const start = Date.parse(item.start);
+      const end = Date.parse(item.end);
+      return Number.isFinite(start) && Number.isFinite(end) && timestamp >= start && timestamp < end;
+    });
+    return slot?.total_power_w ?? null;
+  }
+
+  private renderSimulationCharts(data: PlanningDto, simulation: PlanningSimulationDto): void {
+    const points = this.simulationTimePoints(simulation);
+    if (!points.length || !this.simulationTemperatureCanvas || !this.simulationSocCanvas || !this.simulationPowerCanvas) return;
+    const fullLabels = points.map((point) => this.dateTime(point.at));
+    const labels = this.intervalLabels(fullLabels);
+    const colors = ['#2457a6', '#d46b28', '#3b8c68', '#8a4f9e', '#9b7a21'];
+
+    this.charts.push(new Chart(this.simulationTemperatureCanvas.nativeElement, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: data.heaters.flatMap((heater, index) => {
+          const color = colors[index % colors.length];
+          return [
+            {
+              label: `${heater.name} real (°C)`,
+              data: points.map((point) => this.simulationSampleFor(point, heater.id)?.temperature_c ?? null),
+              borderColor: color,
+              backgroundColor: `${color}22`,
+              tension: 0.2,
+              spanGaps: false,
+            },
+            {
+              label: `${heater.name} objetivo (°C)`,
+              data: points.map((point) => this.simulationSampleFor(point, heater.id)?.target_temperature_c ?? null),
+              borderColor: color,
+              borderDash: [5, 4],
+              pointRadius: 0,
+              tension: 0,
+              spanGaps: false,
+            },
+          ];
+        }),
+      },
+      options: this.chartOptions<'line'>(fullLabels, '°C'),
+    }));
+
+    this.charts.push(new Chart(this.simulationSocCanvas.nativeElement, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: data.heaters.flatMap((heater, index) => {
+          const color = colors[index % colors.length];
+          const target = simulation.target_charge_percent_by_heater[heater.id];
+          const reserve = simulation.reserve_percent_by_heater[heater.id];
+          return [
+            {
+              label: `${heater.name} SOC (%)`,
+              data: points.map((point) => this.simulationSampleFor(point, heater.id)?.stored_charge_percent ?? null),
+              borderColor: color,
+              backgroundColor: `${color}22`,
+              tension: 0.2,
+              spanGaps: false,
+            },
+            {
+              label: `${heater.name} objetivo (${target?.toFixed(0) ?? '—'} %)`,
+              data: points.map(() => target ?? null),
+              borderColor: color,
+              borderDash: [5, 4],
+              pointRadius: 0,
+              tension: 0,
+            },
+            {
+              label: `${heater.name} reserva (${reserve?.toFixed(0) ?? '—'} %)`,
+              data: points.map(() => reserve ?? null),
+              borderColor: '#b33a3a',
+              borderDash: [2, 3],
+              pointRadius: 0,
+              tension: 0,
+            },
+          ];
+        }),
+      },
+      options: this.chartOptions<'line'>(fullLabels, '% SOC'),
+    }));
+
+    this.charts.push(new Chart(this.simulationPowerCanvas.nativeElement, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          {
+            label: 'Potencia planificada (kW)',
+            data: points.map((point) => {
+              const power = this.simulationPlannedPowerAt(data, point.at);
+              return power === null ? null : this.kilowatts(power);
+            }),
+            borderColor: '#2457a6',
+            backgroundColor: '#2457a622',
+            borderDash: [5, 4],
+            tension: 0.15,
+            spanGaps: false,
+          },
+          {
+            label: 'Potencia ejecutada (kW)',
+            data: points.map((point) => this.kilowatts(point.samples.reduce((total, sample) => total + sample.power_w, 0))),
+            borderColor: '#d46b28',
+            backgroundColor: '#d46b2822',
+            stepped: true,
+          },
+        ],
+      },
+      options: this.chartOptions<'line'>(fullLabels, 'kW'),
+    }));
+  }
+
   private renderCharts(): void {
     const data = this.snapshot();
     if (!data) return;
@@ -971,6 +1129,8 @@ export class Planning implements AfterViewInit, OnDestroy {
         }) as unknown as Chart);
         return;
       }
+      if (this.selectedTab() !== 0) return;
+      if (data.simulation?.enabled) this.renderSimulationCharts(data, data.simulation);
       if (!data.plan || !timeline.length || !this.temperatureCanvas || !this.heaterCanvas || !this.aggregateCanvas || !this.cumulativeCanvas) return;
       const fullLabels = timeline.map((slot) => this.slotLabel(slot));
       const labels = this.intervalLabels(fullLabels);

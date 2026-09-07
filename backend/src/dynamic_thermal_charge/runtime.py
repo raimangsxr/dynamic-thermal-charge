@@ -231,10 +231,12 @@ def _run_controller(
                         )
                         return PlanRefresh(
                             plan=automatic[1],
-                            next_refresh_seconds=_seconds_to_next_replan(
+                            next_refresh_seconds=_automatic_refresh_seconds(
                                 now,
                                 replan_minutes=int(planning_site["replan_minutes"]),
                                 slot_minutes=live_config.site.slot_minutes,
+                                planning_site=planning_site,
+                                mqtt=live_mqtt,
                             ),
                             plan_ref=None,
                             installation_revision=live_revision,
@@ -430,6 +432,24 @@ def _seconds_to_next_replan(
     )
     boundary = floor if floor == target else floor + timedelta(minutes=slot_minutes)
     return max(slot_minutes * 60, math.ceil((boundary - now).total_seconds()))
+
+
+def _automatic_refresh_seconds(
+    now: datetime,
+    *,
+    replan_minutes: int,
+    slot_minutes: int,
+    planning_site,
+    mqtt: MqttSystemSettings | None,
+) -> int:
+    """Replan at simulation publication cadence while accelerated tests run."""
+    if bool(planning_site.get("mqtt_simulation_enabled")) and mqtt is not None and mqtt.enabled:
+        return max(1, math.ceil(float(planning_site["mqtt_simulation_publish_seconds"])))
+    return _seconds_to_next_replan(
+        now,
+        replan_minutes=replan_minutes,
+        slot_minutes=slot_minutes,
+    )
 
 
 def _refresh_daily_aemet_forecast(

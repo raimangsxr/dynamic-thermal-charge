@@ -273,6 +273,12 @@ charge_planning_site = Table(
         nullable=False,
         server_default="2",
     ),
+    Column(
+        "mqtt_simulation_seconds_per_hour",
+        Float,
+        nullable=False,
+        server_default="10",
+    ),
     CheckConstraint("replan_minutes > 0", name="ck_charge_site_replan"),
     CheckConstraint("revision >= 1", name="ck_charge_site_revision"),
     CheckConstraint("planning_window_hours > 0 AND planning_window_hours <= 48", name="ck_charge_site_window"),
@@ -301,6 +307,10 @@ charge_planning_site = Table(
     CheckConstraint(
         "mqtt_simulation_thermal_loss_c_per_hour >= 0",
         name="ck_charge_site_sim_thermal_loss",
+    ),
+    CheckConstraint(
+        "mqtt_simulation_seconds_per_hour > 0",
+        name="ck_charge_site_sim_seconds_per_hour",
     ),
 )
 
@@ -357,6 +367,26 @@ heater_telemetry = Table(
     Column("invalid_at", DateTime, nullable=True),
     CheckConstraint("stored_charge_percent IS NULL OR (stored_charge_percent >= 0 AND stored_charge_percent <= 100)", name="ck_telemetry_charge"),
     Index("ix_heater_telemetry_installation", "installation_id", "heater_id"),
+)
+
+simulation_sample = Table(
+    "simulation_sample",
+    application_metadata,
+    Column("id", Integer, primary_key=True),
+    Column("installation_id", Integer, nullable=False),
+    Column("heater_id", String(64), nullable=False),
+    Column("sampled_at", DateTime, nullable=False),
+    Column("temperature_c", Float, nullable=False),
+    Column("target_temperature_c", Float, nullable=False),
+    Column("stored_charge_percent", Float, nullable=False),
+    Column("charging", Boolean, nullable=False),
+    Column("power_w", Integer, nullable=False),
+    CheckConstraint(
+        "stored_charge_percent >= 0 AND stored_charge_percent <= 100",
+        name="ck_simulation_sample_charge",
+    ),
+    CheckConstraint("power_w >= 0", name="ck_simulation_sample_power"),
+    Index("ix_simulation_sample_heater_time", "installation_id", "heater_id", "sampled_at"),
 )
 
 forecast_cycle = Table(
@@ -830,7 +860,7 @@ for _table in configuration_metadata.sorted_tables:
 for _table in application_metadata.sorted_tables:
     if _table not in {
         application_schema_version, process_applied_revision, reconciled_event,
-        heater_telemetry, forecast_cycle, automatic_plan, automatic_plan_slot,
+        heater_telemetry, simulation_sample, forecast_cycle, automatic_plan, automatic_plan_slot,
         plan_audit,
     }:
         _table.to_metadata(metadata)
@@ -975,6 +1005,7 @@ CONFIG_TABLES = (
 APPLICATION_TABLES = (
     indoor_reading,
     heater_telemetry,
+    simulation_sample,
     forecast,
     forecast_hour,
     forecast_cycle,
@@ -1008,6 +1039,7 @@ HISTORY_TABLES = (
     plan_audit,
     preview_job,
     output_transition,
+    simulation_sample,
 )
 
 __all__ = [

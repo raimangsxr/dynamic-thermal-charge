@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 import json
+import math
 from typing import Any, Mapping
 from uuid import uuid4
 
@@ -11,7 +12,7 @@ from sqlalchemy import delete, insert, select, update
 from sqlalchemy.engine import Engine
 
 from ..charge_planning import AutomaticPlan
-from ..models import ChargeConstraint, ChargeTelemetry
+from ..models import ChargeConstraint, ChargeTelemetry, SimulationSample
 from ..weather import ForecastCycleState, HourlyForecastPoint, future_forecast_points
 from . import ConfigConflictError, ConfigValidationError, ForecastRef
 from .engine import store_errors, transaction
@@ -22,6 +23,7 @@ from .schema import (
     charge_constraint,
     charge_planning_site,
     heater_telemetry,
+    simulation_sample,
     plan_audit,
     preview_job,
     preview_job_step,
@@ -73,6 +75,7 @@ class SqlPlanningRepository:
                 "mqtt_simulation_publish_seconds": 30.0,
                 "mqtt_simulation_topic_prefix": "dtc/sim",
                 "mqtt_simulation_thermal_loss_c_per_hour": 2.0,
+                "mqtt_simulation_seconds_per_hour": 10.0,
             }
         integers = (
             "revision",
@@ -92,6 +95,7 @@ class SqlPlanningRepository:
             "mqtt_simulation_initial_temperature_c",
             "mqtt_simulation_publish_seconds",
             "mqtt_simulation_thermal_loss_c_per_hour",
+            "mqtt_simulation_seconds_per_hour",
         )
         booleans = ("mqtt_simulation_enabled",)
         strings = ("mqtt_simulation_topic_prefix",)
@@ -145,6 +149,7 @@ class SqlPlanningRepository:
             "mqtt_simulation_initial_temperature_c",
             "mqtt_simulation_publish_seconds",
             "mqtt_simulation_thermal_loss_c_per_hour",
+            "mqtt_simulation_seconds_per_hour",
         }
         boolean_fields = {"mqtt_simulation_enabled"}
         string_fields = {"mqtt_simulation_topic_prefix"}
@@ -201,6 +206,11 @@ class SqlPlanningRepository:
                 "mqtt_simulation_thermal_loss_c_per_hour must be non-negative",
                 field="mqtt_simulation_thermal_loss_c_per_hour",
             )
+        if not math.isfinite(float(combined["mqtt_simulation_seconds_per_hour"])) or float(combined["mqtt_simulation_seconds_per_hour"]) <= 0:
+            raise ConfigValidationError(
+                "mqtt_simulation_seconds_per_hour must be positive",
+                field="mqtt_simulation_seconds_per_hour",
+            )
         next_revision = expected_revision + 1
         with transaction(self._configuration, self._configuration_location) as connection:
             existing = connection.execute(select(charge_planning_site).where(charge_planning_site.c.installation_id == self._installation_id)).first()
@@ -249,6 +259,84 @@ class SqlPlanningRepository:
     def invalidate_telemetry(self, heater_id: str, field: str, at: datetime) -> None:
         with transaction(self._application, self._application_location) as connection:
             connection.execute(update(heater_telemetry).where((heater_telemetry.c.installation_id == self._installation_id) & (heater_telemetry.c.heater_id == heater_id)).values(invalid_field=field, invalid_at=to_utc(at)))
+
+    def clear_simulation_samples(self) -> None:
+        with transaction(self._application, self._application_location) as connection:
+            connection.execute(
+                delete(
+                    simulation_sample,
+                ).where(simulation_sample.c.installation_id == self._installation_id)
+            )
+
+    def record_simulation_sample(
+        self,
+        sample: SimulationSample,
+        *,
+        max_samples_per_heater: int = 240,
+    ) -> None:
+        if sample.at.tzinfo is None:
+            raise ValueError("sample.at requires a timezone")
+        if not 0 <= sample.stored_charge_percent <= 100:
+            raise ValueError("sample stored charge must be between 0 and 100")
+        if sample.power_w < 0:
+            raise ValueError("sample power must be non-negative")
+        with transaction(self._application, self._application_location) as connection:
+            connection.execute(
+                insert(simulation_sample).values(
+                    installation_id=self._installation_id,
+                    heater_id=sample.heater_id,
+                    sampled_at=to_utc(sample.at),
+                    temperature_c=float(sample.temperature_c),
+                    target_temperature_c=float(sample.target_temperature_c),
+                    stored_charge_percent=float(sample.stored_charge_percent),
+                    charging=bool(sample.charging),
+                    power_w=int(sample.power_w),
+                )
+            )
+            sample_ids = connection.execute(
+                select(simulation_sample.c.id)
+                .where(
+                    (simulation_sample.c.installation_id == self._installation_id)
+                    & (simulation_sample.c.heater_id == sample.heater_id)
+                )
+                .order_by(
+                    simulation_sample.c.sampled_at.desc(),
+                    simulation_sample.c.id.desc(),
+                )
+                .offset(max_samples_per_heater)
+            ).scalars().all()
+            if sample_ids:
+                connection.execute(
+                    delete(simulation_sample).where(
+                        simulation_sample.c.id.in_(sample_ids)
+                    )
+                )
+
+    def simulation_samples(self, *, limit: int = 240) -> tuple[SimulationSample, ...]:
+        safe_limit = max(1, min(int(limit), 240))
+        with store_errors(self._application_location):
+            with self._application.connect() as connection:
+                rows = connection.execute(
+                    select(simulation_sample)
+                    .where(simulation_sample.c.installation_id == self._installation_id)
+                    .order_by(
+                        simulation_sample.c.sampled_at.desc(),
+                        simulation_sample.c.id.desc(),
+                    )
+                    .limit(safe_limit)
+                ).mappings().all()
+        return tuple(
+            SimulationSample(
+                at=from_utc(row["sampled_at"]),
+                heater_id=str(row["heater_id"]),
+                temperature_c=float(row["temperature_c"]),
+                target_temperature_c=float(row["target_temperature_c"]),
+                stored_charge_percent=float(row["stored_charge_percent"]),
+                charging=bool(row["charging"]),
+                power_w=int(row["power_w"]),
+            )
+            for row in reversed(rows)
+        )
 
     def constraints(self, *, enabled_only: bool = True) -> tuple[ChargeConstraint, ...]:
         with store_errors(self._configuration_location):

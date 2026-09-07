@@ -159,6 +159,27 @@ class PlanningTimelineSlotView(BaseModel):
     estimated_temperature_c_by_heater: dict[str, float] = Field(default_factory=dict)
 
 
+class PlanningSimulationSampleView(BaseModel):
+    at: datetime
+    heater_id: str
+    temperature_c: float
+    target_temperature_c: float
+    stored_charge_percent: float
+    charging: bool
+    power_w: int
+
+
+class PlanningSimulationView(BaseModel):
+    enabled: bool
+    status: str
+    seconds_per_hour: float
+    publish_seconds: float
+    target_charge_percent_by_heater: dict[str, float] = Field(default_factory=dict)
+    reserve_percent_by_heater: dict[str, float] = Field(default_factory=dict)
+    demand_factor_by_heater: dict[str, float] = Field(default_factory=dict)
+    samples: list[PlanningSimulationSampleView] = Field(default_factory=list)
+
+
 class PlanningHeaterView(BaseModel):
     id: str
     name: str
@@ -200,6 +221,7 @@ class PlanningResponse(BaseModel):
     preview_job: "PlanningPreviewJobResponse | None" = None
     base_load_w: int = 0
     max_heating_power_w: int = 0
+    simulation: PlanningSimulationView | None = None
 
 
 class WeatherRefreshResponse(BaseModel):
@@ -342,6 +364,7 @@ class PlanningSiteConfigRequest(BaseModel):
     mqtt_simulation_publish_seconds: float = Field(gt=0, default=30.0)
     mqtt_simulation_topic_prefix: str = Field(min_length=1, default="dtc/sim")
     mqtt_simulation_thermal_loss_c_per_hour: float = Field(ge=0, default=2.0)
+    mqtt_simulation_seconds_per_hour: float = Field(gt=0, default=10.0)
 
     @model_validator(mode="after")
     def validate_design_temperatures(self):
@@ -374,6 +397,7 @@ class PlanningSiteConfigResponse(BaseModel):
     mqtt_simulation_publish_seconds: float
     mqtt_simulation_topic_prefix: str
     mqtt_simulation_thermal_loss_c_per_hour: float
+    mqtt_simulation_seconds_per_hour: float
 
 
 class ControllerLogEvent(BaseModel):

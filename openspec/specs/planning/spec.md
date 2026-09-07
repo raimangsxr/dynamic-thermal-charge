@@ -181,6 +181,43 @@ no debe perder la edición ni el trabajo de preview en curso.
 - **THEN** ve únicamente el ámbito correspondiente y puede volver al plan
   activo conservando el estado de edición y de preview
 
+### Requirement: Simulación acelerada con realimentación
+
+La configuración de Planificación debe permitir activar una simulación de
+acumuladores con una relación positiva de segundos reales por hora simulada,
+predeterminada en 10 segundos. Cada ciclo debe aplicar el `demand_factor` del
+acumulador a la descarga cuando no carga, aplicar su ritmo de carga cuando
+carga y publicar temperatura, consigna y SOC. La telemetría simulada debe
+volver al ciclo normal de planificación para que la descarga genere nuevas
+necesidades de carga.
+
+Cuando la simulación está activa, Planificación debe mostrar sin tablas una
+sección gráfica con temperatura real frente a objetivo, SOC frente a reserva y
+objetivo, y potencia planificada frente a ejecutada. La sección debe indicar si
+está activa, detenida, esperando telemetría o sin datos recientes y actualizar
+periódicamente.
+
+#### Scenario: Reloj acelerado configurable
+
+- **WHEN** se configura la simulación con 10 segundos por hora y transcurren
+  10 segundos reales
+- **THEN** el simulador avanza una hora, sin reiniciar el proceso si se cambia
+  posteriormente la relación
+
+#### Scenario: Descarga que provoca recarga
+
+- **WHEN** un acumulador deja de cargar y su telemetría simulada muestra una
+  descarga
+- **THEN** la planificación recibe la nueva lectura y programa carga para
+  recuperar la temperatura objetivo respetando la prioridad térmica
+
+#### Scenario: Seguimiento gráfico sin telemetría
+
+- **WHEN** la simulación está configurada pero aún no hay muestras o estas han
+  quedado obsoletas
+- **THEN** la vista muestra el estado correspondiente y no inventa series en
+  los gráficos
+
 ### Requirement: Detalle tabular de la planificación activa
 
 La pestaña Planificación activa debe reservar sus tarjetas para las gráficas y

@@ -129,6 +129,28 @@ export interface PlanningSiteConfigDto {
   mqtt_simulation_publish_seconds: number;
   mqtt_simulation_topic_prefix: string;
   mqtt_simulation_thermal_loss_c_per_hour: number;
+  mqtt_simulation_seconds_per_hour: number;
+}
+
+export interface PlanningSimulationSampleDto {
+  at: string;
+  heater_id: string;
+  temperature_c: number;
+  target_temperature_c: number;
+  stored_charge_percent: number;
+  charging: boolean;
+  power_w: number;
+}
+
+export interface PlanningSimulationDto {
+  enabled: boolean;
+  status: 'inactive' | 'stopped' | 'waiting' | 'active' | 'stale';
+  seconds_per_hour: number;
+  publish_seconds: number;
+  target_charge_percent_by_heater: Record<string, number>;
+  reserve_percent_by_heater: Record<string, number>;
+  demand_factor_by_heater: Record<string, number>;
+  samples: PlanningSimulationSampleDto[];
 }
 
 export interface PlanningDto {
@@ -155,6 +177,7 @@ export interface PlanningDto {
   forecast_last_error?: string | null;
   forecast_next_run_at?: string | null;
   preview_job?: PlanningPreviewJobDto | null;
+  simulation?: PlanningSimulationDto | null;
 }
 
 export interface ChargeConstraintDto { id: number | null; heater_id: string; target_charge: number; at_time: string; weekdays: number[]; enabled: boolean; }

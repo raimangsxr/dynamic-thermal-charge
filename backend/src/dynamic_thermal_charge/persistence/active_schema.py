@@ -17,8 +17,8 @@ from .topology import BootstrapCorruptError, BootstrapIncompatibleError
 from . import SchemaStatus, SchemaVersionError
 
 
-CONFIGURATION_SCHEMA_REVISION = 7
-APPLICATION_SCHEMA_REVISION = 4
+CONFIGURATION_SCHEMA_REVISION = 8
+APPLICATION_SCHEMA_REVISION = 5
 POSTGRES_CONFIGURATION_SCHEMA = "dtc_config"
 POSTGRES_APPLICATION_SCHEMA = "dtc_app"
 
@@ -199,6 +199,11 @@ def _upgrade_application_schema(engine: Engine, revision: int, expected: int) ->
         from .schema import preview_job, preview_job_step
         application_metadata.create_all(engine, tables=[preview_job, preview_job_step])
         revision = 4
+    if revision == 4 and expected >= 5:
+        from .schema import simulation_sample
+
+        application_metadata.create_all(engine, tables=[simulation_sample])
+        revision = 5
     if revision != expected:
         raise BootstrapIncompatibleError(
             f"application schema revision {revision} has no registered upgrade path to {expected}"
@@ -288,6 +293,19 @@ def _upgrade_configuration_schema(engine: Engine, revision: int, expected: int) 
                     text("ALTER TABLE charge_planning_site ADD COLUMN solver_time_limit_seconds INTEGER NOT NULL DEFAULT 120")
                 )
         revision = 7
+    if revision == 7 and expected >= 8:
+        site_columns = {
+            column["name"] for column in inspect(engine).get_columns("charge_planning_site")
+        }
+        if "mqtt_simulation_seconds_per_hour" not in site_columns:
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "ALTER TABLE charge_planning_site "
+                        "ADD COLUMN mqtt_simulation_seconds_per_hour FLOAT NOT NULL DEFAULT 10"
+                    )
+                )
+        revision = 8
     if revision != expected:
         raise BootstrapIncompatibleError(
             f"configuration schema revision {revision} has no registered upgrade path to {expected}"

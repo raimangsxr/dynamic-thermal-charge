@@ -117,6 +117,19 @@ class Heater:
 
 
 @dataclass(frozen=True)
+class SimulationSample:
+    """One coherent simulated accumulator observation."""
+
+    at: datetime
+    heater_id: str
+    temperature_c: float
+    target_temperature_c: float
+    stored_charge_percent: float
+    charging: bool
+    power_w: int
+
+
+@dataclass(frozen=True)
 class SiteConfig:
     max_total_power_w: int
     slot_minutes: int
