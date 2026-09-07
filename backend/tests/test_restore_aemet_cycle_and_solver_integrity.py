@@ -95,11 +95,10 @@ def test_replan_cadence_waits_for_a_slot_boundary_and_never_underflows():
     assert _seconds_to_next_replan(now, replan_minutes=45, slot_minutes=30) == 55 * 60
 
 
-def test_gpio_startup_rejects_fixed_or_simulated_telemetry(caplog):
-    with pytest.raises(RuntimeError, match="MQTT is disabled"):
-        _require_real_telemetry_for_gpio(
-            "gpio", MqttSystemSettings(enabled=False), {"mqtt_simulation_enabled": False}
-        )
+def test_gpio_startup_allows_fixed_telemetry_without_mqtt_but_rejects_simulation(caplog):
+    _require_real_telemetry_for_gpio(
+        "gpio", MqttSystemSettings(enabled=False), {"mqtt_simulation_enabled": False}
+    )
     with pytest.raises(RuntimeError, match="accumulator simulation"):
         _require_real_telemetry_for_gpio(
             "gpio", MqttSystemSettings(), {"mqtt_simulation_enabled": True}

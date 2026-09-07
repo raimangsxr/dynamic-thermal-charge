@@ -100,9 +100,11 @@ fijos globales de esa sección (temperatura, temperatura objetivo, carga
 almacenada y temperatura interior); al habilitarlo vuelve a exigir telemetría
 recibida por MQTT.
 
-Como medida de seguridad, el controlador no arranca salidas GPIO si MQTT está
-deshabilitado o si está activa la simulación de acumuladores: ambas situaciones
-proporcionan telemetría no real y se registran como un error crítico.
+Con salidas GPIO, MQTT puede permanecer deshabilitado para realizar pruebas de
+relés; cuando el controlador necesita planificar en ese modo usa los valores
+fijos anteriores. La simulación explícita de acumuladores
+(`mqtt_simulation_enabled`) sí bloquea el arranque GPIO y se registra como un
+error crítico.
 
 Si una salida rechaza una conmutación, el controlador degrada únicamente esa
 salida: aplica el resto de las transiciones del ciclo, la reintenta en cada

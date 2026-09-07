@@ -226,11 +226,19 @@ activación.
 
 ### Requirement: Protección de salidas GPIO
 
-El controlador no debe arrancar salidas GPIO cuando MQTT está deshabilitado o
-la simulación de acumuladores está activa.
+El controlador no debe arrancar salidas GPIO cuando la simulación de
+acumuladores está activa. MQTT puede estar deshabilitado porque sus valores
+fijos son válidos para instalaciones de prueba y para la prueba de relés.
 
-#### Scenario: Telemetría no real con GPIO
+#### Scenario: Simulación de acumuladores con GPIO
 
-- **WHEN** se solicita arrancar el controlador GPIO con telemetría fija o
-  simulada
+- **WHEN** se solicita arrancar el controlador GPIO con
+  `mqtt_simulation_enabled` activo
 - **THEN** el arranque falla de forma crítica antes de accionar una salida
+
+#### Scenario: MQTT deshabilitado con GPIO
+
+- **WHEN** se solicita arrancar el controlador GPIO con MQTT deshabilitado y la
+  simulación de acumuladores inactiva
+- **THEN** el arranque continúa y la prueba de relés puede utilizar las salidas
+  físicas
