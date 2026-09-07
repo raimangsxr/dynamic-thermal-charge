@@ -593,12 +593,10 @@ def _require_real_telemetry_for_gpio(
     mqtt: MqttSystemSettings | None,
     planning_site: dict[str, object],
 ) -> None:
-    """Never allow physical relays to run from invented accumulator state."""
+    """Reject physical relays only when accumulator simulation is enabled."""
     if driver_name != "gpio":
         return
     causes: list[str] = []
-    if mqtt is not None and not mqtt.enabled:
-        causes.append("MQTT is disabled")
     if bool(planning_site.get("mqtt_simulation_enabled", False)):
         causes.append("accumulator simulation is enabled")
     if not causes:

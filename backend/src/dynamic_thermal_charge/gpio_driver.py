@@ -11,6 +11,11 @@ from .models import OutputConfig
 
 
 logger = logging.getLogger(__name__)
+_RASPBERRY_PI_MODEL_PATHS = (
+    "/run/dynamic-thermal-charge/raspberry-pi-model",
+    "/proc/device-tree/model",
+    "/sys/firmware/devicetree/base/model",
+)
 
 
 class GpioDriverError(RuntimeError):
@@ -119,10 +124,21 @@ class GpioOutputDriver:
         return create_device
 
 
-def _require_raspberry_pi(model_path: str | Path = "/proc/device-tree/model") -> None:
-    try:
-        model = Path(model_path).read_text(encoding="utf-8").rstrip("\x00")
-    except OSError as exc:
-        raise GpioDriverError("GPIO driver requires a Raspberry Pi") from exc
-    if "Raspberry Pi" not in model:
-        raise GpioDriverError(f"unsupported GPIO platform: {model}")
+def _require_raspberry_pi(model_path: str | Path | None = None) -> None:
+    paths = (str(model_path),) if model_path is not None else _RASPBERRY_PI_MODEL_PATHS
+    last_error: OSError | None = None
+    for configured_path in paths:
+        try:
+            model = Path(configured_path).read_text(encoding="utf-8").rstrip("\x00")
+        except OSError as exc:
+            last_error = exc
+            continue
+        if "Raspberry Pi" not in model:
+            raise GpioDriverError(f"unsupported GPIO platform: {model}")
+        return
+
+    checked_paths = ", ".join(paths)
+    raise GpioDriverError(
+        "GPIO driver requires a readable Raspberry Pi device-tree model; "
+        f"checked {checked_paths}"
+    ) from last_error

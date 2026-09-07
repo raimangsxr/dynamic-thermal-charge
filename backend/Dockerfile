@@ -1,5 +1,6 @@
 FROM python:3.12-slim
 WORKDIR /app
+RUN install -d -m 0755 /run/dynamic-thermal-charge
 COPY pyproject.toml README.md ./
 COPY src ./src
 COPY entrypoint.sh /usr/local/bin/dynamic-thermal-charge-entrypoint

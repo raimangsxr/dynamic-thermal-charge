@@ -2,6 +2,7 @@ from datetime import datetime
 
 import pytest
 
+import dynamic_thermal_charge.gpio_driver as gpio_driver
 from dynamic_thermal_charge.gpio_driver import (
     GpioDriverError,
     GpioOutputDriver,
@@ -92,3 +93,17 @@ def test_accepts_raspberry_pi_model(tmp_path) -> None:
     model.write_text("Raspberry Pi 2 Model B Rev 1.1\x00", encoding="utf-8")
 
     _require_raspberry_pi(model)
+
+
+def test_checks_container_model_path_when_proc_path_is_unavailable(
+    tmp_path, monkeypatch
+) -> None:
+    model = tmp_path / "model"
+    model.write_text("Raspberry Pi 4 Model B Rev 1.5\x00", encoding="utf-8")
+    monkeypatch.setattr(
+        gpio_driver,
+        "_RASPBERRY_PI_MODEL_PATHS",
+        (str(tmp_path / "missing"), str(model)),
+    )
+
+    _require_raspberry_pi()

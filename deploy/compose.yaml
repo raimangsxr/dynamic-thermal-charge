@@ -1,3 +1,8 @@
+x-backend-runtime: &backend-runtime
+  # Keep application processes out of root. Override these values when the
+  # persistent host directory uses another non-root identity.
+  user: "${DTC_RUNTIME_UID:-1000}:${DTC_RUNTIME_GID:-1000}"
+
 services:
   frontend:
     image: ${DOCKERHUB_USERNAME:?set DOCKERHUB_USERNAME}/dynamic-thermal-charge-frontend:${APP_VERSION:?set APP_VERSION}
@@ -6,15 +11,26 @@ services:
     depends_on: { backend-api: { condition: service_healthy } }
     logging: { driver: json-file, options: { max-size: 10m, max-file: "3" } }
   backend:
+    <<: *backend-runtime
     image: ${DOCKERHUB_USERNAME:?set DOCKERHUB_USERNAME}/dynamic-thermal-charge-backend:${APP_VERSION:?set APP_VERSION}
     restart: unless-stopped
     env_file: [{ path: /etc/app/app.env, required: false }]
-    volumes: ["/srv/app/data:/var/lib/dynamic-thermal-charge"]
+    volumes:
+      - "/srv/app/data:/var/lib/dynamic-thermal-charge"
+      - type: bind
+        source: /proc/device-tree/model
+        target: /run/dynamic-thermal-charge/raspberry-pi-model
+        read_only: true
+        bind: { create_host_path: false }
     # LGPIOFactory(chip=0) controls the Pi through gpiochip0.
     devices: ["/dev/gpiochip0:/dev/gpiochip0"]
+    # The host group id is distribution-specific; the reconciler detects it
+    # automatically and manual deployments can override DTC_GPIO_GID.
+    group_add: ["${DTC_GPIO_GID:-997}"]
     healthcheck: { test: ["CMD", "python", "-c", "from dynamic_thermal_charge.entrypoints import check_configuration; check_configuration()"], interval: 5s, timeout: 10s, start_period: 15s, retries: 12 }
     logging: { driver: json-file, options: { max-size: 10m, max-file: "3" } }
   backend-api:
+    <<: *backend-runtime
     image: ${DOCKERHUB_USERNAME:?set DOCKERHUB_USERNAME}/dynamic-thermal-charge-backend:${APP_VERSION:?set APP_VERSION}
     restart: unless-stopped
     # Nginx runs in frontend, so the API must bind the container interface.
@@ -25,6 +41,7 @@ services:
     healthcheck: { test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')"], interval: 5s, timeout: 5s, start_period: 15s, retries: 12 }
     logging: { driver: json-file, options: { max-size: 10m, max-file: "3" } }
   backend-mqtt:
+    <<: *backend-runtime
     image: ${DOCKERHUB_USERNAME:?set DOCKERHUB_USERNAME}/dynamic-thermal-charge-backend:${APP_VERSION:?set APP_VERSION}
     restart: unless-stopped
     command: ["python", "-c", "from dynamic_thermal_charge.entrypoints import run_mqtt; run_mqtt()"]
