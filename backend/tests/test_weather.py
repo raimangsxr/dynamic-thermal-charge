@@ -1,4 +1,5 @@
 from datetime import date, datetime, timezone
+import io
 import logging
 from urllib.error import HTTPError
 
@@ -298,12 +299,13 @@ def test_rejects_payload_that_is_not_json() -> None:
 
 
 def test_http_429_is_preserved_as_a_provider_error(monkeypatch) -> None:
+    response_body = io.BytesIO(b"too many requests")
     error = HTTPError(
         "https://data.example/forecast.json",
         429,
         "Too Many Requests",
         hdrs=None,
-        fp=None,
+        fp=response_body,
     )
 
     def failing_open(*_args, **_kwargs):
@@ -314,3 +316,4 @@ def test_http_429_is_preserved_as_a_provider_error(monkeypatch) -> None:
     with pytest.raises(WeatherProviderError, match=r"HTTP 429.*too many requests") as raised:
         _http_get_json("https://data.example/forecast.json", {}, 5)
     assert raised.value.status_code == 429
+    assert response_body.closed

@@ -461,10 +461,17 @@ def _http_get_json(
             charset = response.headers.get_content_charset()
             return _decode_json(body, charset)
     except HTTPError as exc:
-        detail = "too many requests" if exc.code == 429 else str(exc.reason or exc)
+        try:
+            detail = "too many requests" if exc.code == 429 else str(exc.reason or exc)
+            status_code = exc.code
+        finally:
+            # HTTPError also owns the response's temporary-file wrapper.  It is
+            # not enough to translate the exception: Python 3.14 reports the
+            # wrapper's implicit cleanup as an unraisable ResourceWarning.
+            exc.close()
         raise WeatherProviderError(
             f"weather HTTP request failed with HTTP {exc.code}: {detail}",
-            status_code=exc.code,
+            status_code=status_code,
         ) from exc
     except (URLError, TimeoutError) as exc:
         raise WeatherProviderError(f"weather HTTP request failed: {exc}") from exc
