@@ -128,13 +128,27 @@ def get_status(
     for heater in config.heaters:
         value = telemetry_snapshot.get(heater.id)
         if value is None:
-            telemetry_views.append(ChargeTelemetryView(heater_id=heater.id, missing_fields=["temperature_c", "target_temperature_c", "stored_charge_percent"]))
+            telemetry_views.append(ChargeTelemetryView(heater_id=heater.id, missing_fields=["indoor_temperature_c", "stored_soc_percent"]))
             continue
-        stamps = (value.temperature_received_at, value.target_received_at, value.stored_charge_received_at)
+        stamps = (value.indoor_received_at, value.stored_soc_received_at)
         ages = [(observed_at - item).total_seconds() for item in stamps if item is not None]
-        missing = [name for name, item in (("temperature_c", value.temperature_c), ("target_temperature_c", value.target_temperature_c), ("stored_charge_percent", value.stored_charge_percent)) if item is None]
+        missing = [name for name, item in (("indoor_temperature_c", value.indoor_temperature_c), ("stored_soc_percent", value.stored_soc_percent)) if item is None]
         oldest = max(ages, default=None)
-        telemetry_views.append(ChargeTelemetryView(heater_id=heater.id, temperature_c=value.temperature_c, target_temperature_c=value.target_temperature_c, stored_charge_percent=value.stored_charge_percent, temperature_received_at=value.temperature_received_at, target_received_at=value.target_received_at, stored_charge_received_at=value.stored_charge_received_at, state="telemetry_stale" if missing or oldest is None or oldest > 900 else "ready", missing_fields=missing, oldest_age_seconds=oldest))
+        telemetry_views.append(ChargeTelemetryView(
+            heater_id=heater.id,
+            indoor_temperature_c=value.indoor_temperature_c,
+            stored_soc_percent=value.stored_soc_percent,
+            indoor_received_at=value.indoor_received_at,
+            stored_soc_received_at=value.stored_soc_received_at,
+            stored_energy_kwh=(
+                None
+                if value.stored_soc_percent is None
+                else value.stored_soc_percent / 100 * heater.capacity_kwh
+            ),
+            state="telemetry_stale" if missing or oldest is None or oldest > 900 else "ready",
+            missing_fields=missing,
+            oldest_age_seconds=oldest,
+        ))
     active_automatic = store.planning.active_plan()
     return StatusResponse(
         observed_at=observed_at,

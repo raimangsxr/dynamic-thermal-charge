@@ -324,9 +324,8 @@ def test_preview_uses_mqtt_fixed_telemetry_when_broker_disabled(client, initiali
             "expected_revision": system["revision"],
             "values": {
                 "enabled": False,
-                "fixed_temperature_c": 18,
-                "fixed_target_temperature_c": 22,
-                "fixed_stored_charge_percent": 80,
+                "fixed_indoor_temperature_c": 18,
+                "fixed_stored_soc_percent": 80,
             },
         },
     )
@@ -343,7 +342,7 @@ def test_preview_uses_mqtt_fixed_telemetry_when_broker_disabled(client, initiali
     ).record_forecast(record)
     preview = client.post(
         "/api/v1/planning/preview", headers=AUTH,
-        json={"constraints": [], "expected_revision": revision},
+        json={"expected_revision": revision},
     )
     assert preview.status_code == 200, preview.text
     assert preview.json()["status"] != INVALID
@@ -362,12 +361,12 @@ def test_preview_activation_persists_v1_snapshot(client, initialised_store, api_
         initialised_store.location,
     ).record_forecast(record)
     for item in config.heaters:
-        for field, value in (("temperature_c", 21), ("target_temperature_c", 21), ("stored_charge_percent", 100)):
+        for field, value in (("indoor_temperature_c", 21), ("stored_soc_percent", 100)):
             initialised_store.planning.record_telemetry(item.id, field, value, API_NOW)
     api_clock.advance(minutes=1)
     preview = client.post(
         "/api/v1/planning/preview", headers=AUTH,
-        json={"constraints": [], "expected_revision": 1},
+        json={"expected_revision": 1},
     )
     assert preview.status_code == 200, preview.text
     body = preview.json()
@@ -375,10 +374,10 @@ def test_preview_activation_persists_v1_snapshot(client, initialised_store, api_
     api_clock.advance(minutes=4)
     activated = client.post(
         "/api/v1/planning/activate", headers=AUTH,
-        json={"token": body["token"], "constraints": [], "expected_revision": 1},
+        json={"token": body["token"], "expected_revision": 1},
     )
     assert activated.status_code == 200, activated.text
     stored = initialised_store.planning.active_plan()
     assert stored is not None
-    assert stored["slots"][0]["initial_soc_percent"]
+    assert stored["slots"][0]["stored_energy_kwh"]
     assert stored["explanations"] and stored["demand"]

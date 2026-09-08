@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import math
 from collections.abc import Callable
 
 from ..persistence import (
@@ -18,7 +17,7 @@ from .topics import TopicLayout
 
 logger = logging.getLogger(__name__)
 
-ALLOWED_COMMAND_FIELDS = frozenset({"enabled", "target_charge"})
+ALLOWED_COMMAND_FIELDS = frozenset({"enabled"})
 
 
 class CommandProcessor:
@@ -135,15 +134,7 @@ class CommandProcessor:
             if raw == "OFF":
                 return "false"
             raise ValueError("enabled accepts exactly ON or OFF")
-        if not raw:
-            raise ValueError("target_charge cannot be empty")
-        try:
-            number = float(raw)
-        except ValueError as exc:
-            raise ValueError("target_charge must be a number between 0 and 1") from exc
-        if not math.isfinite(number) or not 0 <= number <= 1:
-            raise ValueError("target_charge must be between 0 and 1")
-        return format(number, "g")
+        raise ValueError(f"unsupported command field: {field}")
 
 
 __all__ = ["ALLOWED_COMMAND_FIELDS", "CommandProcessor"]

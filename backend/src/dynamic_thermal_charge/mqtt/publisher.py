@@ -55,7 +55,6 @@ def project_state(
         payload: dict[str, Any] = {
             "power_w": heater.power_w,
             "enabled": heater.enabled,
-            "target_charge": heater.target_charge,
         }
         if controller.state_is_current:
             payload["output_on"] = bool(output_states.get(heater.id, False))
@@ -243,20 +242,14 @@ class StoreSnapshotReader:
         assert self._config is not None
         result: list[str] = []
         for heater in self._config.heaters:
+            result.append(topics.command(heater.id, "enabled"))
             result.extend(
-                (
-                    topics.command(heater.id, "enabled"),
-                    topics.command(heater.id, "target_charge"),
+                topic
+                for topic in (
+                    heater.indoor_topic,
+                    heater.stored_soc_topic,
                 )
-            )
-            if heater.indoor_topic is not None:
-                result.append(heater.indoor_topic)
-            result.extend(
-                topic for topic in (
-                    heater.temperature_topic,
-                    heater.target_temperature_topic,
-                    heater.stored_charge_topic,
-                ) if topic is not None
+                if topic is not None
             )
         return tuple(result)
 

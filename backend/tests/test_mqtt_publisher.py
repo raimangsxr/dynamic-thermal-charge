@@ -314,8 +314,8 @@ def test_declared_command_and_indoor_topics_are_subscribed_after_discovery(mqtt_
         discovery=lambda: discovery_entities(config, "Casa", topics),
         subscriptions=lambda: (
             topics.command("salon", "enabled"),
-            topics.command("salon", "target_charge"),
             "ha/salon/temp",
+            "dtc/salon/soc",
         ),
     )
     service = MqttService(
@@ -336,8 +336,8 @@ def test_declared_command_and_indoor_topics_are_subscribed_after_discovery(mqtt_
     assert first_subscribe > last_discovery
     assert set(mqtt_client.subscriptions) == {
         topics.command("salon", "enabled"),
-        topics.command("salon", "target_charge"),
         "ha/salon/temp",
+        "dtc/salon/soc",
     }
 
     subscribe_count = len(

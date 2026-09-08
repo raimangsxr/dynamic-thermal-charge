@@ -37,7 +37,7 @@ def _patch_batch(client, values, revision=None):
 def test_the_whole_configuration_is_readable(client):
     body = _config(client)
     assert body["config_revision"] == 1
-    assert body["schema_revision"] == "0013_configurable_solver_time_limit"
+    assert body["schema_revision"] == "0015_temperature_target_intervals"
     assert "state_file" not in body
     assert body["max_total_power_kw"] == 5.2
     assert body["slot_minutes"] == 30
@@ -63,7 +63,19 @@ def test_one_heater_is_readable(client):
     assert body["power_kw"] == 2.8
     assert body["output"] == {"kind": "gpio", "pin": 17, "active_high": False}
     assert "thermal" not in body
-    assert body["demand_factor"] == 1.0
+    assert body["room_thermal_capacity_kwh_per_c"] == 2.5
+    assert body["room_heat_loss_kw_per_c"] == 0.12
+    assert body["temperature_targets"] == [
+        {
+            "id": body["temperature_targets"][0]["id"],
+            "heater_id": "salon",
+            "target_temperature_c": 21.0,
+            "start_time": "00:00",
+            "end_time": "24:00",
+            "weekdays": [0, 1, 2, 3, 4, 5, 6],
+            "enabled": True,
+        }
+    ]
 
 
 def test_an_unknown_heater_lists_the_existing_ones(client):
@@ -116,6 +128,14 @@ def test_a_new_domain_field_cannot_appear_in_the_api_unnoticed():
         "power_w": "power_kw",
         "full_charge_minutes": "full_charge_hours",
         "thermal": None,
+        # These fields are retained only as non-API compatibility attributes
+        # while old domain callers are retired.
+        "target_charge": None,
+        "reserve_percent": None,
+        "demand_factor": None,
+        "temperature_topic": None,
+        "target_temperature_topic": None,
+        "stored_charge_topic": None,
     }
     unaccounted = {
         name
@@ -164,10 +184,10 @@ def test_several_installation_fields_change_in_one_revision(client):
 
 def test_a_heater_field_changes_only_that_heater(client):
     before = {h["id"]: h for h in _config(client)["heaters"]}
-    response = _patch(client, "target_charge", "0.5", heater="entrada")
+    response = _patch(client, "room_heat_loss_kw_per_c", "0.2", heater="entrada")
     assert response.status_code == 200
     after = {h["id"]: h for h in _config(client)["heaters"]}
-    assert after["entrada"]["target_charge"] == 0.5
+    assert after["entrada"]["room_heat_loss_kw_per_c"] == 0.2
     for heater_id, heater in before.items():
         if heater_id != "entrada":
             assert after[heater_id] == heater, "an unrelated heater changed"
@@ -184,27 +204,78 @@ def test_a_heater_can_be_replaced_in_one_revisioned_request(client):
             "model": "nuevo",
             "power_kw": 2.5,
             "full_charge_hours": 8,
-            "target_charge": 0.8,
-            "reserve_percent": 25,
             "priority": 99,
             "enabled": True,
             "indoor_topic": "ha/salon/temp",
-            "temperature_topic": "dtc/salon/temperature",
-            "target_temperature_topic": "dtc/salon/target",
-            "stored_charge_topic": "dtc/salon/charge",
+            "stored_soc_topic": "dtc/salon/soc",
             "output": "gpio",
             "pin": 17,
             "active_high": False,
-            "demand_factor": 1.2,
+            "room_thermal_capacity_kwh_per_c": 3.1,
+            "room_heat_loss_kw_per_c": 0.2,
+            "temperature_targets": [
+                {
+                    "target_temperature_c": 22,
+                    "start_time": "07:00",
+                    "end_time": "09:00",
+                    "weekdays": [0, 1, 2, 3, 4, 5, 6],
+                }
+            ],
         },
     )
     assert response.status_code == 200, response.text
     assert response.json()["revision_after"] == revision + 1
     updated = client.get("/api/v1/config/heaters/salon", headers=AUTH).json()
     assert updated["name"] == "Salón renovado"
-    assert updated["reserve_percent"] == 25
-    assert updated["temperature_topic"] == "dtc/salon/temperature"
-    assert updated["demand_factor"] == 1.2
+    assert updated["stored_soc_topic"] == "dtc/salon/soc"
+    assert updated["room_thermal_capacity_kwh_per_c"] == 3.1
+    assert updated["room_heat_loss_kw_per_c"] == 0.2
+    assert updated["temperature_targets"][0]["start_time"] == "07:00"
+
+
+def test_overlapping_temperature_targets_are_rejected_without_partial_save(client):
+    before = _config(client)
+    revision = before["config_revision"]
+    response = client.put(
+        "/api/v1/config/heaters/salon",
+        headers=AUTH,
+        json={
+            "revision": revision,
+            "name": before["heaters"][0]["name"],
+            "model": before["heaters"][0]["model"],
+            "power_kw": before["heaters"][0]["power_kw"],
+            "full_charge_hours": before["heaters"][0]["full_charge_hours"],
+            "priority": before["heaters"][0]["priority"],
+            "enabled": True,
+            "indoor_topic": before["heaters"][0]["indoor_topic"],
+            "stored_soc_topic": before["heaters"][0]["stored_soc_topic"],
+            "output": before["heaters"][0]["output"]["kind"],
+            "pin": before["heaters"][0]["output"]["pin"],
+            "active_high": before["heaters"][0]["output"]["active_high"],
+            "room_thermal_capacity_kwh_per_c": before["heaters"][0]["room_thermal_capacity_kwh_per_c"],
+            "room_heat_loss_kw_per_c": before["heaters"][0]["room_heat_loss_kw_per_c"],
+            "temperature_targets": [
+                {
+                    "target_temperature_c": 20,
+                    "start_time": "07:00",
+                    "end_time": "09:00",
+                    "weekdays": [0],
+                },
+                {
+                    "target_temperature_c": 21,
+                    "start_time": "08:00",
+                    "end_time": "10:00",
+                    "weekdays": [0],
+                },
+            ],
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "validation_failed"
+    assert response.json()["field"] == "temperature_targets"
+    assert "overlap" in response.json()["message"]
+    assert _config(client) == before
 
 
 def test_indoor_policy_and_topic_round_trip_with_empty_topic_as_null(client):
@@ -244,7 +315,8 @@ NEW_HEATER = {
     "output": "gpio",
     "pin": 24,
     "active_high": False,
-    "demand_factor": 1.1,
+    "room_thermal_capacity_kwh_per_c": 2.8,
+    "room_heat_loss_kw_per_c": 0.15,
 }
 
 
@@ -336,7 +408,8 @@ def test_removing_an_unknown_heater_is_not_found(client):
         ("indoor_min_plausible_c", "60", None, 422),
         ("indoor_max_plausible_c", "-30", None, 422),
         ("pin", "17", "entrada", 422),
-        ("target_charge", "1.5", "entrada", 422),
+        ("room_thermal_capacity_kwh_per_c", "0", "entrada", 422),
+        ("room_heat_loss_kw_per_c", "-1", "entrada", 422),
         ("design_outdoor_temperature_c", "30", "salon", 404),
         ("nonexistent_field", "1", None, 404),
         ("nonexistent_field", "1", "salon", 404),
@@ -352,7 +425,7 @@ def test_a_rejected_edit_changes_nothing(client, field, value, heater, code):
 
 
 def test_a_field_belonging_to_a_heater_says_where_to_send_it(client):
-    response = _patch(client, "target_charge", "0.5")
+    response = _patch(client, "room_heat_loss_kw_per_c", "0.2")
     assert response.status_code == 404
     assert "heater" in response.json()["message"]
 

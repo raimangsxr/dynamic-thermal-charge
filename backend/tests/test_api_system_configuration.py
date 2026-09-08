@@ -83,10 +83,8 @@ def test_system_sections_are_allow_listed_revisioned_and_secret_free(client):
 def test_mqtt_fixed_values_are_readable_writable_and_not_exposed_elsewhere(client):
     snapshot = client.get("/api/v1/system/configuration", headers=AUTH).json()
     values = {
-        "fixed_temperature_c": 19.5,
-        "fixed_target_temperature_c": 22,
-        "fixed_stored_charge_percent": 65,
         "fixed_indoor_temperature_c": 18,
+        "fixed_stored_soc_percent": 65,
     }
     response = client.patch(
         "/api/v1/system/configuration/mqtt",
@@ -104,7 +102,7 @@ def test_mqtt_fixed_values_are_readable_writable_and_not_exposed_elsewhere(clien
         headers=AUTH,
         json={
             "expected_revision": body["revision"],
-            "values": {"fixed_stored_charge_percent": 101},
+            "values": {"fixed_stored_soc_percent": 101},
         },
     )
     assert invalid.status_code == 422

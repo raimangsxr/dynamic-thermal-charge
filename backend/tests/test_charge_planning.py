@@ -123,9 +123,7 @@ def test_disabled_mqtt_supplies_valid_global_telemetry_to_automatic_planning(mon
         (),
         {"forecast_horizon_hours": 2},
         mqtt=MqttSystemSettings(
-            fixed_temperature_c=18,
-            fixed_target_temperature_c=22,
-            fixed_stored_charge_percent=40,
+            fixed_stored_soc_percent=40,
             fixed_indoor_temperature_c=19,
         ),
     )
@@ -133,9 +131,9 @@ def test_disabled_mqtt_supplies_valid_global_telemetry_to_automatic_planning(mon
     assert planning.telemetry_called is False
     assert set(requests[0].telemetry) == {heater.id for heater in config.heaters}
     assert {
-        (value.temperature_c, value.target_temperature_c, value.stored_charge_percent)
+        (value.indoor_temperature_c, value.stored_soc_percent)
         for value in requests[0].telemetry.values()
-    } == {(18, 22, 40)}
+    } == {(19, 40)}
 
 
 def test_enabled_mqtt_automatic_planning_uses_only_persisted_telemetry(monkeypatch):

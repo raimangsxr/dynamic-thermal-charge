@@ -25,6 +25,7 @@ from ..models import (
     ScheduleConfig,
     SimulatedForecastConfig,
     SiteConfig,
+    TemperatureTarget,
     ThermalProfile,
     WeatherConfig,
     WeatherWatchdogConfig,
@@ -70,6 +71,20 @@ def parse_time(raw: str, field: str) -> time:
             f"{field} must use HH:MM format; stored value is {raw!r}", field=field
         )
     return parsed
+
+
+def parse_temperature_target_end_time(raw: str, field: str = "end_time") -> time:
+    """Parse an interval end, accepting ``24:00`` as canonical midnight."""
+    if str(raw).strip() == "24:00":
+        return time(0, 0)
+    return parse_time(raw, field)
+
+
+def format_temperature_target_end_time(start: time, end: time) -> str:
+    """Render the full-day ``00:00`` sentinel as the user-facing ``24:00``."""
+    if start == time(0, 0) and end == time(0, 0):
+        return "24:00"
+    return format_time(end)
 
 
 def format_weekdays(weekdays: Sequence[int]) -> str:
@@ -210,6 +225,7 @@ def heater_from_rows(
     heater_row: Mapping[str, Any],
     output_row: Mapping[str, Any] | None,
     thermal_row: Mapping[str, Any] | None,
+    target_rows: Sequence[Mapping[str, Any]] = (),
 ) -> Heater:
     heater_id = str(heater_row["heater_id"])
     if output_row is None:
@@ -224,28 +240,40 @@ def heater_from_rows(
         )
         thermal = None
         if thermal_row is not None:
-                thermal = ThermalProfile(
-                target_temperature_c=float(thermal_row["target_temperature_c"]),
-                design_outdoor_temperature_c=float(
-                    thermal_row["design_outdoor_temperature_c"]
+            thermal = ThermalProfile(
+                room_thermal_capacity_kwh_per_c=float(
+                    thermal_row.get("room_thermal_capacity_kwh_per_c", 2.5)
                 ),
-                thermal_factor=float(thermal_row["thermal_factor"]),
-                    min_charge=float(thermal_row["min_charge"]),
-                    max_charge=float(thermal_row["max_charge"]),
-                    thermal_loss_c_per_hour=float(
-                        thermal_row.get("thermal_loss_c_per_hour", 0.0)
-                    ),
+                room_heat_loss_kw_per_c=float(
+                    thermal_row.get("room_heat_loss_kw_per_c", 0.12)
+                ),
             )
+        targets = tuple(
+            TemperatureTarget(
+                target_temperature_c=float(row["target_temperature_c"]),
+                start_time=parse_time(str(row["start_time"]), "start_time"),
+                end_time=parse_temperature_target_end_time(
+                    str(row["end_time"]), "end_time"
+                ),
+                weekdays=parse_weekdays(str(row["weekdays"])),
+                # The database surrogate id is not part of the domain
+                # identity; keeping it out also makes a downgrade/upgrade
+                # round-trip value-stable.
+                id=None,
+                enabled=bool(row.get("enabled", True)),
+            )
+            for row in target_rows
+        )
         return Heater(
             id=heater_id,
             name=str(heater_row["name"]),
             model=None if heater_row.get("model") is None else str(heater_row["model"]),
             power_w=int(heater_row["power_w"]),
             full_charge_minutes=int(heater_row["full_charge_minutes"]),
-            target_charge=float(heater_row["target_charge"]),
             priority=int(heater_row["priority"]),
             enabled=bool(heater_row["enabled"]),
             thermal=thermal,
+            temperature_targets=targets,
             output=output,
             indoor_topic=(
                 None
@@ -261,13 +289,19 @@ def config_from_rows(
     heater_rows: Sequence[
         tuple[Mapping[str, Any], Mapping[str, Any] | None, Mapping[str, Any] | None]
     ],
+    temperature_targets: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
 ) -> AppConfig:
     """Build the whole configuration, or raise with the offending field."""
     site = site_from_row(installation_row)
     schedule = schedule_from_row(installation_row)
     weather = weather_from_row(weather_row)
     heaters = tuple(
-        heater_from_rows(heater_row, output_row, thermal_row)
+        heater_from_rows(
+            heater_row,
+            output_row,
+            thermal_row,
+            () if temperature_targets is None else temperature_targets.get(str(heater_row["heater_id"]), ()),
+        )
         for heater_row, output_row, thermal_row in heater_rows
     )
     # Runs before AppConfig is built so the detailed message ("pin 17 is already
@@ -361,7 +395,6 @@ def heater_params(heater: Heater, installation_id: int, position: int) -> dict[s
         "model": heater.model,
         "power_w": heater.power_w,
         "full_charge_minutes": heater.full_charge_minutes,
-        "target_charge": heater.target_charge,
         "priority": heater.priority,
         "enabled": heater.enabled,
         "indoor_topic": heater.indoor_topic,
@@ -381,18 +414,25 @@ def output_params(heater: Heater, heater_key: int) -> dict[str, Any]:
 def thermal_params(profile: ThermalProfile, heater_key: int) -> dict[str, Any]:
     return {
         "heater_id": heater_key,
-        "target_temperature_c": profile.target_temperature_c,
-        "design_outdoor_temperature_c": profile.design_outdoor_temperature_c,
-        "thermal_factor": profile.thermal_factor,
-        "min_charge": profile.min_charge,
-        "max_charge": profile.max_charge,
-        "thermal_loss_c_per_hour": profile.thermal_loss_c_per_hour,
+        # These values are deliberately supplied only for a database that is
+        # still on the pre-room-energy Alembic schema.  _compatible_params()
+        # removes them from the current schema, while their presence lets a
+        # historical installation be seeded before 0014 runs.
+        "target_temperature_c": 21.0,
+        "design_outdoor_temperature_c": 0.0,
+        "thermal_factor": 1.0,
+        "min_charge": 0.0,
+        "max_charge": 1.0,
+        "thermal_loss_c_per_hour": 0.0,
+        "room_thermal_capacity_kwh_per_c": profile.room_thermal_capacity_kwh_per_c,
+        "room_heat_loss_kw_per_c": profile.room_heat_loss_kw_per_c,
     }
 
 
 __all__ = [
     "config_from_rows",
     "format_time",
+    "format_temperature_target_end_time",
     "format_weekdays",
     "from_utc",
     "heater_from_rows",
@@ -400,6 +440,7 @@ __all__ = [
     "installation_params",
     "output_params",
     "parse_time",
+    "parse_temperature_target_end_time",
     "parse_weekdays",
     "site_from_row",
     "thermal_params",

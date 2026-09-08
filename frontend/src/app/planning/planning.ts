@@ -10,8 +10,8 @@ import type { ChartOptions, TooltipItem } from 'chart.js';
 
 import { Api } from '../core/api';
 import { Poller } from '../core/poll';
-import type { ApiErrorDto, HourlyForecastPointDto, PlanningCheckDto, PlanningConstraintRequest, PlanningDto, PlanningDeficitDto, PlanningPreviewDto, PlanningPreviewJobDto, PlanningSlotDto, PlanningTimelineSlotDto } from '../core/api.types';
-import { type Explained, UNREACHABLE, explain } from '../core/errors';
+import type { ApiErrorDto, HourlyForecastPointDto, PlanningCheckDto, TemperatureTargetRequest, PlanningDto, PlanningDeficitDto, PlanningPreviewDto, PlanningPreviewJobDto, PlanningSlotDto, PlanningTimelineSlotDto } from '../core/api.types';
+import { type Explained, UNREACHABLE, explain, messageFor } from '../core/errors';
 import { formatTemperature, truncateTemperature } from '../shared/temperature/temperature';
 
 interface PlanningDetailDialogData {
@@ -51,9 +51,7 @@ interface ChartDetail {
   yAxisTitle?: string;
 }
 
-interface ConstraintDraft extends Omit<PlanningConstraintRequest, 'target_charge'> {
-  target_charge: number;
-}
+type TemperatureTargetDraft = TemperatureTargetRequest;
 
 interface PlanningRefreshOptions {
   restorePreview?: boolean;
@@ -63,9 +61,13 @@ interface PreviewChartPoint {
   x: number;
   y: number;
   power_w: number;
-  energy_delivered_kwh: number;
-  capacity_percent: number;
-  soc_percent: number;
+  stored_energy_kwh: number;
+  indoor_temperature_c: number;
+  target_temperature_c: number | null;
+  heat_delivered_kwh: number;
+  thermal_loss_kwh: number;
+  temperature_shortfall_c: number;
+  charge_energy_kwh: number;
 }
 
 function previewProblems(preview: PlanningPreviewDto): PlanningDeficitDto[] {
@@ -77,9 +79,9 @@ function explainPlanningDeficit(item: PlanningDeficitDto): string {
   if (item.reason.startsWith('forecast_not_eligible')) return 'La previsión activa no es de AEMET. La planificación automática solo usa forecast horario AEMET.';
   if (item.reason.startsWith('missing_aemet_coverage')) return 'No hay cobertura horaria AEMET continua desde el inicio del horizonte planificado.';
   if (item.reason.startsWith('missing_required_state')) return `Falta telemetría MQTT completa y reciente: ${detail}.`;
-  if (item.reason.startsWith('invalid_configuration')) return `Configuración o constraint inválida: ${detail}.`;
-  if (item.reason.startsWith('insufficient_capacity_or_power')) return 'No hay suficiente potencia o capacidad disponible para cumplir el objetivo de carga.';
-  if (item.reason.startsWith('insufficient_stored_energy_or_power')) return 'La energía almacenada o la potencia disponible no cubren la demanda prevista.';
+  if (item.reason.startsWith('invalid_configuration')) return `Configuración o consigna térmica inválida: ${detail}.`;
+  if (item.reason.startsWith('insufficient_capacity_or_power')) return 'No hay suficiente potencia o capacidad disponible para cumplir el objetivo térmico.';
+  if (item.reason.startsWith('insufficient_stored_energy_or_power')) return 'La energía almacenada o la potencia disponible no cubren la demanda térmica prevista.';
   if (item.reason.startsWith('heater_power_exceeds_global_limit')) return 'La potencia nominal del acumulador supera el límite disponible de calefacción.';
   if (item.reason.startsWith('solver_time_limit')) return 'El optimizador alcanzó su límite de tiempo y entregó una solución degradada.';
   if (item.reason.startsWith('solver_failure') || item.reason.startsWith('solver_unavailable')) return 'El optimizador no pudo resolver el plan; revisa la instalación o contacta soporte.';
@@ -88,8 +90,8 @@ function explainPlanningDeficit(item: PlanningDeficitDto): string {
 
 function recommendedPlanningAction(cause: string): string | null {
   if (cause === 'missing_aemet_coverage') return 'Espera una previsión AEMET horaria completa de 24 horas o revisa la conexión meteorológica.';
-  if (cause === 'missing_required_state') return 'Comprueba que cada acumulador publica temperatura, consigna y carga reciente.';
-  if (cause === 'insufficient_capacity_or_power' || cause === 'insufficient_stored_energy_or_power') return 'Revisa potencia disponible, capacidad y el objetivo de carga.';
+  if (cause === 'missing_required_state') return 'Comprueba que cada acumulador publica temperatura interior y SOC reciente.';
+  if (cause === 'insufficient_capacity_or_power' || cause === 'insufficient_stored_energy_or_power') return 'Revisa potencia disponible, capacidad térmica y la consigna programada.';
   if (cause.startsWith('solver')) return 'Revisa la configuración del optimizador o contacta con soporte.';
   return null;
 }
@@ -116,9 +118,10 @@ function recommendedPlanningAction(cause: string): string | null {
               <dl class="detail-list">
                 <div><dt>Acumulador</dt><dd>{{ heaterText(item.heater_id, data.planning) }}</dd></div>
                 <div><dt>Momento</dt><dd>{{ dateTime(item.at) }}</dd></div>
-                <div><dt>Objetivo</dt><dd>{{ percentage(item.target_charge_percent) }}</dd></div>
-                <div><dt>Proyectado</dt><dd>{{ percentage(item.projected_charge_percent) }}</dd></div>
-                <div><dt>Déficit</dt><dd>{{ percentage(item.deficit_percent) }}</dd></div>
+                <div><dt>Objetivo térmico</dt><dd>{{ temperature(item.target_temperature_c) }}</dd></div>
+                <div><dt>Temperatura proyectada</dt><dd>{{ temperature(item.projected_temperature_c) }}</dd></div>
+                <div><dt>Déficit térmico</dt><dd>{{ temperature(item.shortfall_c) }}</dd></div>
+                <div><dt>Energía almacenada</dt><dd>{{ energy(item.stored_energy_kwh) }}</dd></div>
                 <div><dt>Causa</dt><dd>{{ problemExplanation(item) }}</dd></div>
                 @if (problemAction(item, preview); as action) { <div><dt>Acción recomendada</dt><dd>{{ action }}</dd></div> }
               </dl>
@@ -134,7 +137,7 @@ function recommendedPlanningAction(cause: string): string | null {
             }
           </tbody></table>
         </div>
-        <p class="hint preview-detail-tabs-hint">Selecciona una pestaña para consultar potencia, energía, capacidad y SOC por acumulador.</p>
+        <p class="hint preview-detail-tabs-hint">Selecciona una pestaña para consultar potencia, energía almacenada, temperatura, pérdidas y déficit por acumulador.</p>
         @if (data.planning; as planning) {
           @if (planning.heaters.length) {
             <mat-tab-group class="preview-detail-tabs" data-testid="preview-detail-tabs" animationDuration="0ms">
@@ -142,8 +145,8 @@ function recommendedPlanningAction(cause: string): string | null {
               <mat-tab [label]="heater.name">
                 <section class="preview-detail-table" data-testid="preview-detail-heater-table" [attr.aria-labelledby]="'preview-detail-heater-title-' + heater.id">
                   <h3 [id]="'preview-detail-heater-title-' + heater.id">{{ heater.name }}</h3>
-                  <div class="table-scroll"><table [attr.aria-label]="'Detalle de planificación de ' + heater.name"><thead><tr><th scope="col">Intervalo</th><th scope="col">Potencia (W)</th><th scope="col">Energía (kWh)</th><th scope="col">Capacidad (%)</th><th scope="col">SOC (%)</th></tr></thead><tbody>
-                    @for (slot of previewWindowSlots(preview); track $index) { <tr><th scope="row">{{ previewSlotLabel(slot) }}</th><td>{{ previewPower(slot, heater.id, heater.power_w) }}</td><td>{{ previewEnergy(slot, heater.id).toFixed(2) }}</td><td>{{ previewCapacity(slot, heater.id).toFixed(1) }}</td><td>{{ previewSoc(slot, heater.id).toFixed(1) }}</td></tr> }
+                  <div class="table-scroll"><table [attr.aria-label]="'Detalle de planificación de ' + heater.name"><thead><tr><th scope="col">Intervalo</th><th scope="col">Potencia (W)</th><th scope="col">Energía almacenada</th><th scope="col">Interior</th><th scope="col">Objetivo</th><th scope="col">Calor entregado</th><th scope="col">Intercambio térmico</th><th scope="col">Déficit</th></tr></thead><tbody>
+                    @for (slot of previewWindowSlots(preview); track $index) { <tr><th scope="row">{{ previewSlotLabel(slot) }}</th><td>{{ previewPower(slot, heater.id, heater.power_w) }}</td><td>{{ previewStoredEnergy(slot, heater.id).toFixed(2) }} kWh</td><td>{{ temperature(previewIndoorTemperature(slot, heater.id)) }}</td><td>{{ temperature(previewTargetTemperature(slot, heater.id)) }}</td><td>{{ previewHeatDelivered(slot, heater.id).toFixed(2) }} kWh</td><td>{{ previewThermalLoss(slot, heater.id).toFixed(2) }} kWh</td><td>{{ temperature(previewShortfall(slot, heater.id)) }}</td></tr> }
                   </tbody></table></div>
                 </section>
               </mat-tab>
@@ -275,8 +278,12 @@ export class PlanningDetailDialog implements AfterViewInit, OnDestroy {
     return planning?.heaters.find((heater) => heater.id === heaterId)?.name ?? heaterId;
   }
 
-  percentage(value: number | null | undefined): string {
-    return value === null || value === undefined ? 'no disponible' : `${value.toFixed(1)} %`;
+  temperature(value: number | null | undefined): string {
+    return value === null || value === undefined ? 'no disponible' : `${formatTemperature(value)} °C`;
+  }
+
+  energy(value: number | null | undefined): string {
+    return value === null || value === undefined ? 'no disponible' : `${value.toFixed(2)} kWh`;
   }
 
   problemExplanation(item: PlanningDeficitDto): string {
@@ -349,7 +356,7 @@ export class PlanningDetailDialog implements AfterViewInit, OnDestroy {
     });
   }
 
-  previewSlotMetric(slot: Record<string, unknown>, key: 'heater_power_w' | 'energy_delivered_kwh' | 'capacity_percent_by_heater' | 'stored_charge_percent', heaterId: string): number {
+  previewSlotMetric(slot: Record<string, unknown>, key: 'heater_power_w' | 'stored_energy_kwh' | 'indoor_temperature_c' | 'target_temperature_c' | 'heat_delivered_kwh' | 'thermal_loss_kwh' | 'temperature_shortfall_c' | 'charge_energy_kwh', heaterId: string): number {
     const values = slot[key] as Record<string, number> | undefined;
     return typeof values?.[heaterId] === 'number' ? values[heaterId] : 0;
   }
@@ -364,16 +371,24 @@ export class PlanningDetailDialog implements AfterViewInit, OnDestroy {
     return heaterIds.length === 1 ? this.previewSlotPower(slot) : 0;
   }
 
-  previewEnergy(slot: Record<string, unknown>, heaterId: string): number {
-    return this.previewSlotMetric(slot, 'energy_delivered_kwh', heaterId);
+  previewStoredEnergy(slot: Record<string, unknown>, heaterId: string): number {
+    return this.previewSlotMetric(slot, 'stored_energy_kwh', heaterId);
   }
-
-  previewCapacity(slot: Record<string, unknown>, heaterId: string): number {
-    return this.previewSlotMetric(slot, 'capacity_percent_by_heater', heaterId);
+  previewIndoorTemperature(slot: Record<string, unknown>, heaterId: string): number {
+    return this.previewSlotMetric(slot, 'indoor_temperature_c', heaterId);
   }
-
-  previewSoc(slot: Record<string, unknown>, heaterId: string): number {
-    return this.previewSlotMetric(slot, 'stored_charge_percent', heaterId);
+  previewTargetTemperature(slot: Record<string, unknown>, heaterId: string): number | null {
+    const values = slot['target_temperature_c'] as Record<string, number> | undefined;
+    return typeof values?.[heaterId] === 'number' ? values[heaterId] : null;
+  }
+  previewHeatDelivered(slot: Record<string, unknown>, heaterId: string): number {
+    return this.previewSlotMetric(slot, 'heat_delivered_kwh', heaterId);
+  }
+  previewThermalLoss(slot: Record<string, unknown>, heaterId: string): number {
+    return this.previewSlotMetric(slot, 'thermal_loss_kwh', heaterId);
+  }
+  previewShortfall(slot: Record<string, unknown>, heaterId: string): number {
+    return this.previewSlotMetric(slot, 'temperature_shortfall_c', heaterId);
   }
 
   checkText(name: string): string {
@@ -398,7 +413,7 @@ export class Planning implements AfterViewInit, OnDestroy {
   readonly snapshot = signal<PlanningDto | null>(null);
   readonly failure = signal<Explained | null>(null);
   readonly loading = signal(true);
-  readonly draftConstraints = signal<ConstraintDraft[]>([]);
+  readonly draftTargets = signal<TemperatureTargetDraft[]>([]);
   readonly preview = signal<PlanningPreviewDto | null>(null);
   readonly actionMessage = signal('');
   readonly actionError = signal('');
@@ -442,7 +457,7 @@ export class Planning implements AfterViewInit, OnDestroy {
     this.api.planning().subscribe({
       next: (planning) => {
         this.snapshot.set(planning);
-        this.draftConstraints.set(this.draftConstraintsFrom(planning));
+        this.draftTargets.set(this.draftTargetsFrom(planning));
         this.failure.set(null);
         this.loading.set(false);
         if (restorePreview && planning.preview_job) this.acceptPreviewJob(planning.preview_job);
@@ -456,17 +471,25 @@ export class Planning implements AfterViewInit, OnDestroy {
     });
   }
 
-  private draftConstraintsFrom(planning: PlanningDto): ConstraintDraft[] {
-    return (planning.constraints ?? []).map((item) => ({ heater_id: item.heater_id, target_charge: item.target_charge * 100, at_time: item.at_time, weekdays: item.weekdays }));
+  private draftTargetsFrom(planning: PlanningDto): TemperatureTargetDraft[] {
+    return (planning.temperature_targets ?? []).map((item) => ({ heater_id: item.heater_id, target_temperature_c: item.target_temperature_c, start_time: item.start_time, end_time: item.end_time, weekdays: [...item.weekdays], enabled: item.enabled }));
   }
 
-  addConstraint(heaterId = ''): void { this.draftConstraints.update((items) => [...items, { heater_id: heaterId || this.snapshot()?.heaters[0]?.id || '', target_charge: 100, at_time: '07:00', weekdays: [0, 1, 2, 3, 4, 5, 6] }]); }
-  removeConstraint(index: number): void { this.draftConstraints.update((items) => items.filter((_item, itemIndex) => itemIndex !== index)); }
-  editConstraint(index: number, field: keyof ConstraintDraft, value: unknown): void {
-    this.draftConstraints.update((items) => items.map((item, itemIndex) => itemIndex === index ? { ...item, [field]: field === 'target_charge' ? Number(value) : value } as ConstraintDraft : item));
+  addTarget(heaterId = ''): void { this.draftTargets.update((items) => [...items, { heater_id: heaterId || this.snapshot()?.heaters[0]?.id || '', target_temperature_c: 21, start_time: '07:00', end_time: '09:00', weekdays: [0, 1, 2, 3, 4, 5, 6], enabled: true }]); }
+  duplicateTarget(index: number): void {
+    this.draftTargets.update((items) => {
+      const source = items[index];
+      if (!source) return items;
+      const copy = { ...source, weekdays: [...source.weekdays] };
+      return [...items.slice(0, index + 1), copy, ...items.slice(index + 1)];
+    });
+  }
+  removeTarget(index: number): void { this.draftTargets.update((items) => items.filter((_item, itemIndex) => itemIndex !== index)); }
+  editTarget(index: number, field: keyof TemperatureTargetDraft, value: unknown): void {
+    this.draftTargets.update((items) => items.map((item, itemIndex) => itemIndex === index ? { ...item, [field]: field === 'target_temperature_c' ? Number(value) : value } as TemperatureTargetDraft : item));
   }
   toggleDay(index: number, day: number): void {
-    this.draftConstraints.update((items) => items.map((item, itemIndex) => {
+    this.draftTargets.update((items) => items.map((item, itemIndex) => {
       if (itemIndex !== index) return item;
       const weekdays = item.weekdays.includes(day) ? item.weekdays.filter((value) => value !== day) : [...item.weekdays, day].sort((a, b) => a - b);
       return { ...item, weekdays };
@@ -475,9 +498,9 @@ export class Planning implements AfterViewInit, OnDestroy {
   recalculate(): void {
     this.dismissedPreviewJobId = null;
     this.actionError.set(''); this.actionMessage.set('Iniciando vista previa…'); this.preview.set(null);
-    this.api.planningPreviewJobStart(this.apiConstraints(), this.snapshot()?.constraints_revision).subscribe({
+    this.api.planningPreviewJobStart(this.apiTargets(), this.snapshot()?.temperature_targets_revision).subscribe({
       next: (job) => { this.acceptPreviewJob(job); this.actionMessage.set('Vista previa en curso. Puedes seguir sus comprobaciones o cancelarla.'); },
-      error: () => { this.actionMessage.set(''); this.actionError.set('No se pudo iniciar la vista previa. Revisa las constraints y la telemetría.'); },
+      error: (error: unknown) => { this.actionMessage.set(''); this.actionError.set(this.previewStartError(error)); },
     });
   }
   cancelPreview(): void {
@@ -490,11 +513,11 @@ export class Planning implements AfterViewInit, OnDestroy {
     });
   }
   activate(): void {
-    const preview = this.preview(); const revision = this.snapshot()?.constraints_revision;
+    const preview = this.preview(); const revision = this.snapshot()?.temperature_targets_revision;
     if (!preview || revision === undefined || this.activationInFlight()) return;
     this.activationInFlight.set(true);
     this.actionError.set(''); this.actionMessage.set('Guardando y activando…');
-    this.api.planningActivate(preview.token, this.apiConstraints(), revision).subscribe({
+    this.api.planningActivate(preview.token, this.apiTargets(), revision).subscribe({
       next: () => {
         this.activationInFlight.set(false);
         this.clearPreviewState();
@@ -513,14 +536,14 @@ export class Planning implements AfterViewInit, OnDestroy {
     if (this.activationInFlight()) return;
     const planning = this.snapshot();
     if (!planning) return;
-    this.draftConstraints.set(this.draftConstraintsFrom(planning));
+    this.draftTargets.set(this.draftTargetsFrom(planning));
     this.clearPreviewState();
     this.actionError.set('');
-    this.actionMessage.set('Cambios descartados. Se han restaurado las constraints guardadas.');
+    this.actionMessage.set('Cambios descartados. Se han restaurado las consignas guardadas.');
   }
 
-  private apiConstraints(): PlanningConstraintRequest[] {
-    return this.draftConstraints().map((item) => ({ ...item, target_charge: item.target_charge / 100 }));
+  private apiTargets(): TemperatureTargetRequest[] {
+    return this.draftTargets().map((item) => ({ ...item, target_temperature_c: Number(item.target_temperature_c), enabled: item.enabled ?? true }));
   }
 
   sourceText(source: string): string {
@@ -608,12 +631,13 @@ export class Planning implements AfterViewInit, OnDestroy {
     if (!active) return;
     const { data, slots } = active;
     this.openPlanningTableDetails({
-      title: 'Temperatura estimada por acumulador',
-      ariaLabel: 'Valores de temperatura estimada por acumulador y temperatura exterior por intervalo',
-      headers: ['Intervalo', ...data.heaters.map((heater) => `${heater.name} (°C)`), 'Exterior (°C)'],
+      title: 'Balance térmico por acumulador',
+      ariaLabel: 'Valores de temperatura interior, objetivo y temperatura exterior por intervalo',
+      headers: ['Intervalo', ...data.heaters.map((heater) => `${heater.name} interior (°C)`), ...data.heaters.map((heater) => `${heater.name} objetivo (°C)`), 'Exterior (°C)'],
       rows: slots.map((slot) => [
         this.slotLabel(slot),
-        ...data.heaters.map((heater) => this.formatTemperature(slot.estimated_temperature_c_by_heater?.[heater.id])),
+        ...data.heaters.map((heater) => this.formatTemperature(slot.indoor_temperature_c_by_heater?.[heater.id])),
+        ...data.heaters.map((heater) => this.formatTemperature(slot.target_temperature_c_by_heater?.[heater.id])),
         this.formatTemperature(slot.temperature_c),
       ]),
     });
@@ -658,12 +682,12 @@ export class Planning implements AfterViewInit, OnDestroy {
     if (!active) return;
     const { data, slots } = active;
     this.openPlanningTableDetails({
-      title: 'Carga acumulada por acumulador',
-      ariaLabel: 'Porcentaje de carga acumulada por acumulador y por intervalo',
-      headers: ['Intervalo', ...data.heaters.map((heater) => `${heater.name} (%)`)],
+      title: 'Energía almacenada por acumulador',
+      ariaLabel: 'Energía almacenada en kWh por acumulador y por intervalo',
+      headers: ['Intervalo', ...data.heaters.map((heater) => `${heater.name} (kWh)`)],
       rows: slots.map((slot, index) => [
         this.slotLabel(slot),
-        ...data.heaters.map((heater) => `${this.storedChargePercent(data, heater.id, index).toFixed(1)} %`),
+        ...data.heaters.map((heater) => `${(slot.stored_energy_kwh_by_heater?.[heater.id] ?? 0).toFixed(2)} kWh`),
       ]),
     });
   }
@@ -748,20 +772,10 @@ export class Planning implements AfterViewInit, OnDestroy {
     return recommendedPlanningAction(cause);
   }
 
-  cumulativeMinutes(data: PlanningDto, heaterId: string, throughSlot: number): number {
-    const timelineSlot = data.timeline[throughSlot];
-    if (timelineSlot) return timelineSlot.charge_minutes_by_heater[heaterId] ?? 0;
-    if (!data.plan) return 0;
-    return data.plan.slots
-      .slice(0, throughSlot + 1)
-      .filter((slot) => slot.heater_ids.includes(heaterId))
-      .reduce((total, slot) => total + data.plan!.slot_minutes, 0);
-  }
-
-  storedChargePercent(data: PlanningDto, heaterId: string, slotIndex: number): number {
-    const fromPlan = data.plan?.slots[slotIndex]?.stored_charge_percent_by_heater?.[heaterId];
+  storedEnergyKwh(data: PlanningDto, heaterId: string, slotIndex: number): number {
+    const fromPlan = data.plan?.slots[slotIndex]?.stored_energy_kwh_by_heater?.[heaterId];
     if (fromPlan !== undefined) return fromPlan;
-    return data.timeline[slotIndex]?.stored_charge_percent_by_heater[heaterId] ?? 0;
+    return data.timeline[slotIndex]?.stored_energy_kwh_by_heater[heaterId] ?? 0;
   }
 
   kilowatts(watts: number): number {
@@ -784,7 +798,7 @@ export class Planning implements AfterViewInit, OnDestroy {
 
   cumulativeLabel(data: PlanningDto, slotIndex: number): string {
     return data.heaters
-      .map((heater) => `${heater.name}: ${this.storedChargePercent(data, heater.id, slotIndex).toFixed(1)} %`)
+      .map((heater) => `${heater.name}: ${this.storedEnergyKwh(data, heater.id, slotIndex).toFixed(2)} kWh`)
       .join(' · ');
   }
 
@@ -797,7 +811,7 @@ export class Planning implements AfterViewInit, OnDestroy {
   }
 
   checkText(name: string): string {
-    return ({ input_validation: 'Validación de inputs', telemetry: 'Telemetría', aemet_coverage: 'Cobertura AEMET', demand_estimation: 'Estimación de demanda', constraints: 'Materialización de constraints', resolution: 'Resolución', safety_validation: 'Validación de seguridad', operator_summary: 'Resumen final' } as Record<string, string>)[name] ?? name;
+    return ({ input_validation: 'Validación de entradas', telemetry: 'Telemetría', aemet_coverage: 'Cobertura AEMET', demand_estimation: 'Balance energético', constraints: 'Materialización de consignas', resolution: 'Resolución', safety_validation: 'Validación de seguridad', operator_summary: 'Resumen final' } as Record<string, string>)[name] ?? name;
   }
 
   previewSlotLabel(slot: Record<string, unknown>): string { return this.dateTime(String(slot['start'] ?? '')); }
@@ -815,7 +829,7 @@ export class Planning implements AfterViewInit, OnDestroy {
       return Number.isFinite(start) && start >= windowStart && start < windowEnd;
     });
   }
-  previewSlotMetric(slot: Record<string, unknown>, key: 'heater_power_w' | 'energy_delivered_kwh' | 'capacity_percent_by_heater' | 'stored_charge_percent', heaterId: string): number {
+  previewSlotMetric(slot: Record<string, unknown>, key: 'heater_power_w' | 'stored_energy_kwh' | 'indoor_temperature_c' | 'target_temperature_c' | 'heat_delivered_kwh' | 'thermal_loss_kwh' | 'temperature_shortfall_c' | 'charge_energy_kwh', heaterId: string): number {
     const values = slot[key] as Record<string, number> | undefined;
     return typeof values?.[heaterId] === 'number' ? values[heaterId] : 0;
   }
@@ -828,30 +842,25 @@ export class Planning implements AfterViewInit, OnDestroy {
     if (fallbackPowerW > 0) return fallbackPowerW;
     return heaterIds.length === 1 ? this.previewSlotPower(slot) : 0;
   }
-  previewEnergy(slot: Record<string, unknown>, heaterId: string): number {
-    return this.previewSlotMetric(slot, 'energy_delivered_kwh', heaterId);
-  }
-  previewCapacity(slot: Record<string, unknown>, heaterId: string): number {
-    return this.previewSlotMetric(slot, 'capacity_percent_by_heater', heaterId);
-  }
-  previewSoc(slot: Record<string, unknown>, heaterId: string): number {
-    return this.previewSlotMetric(slot, 'stored_charge_percent', heaterId);
-  }
   previewChartPoint(slot: Record<string, unknown>, heaterId: string, fallbackPowerW = 0, index = 0): PreviewChartPoint {
     const power_w = this.previewPower(slot, heaterId, fallbackPowerW);
     return {
       x: index,
       y: this.kilowatts(power_w),
       power_w,
-      energy_delivered_kwh: this.previewEnergy(slot, heaterId),
-      capacity_percent: this.previewCapacity(slot, heaterId),
-      soc_percent: this.previewSoc(slot, heaterId),
+      stored_energy_kwh: this.previewSlotMetric(slot, 'stored_energy_kwh', heaterId),
+      indoor_temperature_c: this.previewSlotMetric(slot, 'indoor_temperature_c', heaterId),
+      target_temperature_c: this.previewSlotMetric(slot, 'target_temperature_c', heaterId),
+      heat_delivered_kwh: this.previewSlotMetric(slot, 'heat_delivered_kwh', heaterId),
+      thermal_loss_kwh: this.previewSlotMetric(slot, 'thermal_loss_kwh', heaterId),
+      temperature_shortfall_c: this.previewSlotMetric(slot, 'temperature_shortfall_c', heaterId),
+      charge_energy_kwh: this.previewSlotMetric(slot, 'charge_energy_kwh', heaterId),
     };
   }
   previewSummaryText(summary: Record<string, unknown>): string {
-    const demand = summary['demand_kwh_by_heater'] as Record<string, number> | undefined;
-    if (!demand) return 'Sin resumen disponible.';
-    return Object.entries(demand).map(([heater, value]) => `${heater}: ${Number(value).toFixed(2)} kWh`).join(' · ') || 'No se estima demanda.';
+    const delivered = summary['heat_delivered_kwh_by_heater'] as Record<string, number> | undefined;
+    if (!delivered) return 'Sin resumen disponible.';
+    return Object.entries(delivered).map(([heater, value]) => `${heater}: ${Number(value).toFixed(2)} kWh entregados`).join(' · ') || 'No se estima calor entregado.';
   }
 
   previewIntervalCount(result: PlanningPreviewDto): number {
@@ -865,7 +874,7 @@ export class Planning implements AfterViewInit, OnDestroy {
       if (Array.isArray(slot['heater_ids'])) {
         for (const heaterId of slot['heater_ids']) ids.add(String(heaterId));
       }
-      for (const key of ['heater_power_w', 'stored_charge_percent']) {
+      for (const key of ['heater_power_w', 'stored_energy_kwh', 'indoor_temperature_c']) {
         const values = slot[key];
         if (values && typeof values === 'object' && !Array.isArray(values)) {
           for (const heaterId of Object.keys(values)) ids.add(heaterId);
@@ -879,7 +888,8 @@ export class Planning implements AfterViewInit, OnDestroy {
     return data.timeline.map((slot) => ({
       ...slot,
       temperature_c: slot.temperature_c === null ? null : truncateTemperature(slot.temperature_c),
-      estimated_temperature_c_by_heater: Object.fromEntries(Object.entries(slot.estimated_temperature_c_by_heater).map(([id, value]) => [id, truncateTemperature(value)])),
+      indoor_temperature_c_by_heater: Object.fromEntries(Object.entries(slot.indoor_temperature_c_by_heater).map(([id, value]) => [id, truncateTemperature(value)])),
+      target_temperature_c_by_heater: Object.fromEntries(Object.entries(slot.target_temperature_c_by_heater).map(([id, value]) => [id, truncateTemperature(value)])),
     }));
   }
 
@@ -966,7 +976,7 @@ export class Planning implements AfterViewInit, OnDestroy {
           },
           options: this.chartOptions<'line'>(fullLabels, 'Potencia (kW)', (context) => {
             const point = context.raw as PreviewChartPoint;
-            return `${context.dataset.label ?? 'Acumulador'}: ${point.power_w} W · ${point.energy_delivered_kwh.toFixed(2)} kWh · ${point.capacity_percent.toFixed(1)} % capacidad · SOC ${point.soc_percent.toFixed(1)} %`;
+            return `${context.dataset.label ?? 'Acumulador'}: ${point.power_w} W · ${point.stored_energy_kwh.toFixed(2)} kWh almacenados · ${point.indoor_temperature_c.toFixed(1)} °C interior · ${point.heat_delivered_kwh.toFixed(2)} kWh entregados · ${point.thermal_loss_kwh.toFixed(2)} kWh intercambio`;
           }),
         }) as unknown as Chart);
         return;
@@ -981,11 +991,20 @@ export class Planning implements AfterViewInit, OnDestroy {
           labels,
           datasets: [
             ...data.heaters.map((heater, index) => ({
-              label: `${heater.name} estimada (°C)`,
-              data: timeline.map((slot) => slot.estimated_temperature_c_by_heater?.[heater.id] ?? null),
+              label: `${heater.name} interior (°C)`,
+              data: timeline.map((slot) => slot.indoor_temperature_c_by_heater?.[heater.id] ?? null),
               borderColor: colors[index % colors.length],
               backgroundColor: `${colors[index % colors.length]}22`,
               tension: 0.25,
+              spanGaps: false,
+            })),
+            ...data.heaters.map((heater, index) => ({
+              label: `${heater.name} objetivo (°C)`,
+              data: timeline.map((slot) => slot.target_temperature_c_by_heater?.[heater.id] ?? null),
+              borderColor: colors[index % colors.length],
+              borderDash: [4, 3],
+              pointRadius: 0,
+              tension: 0,
               spanGaps: false,
             })),
             {
@@ -1021,14 +1040,14 @@ export class Planning implements AfterViewInit, OnDestroy {
       this.charts.push(new Chart(this.cumulativeCanvas.nativeElement, {
         type: 'line',
         data: { labels, datasets: data.heaters.map((heater, index) => ({
-          label: `${heater.name} (%)`,
-          data: timeline.map((_slot, slotIndex) => this.storedChargePercent(data, heater.id, slotIndex)),
+          label: `${heater.name} (kWh)`,
+          data: timeline.map((_slot, slotIndex) => this.storedEnergyKwh(data, heater.id, slotIndex)),
           borderColor: colors[index % colors.length],
           backgroundColor: `${colors[index % colors.length]}22`,
           stepped: true,
           tension: 0,
         })) },
-        options: this.chartOptions<'line'>(fullLabels, 'Carga (%)'),
+        options: this.chartOptions<'line'>(fullLabels, 'Energía almacenada (kWh)'),
       }));
     } catch {
       // Canvas is unavailable in some browsers/test environments. The table is
@@ -1084,8 +1103,23 @@ export class Planning implements AfterViewInit, OnDestroy {
   }
 
   private activationError(error: unknown): string {
+    const apiMessage = this.apiMessage(error);
+    if (apiMessage !== null) return `No se pudo guardar y activar: ${apiMessage}`;
     const explained = this.describe(error);
     const detail = explained.action ? `${explained.title}. ${explained.action}` : explained.title;
     return `No se pudo guardar y activar: ${detail}`;
+  }
+
+  private previewStartError(error: unknown): string {
+    const apiMessage = this.apiMessage(error);
+    return apiMessage === null
+      ? 'No se pudo iniciar la vista previa. Revisa las consignas y la telemetría.'
+      : `No se pudo iniciar la vista previa: ${apiMessage}`;
+  }
+
+  private apiMessage(error: unknown): string | null {
+    if (!(error instanceof HttpErrorResponse)) return null;
+    const body = error.error as ApiErrorDto | null;
+    return body && typeof body === 'object' && 'code' in body ? messageFor(body) : null;
   }
 }

@@ -161,7 +161,6 @@ heater = Table(
     Column("model", String(120), nullable=True),
     Column("power_w", Integer, nullable=False),
     Column("full_charge_minutes", Integer, nullable=False),
-    Column("target_charge", Float, nullable=False, server_default="1.0"),
     Column("priority", Integer, nullable=False, server_default="0"),
     Column("enabled", Boolean, nullable=False, server_default="1"),
     Column("indoor_topic", String(512), nullable=True),
@@ -170,9 +169,6 @@ heater = Table(
     UniqueConstraint("installation_id", "position", name="uq_heater_position"),
     CheckConstraint("power_w > 0", name="ck_heater_power"),
     CheckConstraint("full_charge_minutes > 0", name="ck_heater_full_charge"),
-    CheckConstraint(
-        "target_charge >= 0 AND target_charge <= 1", name="ck_heater_target_charge"
-    ),
 )
 
 output_config = Table(
@@ -209,24 +205,43 @@ thermal_profile = Table(
         nullable=False,
         unique=True,
     ),
+    Column("room_thermal_capacity_kwh_per_c", Float, nullable=False, server_default="2.5"),
+    Column("room_heat_loss_kw_per_c", Float, nullable=False, server_default="0.12"),
+    CheckConstraint(
+        "room_thermal_capacity_kwh_per_c > 0",
+        name="ck_room_thermal_capacity",
+    ),
+    CheckConstraint(
+        "room_heat_loss_kw_per_c >= 0",
+        name="ck_room_heat_loss",
+    ),
+)
+
+# Weekly indoor-temperature intervals replace the old percentage charge rules.
+# ``heater_id`` is intentionally a domain id, like the historical planning
+# tables, so a removed heater cannot make the configuration store unreadable.
+temperature_target = Table(
+    "temperature_target",
+    configuration_metadata,
+    Column("id", Integer, primary_key=True),
+    Column("installation_id", Integer, ForeignKey("installation.id", ondelete="CASCADE"), nullable=False),
+    Column("heater_id", String(64), nullable=False),
     Column("target_temperature_c", Float, nullable=False),
-    Column("design_outdoor_temperature_c", Float, nullable=False),
-    Column("thermal_factor", Float, nullable=False, server_default="1.0"),
-    Column("min_charge", Float, nullable=False, server_default="0.0"),
-    Column("max_charge", Float, nullable=False, server_default="1.0"),
-    Column("thermal_loss_c_per_hour", Float, nullable=False, server_default="0.0"),
+    Column("start_time", String(5), nullable=False),
+    Column("end_time", String(5), nullable=False),
+    Column("weekdays", String(32), nullable=False),
+    Column("enabled", Boolean, nullable=False, server_default="1"),
+    Column("created_at", DateTime, nullable=False),
+    Column("updated_at", DateTime, nullable=False),
     CheckConstraint(
-        "design_outdoor_temperature_c < target_temperature_c",
-        name="ck_thermal_design_below_target",
+        "target_temperature_c >= -50 AND target_temperature_c <= 80",
+        name="ck_temperature_target_range",
     ),
-    CheckConstraint("thermal_factor > 0", name="ck_thermal_factor"),
-    CheckConstraint(
-        "min_charge >= 0 AND min_charge <= max_charge AND max_charge <= 1",
-        name="ck_thermal_charge_bounds",
+    UniqueConstraint(
+        "installation_id", "heater_id", "start_time", "end_time", "weekdays",
+        name="uq_temperature_target_rule",
     ),
-    CheckConstraint(
-        "thermal_loss_c_per_hour >= 0", name="ck_thermal_loss_non_negative"
-    ),
+    Index("ix_temperature_target_installation_heater", "installation_id", "heater_id"),
 )
 
 # Automatic charge-planning data is additive to the original static scheduler.
@@ -245,9 +260,6 @@ charge_planning_site = Table(
     Column("contracted_power_w", Integer, nullable=False, server_default="5200"),
     Column("max_heating_power_w", Integer, nullable=False, server_default="5200"),
     Column("base_load_w", Integer, nullable=False, server_default="0"),
-    Column("design_indoor_temperature_c", Float, nullable=False, server_default="21"),
-    Column("design_outdoor_temperature_c", Float, nullable=False, server_default="0"),
-    Column("feedback_horizon_hours", Float, nullable=False, server_default="6"),
     Column("mqtt_simulation_enabled", Boolean, nullable=False, server_default="0"),
     Column(
         "mqtt_simulation_initial_temperature_c",
@@ -283,8 +295,6 @@ charge_planning_site = Table(
     CheckConstraint("contracted_power_w > 0", name="ck_charge_site_contracted_power"),
     CheckConstraint("max_heating_power_w > 0", name="ck_charge_site_heating_power"),
     CheckConstraint("base_load_w >= 0", name="ck_charge_site_base_load"),
-    CheckConstraint("design_indoor_temperature_c > design_outdoor_temperature_c", name="ck_charge_site_design_temperatures"),
-    CheckConstraint("feedback_horizon_hours > 0", name="ck_charge_site_feedback_horizon"),
     CheckConstraint(
         "mqtt_simulation_initial_temperature_c >= -50 "
         "AND mqtt_simulation_initial_temperature_c <= 80",
@@ -304,41 +314,12 @@ charge_planning_site = Table(
     ),
 )
 
-charge_constraint = Table(
-    "charge_constraint",
-    configuration_metadata,
-    Column("id", Integer, primary_key=True),
-    Column("installation_id", Integer, ForeignKey("installation.id", ondelete="CASCADE"), nullable=False),
-    Column("heater_id", String(64), nullable=False),
-    Column("target_charge", Float, nullable=False),
-    Column("at_time", String(5), nullable=False),
-    Column("weekdays", String(32), nullable=False),
-    Column("enabled", Boolean, nullable=False, server_default="1"),
-    Column("created_at", DateTime, nullable=False),
-    Column("updated_at", DateTime, nullable=False),
-    CheckConstraint("target_charge >= 0 AND target_charge <= 1", name="ck_charge_constraint_target"),
-    UniqueConstraint("installation_id", "heater_id", "at_time", "weekdays", name="uq_charge_constraint_rule"),
-    Index("ix_charge_constraint_installation_heater", "installation_id", "heater_id"),
-)
-
 heater_charge_config = Table(
     "heater_charge_config",
     configuration_metadata,
     Column("installation_id", Integer, ForeignKey("installation.id", ondelete="CASCADE"), nullable=False),
     Column("heater_id", String(64), primary_key=True),
-    Column("temperature_topic", String(512), nullable=True),
-    Column("target_temperature_topic", String(512), nullable=True),
-    Column("stored_charge_topic", String(512), nullable=True),
-    Column("reserve_percent", Float, nullable=False, server_default="0"),
-    Column("demand_factor", Float, nullable=False, server_default="1"),
-    Column("room_inertia_hours", Float, nullable=False, server_default="8"),
-    Column("outdoor_loss_per_hour", Float, nullable=False, server_default="0.08"),
-    Column("emission_c_per_hour", Float, nullable=False, server_default="1"),
-    CheckConstraint("reserve_percent >= 0", name="ck_heater_charge_reserve"),
-    CheckConstraint("demand_factor > 0", name="ck_heater_charge_demand_factor"),
-    CheckConstraint("room_inertia_hours > 0", name="ck_heater_charge_inertia"),
-    CheckConstraint("outdoor_loss_per_hour >= 0 AND outdoor_loss_per_hour <= 1", name="ck_heater_charge_loss"),
-    CheckConstraint("emission_c_per_hour >= 0", name="ck_heater_charge_emission"),
+    Column("stored_soc_topic", String(512), nullable=True),
     UniqueConstraint("installation_id", "heater_id", name="uq_heater_charge_config"),
 )
 
@@ -349,13 +330,11 @@ heater_telemetry = Table(
     Column("heater_id", String(64), primary_key=True),
     Column("temperature_c", Float, nullable=True),
     Column("temperature_received_at", DateTime, nullable=True),
-    Column("target_temperature_c", Float, nullable=True),
-    Column("target_received_at", DateTime, nullable=True),
-    Column("stored_charge_percent", Float, nullable=True),
-    Column("stored_charge_received_at", DateTime, nullable=True),
+    Column("stored_soc_percent", Float, nullable=True),
+    Column("stored_soc_received_at", DateTime, nullable=True),
     Column("invalid_field", String(32), nullable=True),
     Column("invalid_at", DateTime, nullable=True),
-    CheckConstraint("stored_charge_percent IS NULL OR (stored_charge_percent >= 0 AND stored_charge_percent <= 100)", name="ck_telemetry_charge"),
+    CheckConstraint("stored_soc_percent IS NULL OR (stored_soc_percent >= 0 AND stored_soc_percent <= 100)", name="ck_telemetry_soc"),
     Index("ix_heater_telemetry_installation", "installation_id", "heater_id"),
 )
 
@@ -419,6 +398,13 @@ automatic_plan_slot = Table(
     Column("initial_soc_json", Text, nullable=False, server_default="{}"),
     Column("demand_json", Text, nullable=False, server_default="{}"),
     Column("heater_power_json", Text, nullable=False, server_default="{}"),
+    Column("stored_energy_json", Text, nullable=False, server_default="{}"),
+    Column("indoor_temperature_json", Text, nullable=False, server_default="{}"),
+    Column("target_temperature_json", Text, nullable=False, server_default="{}"),
+    Column("heat_delivered_json", Text, nullable=False, server_default="{}"),
+    Column("thermal_loss_json", Text, nullable=False, server_default="{}"),
+    Column("temperature_shortfall_json", Text, nullable=False, server_default="{}"),
+    Column("charge_energy_json", Text, nullable=False, server_default="{}"),
     UniqueConstraint("plan_id", "slot_start", name="uq_automatic_plan_slot"),
 )
 
@@ -823,7 +809,9 @@ for _table in configuration_metadata.sorted_tables:
         system_secret,
         system_audit_event,
         charge_planning_site,
-        charge_constraint,
+        # Planning configuration is materialised only in the split stores.
+        # The legacy Alembic database receives the weekly target table through
+        # 0014, but never the split-only per-heater MQTT table.
         heater_charge_config,
     }:
         _table.to_metadata(metadata)
@@ -873,27 +861,26 @@ CONSTRAINT_FIELDS: dict[str, tuple[str, str]] = {
         "full_charge_hours",
         "the full charge time must be positive",
     ),
-    "ck_heater_target_charge": (
-        "target_charge",
-        "target_charge must be between 0 and 1",
-    ),
     "uq_heater_domain_id": ("heater_id", "heater ids must be unique per installation"),
     "uq_heater_position": ("position", "heater positions must be unique"),
     "ck_output_kind": ("output_type", "the output type must be simulated or gpio"),
     "ck_output_pin": ("pin", "a GPIO pin must be between 0 and 27"),
     "ck_output_gpio_needs_pin": ("pin", "a gpio output requires a BCM pin"),
-    "ck_thermal_design_below_target": (
-        "design_outdoor_temperature_c",
-        "the design outdoor temperature must be below the target temperature",
+    "ck_room_thermal_capacity": (
+        "room_thermal_capacity_kwh_per_c",
+        "room_thermal_capacity_kwh_per_c must be positive",
     ),
-    "ck_thermal_factor": ("thermal_factor", "thermal_factor must be positive"),
-    "ck_thermal_charge_bounds": (
-        "min_charge",
-        "the charge limits must satisfy 0 <= min_charge <= max_charge <= 1",
+    "ck_room_heat_loss": (
+        "room_heat_loss_kw_per_c",
+        "room_heat_loss_kw_per_c must be non-negative",
     ),
-    "ck_thermal_loss_non_negative": (
-        "thermal_loss_c_per_hour",
-        "thermal_loss_c_per_hour must be non-negative",
+    "ck_temperature_target_range": (
+        "target_temperature_c",
+        "target_temperature_c must be between -50 and 80",
+    ),
+    "uq_temperature_target_rule": (
+        "temperature_targets",
+        "a heater cannot repeat the same weekly temperature-target rule",
     ),
     "ck_forecast_source": ("source", "the forecast source is not recognised"),
     "ck_plan_window": ("window_end", "the plan window must end after it starts"),
@@ -925,8 +912,7 @@ CONSTRAINT_FIELDS: dict[str, tuple[str, str]] = {
     "ck_charge_site_horizon": ("forecast_horizon_hours", "the forecast horizon must be between 1 and 48 hours"),
     "ck_charge_site_window_le_horizon": ("planning_window_hours", "the planning window must not exceed the forecast horizon"),
     "ck_charge_site_query_hour": ("aemet_query_hour", "the AEMET query hour must be between 0 and 23"),
-    "ck_charge_constraint_target": ("target_charge", "the constraint target must be between 0 and 1"),
-    "ck_telemetry_charge": ("stored_charge_percent", "stored charge must be between 0 and 100"),
+    "ck_telemetry_soc": ("stored_soc_percent", "stored SOC must be between 0 and 100"),
     "ck_relay_test_fault_generation": ("fault_generation", "the fault generation cannot be negative"),
     "ck_relay_test_session_status": ("status", "the relay-test status is not recognised"),
     "ck_relay_test_output_power": ("power_w", "the relay-test output power must be positive"),
@@ -965,7 +951,7 @@ CONFIG_TABLES = (
     output_config,
     thermal_profile,
     charge_planning_site,
-    charge_constraint,
+    temperature_target,
     heater_charge_config,
     config_change,
     system_configuration,
@@ -1039,8 +1025,8 @@ __all__ = [
     "plan_allocation",
     "plan_slot",
     "thermal_profile",
+    "temperature_target",
     "charge_planning_site",
-    "charge_constraint",
     "heater_charge_config",
     "heater_telemetry",
     "forecast_cycle",

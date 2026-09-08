@@ -79,7 +79,13 @@ export interface PlanningSlotDto extends PlanSlotDto {
   total_power_w: number;
   temperature_c: number | null;
   temperature_interpolated: boolean;
-  stored_charge_percent_by_heater?: Record<string, number>;
+  stored_energy_kwh_by_heater: Record<string, number>;
+  indoor_temperature_c_by_heater: Record<string, number>;
+  target_temperature_c_by_heater: Record<string, number>;
+  heat_delivered_kwh_by_heater: Record<string, number>;
+  thermal_loss_kwh_by_heater: Record<string, number>;
+  temperature_shortfall_c_by_heater: Record<string, number>;
+  charge_energy_kwh_by_heater: Record<string, number>;
 }
 
 export interface PlanningTimelineSlotDto {
@@ -89,9 +95,13 @@ export interface PlanningTimelineSlotDto {
   total_power_w: number;
   temperature_c: number | null;
   temperature_interpolated: boolean;
-  charge_minutes_by_heater: Record<string, number>;
-  stored_charge_percent_by_heater: Record<string, number>;
-  estimated_temperature_c_by_heater: Record<string, number>;
+  stored_energy_kwh_by_heater: Record<string, number>;
+  indoor_temperature_c_by_heater: Record<string, number>;
+  target_temperature_c_by_heater: Record<string, number>;
+  heat_delivered_kwh_by_heater: Record<string, number>;
+  thermal_loss_kwh_by_heater: Record<string, number>;
+  temperature_shortfall_c_by_heater: Record<string, number>;
+  charge_energy_kwh_by_heater: Record<string, number>;
 }
 
 export interface PlanningPlanDto {
@@ -121,9 +131,6 @@ export interface PlanningSiteConfigDto {
   contracted_power_w: number;
   max_heating_power_w: number;
   base_load_w: number;
-  design_indoor_temperature_c: number;
-  design_outdoor_temperature_c: number;
-  feedback_horizon_hours: number;
   mqtt_simulation_enabled: boolean;
   mqtt_simulation_initial_temperature_c: number;
   mqtt_simulation_publish_seconds: number;
@@ -144,12 +151,12 @@ export interface PlanningDto {
   horizon_end: string | null;
   timeline: PlanningTimelineSlotDto[];
   absence_reason: string | null;
-  constraints?: ChargeConstraintDto[];
   telemetry?: ChargeTelemetryDto[];
   plan_status?: string | null;
   deficits?: PlanningDeficitDto[];
   preview_token?: string | null;
-  constraints_revision?: number;
+  temperature_targets_revision?: number;
+  temperature_targets?: TemperatureTargetDto[];
   forecast_status?: 'success' | 'error' | null;
   forecast_last_attempt_at?: string | null;
   forecast_last_error?: string | null;
@@ -157,11 +164,11 @@ export interface PlanningDto {
   preview_job?: PlanningPreviewJobDto | null;
 }
 
-export interface ChargeConstraintDto { id: number | null; heater_id: string; target_charge: number; at_time: string; weekdays: number[]; enabled: boolean; }
-export interface ChargeTelemetryDto { heater_id: string; temperature_c: number | null; target_temperature_c: number | null; stored_charge_percent: number | null; temperature_received_at: string | null; target_received_at: string | null; stored_charge_received_at: string | null; state: 'ready' | 'telemetry_stale'; missing_fields: string[]; oldest_age_seconds: number | null; }
-export interface PlanningDeficitDto { heater_id: string | null; requirement: string; achievable_value: number | null; shortfall: number | null; at: string | null; reason: string; target_charge_percent: number; projected_charge_percent: number; deficit_percent: number; }
-export interface PlanningConstraintRequest { heater_id: string; target_charge: number; at_time: string; weekdays: number[]; }
-export interface PlanningPreviewDto { token: string; status: 'FEASIBLE' | 'DEGRADED' | 'INVALID'; score: number[]; window_start: string; window_end: string; horizon_start: string; horizon_end: string; slot_minutes: number; slots: Array<Record<string, unknown>>; deficits: PlanningDeficitDto[]; violations: PlanningDeficitDto[]; explanations: Array<Record<string, unknown>>; demand: Array<Record<string, unknown>>; constraints: ChargeConstraintDto[]; operator_summary: Record<string, unknown>; }
+export interface TemperatureTargetDto { id: number | null; heater_id: string; target_temperature_c: number; start_time: string; end_time: string; weekdays: number[]; enabled: boolean; }
+export interface ChargeTelemetryDto { heater_id: string; indoor_temperature_c: number | null; stored_soc_percent: number | null; indoor_received_at: string | null; stored_soc_received_at: string | null; state: string; missing_fields: string[]; oldest_age_seconds: number | null; stored_energy_kwh: number | null; }
+export interface PlanningDeficitDto { heater_id: string | null; requirement: string; achievable_value: number | null; shortfall: number | null; at: string | null; reason: string; target_temperature_c: number | null; projected_temperature_c: number | null; shortfall_c: number | null; stored_energy_kwh: number | null; stored_soc_percent: number | null; }
+export interface TemperatureTargetRequest { heater_id: string; target_temperature_c: number; start_time: string; end_time: string; weekdays: number[]; enabled?: boolean; }
+export interface PlanningPreviewDto { token: string; status: 'FEASIBLE' | 'DEGRADED' | 'INVALID'; score: number[]; window_start: string; window_end: string; horizon_start: string; horizon_end: string; slot_minutes: number; slots: Array<Record<string, unknown>>; deficits: PlanningDeficitDto[]; violations: PlanningDeficitDto[]; explanations: Array<Record<string, unknown>>; demand: Array<Record<string, unknown>>; temperature_targets: TemperatureTargetDto[]; operator_summary: Record<string, unknown>; }
 export interface PlanningCheckDto { name: string; status: 'pending' | 'running' | 'completed' | 'error' | 'cancelled' | 'skipped'; detail: string | null; started_at: string | null; finished_at: string | null; }
 export interface PlanningPreviewJobDto { job_id: string; status: 'queued' | 'running' | 'cancelling' | 'completed' | 'error' | 'cancelled' | 'interrupted'; cancellation_requested: boolean; requested_at: string; started_at: string | null; finished_at: string | null; checks: PlanningCheckDto[]; result: PlanningPreviewDto | null; operator_summary: Record<string, unknown>; error_code: string | null; error_detail: string | null; }
 export interface AutomaticPlanAuditItem { id: number; plan_id: number | null; event: string; reason: string; details: Record<string, unknown>; occurred_at: string; }
@@ -209,15 +216,13 @@ export interface HeaterDto {
   model: string | null;
   power_kw: number;
   full_charge_hours: number;
-  target_charge: number;
-  reserve_percent: number;
-  demand_factor: number;
   priority: number;
   enabled: boolean;
   indoor_topic: string | null;
-  temperature_topic: string | null;
-  target_temperature_topic: string | null;
-  stored_charge_topic: string | null;
+  stored_soc_topic: string | null;
+  room_thermal_capacity_kwh_per_c: number;
+  room_heat_loss_kw_per_c: number;
+  temperature_targets: TemperatureTargetDto[];
   output: OutputDto;
 }
 
@@ -259,18 +264,16 @@ export interface AddHeaterRequest {
   full_charge_hours: number;
   name?: string;
   model?: string;
-  target_charge?: number;
-  reserve_percent?: number;
-  demand_factor?: number;
   priority?: number;
   enabled?: boolean;
   indoor_topic?: string | null;
-  temperature_topic?: string | null;
-  target_temperature_topic?: string | null;
-  stored_charge_topic?: string | null;
+  stored_soc_topic?: string | null;
   output?: 'simulated' | 'gpio';
   pin?: number | null;
   active_high?: boolean;
+  room_thermal_capacity_kwh_per_c?: number;
+  room_heat_loss_kw_per_c?: number;
+  temperature_targets?: TemperatureTargetRequest[];
 }
 
 export interface UpdateHeaterRequest {
@@ -279,18 +282,16 @@ export interface UpdateHeaterRequest {
   model: string | null;
   power_kw: number;
   full_charge_hours: number;
-  target_charge: number;
-  reserve_percent: number;
-  demand_factor: number;
   priority: number;
   enabled: boolean;
   indoor_topic: string | null;
-  temperature_topic: string | null;
-  target_temperature_topic: string | null;
-  stored_charge_topic: string | null;
+  stored_soc_topic: string | null;
   output: 'simulated' | 'gpio';
   pin: number | null;
   active_high: boolean;
+  room_thermal_capacity_kwh_per_c: number;
+  room_heat_loss_kw_per_c: number;
+  temperature_targets?: TemperatureTargetRequest[];
 }
 
 export interface ChangeDto {

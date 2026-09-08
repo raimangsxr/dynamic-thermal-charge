@@ -63,7 +63,6 @@ def test_topic_add_change_and_removal_reconcile_subscriptions(mqtt_client):
             topic for heater in current[0].heaters
             for topic in (
                 topics.command(heater.id, "enabled"),
-                topics.command(heater.id, "target_charge"),
                 *((heater.indoor_topic,) if heater.indoor_topic else ()),
             )
         ),

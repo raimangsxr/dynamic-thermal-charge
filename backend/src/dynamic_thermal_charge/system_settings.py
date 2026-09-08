@@ -68,9 +68,7 @@ class MqttSystemSettings:
     prefix: str = "dtc"
     discovery_prefix: str = "homeassistant"
     publish_seconds: float = 15.0
-    fixed_temperature_c: float = 20.0
-    fixed_target_temperature_c: float = 21.0
-    fixed_stored_charge_percent: float = 50.0
+    fixed_stored_soc_percent: float = 50.0
     fixed_indoor_temperature_c: float = 20.0
 
     def __post_init__(self) -> None:
@@ -82,19 +80,15 @@ class MqttSystemSettings:
             raise ValueError("MQTT prefixes cannot be empty")
         if self.publish_seconds <= 0:
             raise ValueError("mqtt.publish_seconds must be positive")
-        for name, value in (
-            ("fixed_temperature_c", self.fixed_temperature_c),
-            ("fixed_target_temperature_c", self.fixed_target_temperature_c),
-            ("fixed_indoor_temperature_c", self.fixed_indoor_temperature_c),
-        ):
+        for name, value in (("fixed_indoor_temperature_c", self.fixed_indoor_temperature_c),):
             if not math.isfinite(value) or not -50 <= value <= 80:
                 raise ValueError(f"mqtt.{name} must be between -50 and 80")
         if (
-            not math.isfinite(self.fixed_stored_charge_percent)
-            or not 0 <= self.fixed_stored_charge_percent <= 100
+            not math.isfinite(self.fixed_stored_soc_percent)
+            or not 0 <= self.fixed_stored_soc_percent <= 100
         ):
             raise ValueError(
-                "mqtt.fixed_stored_charge_percent must be between 0 and 100"
+                "mqtt.fixed_stored_soc_percent must be between 0 and 100"
             )
 
 
@@ -203,10 +197,19 @@ class SystemConfiguration:
     def from_documents(cls, documents: Mapping[str, Mapping[str, Any]]) -> "SystemConfiguration":
         api = dict(documents["api"])
         api["cors_origins"] = tuple(api.get("cors_origins", ()))
+        mqtt = dict(documents["mqtt"])
+        # Read the pre-room-energy simulation names once so an existing system
+        # configuration can be upgraded by the normal write path. They are not
+        # exposed again and never participate in planning.
+        mqtt.pop("fixed_temperature_c", None)
+        mqtt.pop("fixed_target_temperature_c", None)
+        if "fixed_stored_soc_percent" not in mqtt and "fixed_stored_charge_percent" in mqtt:
+            mqtt["fixed_stored_soc_percent"] = mqtt["fixed_stored_charge_percent"]
+        mqtt.pop("fixed_stored_charge_percent", None)
         return cls(
             database=_strict_build(DatabaseSettings, documents["database"]),
             api=_strict_build(ApiSystemSettings, api),
-            mqtt=_strict_build(MqttSystemSettings, documents["mqtt"]),
+            mqtt=_strict_build(MqttSystemSettings, mqtt),
             weather=_strict_build(WeatherSystemSettings, documents["weather"]),
             output=_strict_build(OutputSystemSettings, documents["output"]),
             logging=_strict_build(LoggingSystemSettings, documents["logging"]),
@@ -247,9 +250,7 @@ ACTIVATION_POLICIES: dict[str, ActivationPolicy] = {
     "mqtt.prefix": ActivationPolicy.HOT,
     "mqtt.discovery_prefix": ActivationPolicy.HOT,
     "mqtt.publish_seconds": ActivationPolicy.HOT,
-    "mqtt.fixed_temperature_c": ActivationPolicy.NEXT_CYCLE,
-    "mqtt.fixed_target_temperature_c": ActivationPolicy.NEXT_CYCLE,
-    "mqtt.fixed_stored_charge_percent": ActivationPolicy.NEXT_CYCLE,
+    "mqtt.fixed_stored_soc_percent": ActivationPolicy.NEXT_CYCLE,
     "mqtt.fixed_indoor_temperature_c": ActivationPolicy.NEXT_CYCLE,
     "weather.provider": ActivationPolicy.NEXT_CYCLE,
     "weather.municipality_code": ActivationPolicy.NEXT_CYCLE,

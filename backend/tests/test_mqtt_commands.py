@@ -41,8 +41,6 @@ class CommandRepository:
                 heaters.append(heater)
             elif field == "enabled":
                 heaters.append(replace(heater, enabled=value == "true"))
-            elif field == "target_charge":
-                heaters.append(replace(heater, target_charge=float(value)))
         self.config = replace(self.config, heaters=tuple(heaters))
         before = self.revision
         self.revision += 1
@@ -67,9 +65,6 @@ def _processor(repository=None, republished=None):
     [
         ("enabled", "ON", True),
         ("enabled", "OFF", False),
-        ("target_charge", "0", 0.0),
-        ("target_charge", "0.45", 0.45),
-        ("target_charge", "1", 1.0),
     ],
 )
 def test_valid_commands_update_only_the_requested_configuration(field, payload, expected):
@@ -78,15 +73,14 @@ def test_valid_commands_update_only_the_requested_configuration(field, payload, 
         IncomingMessage(f"dtc/installation/heater/salon/set/{field}", payload.encode())
     )
     heater = next(h for h in repository.config.heaters if h.id == "salon")
-    assert getattr(heater, field) == expected
+    assert getattr(heater, field) is expected
 
 
 @pytest.mark.parametrize(
     ("field", "payload"),
     [
         ("enabled", ""), ("enabled", "true"),
-        ("target_charge", ""), ("target_charge", "abc"),
-        ("target_charge", "-0.1"), ("target_charge", "1.1"),
+        ("stored_soc", "50"), ("target_charge", "50"),
     ],
 )
 def test_invalid_payload_or_unknown_heater_is_rejected_and_republished(field, payload):
@@ -165,20 +159,20 @@ def test_every_result_republishes_qos_one_retained_stored_state(mqtt_client):
         repository, topics, republish=publisher.republish_heater
     )
     assert not processor.handle(
-        IncomingMessage(topics.command("salon", "target_charge"), b"9")
+        IncomingMessage(topics.command("salon", "enabled"), b"MAYBE")
     )
     topic, payload, qos, retained = mqtt_client.publications[-1]
     assert topic == topics.heater_state("salon")
-    assert json.loads(payload)["target_charge"] == 1.0
+    assert json.loads(payload)["enabled"] is True
     assert (qos, retained) == (1, True)
 
 
-def test_accepted_target_is_visible_to_the_next_plan_input():
+def test_accepted_enabled_command_is_visible_to_the_next_state_snapshot():
     processor, repository, _ = _processor()
     assert processor.handle(
         IncomingMessage(
-            "dtc/installation/heater/salon/set/target_charge", b"0.5"
+            "dtc/installation/heater/salon/set/enabled", b"OFF"
         )
     )
     heater = next(h for h in repository.current()[0].heaters if h.id == "salon")
-    assert heater.requested_charge_minutes == heater.full_charge_minutes // 2
+    assert heater.enabled is False

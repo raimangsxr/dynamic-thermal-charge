@@ -8,12 +8,25 @@ the configuration repository refuses (FR-025).
 
 from __future__ import annotations
 
+from datetime import time
+
 from fastapi import APIRouter, Depends, Query, status
 
-from ...models import Heater, OutputConfig
+from ...models import (
+    Heater,
+    OutputConfig,
+    TemperatureTarget,
+    ThermalProfile,
+    validate_temperature_targets,
+)
 from ...persistence import ConfigChange, ConfigValidationError
 from ...persistence.bootstrap import Store
 from ...persistence.gate import EXPECTED_REVISION
+from ...persistence.mapping import (
+    format_temperature_target_end_time,
+    parse_temperature_target_end_time,
+    parse_time,
+)
 from ..dependencies import usable_store
 from ..errors import ApiError, CODE_ALREADY_EXISTS, not_found
 from ..schemas import (
@@ -29,6 +42,7 @@ from ..schemas import (
     ScheduleView,
     SetFieldRequest,
     UpdateHeaterRequest,
+    TemperatureTargetView,
 )
 
 
@@ -42,21 +56,53 @@ def _heater_view(heater: Heater) -> HeaterResponse:
         model=heater.model,
         power_kw=heater.power_w / 1000,
         full_charge_hours=heater.full_charge_minutes / 60,
-        target_charge=heater.target_charge,
         priority=heater.priority,
         enabled=heater.enabled,
         indoor_topic=heater.indoor_topic,
-        temperature_topic=heater.temperature_topic,
-        target_temperature_topic=heater.target_temperature_topic,
-        stored_charge_topic=heater.stored_charge_topic,
-        reserve_percent=heater.reserve_percent,
-        demand_factor=heater.demand_factor,
+        stored_soc_topic=heater.stored_soc_topic,
         output=OutputView(
             kind=heater.output.kind,
             pin=heater.output.pin,
             active_high=heater.output.active_high,
         ),
+        room_thermal_capacity_kwh_per_c=heater.room_thermal_capacity_kwh_per_c,
+        room_heat_loss_kw_per_c=heater.room_heat_loss_kw_per_c,
+        temperature_targets=[
+            TemperatureTargetView(
+                id=target.id,
+                heater_id=heater.id,
+                target_temperature_c=target.target_temperature_c,
+                start_time=target.start_time.strftime("%H:%M"),
+                end_time=format_temperature_target_end_time(
+                    target.start_time, target.end_time
+                ),
+                weekdays=list(target.weekdays),
+                enabled=target.enabled,
+            )
+            for target in heater.temperature_targets
+        ],
     )
+
+
+def _targets_for_heater(heater_id: str, payload_targets) -> tuple[TemperatureTarget, ...]:
+    try:
+        targets = tuple(
+            TemperatureTarget(
+                target_temperature_c=item.target_temperature_c,
+                start_time=parse_time(item.start_time, "start_time"),
+                end_time=parse_temperature_target_end_time(item.end_time, "end_time"),
+                weekdays=tuple(sorted(set(item.weekdays))),
+                enabled=item.enabled,
+            )
+            for item in payload_targets
+            if not item.heater_id or item.heater_id == heater_id
+        )
+        validate_temperature_targets(targets)
+        return targets
+    except (TypeError, ValueError) as exc:
+        raise ConfigValidationError(
+            str(exc), field="temperature_targets", heater_id=heater_id
+        ) from exc
 
 
 def _config_view(config, revision: int) -> ConfigResponse:
@@ -249,6 +295,14 @@ def update_heater(
         raise not_found(f"heater {heater_id!r} does not exist", field="heater_id")
 
     thermal = current.thermal
+    if thermal is None or (
+        payload.room_thermal_capacity_kwh_per_c != thermal.room_thermal_capacity_kwh_per_c
+        or payload.room_heat_loss_kw_per_c != thermal.room_heat_loss_kw_per_c
+    ):
+        thermal = ThermalProfile(
+            room_thermal_capacity_kwh_per_c=payload.room_thermal_capacity_kwh_per_c,
+            room_heat_loss_kw_per_c=payload.room_heat_loss_kw_per_c,
+        )
 
     try:
         heater = Heater(
@@ -257,19 +311,19 @@ def update_heater(
             model=payload.model,
             power_w=round(payload.power_kw * 1000),
             full_charge_minutes=round(payload.full_charge_hours * 60),
-            target_charge=payload.target_charge,
             priority=payload.priority,
             enabled=payload.enabled,
             indoor_topic=payload.indoor_topic,
-            temperature_topic=payload.temperature_topic,
-            target_temperature_topic=payload.target_temperature_topic,
-            stored_charge_topic=payload.stored_charge_topic,
-            reserve_percent=payload.reserve_percent,
-            demand_factor=payload.demand_factor,
+            stored_soc_topic=payload.stored_soc_topic,
             output=OutputConfig(
                 kind=payload.output, pin=payload.pin, active_high=payload.active_high
             ),
             thermal=thermal,
+            temperature_targets=(
+                current.temperature_targets
+                if payload.temperature_targets is None
+                else _targets_for_heater(heater_id, payload.temperature_targets)
+            ),
         )
         change = store.repository.update_heater(payload.revision, heater)
     except ConfigValidationError:
@@ -290,23 +344,23 @@ def update_heater(
 def post_heater(
     payload: AddHeaterRequest, store: Store = Depends(usable_store)
 ) -> ChangeResponse:
-    thermal = None
+    thermal = ThermalProfile(
+        room_thermal_capacity_kwh_per_c=payload.room_thermal_capacity_kwh_per_c,
+        room_heat_loss_kw_per_c=payload.room_heat_loss_kw_per_c,
+    )
     heater = Heater(
         id=payload.id,
         name=payload.name or payload.id,
         model=payload.model,
         power_w=round(payload.power_kw * 1000),
         full_charge_minutes=round(payload.full_charge_hours * 60),
-        target_charge=payload.target_charge,
         priority=payload.priority,
         enabled=payload.enabled,
         indoor_topic=payload.indoor_topic,
-        temperature_topic=payload.temperature_topic,
-        target_temperature_topic=payload.target_temperature_topic,
-        stored_charge_topic=payload.stored_charge_topic,
-        reserve_percent=payload.reserve_percent,
-        demand_factor=payload.demand_factor,
+        stored_soc_topic=payload.stored_soc_topic,
         thermal=thermal,
+        temperature_targets=_targets_for_heater(payload.id, payload.temperature_targets)
+        or (TemperatureTarget(21.0, time(0, 0), time(0, 0)),),
         output=OutputConfig(
             kind=payload.output, pin=payload.pin, active_high=payload.active_high
         ),

@@ -20,7 +20,7 @@ from sqlalchemy import MetaData, Table, delete, insert, inspect, select, update
 from sqlalchemy.engine import Connection, Engine
 
 from ..config import validate_config
-from ..models import AppConfig, Heater, IndoorReading
+from ..models import AppConfig, Heater, IndoorReading, validate_temperature_targets
 from . import (
     ConfigChange,
     ConfigConflictError,
@@ -32,6 +32,7 @@ from .engine import store_errors, transaction
 from .mapping import (
     config_from_rows,
     format_time,
+    format_temperature_target_end_time,
     format_weekdays,
     heater_params,
     installation_params,
@@ -51,6 +52,7 @@ from .schema import (
     installation as installation_table,
     output_config as output_table,
     thermal_profile as thermal_table,
+    temperature_target,
     weather_config as weather_table,
     relay_test_control,
 )
@@ -161,12 +163,14 @@ HEATER_FIELDS: dict[str, tuple[str, str, Callable[[str, str], Any]]] = {
     "power_w": ("heater", "power_w", _parse_int),
     "full_charge_hours": ("heater", "full_charge_minutes", _hours_to_minutes),
     "full_charge_minutes": ("heater", "full_charge_minutes", _parse_int),
-    "target_charge": ("heater", "target_charge", _parse_float),
     "priority": ("heater", "priority", _parse_int),
     "enabled": ("heater", "enabled", _parse_bool),
     "indoor_topic": ("heater", "indoor_topic", _parse_optional_str),
-    "reserve_percent": ("charge", "reserve_percent", _parse_float),
-    "demand_factor": ("charge", "demand_factor", _parse_float),
+    "stored_soc_topic": ("charge", "stored_soc_topic", _parse_optional_str),
+    "room_thermal_capacity_kwh_per_c": (
+        "thermal", "room_thermal_capacity_kwh_per_c", _parse_float
+    ),
+    "room_heat_loss_kw_per_c": ("thermal", "room_heat_loss_kw_per_c", _parse_float),
     "output_type": ("output", "kind", lambda raw, field: raw),
     "pin": ("output", "pin", _parse_optional_int),
     "active_high": ("output", "active_high", _parse_bool),
@@ -215,6 +219,20 @@ class SqlConfigRepository:
             .order_by(heater_table.c.position)
         ).mappings().all()
 
+        target_rows: dict[str, list[dict[str, Any]]] = {}
+        if inspect(connection).has_table(temperature_target.name):
+            target_rows = {}
+            for row in connection.execute(
+                select(temperature_target).where(
+                    temperature_target.c.installation_id == installation_id
+                ).order_by(
+                    temperature_target.c.heater_id,
+                    temperature_target.c.start_time,
+                    temperature_target.c.end_time,
+                )
+            ).mappings().all():
+                target_rows.setdefault(str(row["heater_id"]), []).append(dict(row))
+
         combined = []
         for heater_row in heater_rows:
             output_row = connection.execute(
@@ -227,7 +245,12 @@ class SqlConfigRepository:
             ).mappings().first()
             combined.append((heater_row, output_row, thermal_row))
 
-        config = config_from_rows(installation_row, weather_row, combined)
+        config = config_from_rows(
+            installation_row,
+            weather_row,
+            combined,
+            temperature_targets=target_rows,
+        )
         charge_rows = {}
         if inspect(connection).has_table(heater_charge_config.name):
             charge_rows = {
@@ -244,19 +267,7 @@ class SqlConfigRepository:
                 heaters=tuple(
                     replace(
                         item,
-                        temperature_topic=charge_rows.get(item.id, {}).get("temperature_topic"),
-                        target_temperature_topic=charge_rows.get(item.id, {}).get("target_temperature_topic"),
-                        stored_charge_topic=charge_rows.get(item.id, {}).get("stored_charge_topic"),
-                        reserve_percent=float(charge_rows.get(item.id, {}).get("reserve_percent", 0.0)),
-                        demand_factor=float(charge_rows.get(item.id, {}).get("demand_factor", 1.0)),
-                        thermal=(
-                            None if item.thermal is None else replace(
-                                item.thermal,
-                                room_inertia_hours=float(charge_rows[item.id].get("room_inertia_hours", item.thermal.room_inertia_hours)),
-                                outdoor_loss_per_hour=float(charge_rows[item.id].get("outdoor_loss_per_hour", item.thermal.outdoor_loss_per_hour)),
-                                emission_c_per_hour=float(charge_rows[item.id].get("emission_c_per_hour", item.thermal.emission_c_per_hour)),
-                            )
-                        ),
+                        stored_soc_topic=charge_rows.get(item.id, {}).get("stored_soc_topic"),
                     ) if item.id in charge_rows else item
                     for item in config.heaters
                 ),
@@ -368,26 +379,67 @@ class SqlConfigRepository:
         if inspect(connection).has_table(heater_charge_config.name):
             connection.execute(
                 insert(heater_charge_config).values(
-                    installation_id=installation_id,
-                    heater_id=heater.id,
-                    temperature_topic=heater.temperature_topic or heater.indoor_topic,
-                    target_temperature_topic=heater.target_temperature_topic,
-                    stored_charge_topic=heater.stored_charge_topic,
-                    reserve_percent=heater.reserve_percent,
-                    demand_factor=heater.demand_factor,
-                    room_inertia_hours=8 if heater.thermal is None else heater.thermal.room_inertia_hours,
-                    outdoor_loss_per_hour=0.08 if heater.thermal is None else heater.thermal.outdoor_loss_per_hour,
-                    emission_c_per_hour=1 if heater.thermal is None else heater.thermal.emission_c_per_hour,
+                    **self._compatible_params(
+                        connection,
+                        heater_charge_config.name,
+                        {
+                            "installation_id": installation_id,
+                            "heater_id": heater.id,
+                            "stored_soc_topic": heater.stored_soc_topic,
+                        },
+                    )
                 )
             )
         if heater.thermal is not None:
+            thermal_insert_table, thermal_values = self._compatible_table_and_params(
+                connection,
+                thermal_table,
+                thermal_params(heater.thermal, heater_key),
+            )
             connection.execute(
-                insert(thermal_table).values(
-                    **self._compatible_params(
-                        connection,
-                        thermal_table.name,
-                        thermal_params(heater.thermal, heater_key),
-                    )
+                insert(thermal_insert_table).values(**thermal_values)
+            )
+        self._replace_temperature_targets(
+            connection, installation_id, heater.id, heater.temperature_targets
+        )
+
+    def _replace_temperature_targets(
+        self,
+        connection: Connection,
+        installation_id: int,
+        heater_id: str,
+        targets,
+    ) -> None:
+        """Replace one heater's weekly target rules in the same transaction."""
+        if not inspect(connection).has_table(temperature_target.name):
+            return
+        try:
+            validate_temperature_targets(tuple(targets))
+        except ValueError as exc:
+            raise ConfigValidationError(
+                str(exc), field="temperature_targets", heater_id=heater_id
+            ) from exc
+        now = to_utc(self._clock())
+        connection.execute(
+            delete(temperature_target).where(
+                (temperature_target.c.installation_id == installation_id)
+                & (temperature_target.c.heater_id == heater_id)
+            )
+        )
+        for target in targets:
+            connection.execute(
+                insert(temperature_target).values(
+                    installation_id=installation_id,
+                    heater_id=heater_id,
+                    target_temperature_c=target.target_temperature_c,
+                    start_time=format_time(target.start_time),
+                    end_time=format_temperature_target_end_time(
+                        target.start_time, target.end_time
+                    ),
+                    weekdays=format_weekdays(target.weekdays),
+                    enabled=target.enabled,
+                    created_at=now,
+                    updated_at=now,
                 )
             )
 
@@ -400,6 +452,27 @@ class SqlConfigRepository:
             column["name"] for column in inspect(connection).get_columns(table_name)
         }
         return {name: value for name, value in params.items() if name in present}
+
+    @staticmethod
+    def _compatible_table_and_params(
+        connection: Connection, table, params: dict[str, Any]
+    ):
+        """Use a reflected table when seeding a pinned historical schema.
+
+        The live SQLAlchemy table definitions describe the current schema.  A
+        pre-room-energy database still has required legacy thermal columns, so
+        its insert needs the reflected historical table long enough for the
+        migration to run.  Current stores continue to use the shared metadata
+        table and therefore cannot accidentally acquire those columns.
+        """
+        present = {
+            column["name"] for column in inspect(connection).get_columns(table.name)
+        }
+        if not set(params).issubset(table.c.keys()):
+            table = Table(table.name, MetaData(), autoload_with=connection)
+        return table, {
+            name: value for name, value in params.items() if name in present and name in table.c
+        }
 
     @staticmethod
     def _select_present(connection: Connection, table):  # noqa: ANN001
@@ -603,13 +676,7 @@ class SqlConfigRepository:
                 })
             )
             if inspect(connection).has_table(heater_charge_config.name):
-                charge_values = {
-                    "temperature_topic": heater.temperature_topic or heater.indoor_topic,
-                    "target_temperature_topic": heater.target_temperature_topic,
-                    "stored_charge_topic": heater.stored_charge_topic,
-                    "reserve_percent": heater.reserve_percent,
-                    "demand_factor": heater.demand_factor,
-                }
+                charge_values = {"stored_soc_topic": heater.stored_soc_topic}
                 charge_updated = connection.execute(
                     update(heater_charge_config)
                     .where(
@@ -621,29 +688,32 @@ class SqlConfigRepository:
                 if charge_updated.rowcount != 1:
                     connection.execute(
                         insert(heater_charge_config).values(
-                            installation_id=installation_id,
-                            heater_id=heater.id,
-                            **charge_values,
-                            room_inertia_hours=(
-                                8 if heater.thermal is None else heater.thermal.room_inertia_hours
-                            ),
-                            outdoor_loss_per_hour=(
-                                0.08 if heater.thermal is None else heater.thermal.outdoor_loss_per_hour
-                            ),
-                            emission_c_per_hour=(
-                                1 if heater.thermal is None else heater.thermal.emission_c_per_hour
-                            ),
+                            **self._compatible_params(
+                                connection,
+                                heater_charge_config.name,
+                                {
+                                    "installation_id": installation_id,
+                                    "heater_id": heater.id,
+                                    **charge_values,
+                                },
+                            )
                         )
                     )
             connection.execute(
                 delete(thermal_table).where(thermal_table.c.heater_id == heater_key)
             )
             if heater.thermal is not None:
-                connection.execute(
-                    insert(thermal_table).values(
-                        **thermal_params(heater.thermal, int(heater_key))
-                    )
+                thermal_update_table, thermal_values = self._compatible_table_and_params(
+                    connection,
+                    thermal_table,
+                    thermal_params(heater.thermal, int(heater_key)),
                 )
+                connection.execute(
+                    insert(thermal_update_table).values(**thermal_values)
+                )
+            self._replace_temperature_targets(
+                connection, installation_id, heater.id, heater.temperature_targets
+            )
             change = ConfigChange(
                 entity="heater",
                 entity_key=heater.id,
@@ -858,7 +928,7 @@ class SqlConfigRepository:
             "thermal": thermal_table,
             "charge": heater_charge_config,
         }[table_name]
-        key_column = table.c.id if table_name == "heater" else table.c.heater_id
+        key_column = table.c.id if table_name in {"heater", "output"} else table.c.heater_id
         key_value = heater_key
         row = connection.execute(
             select(table.c[column]).where(

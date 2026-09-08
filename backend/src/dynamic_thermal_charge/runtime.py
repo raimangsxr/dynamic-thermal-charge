@@ -24,7 +24,6 @@ from .models import AppConfig
 from .persistence import ConfigStoreError
 from .persistence.active_plan import SqlActivePlanRepository
 from .scheduler import (
-    ChargeScheduler,
     ScheduleResult,
     ScheduleSlot,
     _floor_to_wall_boundary,
@@ -32,7 +31,7 @@ from .scheduler import (
 )
 from .service import ControllerService, PlanRefresh
 from .system_settings import MqttSystemSettings
-from .thermal import ThermalDemandEngine, select_indoor_temperatures
+from .thermal import select_indoor_temperatures
 from .watchdog import DailyAemetForecastManager, ForecastWatchdog
 from .weather import OutdoorForecast, WeatherProvider
 
@@ -59,7 +58,6 @@ def _build_plan(
     forecast: OutdoorForecast | None,
     indoor_temperatures: dict[str, float] | None = None,
 ) -> ScheduleResult:
-    requested_charge_minutes = None
     if forecast is not None:
         logger.info(
             "Weather forecast: date=%s source=%s location=%s min=%.1f C avg=%.1f C "
@@ -71,22 +69,14 @@ def _build_plan(
             forecast.average_temperature_c,
             forecast.maximum_temperature_c,
         )
-        requested_charge_minutes = ThermalDemandEngine().calculate(
-            config.heaters,
-            forecast,
-            indoor_temperatures=indoor_temperatures,
-            window_start=start,
-            window_end=start + timedelta(minutes=config.site.window_minutes),
-        )
-    return ChargeScheduler().build(
-        config.site,
-        config.heaters,
-        start,
-        requested_charge_minutes=requested_charge_minutes,
-        hourly_points=None if forecast is None else forecast.hourly_points,
-        fallback_temperature_c=(
-            None if forecast is None else forecast.average_temperature_c
-        ),
+    logger.warning(
+        "Room-energy planning is unavailable in the standalone watchdog; "
+        "fresh indoor temperature and stored SOC telemetry are required"
+    )
+    return ScheduleResult(
+        slots=(),
+        allocated_minutes={heater.id: 0 for heater in config.heaters if heater.enabled},
+        unmet_minutes={},
     )
 
 
@@ -184,12 +174,17 @@ def _run_controller(
                 live_config, live_revision = store.repository.current()
                 live_mqtt = _live_mqtt_settings(store, None if system is None else system.mqtt)
                 planning_site = store.planning.site()
-                automatic_constraints = store.planning.constraints()
+                # Percentage charge constraints were removed.  The planning
+                # revision now protects the weekly temperature-target schedule.
+                automatic_constraints = ()
                 logger.debug(
-                    "Plan refresh started: at=%s constraints=%d active_automatic=%s "
+                    "Plan refresh started: at=%s temperature_targets=%d active_automatic=%s "
                     "replan_minutes=%s",
                     now.isoformat(),
-                    len(automatic_constraints),
+                    sum(
+                        len(getattr(heater, "temperature_targets", ()))
+                        for heater in live_config.heaters
+                    ),
                     store.planning.active_plan() is not None,
                     planning_site["replan_minutes"],
                 )
@@ -206,13 +201,33 @@ def _run_controller(
                     query_hour=int(planning_site["aemet_query_hour"]),
                     timezone_name=timezone_name,
                 )
-                if automatic_constraints or store.planning.active_plan() is not None:
+                room_energy_targets = {
+                    heater.id: tuple(getattr(heater, "temperature_targets", ()))
+                    for heater in live_config.heaters
+                    if heater.enabled
+                }
+                if hasattr(store.planning, "temperature_targets"):
+                    persisted_targets = store.planning.temperature_targets()
+                    room_energy_targets.update(
+                        {
+                            heater_id: tuple(targets)
+                            for heater_id, targets in persisted_targets.items()
+                        }
+                    )
+                # Every enabled heater is now governed by the room-energy
+                # planner.  An empty target map is an explicit invalid input,
+                # not a reason to fall back to percentage planning.
+                room_energy_planning = any(
+                    heater.enabled for heater in live_config.heaters
+                )
+                if room_energy_planning or store.planning.active_plan() is not None:
                     automatic = _build_automatic_runtime_plan(
                         store,
                         live_config,
                         now,
                         automatic_constraints,
                         planning_site,
+                        temperature_targets=room_energy_targets,
                         mqtt=live_mqtt,
                     )
                     if automatic is not None:
@@ -334,6 +349,7 @@ def _build_automatic_runtime_plan(
     constraints,
     planning_site: dict[str, int],
     *,
+    temperature_targets=None,
     mqtt: MqttSystemSettings | None = None,
 ):
     """Build the controller-facing schedule from the automatic plan value."""
@@ -349,11 +365,22 @@ def _build_automatic_runtime_plan(
         now,
         mqtt=mqtt_settings,
     )
+    target_map = temperature_targets
+    if target_map is None:
+        target_map = {
+            heater.id: tuple(getattr(heater, "temperature_targets", ()))
+            for heater in config.heaters
+            if heater.enabled
+        }
+    # The new model must remain selected even when a schedule is missing: the
+    # planner then returns a visible ``missing_temperature_schedule`` result.
+    # Falling back to the legacy percentage model would hide a configuration
+    # error and violate the safety contract.
     timezone_name = config.schedule.timezone if config.schedule is not None else "UTC"
     request = PlanningInput(
         heaters=config.heaters,
         telemetry=valid,
-        constraints=constraints,
+        constraints=(),
         forecast=store.planning.latest_forecast(now),
         horizon_start=now,
         horizon_hours=int(planning_site.get("forecast_horizon_hours", PLANNING_HORIZON_HOURS)),
@@ -361,13 +388,12 @@ def _build_automatic_runtime_plan(
         max_total_power_w=int(planning_site.get("contracted_power_w", config.site.max_total_power_w)),
         base_load_w=int(planning_site.get("base_load_w", 0)),
         max_heating_power_w=int(planning_site.get("max_heating_power_w", config.site.max_heating_power_w or config.site.max_total_power_w)),
-        design_indoor_temperature_c=float(planning_site.get("design_indoor_temperature_c", config.site.design_indoor_temperature_c)),
-        design_outdoor_temperature_c=float(planning_site.get("design_outdoor_temperature_c", config.site.design_outdoor_temperature_c)),
-        feedback_horizon_hours=float(planning_site.get("feedback_horizon_hours", config.site.feedback_horizon_hours)),
         solver_time_limit_seconds=int(planning_site.get("solver_time_limit_seconds", 120)),
         forecast_automatic_eligible=(store.planning.latest_forecast_automatic_eligible() if hasattr(store.planning, "latest_forecast_automatic_eligible") else True),
         generated_at=now,
         timezone_name=timezone_name,
+        temperature_targets=target_map,
+        room_energy_model=True,
     )
     plan = DeterministicChargeOptimizer().build(request)
     legacy_slots = tuple(
@@ -395,6 +421,11 @@ def _aggregate_unmet_minutes(config: AppConfig, violations) -> dict[str, int]:
     heaters_by_id = {heater.id: heater for heater in config.heaters}
     unmet: dict[str, int] = {}
     for item in violations:
+        # Room-energy deficits are degrees Celsius, not charge percentages;
+        # they are already exposed in the automatic-plan audit and must not be
+        # converted into legacy charge minutes.
+        if item.requirement == "temperature_comfort":
+            continue
         if item.heater_id is None or item.deficit_percent <= 0:
             continue
         heater = heaters_by_id.get(item.heater_id)
