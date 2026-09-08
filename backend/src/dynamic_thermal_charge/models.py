@@ -401,6 +401,8 @@ class ChargeTelemetry:
     stored_soc_percent: float | None = None
     indoor_received_at: datetime | None = None
     stored_soc_received_at: datetime | None = None
+    damper_position_percent: float | None = None
+    damper_received_at: datetime | None = None
 
     def __post_init__(self) -> None:
         if not self.heater_id:
@@ -425,15 +427,19 @@ class ChargeTelemetry:
             self.temperature_c,
             self.target_temperature_c,
             self.stored_charge_percent,
+            self.damper_position_percent,
         ):
             if value is not None and not math.isfinite(value):
                 raise ValueError("telemetry values must be finite")
         if self.stored_charge_percent is not None and not 0 <= self.stored_charge_percent <= 100:
             raise ValueError("stored charge must be between 0 and 100")
+        if self.damper_position_percent is not None and not 0 <= self.damper_position_percent <= 100:
+            raise ValueError("damper position must be between 0 and 100")
         for received_at in (
             self.temperature_received_at,
             self.target_received_at,
             self.stored_charge_received_at,
+            self.damper_received_at,
         ):
             if received_at is not None and received_at.tzinfo is None:
                 raise ValueError("telemetry timestamps require a timezone")

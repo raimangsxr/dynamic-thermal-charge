@@ -241,6 +241,7 @@ def run_mqtt() -> None:
             heartbeat_reader=lambda: read_heartbeat(application_engine, installation_id, store.location),
             status_reader=status_reader,
             clock=lambda: datetime.now(timezone.utc),
+            charge_config_provider=store.planning.heater_charge_config,
         )
         transport = PahoMqttClient(settings)
 

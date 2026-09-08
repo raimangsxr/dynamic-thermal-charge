@@ -189,12 +189,14 @@ class StoreSnapshotReader:
         heartbeat_reader: Callable[[], Heartbeat | None],
         status_reader,
         clock: Callable[[], Any],
+        charge_config_provider: Callable[[], Mapping[str, Mapping[str, Any]]] | None = None,
     ) -> None:
         self._config_repository = config_repository
         self._schema_gate = schema_gate
         self._heartbeat_reader = heartbeat_reader
         self._status_reader = status_reader
         self._clock = clock
+        self._charge_config_provider = charge_config_provider or (lambda: {})
         self._previous_heartbeat: Heartbeat | None = None
         self._config: AppConfig | None = None
 
@@ -243,11 +245,13 @@ class StoreSnapshotReader:
         result: list[str] = []
         for heater in self._config.heaters:
             result.append(topics.command(heater.id, "enabled"))
+            damper_topic = self._charge_config_provider().get(heater.id, {}).get("damper_topic")
             result.extend(
                 topic
                 for topic in (
                     heater.indoor_topic,
                     heater.stored_soc_topic,
+                    damper_topic,
                 )
                 if topic is not None
             )

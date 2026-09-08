@@ -110,6 +110,7 @@ def create_app(
     from .routes import system as system_routes
     from .routes import relay_test as relay_test_routes
     from .routes import planning as planning_routes
+    from .routes import operational as operational_routes
 
     # A process restart must be visible to the operator, never an implicit
     # rerun against a different telemetry/forecast snapshot. The worker itself
@@ -132,6 +133,12 @@ def create_app(
     )
     app.include_router(
         planning_routes.router, prefix=API_PREFIX, tags=["planning"], dependencies=protected
+    )
+    app.include_router(
+        operational_routes.router,
+        prefix=API_PREFIX,
+        tags=["operational"],
+        dependencies=protected,
     )
     app.include_router(controller_log_routes.router, prefix=API_PREFIX, tags=["controller-log"], dependencies=protected)
     app.include_router(relay_test_routes.router, prefix=API_PREFIX, tags=["relay-test"], dependencies=protected)

@@ -66,6 +66,7 @@ def test_a_missing_directory_is_created(tmp_path):
 def _installation_row(now: datetime) -> dict:
     return {
         "name": "test",
+        "installation_uuid": "00000000-0000-4000-8000-000000000001",
         "revision": 1,
         "max_total_power_w": 6000,
         "slot_minutes": 30,

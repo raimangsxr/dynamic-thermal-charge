@@ -1,0 +1,11 @@
+{
+  "domain": "dynamic_thermal_charge",
+  "name": "Dynamic Thermal Charge",
+  "version": "0.1.0",
+  "config_flow": true,
+  "documentation": "https://github.com/rromanit/dynamic-thermal-charge",
+  "integration_type": "hub",
+  "iot_class": "local_polling",
+  "requirements": [],
+  "codeowners": ["@rromanit"]
+}

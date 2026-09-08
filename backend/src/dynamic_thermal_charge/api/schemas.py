@@ -336,6 +336,7 @@ class AutomaticPlanAuditPage(BaseModel):
 class HeaterChargeConfigRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     stored_soc_topic: str | None = None
+    damper_topic: str | None = None
 
 
 class PlanningSiteConfigRequest(BaseModel):

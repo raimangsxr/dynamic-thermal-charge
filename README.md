@@ -30,6 +30,38 @@ El backend se instala en `backend/.venv`, que es el intérprete que usan `make
 test` y `make lint` cuando existe. El panel se compila siempre fuera del
 dispositivo.
 
+## Integración con Home Assistant
+
+La integración nativa está en `custom_components/dynamic_thermal_charge`. Para
+una instalación manual, copia ese directorio a
+`/config/custom_components/dynamic_thermal_charge` en Home Assistant y reinicia
+Home Assistant. En `Ajustes → Dispositivos y servicios → Añadir integración`,
+introduce el host y puerto accesibles desde Home Assistant y el mismo token
+Bearer configurado en `DTC_API_TOKEN` (el puerto habitual del backend es
+`8080`). El backend debe ser accesible desde la red de Home Assistant; la
+integración no usa la API del panel web.
+
+El backend sigue siendo la autoridad: Home Assistant solo lee snapshots y
+envía comandos autenticados con revisión optimista. La integración consulta un
+snapshot coherente cada 30 segundos y solicita una actualización inmediata tras
+cualquier comando. Si falla la conexión o la autenticación, todas las entidades
+quedan no disponibles y no se conserva telemetría como si fuera actual.
+
+Se crea un dispositivo controlador y un dispositivo por acumulador. El
+controlador ofrece estado, potencia total, interruptor de control automático,
+botón de recálculo y calendario global. Cada acumulador ofrece clima AUTO/OFF,
+temperatura interior, SOC térmico, potencia, carga confirmada, posición de
+compuerta opcional, próxima carga y próximo objetivo de SOC. El clima solo
+permite AUTO/OFF y modifica la consigna semanal activa; no existe un mando
+manual HEAT ni un mando de compuerta. El calendario agrupa intervalos contiguos
+del mismo acumulador e incluye la evolución de SOC y energía.
+
+La instalación se identifica por un UUID persistente del backend, no por el
+nombre editable ni por el host. Por ello se conservan las entidades, nombres y
+áreas al renombrar o reconfigurar el endpoint. La configuración detecta
+duplicados por esa identidad y permite reautenticar el token sin crear otra
+instalación.
+
 ## Despliegue en Docker
 
 En la Raspberry prepara `/srv/app/data` para el estado persistente y configura

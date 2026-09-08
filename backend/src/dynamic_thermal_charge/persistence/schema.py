@@ -72,8 +72,27 @@ installation = Table(
     configuration_metadata,
     Column("id", Integer, primary_key=True),
     Column("name", String(120), nullable=False),
+    # Stable public identity. It is generated once and never derived from the
+    # editable installation name or the network address.
+    # Nullable at the SQL layer because legacy migrations add it in two phases;
+    # all bootstrap-created rows populate it and the operational repository
+    # rejects a missing identity.
+    Column("installation_uuid", String(36), nullable=True, unique=True),
     # Optimistic locking. Grows monotonically; see research.md D9.
     Column("revision", Integer, nullable=False, server_default="1"),
+    Column("automatic_control_enabled", Boolean, nullable=False, server_default="1"),
+    Column(
+        "recalculation_requested_generation",
+        Integer,
+        nullable=False,
+        server_default="0",
+    ),
+    Column(
+        "recalculation_processed_generation",
+        Integer,
+        nullable=False,
+        server_default="0",
+    ),
     Column("max_total_power_w", Integer, nullable=False),
     Column("slot_minutes", Integer, nullable=False),
     Column("window_minutes", Integer, nullable=False),
@@ -320,7 +339,10 @@ heater_charge_config = Table(
     Column("installation_id", Integer, ForeignKey("installation.id", ondelete="CASCADE"), nullable=False),
     Column("heater_id", String(64), primary_key=True),
     Column("stored_soc_topic", String(512), nullable=True),
+    Column("control_mode", String(8), nullable=False, server_default="AUTO"),
+    Column("damper_topic", String(512), nullable=True),
     UniqueConstraint("installation_id", "heater_id", name="uq_heater_charge_config"),
+    CheckConstraint("control_mode IN ('AUTO', 'OFF')", name="ck_heater_control_mode"),
 )
 
 heater_telemetry = Table(
@@ -332,9 +354,15 @@ heater_telemetry = Table(
     Column("temperature_received_at", DateTime, nullable=True),
     Column("stored_soc_percent", Float, nullable=True),
     Column("stored_soc_received_at", DateTime, nullable=True),
+    Column("damper_position_percent", Float, nullable=True),
+    Column("damper_received_at", DateTime, nullable=True),
     Column("invalid_field", String(32), nullable=True),
     Column("invalid_at", DateTime, nullable=True),
     CheckConstraint("stored_soc_percent IS NULL OR (stored_soc_percent >= 0 AND stored_soc_percent <= 100)", name="ck_telemetry_soc"),
+    CheckConstraint(
+        "damper_position_percent IS NULL OR (damper_position_percent >= 0 AND damper_position_percent <= 100)",
+        name="ck_telemetry_damper",
+    ),
     Index("ix_heater_telemetry_installation", "installation_id", "heater_id"),
 )
 

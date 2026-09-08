@@ -50,6 +50,18 @@ class Store:
             self.location,
         )
 
+    @property
+    def home_assistant(self):
+        from .home_assistant import SqlHomeAssistantRepository
+
+        return SqlHomeAssistantRepository(
+            self.configuration_engine or self.engine,
+            self.application_engine or self.engine,
+            self.repository.installation_id(),
+            self.location,
+            self.location,
+        )
+
 
 @dataclass(frozen=True)
 class InitReport:

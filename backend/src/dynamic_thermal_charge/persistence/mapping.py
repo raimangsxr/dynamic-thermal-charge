@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from datetime import datetime, time, timezone
 from typing import Any, Mapping, Sequence
+from uuid import uuid4
 
 from ..models import (
     AemetConfig,
@@ -340,7 +341,11 @@ def installation_params(config: AppConfig, name: str, now: datetime) -> dict[str
     schedule = config.schedule
     return {
         "name": name,
+        "installation_uuid": str(uuid4()),
         "revision": 1,
+        "automatic_control_enabled": True,
+        "recalculation_requested_generation": 0,
+        "recalculation_processed_generation": 0,
         "max_total_power_w": config.site.max_total_power_w,
         "slot_minutes": config.site.slot_minutes,
         "window_minutes": config.site.window_minutes,

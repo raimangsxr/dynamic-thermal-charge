@@ -386,6 +386,8 @@ class SqlConfigRepository:
                             "installation_id": installation_id,
                             "heater_id": heater.id,
                             "stored_soc_topic": heater.stored_soc_topic,
+                            "control_mode": "AUTO",
+                            "damper_topic": None,
                         },
                     )
                 )

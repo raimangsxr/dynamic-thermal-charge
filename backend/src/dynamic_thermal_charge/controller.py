@@ -13,7 +13,14 @@ logger = logging.getLogger(__name__)
 
 
 class ChargeController:
-    def __init__(self, heater_ids: tuple[str, ...], driver: OutputDriver, relay_tests=None, runner_id: str = "controller") -> None:
+    def __init__(
+        self,
+        heater_ids: tuple[str, ...],
+        driver: OutputDriver,
+        relay_tests=None,
+        runner_id: str = "controller",
+        allowed_outputs_provider=None,
+    ) -> None:
         self._heater_ids = heater_ids
         self._heater_id_set = set(heater_ids)
         self._driver = driver
@@ -23,6 +30,7 @@ class ChargeController:
         self._relay_test_latch_local = False
         self._relay_test_session_id: str | None = None
         self._failed_outputs: set[str] = set()
+        self._allowed_outputs_provider = allowed_outputs_provider
 
     @property
     def active_outputs(self) -> set[str]:
@@ -308,11 +316,20 @@ class ChargeController:
     def _desired_outputs(self, plan: ScheduleResult | None, at: datetime) -> set[str]:
         if plan is None:
             return set()
+        try:
+            allowed = (
+                self._heater_id_set
+                if self._allowed_outputs_provider is None
+                else set(self._allowed_outputs_provider())
+            )
+        except Exception:
+            logger.error("Could not read durable output control; forcing all outputs off", exc_info=True)
+            return set()
         for slot in plan.slots:
             if slot.start <= at < slot.end:
                 requested = set(slot.heater_ids)
                 unknown = requested - self._heater_id_set
                 if unknown:
                     logger.error("Ignoring unknown heater ids in active plan: %s", sorted(unknown))
-                return requested & self._heater_id_set
+                return requested & self._heater_id_set & allowed
         return set()

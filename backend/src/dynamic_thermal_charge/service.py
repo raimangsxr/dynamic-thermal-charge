@@ -67,6 +67,8 @@ class ControllerService:
         history: HistoryRecorder | None = None,
         retention_days: int | None = None,
         heartbeat: HeartbeatPublisher | None = None,
+        control_state: Callable[[], object] | None = None,
+        mark_recalculation_processed: Callable[[int], None] | None = None,
     ) -> None:
         self._controller = controller
         self._store = store
@@ -78,6 +80,8 @@ class ControllerService:
         self._history = history
         self._retention_days = retention_days
         self._heartbeat = heartbeat
+        self._control_state = control_state
+        self._mark_recalculation_processed = mark_recalculation_processed
         self._current_plan_ref: PlanRef | None = None
         self._degraded = False
         self._refresh_abandoned = False
@@ -96,7 +100,27 @@ class ControllerService:
             cycles = 0
             while max_cycles is None or cycles < max_cycles:
                 now = self._clock()
-                if now >= next_refresh and not self._refresh_abandoned:
+                durable_control = self._read_control_state()
+                if durable_control is not None and not getattr(
+                    durable_control, "automatic_control_enabled", True
+                ):
+                    # The command is durable and the controller is the only
+                    # process allowed to switch outputs.  The next loop applies
+                    # the all-off state without waiting for a solver refresh.
+                    plan = None
+                    next_refresh = now + timedelta(seconds=self._error_retry_seconds)
+                elif durable_control is not None and getattr(
+                    durable_control, "recalculation_pending", False
+                ):
+                    next_refresh = now
+                if (
+                    now >= next_refresh
+                    and not self._refresh_abandoned
+                    and not (
+                        durable_control is not None
+                        and not getattr(durable_control, "automatic_control_enabled", True)
+                    )
+                ):
                     plan, next_refresh = self._try_refresh(now, plan)
                 self._controller.apply(plan, now)
                 # Published every iteration, not only on refresh: refreshing can
@@ -150,6 +174,7 @@ class ControllerService:
 
         self._leave_degraded()
         self._current_plan_ref = persisted_ref or refreshed.plan_ref
+        self._acknowledge_recalculation()
         self._prune_history(now)
         return (
             refreshed.plan,
@@ -203,6 +228,28 @@ class ControllerService:
         report = self._history.prune(now, self._retention_days)
         if report.total:
             logger.info("Pruned %d history rows", report.total)
+
+    def _read_control_state(self):
+        if self._control_state is None:
+            return None
+        try:
+            return self._control_state()
+        except ConfigStoreUnavailableError as exc:
+            self._enter_degraded(exc)
+            return None
+        except ConfigStoreError as exc:
+            logger.error("Could not read durable output control: %s", exc)
+            return None
+
+    def _acknowledge_recalculation(self) -> None:
+        if self._control_state is None or self._mark_recalculation_processed is None:
+            return
+        try:
+            state = self._control_state()
+            generation = int(getattr(state, "recalculation_requested_generation", 0))
+            self._mark_recalculation_processed(generation)
+        except Exception:
+            logger.error("Could not mark the durable recalculation as processed", exc_info=True)
 
     @property
     def degraded(self) -> bool:
