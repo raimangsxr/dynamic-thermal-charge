@@ -2,7 +2,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { formatAge, formatInstant } from './age';
+import { formatAge, formatDateOnly, formatInstant } from './age';
 
 describe('formatAge', () => {
   it('reports nothing to age as a dash', () => {
@@ -60,5 +60,15 @@ describe('formatInstant', () => {
 
   it('formats a real instant', () => {
     expect(formatInstant('2026-01-16T01:00:00Z')).not.toBe('—');
+  });
+
+  it('uses the installation timezone instead of the browser timezone', () => {
+    expect(formatInstant('2026-01-16T00:00:00Z', 'Europe/Madrid')).toContain('01:00');
+    expect(formatInstant('2026-07-16T00:00:00Z', 'Europe/Madrid')).toContain('02:00');
+  });
+
+  it('keeps a provider calendar date independent of the browser timezone', () => {
+    expect(formatDateOnly('2026-01-16')).toContain('16');
+    expect(formatDateOnly('2026-01-16')).toContain('ene');
   });
 });

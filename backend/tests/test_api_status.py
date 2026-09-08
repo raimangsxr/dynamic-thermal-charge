@@ -268,6 +268,101 @@ def test_planning_endpoint_prefers_automatic_plan_slot_minutes_over_legacy_plan(
     assert (slot_end - slot_start).total_seconds() == 15 * 60
 
 
+def test_status_uses_the_active_automatic_plan_over_a_legacy_plan(
+    client, initialised_store, heartbeat, recorded_night
+):
+    from dynamic_thermal_charge.charge_planning import (
+        AutomaticPlan,
+        AutomaticPlanSlot,
+        FEASIBLE,
+    )
+
+    config, revision = initialised_store.repository.current()
+    start = API_NOW
+    heater_id = config.heaters[0].id
+    automatic = AutomaticPlan(
+        start,
+        start + timedelta(minutes=15),
+        15,
+        (
+            AutomaticPlanSlot(
+                start,
+                start + timedelta(minutes=15),
+                (heater_id,),
+                config.heaters[0].power_w,
+                {heater_id: 50.0},
+                {heater_id: 0.0},
+                outdoor_temperature_c=4.0,
+            ),
+        ),
+        (),
+        FEASIBLE,
+        (),
+        "status-automatic",
+        start,
+    )
+    initialised_store.planning.save_plan(
+        automatic,
+        configuration_revision=revision,
+        constraints_revision=initialised_store.planning.site()["revision"],
+        reason="activated",
+        active=True,
+    )
+    heartbeat.publish(API_NOW, degraded=False)
+
+    body = _status(client)
+
+    assert body["plan_status"] == "FEASIBLE"
+    assert body["plan"]["slot_minutes"] == 15
+    assert body["plan"]["slots"][0]["heater_ids"] == [heater_id]
+
+
+def test_status_does_not_revive_legacy_plan_after_an_invalid_automatic_plan(
+    client, initialised_store, heartbeat, recorded_night
+):
+    from dynamic_thermal_charge.charge_planning import (
+        AutomaticPlan,
+        AutomaticPlanSlot,
+        INVALID,
+        PlanningViolation,
+    )
+
+    config, revision = initialised_store.repository.current()
+    start = API_NOW
+    invalid = AutomaticPlan(
+        start,
+        start + timedelta(minutes=30),
+        30,
+        (
+            AutomaticPlanSlot(start, start + timedelta(minutes=30), (), 0, {}, {}),
+        ),
+        (PlanningViolation(None, "safe_planning_input", None, None, start, "invalid_configuration"),),
+        INVALID,
+        (),
+        "status-invalid",
+        start,
+    )
+    initialised_store.planning.save_plan(
+        invalid,
+        configuration_revision=revision,
+        constraints_revision=initialised_store.planning.site()["revision"],
+        reason="invalid_configuration",
+        active=False,
+    )
+    heartbeat.publish(API_NOW, degraded=False)
+
+    body = _status(client)
+
+    assert body["plan"] is None
+    assert body["plan_status"] == "INVALID"
+    assert body["absence_reason"] == "invalid_automatic_plan"
+
+    planning = client.get("/api/v1/planning", headers=AUTH)
+    assert planning.status_code == 200, planning.text
+    assert planning.json()["plan_status"] == "INVALID"
+    assert planning.json()["deficits"][0]["reason"] == "invalid_configuration"
+
+
 def test_planning_projection_reports_signed_room_exchange():
     from dynamic_thermal_charge.charge_planning import room_energy_step
     from dynamic_thermal_charge.persistence.seed import example_installation

@@ -12,6 +12,7 @@ relay to close; without an audit record, there is.
 from __future__ import annotations
 
 import base64
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping, Sequence
@@ -24,6 +25,7 @@ from ..weather import HourlyForecastPoint, future_forecast_points
 from .mapping import from_utc, to_utc
 from .schema import (
     RETAINED_TABLES,
+    automatic_plan,
     forecast as forecast_table,
     forecast_hour,
     output_transition,
@@ -351,6 +353,101 @@ def decode_cursor(cursor: str) -> tuple[datetime, int]:
         ) from exc
 
 
+def encode_plan_cursor(instant: datetime, source: str, row_id: int) -> str:
+    """Encode the source-aware cursor used by the combined plans stream."""
+    if source not in {"automatic", "legacy"}:
+        raise CursorError("the continuation cursor has an unknown plan source")
+    payload = {
+        "v": 1,
+        "instant": to_utc(instant).isoformat(),
+        "source": source,
+        "id": int(row_id),
+    }
+    return base64.urlsafe_b64encode(
+        json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    ).decode("ascii")
+
+
+def decode_plan_cursor(cursor: str) -> tuple[datetime, str, int]:
+    """Decode a source-aware plans cursor, accepting the old legacy cursor."""
+    try:
+        payload = base64.urlsafe_b64decode(cursor.encode("ascii")).decode("utf-8")
+        try:
+            value = json.loads(payload)
+        except json.JSONDecodeError:
+            # Cursors issued before automatic plans were exposed only contained
+            # (instant, id); interpret those as the legacy stream.
+            instant, row_id = decode_cursor(cursor)
+            return instant, "legacy", row_id
+        if not isinstance(value, dict) or value.get("v") != 1:
+            raise ValueError("unsupported cursor version")
+        source = value.get("source")
+        if source not in {"automatic", "legacy"}:
+            raise ValueError("unknown plan source")
+        instant = datetime.fromisoformat(str(value["instant"]))
+        if instant.tzinfo is None:
+            instant = instant.replace(tzinfo=timezone.utc)
+        row_id = int(value["id"])
+        if row_id < 1:
+            raise ValueError("invalid row id")
+        return instant, source, row_id
+    except CursorError:
+        raise
+    except Exception as exc:
+        raise CursorError(
+            "the continuation cursor is unreadable; request the first page again "
+            "without a cursor"
+        ) from exc
+
+
+def _plan_source_rank(source: str) -> int:
+    if source == "automatic":
+        return 1
+    if source == "legacy":
+        return 0
+    raise CursorError("the continuation cursor has an unknown plan source")
+
+
+def _plan_history_item(row: dict[str, Any], source: str) -> dict[str, Any]:
+    """Project either plan table into the stable history API shape."""
+    if source == "automatic":
+        status = {
+            "FEASIBLE": "FEASIBLE",
+            "DEGRADED": "DEGRADED",
+            "INVALID": "INVALID",
+            "feasible": "FEASIBLE",
+            "deficit": "DEGRADED",
+            "best_effort": "DEGRADED",
+            "preview": "INVALID",
+        }.get(row["status"], str(row["status"]))
+        return {
+            "id": int(row["id"]),
+            "source": source,
+            "created_at": from_utc(row["created_at"]),
+            "window_start": from_utc(row["horizon_start"]),
+            "window_end": from_utc(row["horizon_end"]),
+            "slot_minutes": int(row["slot_minutes"]),
+            "installation_revision": int(row["configuration_revision"]),
+            "forecast_id": None if row["forecast_id"] is None else int(row["forecast_id"]),
+            "status": status,
+            "reason": str(row["reason"]),
+            "active": bool(row["active"]),
+        }
+    return {
+        "id": int(row["id"]),
+        "source": source,
+        "created_at": from_utc(row["created_at"]),
+        "window_start": from_utc(row["window_start"]),
+        "window_end": from_utc(row["window_end"]),
+        "slot_minutes": int(row["slot_minutes"]),
+        "installation_revision": int(row["installation_revision"]),
+        "forecast_id": None if row["forecast_id"] is None else int(row["forecast_id"]),
+        "status": None,
+        "reason": None,
+        "active": None,
+    }
+
+
 def _page_size(limit: int | None) -> int:
     if limit is None:
         return DEFAULT_PAGE_SIZE
@@ -371,9 +468,7 @@ class SqlHistoryReader:
         self._location = location
 
     def plans(self, since=None, until=None, limit=None, cursor=None) -> HistoryPage:
-        return self._page(
-            plan_table, plan_table.c.created_at, since, until, limit, cursor
-        )
+        return self._plan_page(since, until, limit, cursor)
 
     def forecasts(self, since=None, until=None, limit=None, cursor=None) -> HistoryPage:
         return self._page(
@@ -457,6 +552,88 @@ class SqlHistoryReader:
             last = items[-1]
             next_cursor = encode_cursor(
                 from_utc(last[timestamp.name]), int(last["id"])
+            )
+        for item in items:
+            for key, value in list(item.items()):
+                if isinstance(value, datetime):
+                    item[key] = from_utc(value)
+        return HistoryPage(
+            items=items,
+            limit_applied=size,
+            has_more=has_more,
+            next_cursor=next_cursor,
+        )
+
+    def _plan_page(self, since, until, limit, cursor) -> HistoryPage:
+        """Read the canonical automatic and legacy plan streams together.
+
+        The two tables intentionally keep their own identities.  The composite
+        cursor carries the source as well as the instant and id, so equal
+        timestamps and colliding integer ids cannot make a page repeat or skip
+        a plan.  Each source is bounded to ``size + 1`` rows before merging;
+        this remains a paged read even when the installation has a long audit
+        trail.
+        """
+        size = _page_size(limit)
+        cursor_value = None if cursor is None else decode_plan_cursor(cursor)
+        rows: list[dict[str, Any]] = []
+
+        from .engine import store_errors
+
+        with store_errors(self._location):
+            with self._engine.connect() as connection:
+                for table, timestamp, source, source_rank in (
+                    (plan_table, plan_table.c.created_at, "legacy", 0),
+                    (automatic_plan, automatic_plan.c.created_at, "automatic", 1),
+                ):
+                    condition = table.c.installation_id == self._installation_id
+                    if since is not None:
+                        condition = condition & (timestamp >= to_utc(since))
+                    if until is not None:
+                        condition = condition & (timestamp <= to_utc(until))
+                    if cursor_value is not None:
+                        cursor_instant, cursor_source, cursor_id = cursor_value
+                        cursor_rank = _plan_source_rank(cursor_source)
+                        cursor_utc = to_utc(cursor_instant)
+                        if source_rank < cursor_rank:
+                            cursor_condition = timestamp <= cursor_utc
+                        elif source_rank == cursor_rank:
+                            cursor_condition = (timestamp < cursor_utc) | (
+                                (timestamp == cursor_utc) & (table.c.id < cursor_id)
+                            )
+                        else:
+                            cursor_condition = timestamp < cursor_utc
+                        condition = condition & cursor_condition
+                    source_rows = (
+                        connection.execute(
+                            select(table)
+                            .where(condition)
+                            .order_by(timestamp.desc(), table.c.id.desc())
+                            .limit(size + 1)
+                        )
+                        .mappings()
+                        .all()
+                    )
+                    rows.extend(
+                        _plan_history_item(dict(row), source)
+                        for row in source_rows
+                    )
+
+        rows.sort(
+            key=lambda item: (
+                to_utc(item["created_at"]),
+                _plan_source_rank(str(item["source"])),
+                int(item["id"]),
+            ),
+            reverse=True,
+        )
+        items = rows[:size]
+        has_more = len(rows) > size
+        next_cursor = None
+        if has_more and items:
+            last = items[-1]
+            next_cursor = encode_plan_cursor(
+                last["created_at"], str(last["source"]), int(last["id"])
             )
         for item in items:
             for key, value in list(item.items()):
@@ -728,5 +905,7 @@ __all__ = [
     "SqlHistoryRecorder",
     "SqlStatusReader",
     "decode_cursor",
+    "decode_plan_cursor",
     "encode_cursor",
+    "encode_plan_cursor",
 ]

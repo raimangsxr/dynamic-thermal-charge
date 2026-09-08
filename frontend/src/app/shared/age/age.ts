@@ -41,14 +41,60 @@ export function formatAge(ageSeconds: number | null): string {
   return `hace ${days} d`;
 }
 
-/** An absolute instant, for when the operator needs the actual time. */
-export function formatInstant(iso: string | null): string {
-  if (iso === null) {
+/**
+ * An absolute instant, rendered in the installation timezone.
+ *
+ * The API deliberately keeps ISO instants timezone-aware.  Passing the
+ * timezone explicitly here prevents the browser's own locale from silently
+ * changing the meaning of a schedule when the panel is opened elsewhere.
+ */
+export function formatInstant(
+  iso: string | null | undefined,
+  timeZone = 'Europe/Madrid',
+): string {
+  if (!iso) {
     return '—';
   }
   const parsed = new Date(iso);
   if (Number.isNaN(parsed.getTime())) {
     return '—';
   }
-  return parsed.toLocaleString();
+  try {
+    return new Intl.DateTimeFormat('es-ES', {
+      timeZone,
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).format(parsed);
+  } catch {
+    // A malformed/unknown configured timezone must not blank an operational
+    // screen. UTC is the API's safe temporal boundary.
+    return new Intl.DateTimeFormat('es-ES', {
+      timeZone: 'UTC',
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).format(parsed);
+  }
+}
+
+/** A calendar date, not an instant: keep the provider's date intact. */
+export function formatDateOnly(value: string | null | undefined): string {
+  if (!value) return '—';
+  const parsed = /^\d{4}-\d{2}-\d{2}$/.test(value)
+    ? new Date(`${value}T12:00:00Z`)
+    : new Date(value);
+  if (Number.isNaN(parsed.getTime())) return '—';
+  return new Intl.DateTimeFormat('es-ES', {
+    timeZone: 'UTC',
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  }).format(parsed);
 }

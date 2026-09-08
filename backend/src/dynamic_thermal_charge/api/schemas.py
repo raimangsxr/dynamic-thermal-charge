@@ -110,6 +110,7 @@ class AllocationSummary(BaseModel):
 
 class StatusResponse(BaseModel):
     observed_at: datetime
+    timezone: str = "UTC"
     controller: ControllerHealth
     power: PowerSnapshot | None = Field(
         default=None,
@@ -128,6 +129,15 @@ class StatusResponse(BaseModel):
     telemetry: list["ChargeTelemetryView"] = Field(default_factory=list)
     plan_status: str | None = None
     deficits: list["PlanningDeficitView"] = Field(default_factory=list)
+    horizon_start: datetime | None = None
+    horizon_end: datetime | None = None
+    absence_reason: str | None = None
+    forecast_status: str | None = None
+    forecast_last_attempt_at: datetime | None = None
+    forecast_last_error: str | None = None
+    forecast_next_run_at: datetime | None = None
+    forecast_next_run_kind: str | None = None
+    forecast_stale: bool | None = None
 
 
 class HourlyForecastPointView(BaseModel):
@@ -188,6 +198,7 @@ class PlanningPlanView(BaseModel):
 
 class PlanningResponse(BaseModel):
     observed_at: datetime
+    timezone: str = "UTC"
     max_total_power_w: int
     plan: PlanningPlanView | None = None
     forecast: PlanningForecastView | None = None
@@ -206,6 +217,8 @@ class PlanningResponse(BaseModel):
     forecast_last_attempt_at: datetime | None = None
     forecast_last_error: str | None = None
     forecast_next_run_at: datetime | None = None
+    forecast_next_run_kind: str | None = None
+    forecast_stale: bool | None = None
     preview_job: "PlanningPreviewJobResponse | None" = None
     base_load_w: int = 0
     max_heating_power_w: int = 0
@@ -218,6 +231,7 @@ class WeatherRefreshResponse(BaseModel):
     forecast_last_attempt_at: datetime
     forecast_last_error: str | None = None
     forecast_next_run_at: datetime | None = None
+    forecast_next_run_kind: str | None = None
     forecast: PlanningForecastView | None = None
 
 
@@ -603,6 +617,10 @@ class PlanHistoryItem(BaseModel):
     slot_minutes: int
     installation_revision: int
     forecast_id: int | None = None
+    source: str = "legacy"
+    status: str | None = None
+    reason: str | None = None
+    active: bool | None = None
 
 
 class ForecastHistoryItem(BaseModel):
@@ -643,6 +661,7 @@ class TransitionPage(BaseModel):
     limit_applied: int
     has_more: bool
     next_cursor: str | None = None
+    availability: str = "available"
 
 
 class RelayTestHistoryItem(BaseModel):

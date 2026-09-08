@@ -28,8 +28,14 @@ import type {
   AutomaticPlanAuditPage,
 } from '../core/api.types';
 import { type Explained, UNREACHABLE, explain } from '../core/errors';
-import { formatInstant } from '../shared/age/age';
+import { formatDateOnly, formatInstant } from '../shared/age/age';
 import { formatTemperature } from '../shared/temperature/temperature';
+import {
+  forecastSourceLabel,
+  planEventLabel,
+  planReasonLabel,
+  planStatusLabel,
+} from '../shared/presentation/presentation';
 
 type Tab = 'plans' | 'forecasts' | 'transitions' | 'planning';
 
@@ -70,6 +76,8 @@ export class History {
 
   /** Heater ids present in the configuration, to flag the ones that are gone. */
   readonly configuredHeaters = signal<Set<string>>(new Set());
+  readonly heaterNames = signal<Map<string, string>>(new Map());
+  readonly installationTimezone = signal('Europe/Madrid');
 
   temperature(value: number | null | undefined): string {
     return value === null || value === undefined ? '—' : `${formatTemperature(value)} °C`;
@@ -99,8 +107,11 @@ export class History {
 
   constructor() {
     this.api.config().subscribe({
-      next: (config: ConfigDto) =>
-        this.configuredHeaters.set(new Set(config.heaters.map((h) => h.id))),
+      next: (config: ConfigDto) => {
+        this.configuredHeaters.set(new Set(config.heaters.map((h) => h.id)));
+        this.heaterNames.set(new Map(config.heaters.map((heater) => [heater.id, heater.name])));
+        this.installationTimezone.set(config.schedule?.timezone ?? 'Europe/Madrid');
+      },
       // The panel still works without it; heaters just are not flagged.
       error: () => undefined,
     });
@@ -194,7 +205,39 @@ export class History {
   }
 
   instant(iso: string): string {
-    return formatInstant(iso);
+    return formatInstant(iso, this.installationTimezone());
+  }
+
+  dateOnly(value: string): string {
+    return formatDateOnly(value);
+  }
+
+  heaterText(heaterId: string): string {
+    return this.heaterNames().get(heaterId) ?? heaterId;
+  }
+
+  planSourceText(source: string | undefined): string {
+    return source === 'automatic' ? 'plan automático' : 'histórico compatible';
+  }
+
+  planStatusText(status: string | null | undefined): string {
+    return planStatusLabel(status);
+  }
+
+  planReasonText(reason: string | null | undefined): string {
+    return planReasonLabel(reason);
+  }
+
+  auditEventText(event: string): string {
+    return planEventLabel(event);
+  }
+
+  auditReasonText(reason: string): string {
+    return planReasonLabel(reason);
+  }
+
+  auditDetailsText(details: Record<string, unknown>): string {
+    return JSON.stringify(details);
   }
 
   /** FR-028: a heater in the history that is no longer configured. */
@@ -204,14 +247,7 @@ export class History {
   }
 
   sourceText(source: string): string {
-    switch (source) {
-      case 'aemet':
-        return 'proveedor real';
-      case 'fallback':
-        return 'valor de reserva';
-      default:
-        return 'simulado';
-    }
+    return forecastSourceLabel(source);
   }
 
   private describe(error: unknown): Explained {

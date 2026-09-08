@@ -458,6 +458,33 @@ describe('Planning', () => {
     expect((fixture.nativeElement as HTMLElement).querySelector('table')).toBeNull();
   });
 
+  it('labels an invalid automatic plan and explains why outputs stay off', () => {
+    backend.expectOne('/api/v1/planning').flush({
+      ...PLANNING,
+      plan: null,
+      plan_status: 'invalid',
+      absence_reason: 'invalid_automatic_plan',
+      deficits: [{
+        heater_id: 'salon',
+        requirement: 'safe_planning_input',
+        achievable_value: null,
+        shortfall: null,
+        at: PLANNING.observed_at,
+        reason: 'invalid_configuration',
+        target_temperature_c: null,
+        projected_temperature_c: null,
+        shortfall_c: null,
+        stored_energy_kwh: null,
+        stored_soc_percent: null,
+      }],
+    });
+    fixture.detectChanges();
+    const element = fixture.nativeElement as HTMLElement;
+    expect(element.querySelector('.active-chip')?.textContent).toContain('No válido');
+    expect(element.textContent).toContain('salidas permanecen apagadas');
+    expect(element.textContent).not.toContain('invalid');
+  });
+
   it('shows stored room energy in kWh for every interval', () => {
     expect(fixture.componentInstance.storedEnergyKwh(PLANNING, 'salon', 0)).toBe(10.9);
     expect(fixture.componentInstance.storedEnergyKwh(PLANNING, 'salon', 1)).toBe(9.8);

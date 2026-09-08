@@ -8,6 +8,7 @@ h1 { margin: 0; font-size: clamp(1.7rem, 4vw, 2.35rem); letter-spacing: -.02em; 
 h2 { margin: 0; color: var(--ink); font-size: 1.3rem; letter-spacing: -.01em; }
 .intro, .section-lead, .revision-chip, .end, .inline-loading, .empty-state { color: var(--muted); }
 .intro { max-width: 58rem; margin: .45rem 0 0; line-height: 1.45; }
+.observed { margin: .45rem 0 0; color: var(--muted); font-size: .86rem; }
 .history-tabs { display: block; margin-top: 1.25rem; }
 .workspace-panel { margin-top: 1rem; padding: 1.35rem; border: 1px solid var(--border); border-radius: .85rem; background: var(--surface); box-shadow: 0 5px 18px #1720330b; }
 .section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
@@ -37,6 +38,8 @@ th, td { padding: .65rem .75rem; border-bottom: 1px solid var(--border); text-al
 thead th { color: var(--muted); font-size: .82rem; }
 tbody tr:hover { background: #f8faff; }
 td code { display: block; max-width: 28rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+details summary { cursor: pointer; color: var(--primary); font-size: .86rem; }
+.technical-id { color: var(--muted); font-size: .78em; font-weight: 500; }
 .source-chip, .state-chip { display: inline-flex; align-items: center; gap: .3rem; white-space: nowrap; }
 .source-chip mat-icon, .state-chip mat-icon { width: 1rem; height: 1rem; font-size: 1rem; }
 .source-chip { color: var(--primary); }

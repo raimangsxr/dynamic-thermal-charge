@@ -12,7 +12,16 @@ import { Api } from '../core/api';
 import { Poller } from '../core/poll';
 import type { ApiErrorDto, HourlyForecastPointDto, PlanningCheckDto, TemperatureTargetRequest, PlanningDto, PlanningDeficitDto, PlanningPreviewDto, PlanningPreviewJobDto, PlanningSlotDto, PlanningTimelineSlotDto } from '../core/api.types';
 import { type Explained, UNREACHABLE, explain, messageFor } from '../core/errors';
+import { formatDateOnly, formatInstant } from '../shared/age/age';
 import { formatTemperature, truncateTemperature } from '../shared/temperature/temperature';
+import {
+  forecastNextRunLabel,
+  forecastSourceLabel,
+  forecastStatusLabel,
+  planReasonLabel,
+  planStatusLabel,
+  requirementLabel,
+} from '../shared/presentation/presentation';
 
 interface PlanningDetailDialogData {
   kind: 'forecast' | 'planning' | 'failure' | 'problems' | 'preview' | 'planning-table' | 'chart';
@@ -114,7 +123,7 @@ function recommendedPlanningAction(cause: string): string | null {
         <div class="problem-list" data-testid="preview-problems-dialog">
           @for (item of previewProblems(preview); track $index) {
             <article class="problem" data-testid="preview-problem">
-              <h3>{{ item.requirement || 'Incumplimiento de planificación' }}</h3>
+              <h3>{{ requirementText(item.requirement) }} @if (item.requirement) { <small class="technical-id">{{ item.requirement }}</small> }</h3>
               <dl class="detail-list">
                 <div><dt>Acumulador</dt><dd>{{ heaterText(item.heater_id, data.planning) }}</dd></div>
                 <div><dt>Momento</dt><dd>{{ dateTime(item.at) }}</dd></div>
@@ -174,8 +183,9 @@ function recommendedPlanningAction(cause: string): string | null {
           <div><dt>Rango horario</dt><dd>{{ forecastRange(forecast.hourly_points) }}</dd></div>
           <div><dt>Registros horarios</dt><dd>{{ forecast.hourly_points.length }}</dd></div>
           <div><dt>Temperaturas</dt><dd>{{ temperatures(forecast) }}</dd></div>
+          <div><dt>Estado de consulta</dt><dd>{{ forecastStatusText(data.planning?.forecast_status) }}</dd></div>
           <div><dt>Última consulta</dt><dd>{{ dateTime(data.planning?.forecast_last_attempt_at) }}</dd></div>
-          <div><dt>Próxima consulta</dt><dd>{{ dateTime(data.planning?.forecast_next_run_at) }}</dd></div>
+          <div><dt>{{ forecastNextText(data.planning?.forecast_next_run_kind) }}</dt><dd>{{ dateTime(data.planning?.forecast_next_run_at) }}</dd></div>
         </dl>
         @if (forecast.hourly_points.length) {
           <div class="table-scroll">
@@ -188,12 +198,12 @@ function recommendedPlanningAction(cause: string): string | null {
         }
       } @else if (data.kind === 'forecast') {
         <p>No hay datos de previsión horaria disponibles.</p>
-        <p>Última consulta: {{ dateTime(data.planning?.forecast_last_attempt_at) }} · Próxima consulta: {{ dateTime(data.planning?.forecast_next_run_at) }}</p>
+        <p>Estado: {{ forecastStatusText(data.planning?.forecast_status) }} · Última consulta: {{ dateTime(data.planning?.forecast_last_attempt_at) }} · {{ forecastNextText(data.planning?.forecast_next_run_kind) }}: {{ dateTime(data.planning?.forecast_next_run_at) }}</p>
       } @else if (data.planning?.plan; as plan) {
         <dl class="detail-list">
           <div><dt>Ventana</dt><dd>{{ dateTime(plan.window_start) }}–{{ dateTime(plan.window_end) }}</dd></div>
           <div><dt>Horizonte</dt><dd>{{ dateTime(data.planning?.horizon_start) }}–{{ dateTime(data.planning?.horizon_end) }}</dd></div>
-          <div><dt>Intervalo</dt><dd>{{ plan.slot_minutes }} minutos</dd></div>
+          <div><dt>Intervalo</dt><dd>intervalos de {{ plan.slot_minutes }} minutos</dd></div>
           <div><dt>Registros de planificación</dt><dd>{{ plan.slots.length }}</dd></div>
           <div><dt>Creado</dt><dd>{{ dateTime(plan.created_at) }}</dd></div>
           <div><dt>Revisión de configuración</dt><dd>{{ plan.installation_revision }}</dd></div>
@@ -201,7 +211,7 @@ function recommendedPlanningAction(cause: string): string | null {
         <div class="table-scroll">
           <table><caption>Intervalos planificados</caption><thead><tr><th>Intervalo</th><th>Acumuladores</th><th>Potencia</th></tr></thead><tbody>
             @for (slot of plan.slots; track slot.start) {
-              <tr><th scope="row">{{ dateTime(slot.start) }}–{{ dateTime(slot.end) }}</th><td>{{ slot.heater_ids.length ? slot.heater_ids.join(', ') : 'ninguno' }}</td><td>{{ slot.total_power_w }} W</td></tr>
+              <tr><th scope="row">{{ dateTime(slot.start) }}–{{ dateTime(slot.end) }}</th><td>{{ heaterTexts(slot.heater_ids, data.planning) }}</td><td>{{ slot.total_power_w }} W</td></tr>
             }
           </tbody></table>
         </div>
@@ -278,6 +288,14 @@ export class PlanningDetailDialog implements AfterViewInit, OnDestroy {
     return planning?.heaters.find((heater) => heater.id === heaterId)?.name ?? heaterId;
   }
 
+  heaterTexts(heaterIds: string[], planning: PlanningDto | undefined): string {
+    return heaterIds.length ? heaterIds.map((heaterId) => this.heaterText(heaterId, planning)).join(', ') : 'ninguno';
+  }
+
+  requirementText(requirement: string): string {
+    return requirementLabel(requirement);
+  }
+
   temperature(value: number | null | undefined): string {
     return value === null || value === undefined ? 'no disponible' : `${formatTemperature(value)} °C`;
   }
@@ -301,18 +319,27 @@ export class PlanningDetailDialog implements AfterViewInit, OnDestroy {
   }
 
   sourceText(source: string): string {
-    return source === 'aemet' ? 'AEMET' : source === 'fallback' ? 'Fallback (última previsión válida)' : 'Simulación local';
+    return forecastSourceLabel(source);
   }
 
   dateText(value: string | null | undefined): string {
     if (!value) return 'no disponible';
-    const date = /^\d{4}-\d{2}-\d{2}$/.test(value) ? new Date(`${value}T12:00:00`) : new Date(value);
-    return date.toLocaleDateString('es-ES', { day: '2-digit', month: 'short', year: 'numeric' });
+    const formatted = formatDateOnly(value);
+    return formatted === '—' ? 'no disponible' : formatted;
   }
 
   dateTime(value: string | null | undefined): string {
     if (!value) return 'no disponible';
-    return new Date(value).toLocaleString('es-ES', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+    const formatted = formatInstant(value, this.data.planning?.timezone ?? 'Europe/Madrid');
+    return formatted === '—' ? 'no disponible' : formatted;
+  }
+
+  forecastStatusText(status: string | null | undefined): string {
+    return forecastStatusLabel(status);
+  }
+
+  forecastNextText(kind: string | null | undefined): string {
+    return forecastNextRunLabel(kind);
   }
 
   forecastRange(points: HourlyForecastPointDto[]): string {
@@ -339,7 +366,8 @@ export class PlanningDetailDialog implements AfterViewInit, OnDestroy {
   }
 
   previewSlotHeaters(slot: Record<string, unknown>): string {
-    return Array.isArray(slot['heater_ids']) && slot['heater_ids'].length ? slot['heater_ids'].join(', ') : 'ninguno';
+    const ids = Array.isArray(slot['heater_ids']) ? slot['heater_ids'].map(String) : [];
+    return this.heaterTexts(ids, this.data.planning);
   }
 
   previewChargingSlots(result: PlanningPreviewDto): Array<Record<string, unknown>> {
@@ -547,7 +575,20 @@ export class Planning implements AfterViewInit, OnDestroy {
   }
 
   sourceText(source: string): string {
-    return source === 'aemet' ? 'AEMET' : source === 'fallback' ? 'Fallback (última previsión válida)' : 'Simulación local';
+    return forecastSourceLabel(source);
+  }
+
+  planStatus(status: string | null | undefined): string {
+    return planStatusLabel(status);
+  }
+
+  heaterText(heaterId: string | null | undefined): string {
+    if (!heaterId) return 'Instalación';
+    return this.snapshot()?.heaters.find((heater) => heater.id === heaterId)?.name ?? heaterId;
+  }
+
+  requirementText(requirement: string): string {
+    return requirementLabel(requirement);
   }
 
   slotLabel(slot: PlanningSlotDto): string {
@@ -556,13 +597,14 @@ export class Planning implements AfterViewInit, OnDestroy {
 
   dateTime(value: string | null | undefined): string {
     if (!value) return 'no disponible';
-    return new Date(value).toLocaleString('es-ES', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+    const formatted = formatInstant(value, this.snapshot()?.timezone ?? 'Europe/Madrid');
+    return formatted === '—' ? 'no disponible' : formatted;
   }
 
   dateText(value: string | null | undefined): string {
     if (!value) return 'no disponible';
-    const date = /^\d{4}-\d{2}-\d{2}$/.test(value) ? new Date(`${value}T12:00:00`) : new Date(value);
-    return date.toLocaleDateString('es-ES', { day: '2-digit', month: 'short', year: 'numeric' });
+    const formatted = formatDateOnly(value);
+    return formatted === '—' ? 'no disponible' : formatted;
   }
 
   forecastRange(points: HourlyForecastPointDto[]): string {
@@ -574,6 +616,24 @@ export class Planning implements AfterViewInit, OnDestroy {
     const minimum = forecast.minimum_temperature_c === null ? 'no disponible' : `${formatTemperature(forecast.minimum_temperature_c)} °C`;
     const maximum = forecast.maximum_temperature_c === null ? 'no disponible' : `${formatTemperature(forecast.maximum_temperature_c)} °C`;
     return `media ${formatTemperature(forecast.average_temperature_c)} °C · mínima ${minimum} · máxima ${maximum}`;
+  }
+
+  forecastStatusText(status: string | null | undefined): string {
+    return forecastStatusLabel(status);
+  }
+
+  forecastNextText(kind: string | null | undefined): string {
+    return forecastNextRunLabel(kind);
+  }
+
+  operatorForecastText(summary: Record<string, unknown>): string {
+    const forecast = summary['forecast'];
+    if (!forecast || typeof forecast !== 'object' || Array.isArray(forecast)) return 'no disponible';
+    const value = forecast as Record<string, unknown>;
+    const source = typeof value['source'] === 'string' ? forecastSourceLabel(value['source']) : 'origen no disponible';
+    if (value['automatic_eligible'] === true) return `${source} (apta para automático)`;
+    if (value['available'] === true) return `${source} (solo contexto)`;
+    return 'no disponible';
   }
 
   formatTemperature(value: number | null | undefined): string {
@@ -754,6 +814,14 @@ export class Planning implements AfterViewInit, OnDestroy {
     return data.allocations.some((allocation) => allocation.unmet_minutes > 0);
   }
 
+  hasDeficits(data: PlanningDto): boolean {
+    return Boolean(data.deficits?.length);
+  }
+
+  deficitText(item: PlanningDeficitDto): string {
+    return `${this.heaterText(item.heater_id)}: ${requirementLabel(item.requirement)} · ${planReasonLabel(item.reason)}`;
+  }
+
   deficitExplanation(item: PlanningDeficitDto): string {
     return explainPlanningDeficit(item);
   }
@@ -816,7 +884,10 @@ export class Planning implements AfterViewInit, OnDestroy {
 
   previewSlotLabel(slot: Record<string, unknown>): string { return this.dateTime(String(slot['start'] ?? '')); }
   previewSlotPower(slot: Record<string, unknown>): number { return Number(slot['power_w'] ?? 0); }
-  previewSlotHeaters(slot: Record<string, unknown>): string { return Array.isArray(slot['heater_ids']) && slot['heater_ids'].length ? slot['heater_ids'].join(', ') : 'ninguno'; }
+  previewSlotHeaters(slot: Record<string, unknown>): string {
+    const ids = Array.isArray(slot['heater_ids']) ? slot['heater_ids'].map(String) : [];
+    return ids.length ? ids.map((heaterId) => this.heaterText(heaterId)).join(', ') : 'ninguno';
+  }
   previewChargingSlots(result: PlanningPreviewDto): Array<Record<string, unknown>> {
     return this.previewWindowSlots(result).filter((slot) => this.previewSlotPower(slot) > 0);
   }
@@ -860,7 +931,7 @@ export class Planning implements AfterViewInit, OnDestroy {
   previewSummaryText(summary: Record<string, unknown>): string {
     const delivered = summary['heat_delivered_kwh_by_heater'] as Record<string, number> | undefined;
     if (!delivered) return 'Sin resumen disponible.';
-    return Object.entries(delivered).map(([heater, value]) => `${heater}: ${Number(value).toFixed(2)} kWh entregados`).join(' · ') || 'No se estima calor entregado.';
+    return Object.entries(delivered).map(([heater, value]) => `${this.heaterText(heater)}: ${Number(value).toFixed(2)} kWh entregados`).join(' · ') || 'No se estima calor entregado.';
   }
 
   previewIntervalCount(result: PlanningPreviewDto): number {

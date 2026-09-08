@@ -19,6 +19,7 @@ from ...persistence.migration import MigrationCoordinator, MigrationInProgress
 from ...system_settings import ACTIVATION_POLICIES, ActivationPolicy
 from ...weather import AemetWeatherProvider, future_forecast_points, weather_config_from_system
 from ...persistence.history import SqlHistoryRecorder
+from ..read_model import forecast_cycle_context
 from ..dependencies import usable_store
 from ..errors import ApiError
 from ..schemas import WeatherRefreshResponse
@@ -264,6 +265,7 @@ def refresh_weather(request: Request, store: Store = Depends(usable_store)) -> W
             forecast_last_attempt_at=now,
             forecast_last_error=None,
             forecast_next_run_at=next_run_at,
+            forecast_next_run_kind="daily",
             forecast=_forecast_response(forecast, now),
         )
     finally:
@@ -300,7 +302,7 @@ def migration_status(
 
 def _public_snapshot(store: Store) -> dict[str, object]:
     response = store.system_configuration.public_snapshot()
-    status = store.planning.forecast_cycle_status() or {
+    status = forecast_cycle_context(store.planning) or {
         "forecast_status": None,
         "forecast_last_attempt_at": None,
         "forecast_last_error": None,
@@ -311,6 +313,28 @@ def _public_snapshot(store: Store) -> dict[str, object]:
     weather = sections["weather"]
     assert isinstance(weather, dict)
     weather.update(status)
+    output = sections["output"]
+    assert isinstance(output, dict)
+    configured_driver = str(output.get("driver", "simulated"))
+    config, _revision = store.repository.current()
+    gpio_heaters = [
+        heater.name
+        for heater in config.heaters
+        if heater.enabled and heater.output.kind == "gpio"
+    ]
+    output.update(
+        {
+            "configured_driver": configured_driver,
+            "effective_driver": configured_driver,
+            "effective_driver_reason": (
+                "El driver global simulado prevalece sobre las salidas GPIO "
+                "configuradas por acumulador."
+                if configured_driver == "simulated" and gpio_heaters
+                else "El driver global seleccionado controla las salidas habilitadas."
+            ),
+            "overridden_gpio_heaters": gpio_heaters,
+        }
+    )
     return response
 
 

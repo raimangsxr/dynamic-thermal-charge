@@ -36,6 +36,12 @@ import type {
   UpdateHeaterRequest,
 } from '../core/api.types';
 import { type Explained, UNREACHABLE, explain, messageFor } from '../core/errors';
+import { formatInstant } from '../shared/age/age';
+import {
+  forecastNextRunLabel,
+  forecastStatusLabel,
+  outputDriverLabel,
+} from '../shared/presentation/presentation';
 import { confirmationText, needsConfirmation } from './electrical-fields';
 import { ParamHelp } from '../shared/param-help/param-help';
 
@@ -408,6 +414,21 @@ export class Config {
   }
   topologyDriver(): string { return this.topology()?.canonical_driver === 'postgresql' ? 'PostgreSQL' : this.topology()?.canonical_driver === 'sqlite' ? 'SQLite' : 'Sin determinar'; }
   formatPower(value: number | null | undefined): string { return value === null || value === undefined ? '—' : `${(value / 1000).toLocaleString('es-ES', { maximumFractionDigits: 1 })} kW`; }
+  installationTimezone(): string { return this.config()?.schedule?.timezone ?? 'Europe/Madrid'; }
+  dateTime(value: unknown): string {
+    if (typeof value !== 'string' || !value) return 'no disponible';
+    const formatted = formatInstant(value, this.installationTimezone());
+    return formatted === '—' ? 'no disponible' : formatted;
+  }
+  weatherStatusText(value: unknown): string { return forecastStatusLabel(value); }
+  weatherNextText(value: unknown): string { return forecastNextRunLabel(value); }
+  configuredOutputDriver(): string { return outputDriverLabel(this.systemValue('output', 'configured_driver') || this.systemValue('output', 'driver')); }
+  effectiveOutputDriver(): string { return outputDriverLabel(this.systemValue('output', 'effective_driver') || this.systemValue('output', 'driver')); }
+  effectiveOutputReason(): string { return String(this.systemValue('output', 'effective_driver_reason') || 'El driver global seleccionado controla las salidas habilitadas.'); }
+  overriddenGpioHeaters(): string[] {
+    const value = this.systemValue('output', 'overridden_gpio_heaters');
+    return Array.isArray(value) ? value.map(String) : [];
+  }
   canonicalPower(): number | null { return this.planningConfig()?.contracted_power_w ?? null; }
   enabledText(value: unknown): string { return value === true || value === 'true' ? 'Activado' : 'Desactivado'; }
   systemValue(section: SystemSection, field: string): unknown {
@@ -768,7 +789,7 @@ export class Config {
       next: (result) => {
         this.weatherRefreshLoading.set(false);
         this.weatherRefreshMessage.set('Consulta AEMET completada correctamente.');
-        this.configuration.update((current) => current ? ({ ...current, sections: { ...current.sections, weather: { ...current.sections.weather, forecast_status: result.forecast_status, forecast_last_attempt_at: result.forecast_last_attempt_at, forecast_last_error: result.forecast_last_error, forecast_next_run_at: result.forecast_next_run_at } } }) : current);
+        this.configuration.update((current) => current ? ({ ...current, sections: { ...current.sections, weather: { ...current.sections.weather, forecast_status: result.forecast_status, forecast_last_attempt_at: result.forecast_last_attempt_at, forecast_last_error: result.forecast_last_error, forecast_next_run_at: result.forecast_next_run_at, forecast_next_run_kind: result.forecast_next_run_kind } } }) : current);
       },
       error: (error: unknown) => {
         this.weatherRefreshLoading.set(false);
