@@ -116,6 +116,7 @@ class SqlPlanningRepository:
             key: values[key]
             for key in (
                 "stored_soc_topic",
+                "damper_topic",
             )
             if key in values
         }
@@ -217,23 +218,29 @@ class SqlPlanningRepository:
             stored_soc_percent=_float_or_none(row["stored_soc_percent"]),
             indoor_received_at=from_utc(row["temperature_received_at"]),
             stored_soc_received_at=from_utc(row["stored_soc_received_at"]),
+            damper_position_percent=_float_or_none(row.get("damper_position_percent")),
+            damper_received_at=from_utc(row.get("damper_received_at")),
         ) for row in rows}
 
     def record_telemetry(self, heater_id: str, field: str, value: float, received_at: datetime) -> None:
         aliases = {
             "indoor_temperature_c": "temperature_c",
             "stored_soc_percent": "stored_soc_percent",
+            "damper_position_percent": "damper_position_percent",
         }
         field = aliases.get(field, field)
-        if field not in {"temperature_c", "stored_soc_percent"}:
+        if field not in {"temperature_c", "stored_soc_percent", "damper_position_percent"}:
             raise ConfigValidationError(f"unknown telemetry field {field}", field=field, heater_id=heater_id)
         if received_at.tzinfo is None:
             raise ValueError("received_at requires a timezone")
         if field == "stored_soc_percent" and not 0 <= value <= 100:
             raise ConfigValidationError("stored SOC must be between 0 and 100", field=field, heater_id=heater_id)
+        if field == "damper_position_percent" and not 0 <= value <= 100:
+            raise ConfigValidationError("damper position must be between 0 and 100", field=field, heater_id=heater_id)
         timestamp = {
             "temperature_c": "temperature_received_at",
             "stored_soc_percent": "stored_soc_received_at",
+            "damper_position_percent": "damper_received_at",
         }[field]
         with transaction(self._application, self._application_location) as connection:
             row = connection.execute(select(heater_telemetry).where((heater_telemetry.c.installation_id == self._installation_id) & (heater_telemetry.c.heater_id == heater_id))).mappings().first()
@@ -670,6 +677,39 @@ class SqlPlanningRepository:
         if at is None:
             return points
         return future_forecast_points(points, at)
+
+    def latest_forecast_snapshot(self) -> dict[str, Any] | None:
+        """Return the complete latest forecast for a dedicated API operation."""
+        from .schema import forecast, forecast_hour
+
+        with store_errors(self._application_location):
+            with self._application.connect() as connection:
+                row = connection.execute(
+                    select(forecast)
+                    .where(forecast.c.installation_id == self._installation_id)
+                    .order_by(forecast.c.retrieved_at.desc(), forecast.c.id.desc())
+                    .limit(1)
+                ).mappings().first()
+                if row is None:
+                    return None
+                hours = connection.execute(
+                    select(forecast_hour)
+                    .where(forecast_hour.c.forecast_id == row["id"])
+                    .order_by(forecast_hour.c.observed_at)
+                ).mappings().all()
+        return {
+            "retrieved_at": from_utc(row["retrieved_at"]),
+            "source": str(row["source"]),
+            "forecast_date": row["forecast_date"].isoformat(),
+            "points": [
+                {
+                    "timestamp": from_utc(item["observed_at"]),
+                    "temperature_c": float(item["temperature_c"]),
+                    "interpolated": bool(item["interpolated"]),
+                }
+                for item in hours
+            ],
+        }
 
     def latest_forecast_automatic_eligible(self) -> bool:
         from .schema import forecast

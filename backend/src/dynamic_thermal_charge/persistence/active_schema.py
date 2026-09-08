@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
+from uuid import uuid4
 
 from sqlalchemy import Index, MetaData, Table, inspect, select, text, update
 from sqlalchemy.engine import Engine
@@ -18,8 +19,8 @@ from .topology import BootstrapCorruptError, BootstrapIncompatibleError
 from . import SchemaStatus, SchemaVersionError
 
 
-CONFIGURATION_SCHEMA_REVISION = 9
-APPLICATION_SCHEMA_REVISION = 5
+CONFIGURATION_SCHEMA_REVISION = 10
+APPLICATION_SCHEMA_REVISION = 6
 POSTGRES_CONFIGURATION_SCHEMA = "dtc_config"
 POSTGRES_APPLICATION_SCHEMA = "dtc_app"
 
@@ -249,6 +250,17 @@ def _upgrade_application_schema(engine: Engine, revision: int, expected: int) ->
             },
         )
         revision = 5
+    if revision == 5 and expected >= 6:
+        columns = {column["name"] for column in inspect(engine).get_columns("heater_telemetry")}
+        additions = (
+            ("damper_position_percent", "FLOAT"),
+            ("damper_received_at", "DATETIME"),
+        )
+        with engine.begin() as connection:
+            for name, definition in additions:
+                if name not in columns:
+                    connection.execute(text(f"ALTER TABLE heater_telemetry ADD COLUMN {name} {definition}"))
+        revision = 6
     if revision != expected:
         raise BootstrapIncompatibleError(
             f"application schema revision {revision} has no registered upgrade path to {expected}"
@@ -428,6 +440,49 @@ def _upgrade_configuration_schema(engine: Engine, revision: int, expected: int) 
                 temperature_target.drop(connection)
         configuration_metadata.create_all(engine, tables=[temperature_target])
         revision = 9
+    if revision == 9 and expected >= 10:
+        installation_columns = {
+            column["name"] for column in inspect(engine).get_columns("installation")
+        }
+        charge_columns = {
+            column["name"] for column in inspect(engine).get_columns("heater_charge_config")
+        }
+        with engine.begin() as connection:
+            if "installation_uuid" not in installation_columns:
+                connection.execute(
+                    text("ALTER TABLE installation ADD COLUMN installation_uuid VARCHAR(36)")
+                )
+            if "automatic_control_enabled" not in installation_columns:
+                connection.execute(
+                    text("ALTER TABLE installation ADD COLUMN automatic_control_enabled BOOLEAN NOT NULL DEFAULT 1")
+                )
+            if "recalculation_requested_generation" not in installation_columns:
+                connection.execute(
+                    text("ALTER TABLE installation ADD COLUMN recalculation_requested_generation INTEGER NOT NULL DEFAULT 0")
+                )
+            if "recalculation_processed_generation" not in installation_columns:
+                connection.execute(
+                    text("ALTER TABLE installation ADD COLUMN recalculation_processed_generation INTEGER NOT NULL DEFAULT 0")
+                )
+            if "control_mode" not in charge_columns:
+                connection.execute(
+                    text("ALTER TABLE heater_charge_config ADD COLUMN control_mode VARCHAR(8) NOT NULL DEFAULT 'AUTO'")
+                )
+            if "damper_topic" not in charge_columns:
+                connection.execute(
+                    text("ALTER TABLE heater_charge_config ADD COLUMN damper_topic VARCHAR(512)")
+                )
+            rows = connection.execute(text("SELECT id, installation_uuid FROM installation")).all()
+            for installation_id, installation_uuid in rows:
+                if not installation_uuid:
+                    connection.execute(
+                        text("UPDATE installation SET installation_uuid = :value WHERE id = :id"),
+                        {"value": str(uuid4()), "id": installation_id},
+                    )
+            connection.execute(
+                text("CREATE UNIQUE INDEX IF NOT EXISTS uq_installation_uuid ON installation (installation_uuid)")
+            )
+        revision = 10
     if revision != expected:
         raise BootstrapIncompatibleError(
             f"configuration schema revision {revision} has no registered upgrade path to {expected}"

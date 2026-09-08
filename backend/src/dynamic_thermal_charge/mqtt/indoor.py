@@ -95,8 +95,12 @@ class ChargeTelemetryMessageProcessor:
             return False
         match = None
         simulation = simulation_config_from_site(self._planning.site())
+        charge_config = self._planning.heater_charge_config()
         for heater in config.heaters:
             topics = heater_telemetry_topics(heater, simulation=simulation)
+            damper_topic = charge_config.get(heater.id, {}).get("damper_topic")
+            if damper_topic:
+                topics[damper_topic] = "damper_position_percent"
             field = topics.get(message.topic)
             if field is not None:
                 match = (heater.id, field)
@@ -113,6 +117,8 @@ class ChargeTelemetryMessageProcessor:
                 raise ValueError("stored charge must be between 0 and 100")
             if field == "indoor_temperature_c" and not -50 <= value <= 80:
                 raise ValueError("temperature is outside the safe range")
+            if field == "damper_position_percent" and not 0 <= value <= 100:
+                raise ValueError("damper position must be between 0 and 100")
         except (UnicodeDecodeError, ValueError) as exc:
             logger.error("Invalid %s for heater %s on topic %s: %s", field, heater_id, message.topic, exc)
             try:

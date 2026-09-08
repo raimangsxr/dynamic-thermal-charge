@@ -1,0 +1,69 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect Dynamic Thermal Charge",
+        "description": "Enter the host, port and bearer token of the local backend.",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "token": "Token"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate Dynamic Thermal Charge",
+        "description": "The backend rejected the stored token.",
+        "data": {
+          "token": "Token"
+        }
+      },
+      "reconfigure": {
+        "title": "Reconfigure Dynamic Thermal Charge",
+        "description": "Change the backend connection without changing the installation identity.",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "token": "Token"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Unable to connect to the backend",
+      "invalid_auth": "The token was rejected",
+      "different_installation": "The new endpoint is a different installation"
+    },
+    "abort": {
+      "already_configured": "This installation is already configured",
+      "reauth_success": "Re-authentication succeeded",
+      "reconfigure_success": "Reconfiguration succeeded",
+      "unknown_entry": "The configuration entry no longer exists"
+    }
+  },
+  "entity": {
+    "sensor": {
+      "controller_state": {"name": "State"},
+      "total_power": {"name": "Total power"},
+      "indoor_temperature_c": {"name": "Temperature"},
+      "soc_percent": {"name": "Thermal SOC"},
+      "instant_power_w": {"name": "Power"},
+      "damper_position_percent": {"name": "Damper position"},
+      "next_charge_at": {"name": "Next charge"},
+      "next_soc_target_percent": {"name": "Next SOC target"}
+    },
+    "binary_sensor": {
+      "charging": {"name": "Charging"}
+    },
+    "switch": {
+      "automatic_control": {"name": "Automatic control"}
+    },
+    "button": {
+      "recalculate": {"name": "Recalculate"}
+    },
+    "climate": {
+      "accumulator_climate": {"name": "Climate"}
+    },
+    "calendar": {
+      "global_calendar": {"name": "Charge calendar"}
+    }
+  }
+}

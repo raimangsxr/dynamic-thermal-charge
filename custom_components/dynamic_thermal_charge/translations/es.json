@@ -1,0 +1,49 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Conectar Dynamic Thermal Charge",
+        "description": "Introduce el host, puerto y token Bearer del backend local.",
+        "data": {"host": "Host", "port": "Puerto", "token": "Token"}
+      },
+      "reauth_confirm": {
+        "title": "Reautenticar Dynamic Thermal Charge",
+        "description": "El backend ha rechazado el token guardado.",
+        "data": {"token": "Token"}
+      },
+      "reconfigure": {
+        "title": "Reconfigurar Dynamic Thermal Charge",
+        "description": "Cambia la conexión sin cambiar la identidad de la instalación.",
+        "data": {"host": "Host", "port": "Puerto", "token": "Token"}
+      }
+    },
+    "error": {
+      "cannot_connect": "No se puede conectar con el backend",
+      "invalid_auth": "El token ha sido rechazado",
+      "different_installation": "El nuevo endpoint pertenece a otra instalación"
+    },
+    "abort": {
+      "already_configured": "Esta instalación ya está configurada",
+      "reauth_success": "Reautenticación correcta",
+      "reconfigure_success": "Reconfiguración correcta",
+      "unknown_entry": "La entrada de configuración ya no existe"
+    }
+  },
+  "entity": {
+    "sensor": {
+      "controller_state": {"name": "Estado"},
+      "total_power": {"name": "Potencia total"},
+      "indoor_temperature_c": {"name": "Temperatura"},
+      "soc_percent": {"name": "SOC térmico"},
+      "instant_power_w": {"name": "Potencia"},
+      "damper_position_percent": {"name": "Posición de compuerta"},
+      "next_charge_at": {"name": "Próxima carga"},
+      "next_soc_target_percent": {"name": "Próximo objetivo de SOC"}
+    },
+    "binary_sensor": {"charging": {"name": "Cargando"}},
+    "switch": {"automatic_control": {"name": "Control automático"}},
+    "button": {"recalculate": {"name": "Recalcular"}},
+    "climate": {"accumulator_climate": {"name": "Clima"}},
+    "calendar": {"global_calendar": {"name": "Calendario de carga"}}
+  }
+}

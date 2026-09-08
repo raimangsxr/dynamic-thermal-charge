@@ -156,11 +156,25 @@ def _run_controller(
                 history,
                 plan_ref=lambda: None if service is None else service.current_plan_ref,
             )
+
+            def allowed_outputs() -> set[str]:
+                control_repository = getattr(store, "home_assistant", None)
+                if control_repository is None:
+                    return {heater.id for heater in config.heaters if heater.enabled}
+                state = control_repository.control_state()
+                return {
+                    heater.id
+                    for heater in store.repository.current()[0].heaters
+                    if heater.enabled and state.heater_enabled(heater.id)
+                }
+
+            control_repository = getattr(store, "home_assistant", None)
             controller = ChargeController(
                 tuple(heater.id for heater in config.heaters if heater.enabled),
                 driver,
                 relay_tests=store.relay_tests,
                 runner_id=heartbeat.runner_id,
+                allowed_outputs_provider=allowed_outputs,
             )
             watchdog = ForecastWatchdog(
                 provider,
@@ -174,6 +188,11 @@ def _run_controller(
                 live_config, live_revision = store.repository.current()
                 live_mqtt = _live_mqtt_settings(store, None if system is None else system.mqtt)
                 planning_site = store.planning.site()
+                control = (
+                    control_repository.control_state()
+                    if control_repository is not None
+                    else None
+                )
                 # Percentage charge constraints were removed.  The planning
                 # revision now protects the weekly temperature-target schedule.
                 automatic_constraints = ()
@@ -204,7 +223,9 @@ def _run_controller(
                 room_energy_targets = {
                     heater.id: tuple(getattr(heater, "temperature_targets", ()))
                     for heater in live_config.heaters
-                    if heater.enabled
+                    if heater.enabled and (
+                        control is None or control.heater_enabled(heater.id)
+                    )
                 }
                 if hasattr(store.planning, "temperature_targets"):
                     persisted_targets = store.planning.temperature_targets()
@@ -212,13 +233,17 @@ def _run_controller(
                         {
                             heater_id: tuple(targets)
                             for heater_id, targets in persisted_targets.items()
+                            if control is None or control.heater_enabled(heater_id)
                         }
                     )
                 # Every enabled heater is now governed by the room-energy
                 # planner.  An empty target map is an explicit invalid input,
                 # not a reason to fall back to percentage planning.
                 room_energy_planning = any(
-                    heater.enabled for heater in live_config.heaters
+                    heater.enabled and (
+                        control is None or control.heater_enabled(heater.id)
+                    )
+                    for heater in live_config.heaters
                 )
                 if room_energy_planning or store.planning.active_plan() is not None:
                     automatic = _build_automatic_runtime_plan(
@@ -333,6 +358,14 @@ def _run_controller(
                 history=history,
                 retention_days=(config.retention_days if system is None else system.operations.retention_days),
                 heartbeat=heartbeat,
+                control_state=(
+                    None if control_repository is None else control_repository.control_state
+                ),
+                mark_recalculation_processed=(
+                    None
+                    if control_repository is None
+                    else control_repository.mark_recalculation_processed
+                ),
             )
             return service.run()
         finally:
@@ -353,6 +386,21 @@ def _build_automatic_runtime_plan(
     mqtt: MqttSystemSettings | None = None,
 ):
     """Build the controller-facing schedule from the automatic plan value."""
+    control_repository = getattr(store, "home_assistant", None)
+    control = None if control_repository is None else control_repository.control_state()
+    if control is not None and not control.automatic_control_enabled:
+        return None
+    if control is not None:
+        config = replace(
+            config,
+            heaters=tuple(
+                replace(
+                    heater,
+                    enabled=heater.enabled and control.heater_enabled(heater.id),
+                )
+                for heater in config.heaters
+            ),
+        )
     mqtt_settings = mqtt if mqtt is not None else _live_mqtt_settings(store, None)
     persisted = (
         {}
