@@ -71,7 +71,7 @@ def test_catalog_contains_every_installation_and_heater_entity_with_grouping():
             f"heater_{heater_id}_{entity}"
             for heater_id in ("salon", "entrada", "habitaciones", "buhardilla")
             for entity in (
-                "output", "power", "enabled", "target_charge",
+                "output", "power", "enabled",
                 "requested_minutes", "allocated_minutes", "unmet_minutes",
             )
         ),

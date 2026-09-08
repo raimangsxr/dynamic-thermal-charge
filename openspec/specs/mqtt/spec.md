@@ -34,19 +34,23 @@ procesos.
 - **WHEN** `mqtt.enabled` cambia entre falso y verdadero, o de verdadero a falso
 - **THEN** el proceso inicia o detiene la conexión MQTT en el siguiente ciclo de reconciliación
 
-### Requirement: Telemetría fija sin broker
+### Requirement: Telemetría física fija sin broker
 
-La configuración MQTT conserva cuatro valores globales fijos y, mientras la
-integración está deshabilitada, el controlador los usa como telemetría válida
-para todos los acumuladores y como lectura interior disponible. Al habilitar
-MQTT solo son válidas las lecturas recibidas por MQTT.
+Mientras la integración está deshabilitada, el controlador usa temperatura
+interior y SOC almacenado fijos como telemetría válida para todos los
+acumuladores. La consigna procede siempre de la programación semanal; no se
+publican ni consumen valores MQTT de temperatura objetivo o temperatura del
+acumulador. Al habilitar MQTT solo son válidas las lecturas interior y SOC
+recibidas por MQTT.
 
 #### Scenario: Planificación sin mensajes MQTT
 
 - **WHEN** MQTT está deshabilitado y se recalcula la planificación
-- **THEN** cada acumulador recibe temperatura, temperatura objetivo y carga almacenada fijas, y la temperatura interior fija se usa en el cálculo
+- **THEN** cada acumulador recibe temperatura interior y SOC fijos, y el
+  objetivo se obtiene de su programación semanal
 
 #### Scenario: Planificación con MQTT habilitado
 
 - **WHEN** MQTT está habilitado y se recalcula la planificación
-- **THEN** el controlador usa únicamente la telemetría MQTT persistida y no aplica los valores fijos
+- **THEN** el controlador usa únicamente la temperatura interior y el SOC MQTT
+  persistidos, y no aplica los valores fijos

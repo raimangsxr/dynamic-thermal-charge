@@ -113,10 +113,10 @@ replanificación y se ajusta siempre a un límite de intervalo, sin ser menor qu
 un intervalo de carga.
 
 La sección `Configuración → Integraciones → MQTT` permite desactivar el broker para instalaciones de
-prueba. Mientras MQTT está deshabilitado, el controlador usa los cuatro valores
-fijos globales de esa sección (temperatura, temperatura objetivo, carga
-almacenada y temperatura interior); al habilitarlo vuelve a exigir telemetría
-recibida por MQTT.
+prueba. Mientras MQTT está deshabilitado, el controlador usa los dos valores
+fijos globales de esa sección (temperatura interior y SOC almacenado); al
+habilitarlo vuelve a exigir ambos datos recibidos por MQTT. La consigna térmica
+siempre procede del horario semanal configurado para cada acumulador.
 
 Con salidas GPIO, MQTT puede permanecer deshabilitado para realizar pruebas de
 relés; cuando el controlador necesita planificar en ese modo usa los valores
@@ -136,12 +136,15 @@ La sección `Configuración → Planificación` permite configurar la ventana vi
 horizonte completo, ambos entre 1 y 48 horas, con ventana no mayor que el
 horizonte, además del límite total de tiempo del optimizador en segundos
 (entero positivo; por defecto 120). La sección `Planificación` consulta el plan aceptado en `GET /api/v1/planning`
-y permite editar constraints recurrentes. La vista previa se inicia con
+y permite editar consignas semanales de temperatura por acumulador. Cada
+consigna contiene temperatura en °C, hora de inicio, hora de fin y días de la
+semana; el inicio se incluye, el fin se excluye y el intervalo puede cruzar
+medianoche. La vista previa se inicia con
 `POST /api/v1/planning/preview/jobs`, se consulta con
 `GET /api/v1/planning/preview/jobs/{job_id}` y se cancela con
 `POST /api/v1/planning/preview/jobs/{job_id}/cancel`; el trabajo y sus checks
 se conservan al recargar. `POST /api/v1/planning/activate` valida el token de
-inputs y guarda constraints y plan conjuntamente. Por defecto la ventana es
+inputs y guarda las consignas y el plan conjuntamente. Por defecto la ventana es
 de 12 horas y el horizonte de 24 horas; ambos comienzan en el primer límite de
 slot que no haya pasado (el límite exacto se conserva y los instantes
 intermedios avanzan al siguiente). Sin cobertura AEMET horaria continua para todo el
@@ -158,13 +161,22 @@ de 48. Cada slot dura exactamente su duración configurada de tiempo real, los
 límites nunca se solapan y la hora que se repite en octubre usa la previsión
 horaria de esa hora de pared en sus dos pasadas.
 
-Las constraints se editan como porcentajes de 0 a 100 en el panel y se envían a
-la API como fracciones de 0 a 1. La reserva de cada acumulador es un
-porcentaje multiplicativo sobre la demanda estimada (no puntos extra de SOC).
-`demand_factor` escala la demanda degree-hours y la configuración global define
-potencia contratada, carga base de vivienda, límite de calefacción, diseño 21/0 °C
-y horizonte de feedback. La edición completa
-de un acumulador se guarda con una única petición `PUT /api/v1/config/heaters/{id}`.
+El plan usa un balance físico por sala y por intervalo. En cada acumulador,
+`room_thermal_capacity_kwh_per_c` (C) mide la energía necesaria para subir un
+grado y `room_heat_loss_kw_per_c` (K) mide el intercambio con el exterior. La
+pérdida firmada se calcula como `K × (temperatura interior − temperatura exterior)
+× horas`; por eso puede ser negativa cuando fuera hace más calor. La capacidad
+del almacén sigue siendo `potencia nominal × horas de carga completa`, y el SOC
+recibido se convierte a kWh solo para inicializar esa energía. El plan muestra
+por intervalo SOC, energía almacenada, temperatura interior, objetivo, calor
+entregado, intercambio térmico y déficit de temperatura.
+
+Los valores iniciales recomendados son C = 2,5 kWh/°C y K = 0,12 kW/°C. No se
+configuran objetivos porcentuales, reservas ni factores de demanda. Si falta
+telemetría interior/SOC reciente, una consigna semanal, cobertura horaria o
+potencia eléctrica suficiente, la vista previa lo declara como inválido o
+degradado y no cambia al modelo porcentual anterior. La edición completa de un
+acumulador se guarda con una única petición `PUT /api/v1/config/heaters/{id}`.
 
 El histórico de decisiones está disponible en `GET /api/v1/history/planning-audit`
 y conserva el motivo, el estado y las violaciones de cada preview o activación.

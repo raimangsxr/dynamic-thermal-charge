@@ -25,8 +25,17 @@ class OutputConfig:
 
 @dataclass(frozen=True)
 class ThermalProfile:
-    target_temperature_c: float
-    design_outdoor_temperature_c: float
+    """Physical room model used by the energy planner.
+
+    The first two fields are kept optional for one release so that old
+    configuration rows can still be read while the migration is being rolled
+    forward.  They are no longer used by the room-energy calculation.  New
+    installations use the two physical coefficients below and obtain their
+    temperature target from :class:`TemperatureTarget`.
+    """
+
+    target_temperature_c: float | None = None
+    design_outdoor_temperature_c: float | None = None
     thermal_factor: float = 1.0
     min_charge: float = 0.0
     max_charge: float = 1.0
@@ -34,9 +43,21 @@ class ThermalProfile:
     room_inertia_hours: float = 8.0
     outdoor_loss_per_hour: float = 0.08
     emission_c_per_hour: float = 1.0
+    room_thermal_capacity_kwh_per_c: float = 2.5
+    room_heat_loss_kw_per_c: float = 0.12
 
     def __post_init__(self) -> None:
-        if self.design_outdoor_temperature_c >= self.target_temperature_c:
+        if (self.design_outdoor_temperature_c is None) != (
+            self.target_temperature_c is None
+        ):
+            raise ValueError(
+                "legacy thermal target and design outdoor temperature must be set together"
+            )
+        if (
+            self.design_outdoor_temperature_c is not None
+            and self.target_temperature_c is not None
+            and self.design_outdoor_temperature_c >= self.target_temperature_c
+        ):
             raise ValueError("design outdoor temperature must be below target temperature")
         if self.thermal_factor <= 0:
             raise ValueError("thermal_factor must be positive")
@@ -50,6 +71,125 @@ class ThermalProfile:
             raise ValueError("outdoor_loss_per_hour must be between 0 and 1")
         if self.emission_c_per_hour < 0:
             raise ValueError("emission_c_per_hour must be non-negative")
+        if (
+            not math.isfinite(self.room_thermal_capacity_kwh_per_c)
+            or self.room_thermal_capacity_kwh_per_c <= 0
+        ):
+            raise ValueError(
+                "room_thermal_capacity_kwh_per_c must be finite and positive"
+            )
+        if (
+            not math.isfinite(self.room_heat_loss_kw_per_c)
+            or self.room_heat_loss_kw_per_c < 0
+        ):
+            raise ValueError(
+                "room_heat_loss_kw_per_c must be finite and non-negative"
+            )
+
+
+@dataclass(frozen=True)
+class TemperatureTarget:
+    """One recurring weekly indoor-temperature interval.
+
+    ``weekdays`` identifies the local calendar day on which the interval
+    starts.  ``end_time`` is exclusive and ``00:00`` represents midnight; when
+    it is equal to ``start_time`` the interval covers the complete day.
+    """
+
+    target_temperature_c: float
+    start_time: time
+    end_time: time = time(0, 0)
+    weekdays: tuple[int, ...] = tuple(range(7))
+    id: int | None = None
+    enabled: bool = True
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.target_temperature_c) or not -50 <= self.target_temperature_c <= 80:
+            raise ValueError("target_temperature_c must be finite and between -50 and 80")
+        for field_name, value in (
+            ("start_time", self.start_time),
+            ("end_time", self.end_time),
+        ):
+            if not isinstance(value, time) or value.second or value.microsecond or value.tzinfo is not None:
+                raise ValueError(
+                    f"temperature target {field_name} must be a wall-clock HH:MM time"
+                )
+        if not self.weekdays or any(day not in range(7) for day in self.weekdays):
+            raise ValueError("temperature target weekdays must contain values from 0 to 6")
+        if tuple(self.weekdays) != tuple(sorted(set(self.weekdays))):
+            raise ValueError("temperature target weekdays must be sorted and unique")
+
+    @property
+    def at(self) -> time:
+        """Compatibility alias for callers that only need the start time."""
+        return self.start_time
+
+    @property
+    def start(self) -> time:
+        return self.start_time
+
+    @property
+    def end(self) -> time:
+        return self.end_time
+
+
+def _time_minutes(value: time) -> int:
+    return value.hour * 60 + value.minute
+
+
+def _temperature_target_segments(
+    target: TemperatureTarget,
+) -> tuple[tuple[int, int, int], ...]:
+    """Expand one weekly interval into wall-clock day segments.
+
+    A cross-midnight interval is represented by one segment on its selected
+    start day and one segment on the following natural day.  This makes the
+    weekly overlap check independent of daylight-saving-time transitions.
+    """
+    start = _time_minutes(target.start_time)
+    end = _time_minutes(target.end_time)
+    segments: list[tuple[int, int, int]] = []
+    for weekday in target.weekdays:
+        if end > start:
+            segments.append((weekday, start, end))
+            continue
+        segments.append((weekday, start, 24 * 60))
+        if end:
+            segments.append(((weekday + 1) % 7, 0, end))
+    return tuple(segments)
+
+
+def validate_temperature_targets(
+    targets: tuple[TemperatureTarget, ...] | list[TemperatureTarget] | tuple,
+) -> None:
+    """Reject any overlapping weekly intervals in one heater schedule."""
+    normalized = tuple(targets)
+    for index, target in enumerate(normalized):
+        if not isinstance(target, TemperatureTarget):
+            raise ValueError(f"temperature target {index} is invalid")
+    segments = [
+        (index, weekday, start, end)
+        for index, target in enumerate(normalized)
+        for weekday, start, end in _temperature_target_segments(target)
+    ]
+    for left_index, left_weekday, left_start, left_end in segments:
+        for right_index, right_weekday, right_start, right_end in segments:
+            if left_index >= right_index or left_weekday != right_weekday:
+                continue
+            if max(left_start, right_start) < min(left_end, right_end):
+                left = normalized[left_index]
+                right = normalized[right_index]
+                raise ValueError(
+                    "temperature target intervals overlap for the same heater: "
+                    f"targets {left_index} ({left.start_time:%H:%M}-{left.end_time:%H:%M}) "
+                    f"and {right_index} ({right.start_time:%H:%M}-{right.end_time:%H:%M}) "
+                    f"share weekday {left_weekday}"
+                )
+
+
+# The longer name is useful at integration boundaries and keeps the model
+# discoverable for callers that do not know the compact UI name.
+WeeklyTemperatureTarget = TemperatureTarget
 
 
 @dataclass(frozen=True)
@@ -58,9 +198,11 @@ class Heater:
     name: str
     power_w: int
     full_charge_minutes: int
-    target_charge: float
-    priority: int
-    output: OutputConfig
+    # Deprecated compatibility input.  New planning never reads it and new
+    # API payloads do not expose it.
+    target_charge: float = 1.0
+    priority: int = 0
+    output: OutputConfig = OutputConfig()
     thermal: ThermalProfile | None = None
     model: str | None = None
     enabled: bool = True
@@ -68,8 +210,10 @@ class Heater:
     temperature_topic: str | None = None
     target_temperature_topic: str | None = None
     stored_charge_topic: str | None = None
+    stored_soc_topic: str | None = None
     reserve_percent: float = 0.0
     demand_factor: float = 1.0
+    temperature_targets: tuple[TemperatureTarget, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.id:
@@ -87,6 +231,7 @@ class Heater:
             "temperature_topic",
             "target_temperature_topic",
             "stored_charge_topic",
+            "stored_soc_topic",
         ):
             value = getattr(self, field_name)
             if value is not None:
@@ -95,6 +240,27 @@ class Heater:
             raise ValueError(f"heater {self.id}: reserve_percent must be non-negative")
         if not math.isfinite(self.demand_factor) or self.demand_factor <= 0:
             raise ValueError(f"heater {self.id}: demand_factor must be positive")
+        targets = tuple(self.temperature_targets)
+        if any(not isinstance(target, TemperatureTarget) for target in targets):
+            raise ValueError(f"heater {self.id}: temperature_targets are invalid")
+        validate_temperature_targets(targets)
+        object.__setattr__(
+            self,
+            "temperature_targets",
+            tuple(
+                sorted(
+                    targets,
+                    key=lambda target: (
+                        target.start_time.hour,
+                        target.start_time.minute,
+                        target.end_time.hour,
+                        target.end_time.minute,
+                        target.weekdays,
+                        target.id if target.id is not None else -1,
+                    ),
+                )
+            ),
+        )
 
     @property
     def charge_power_kw(self) -> float:
@@ -114,6 +280,16 @@ class Heater:
             self.full_charge_minutes
             * (self.target_charge + self.reserve_percent / 100)
         )
+
+    @property
+    def room_thermal_capacity_kwh_per_c(self) -> float:
+        """The configured room heat capacity, with the migration default."""
+        return 2.5 if self.thermal is None else self.thermal.room_thermal_capacity_kwh_per_c
+
+    @property
+    def room_heat_loss_kw_per_c(self) -> float:
+        """The configured envelope heat-loss coefficient."""
+        return 0.12 if self.thermal is None else self.thermal.room_heat_loss_kw_per_c
 
 
 @dataclass(frozen=True)
@@ -218,10 +394,33 @@ class ChargeTelemetry:
     temperature_received_at: datetime | None = None
     target_received_at: datetime | None = None
     stored_charge_received_at: datetime | None = None
+    # New names are explicit aliases.  Persistence and MQTT may still expose
+    # the historical column names while installations migrate, but planning
+    # treats these values as indoor temperature and stored state of charge.
+    indoor_temperature_c: float | None = None
+    stored_soc_percent: float | None = None
+    indoor_received_at: datetime | None = None
+    stored_soc_received_at: datetime | None = None
 
     def __post_init__(self) -> None:
         if not self.heater_id:
             raise ValueError("telemetry heater_id cannot be empty")
+        if self.temperature_c is None and self.indoor_temperature_c is not None:
+            object.__setattr__(self, "temperature_c", self.indoor_temperature_c)
+        if self.indoor_temperature_c is None and self.temperature_c is not None:
+            object.__setattr__(self, "indoor_temperature_c", self.temperature_c)
+        if self.stored_charge_percent is None and self.stored_soc_percent is not None:
+            object.__setattr__(self, "stored_charge_percent", self.stored_soc_percent)
+        if self.stored_soc_percent is None and self.stored_charge_percent is not None:
+            object.__setattr__(self, "stored_soc_percent", self.stored_charge_percent)
+        if self.temperature_received_at is None and self.indoor_received_at is not None:
+            object.__setattr__(self, "temperature_received_at", self.indoor_received_at)
+        if self.indoor_received_at is None and self.temperature_received_at is not None:
+            object.__setattr__(self, "indoor_received_at", self.temperature_received_at)
+        if self.stored_charge_received_at is None and self.stored_soc_received_at is not None:
+            object.__setattr__(self, "stored_charge_received_at", self.stored_soc_received_at)
+        if self.stored_soc_received_at is None and self.stored_charge_received_at is not None:
+            object.__setattr__(self, "stored_soc_received_at", self.stored_charge_received_at)
         for value in (
             self.temperature_c,
             self.target_temperature_c,

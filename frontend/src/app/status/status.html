@@ -136,14 +136,14 @@
         <div class="table-scroll">
           <table>
             <caption class="sr-only">Telemetría independiente por acumulador</caption>
-            <thead><tr><th scope="col">Acumulador</th><th scope="col">Temperatura</th><th scope="col">Objetivo</th><th scope="col">Carga almacenada</th><th scope="col">Estado</th></tr></thead>
+            <thead><tr><th scope="col">Acumulador</th><th scope="col">Temperatura interior</th><th scope="col">SOC almacenado</th><th scope="col">Energía almacenada</th><th scope="col">Estado</th></tr></thead>
             <tbody>
               @for (item of data.telemetry; track item.heater_id) {
                 <tr [class.stale]="item.state === 'telemetry_stale'">
                   <th scope="row">{{ item.heater_id }}</th>
-                  <td>{{ temperature(item.temperature_c) }}</td>
-                  <td>{{ temperature(item.target_temperature_c) }}</td>
-                  <td>{{ item.stored_charge_percent === null ? 'sin dato' : item.stored_charge_percent + ' %' }}</td>
+                  <td>{{ temperature(item.indoor_temperature_c) }}</td>
+                  <td>{{ item.stored_soc_percent === null ? 'sin dato' : item.stored_soc_percent + ' %' }}</td>
+                  <td>{{ item.stored_energy_kwh === null ? 'sin dato' : item.stored_energy_kwh.toFixed(2) + ' kWh' }}</td>
                   <td>@if (item.state === 'telemetry_stale') { <span class="state-chip state-warning"><mat-icon aria-hidden="true">warning</mat-icon>Caducada o incompleta</span> } @else { <span class="state-chip state-ok"><mat-icon aria-hidden="true">check_circle</mat-icon>Válida</span> }</td>
                 </tr>
               }

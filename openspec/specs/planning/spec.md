@@ -5,6 +5,80 @@ y ejecutables a partir de previsión y telemetría aptas.
 
 ## Requirements
 
+### Requirement: Modelo acoplado de energía y confort por habitación
+
+Cada acumulador debe modelar la energía almacenada y la temperatura interior
+por intervalo. La capacidad del acumulador es la potencia nominal multiplicada
+por sus horas de carga completa; la energía inicial es el SOC recibido por esa
+capacidad. Para un intervalo de `dt` horas, el intercambio firmado del recinto
+es `K_room * (T_inside - T_outside) * dt` y la temperatura siguiente cumple
+`T_next = T_inside + (E_heater - E_loss) / C_room`. La energía almacenada debe
+permanecer entre cero y la capacidad, y la carga nominal solo se suma cuando el
+acumulador está encendido.
+
+#### Scenario: Exterior más cálido que el interior
+
+- **WHEN** la temperatura exterior supera la interior durante un intervalo
+- **THEN** el intercambio térmico es negativo, aumenta la temperatura
+  proyectada y se conserva el balance energético firmado
+
+### Requirement: Consignas semanales y fuente del objetivo
+
+Cada acumulador habilitado debe tener una o más consignas semanales de
+temperatura, intervalo horario local, días de la semana y estado activo. El
+inicio del intervalo se incluye y el fin se excluye; un intervalo cuyo fin es
+anterior al inicio continúa en el día natural siguiente. La planificación usa
+la consigna solo mientras el instante pertenece a un intervalo activo, no
+mantiene una consigna durante los huecos y nunca usa telemetría de temperatura
+del acumulador ni deriva una temperatura desde el SOC. Los intervalos de un
+mismo acumulador no pueden solaparse, incluso al cruzar medianoche.
+
+#### Scenario: Intervalo activo durante la semana
+
+- **WHEN** llega una hora local incluida entre el inicio y el fin de una regla
+- **THEN** ese intervalo usa la temperatura objetivo y deja de usarla en su fin
+  exclusivo, también si la regla cruza medianoche
+
+#### Scenario: Hueco sin consigna
+
+- **WHEN** un intervalo de planificación queda fuera de todas las reglas activas
+- **THEN** no tiene objetivo térmico ni déficit de confort
+
+#### Scenario: Solape de consignas
+
+- **WHEN** dos reglas del mismo acumulador ocupan el mismo tramo de un día
+- **THEN** la configuración se rechaza con el acumulador y las reglas
+  identificados, sin guardar cambios parciales
+
+### Requirement: Entradas físicas frescas y resultado explícito
+
+La planificación automática requiere temperatura interior y SOC recientes para
+cada acumulador habilitado. Si falta o está obsoleta cualquiera de esas
+lecturas, falta una consigna, no hay cobertura meteorológica, los coeficientes
+son inválidos o la configuración eléctrica es inviable, el resultado debe ser
+explícitamente `INVALID` o `DEGRADED` con la causa; nunca debe volver al cálculo
+basado en porcentajes.
+
+#### Scenario: Telemetría incompleta
+
+- **WHEN** un acumulador no tiene temperatura interior o SOC reciente
+- **THEN** el resultado identifica la entrada ausente y no publica un plan
+  automático basado en un valor supuesto
+
+### Requirement: Auditoría física del plan
+
+Las vistas previas, el plan activo, las explicaciones y el historial deben
+conservar por acumulador e intervalo la temperatura interior proyectada, la
+consigna, la energía almacenada en kWh y SOC, el calor entregado, el intercambio
+térmico y el déficit de temperatura cuando exista.
+
+#### Scenario: Consulta de un intervalo planificado
+
+- **WHEN** el operador abre el detalle de un intervalo
+- **THEN** puede distinguir energía almacenada, carga, calor entregado,
+  intercambio térmico, interior, objetivo y déficit sin inferir temperatura a
+  partir del SOC
+
 ### Requirement: Ciclo de previsión AEMET durable
 
 La consulta AEMET debe ejecutarse a la hora local configurada y conservar su
@@ -35,8 +109,8 @@ al expirar el límite de tiempo será `DEGRADED` con la violación
 ### Requirement: Activación segura de previews completados
 
 La activación debe poder reutilizar un preview durable completado cuando el
-token de entrada vigente, las revisiones de configuración y constraints y el
-payload de constraints coinciden. En cualquier otro caso debe mantener la
+token de entrada vigente, las revisiones de configuración y objetivos térmicos
+y el payload de consignas coinciden. En cualquier otro caso debe mantener la
 validación normal y nunca activar un resultado obsoleto o `INVALID`.
 
 #### Scenario: Activación inmediata de un preview válido
@@ -47,7 +121,7 @@ validación normal y nunca activar un resultado obsoleto o `INVALID`.
 
 #### Scenario: Entrada modificada después del preview
 
-- **WHEN** cambia la telemetría, previsión, configuración o constraints desde
+- **WHEN** cambia la telemetría, previsión, configuración o las consignas desde
   que terminó el preview
 - **THEN** el token deja de coincidir y el resultado anterior no se activa
 
@@ -142,8 +216,8 @@ un plan.
 
 La vista previa debe representar únicamente su ventana visible con una
 visualización compacta de series por acumulador. Cada acumulador debe conservar
-una tabla accesible por intervalo con potencia, energía entregada, porcentaje
-de capacidad utilizado y SOC. Si existen déficits o violaciones, la vista
+una tabla accesible por intervalo con potencia, energía almacenada, temperatura
+interior, objetivo, calor entregado, intercambio térmico, déficit y SOC. Si existen déficits o violaciones, la vista
 previa debe ofrecer un diálogo accesible con el acumulador, requisito,
 momento, valores objetivo/proyectado/déficit, causa explicada y acción
 recomendada cuando exista; `deficits` tiene prioridad sobre `violations` como
@@ -165,7 +239,7 @@ fuente de problemas.
 La vista de Planificación debe ofrecer tres pestañas accesibles, en este orden:
 Planificación activa, Nueva planificación y Previsión meteorológica. Debe abrir
 en Planificación activa; esta pestaña solo muestra el plan aceptado y sus
-gráficos, Nueva planificación concentra constraints y preview, y Previsión
+gráficos, Nueva planificación concentra consignas térmicas y preview, y Previsión
 meteorológica concentra el resumen y gráfico meteorológico. Cambiar de pestaña
 no debe perder la edición ni el trabajo de preview en curso.
 
@@ -173,7 +247,7 @@ no debe perder la edición ni el trabajo de preview en curso.
 
 - **WHEN** el operador entra en Planificación
 - **THEN** se selecciona Planificación activa y no se mezcla su contenido con
-  constraints, preview o detalle meteorológico
+  consignas, preview o detalle meteorológico
 
 #### Scenario: Consulta o edición separada
 
@@ -206,14 +280,14 @@ cuando el número de columnas lo requiera.
 ### Requirement: Feedback de las acciones del editor de planificación
 
 El editor de Nueva planificación debe hacer visible el resultado de sus
-acciones. Descartar debe restaurar inmediatamente las constraints guardadas y
+acciones. Descartar debe restaurar inmediatamente las consignas guardadas y
 retirar la preview local; Guardar y activar debe indicar el estado en curso, el
 éxito o el error sin confundir una preview persistida con el resultado de la
 activación.
 
 #### Scenario: Descartar cambios locales
 
-- **WHEN** el operador modifica una constraint y pulsa “Descartar”
+- **WHEN** el operador modifica una consigna y pulsa “Descartar”
 - **THEN** los controles recuperan los valores guardados, se limpia la preview
   local y se muestra una confirmación sin una nueva petición de lectura
 

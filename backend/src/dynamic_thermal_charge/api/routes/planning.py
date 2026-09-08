@@ -16,6 +16,7 @@ from ...charge_planning import (
     AutomaticPlanSlot,
     DemandEstimate,
     HeaterExplanation,
+    RoomEnergyInterval,
     PLANNING_HORIZON_HOURS,
     DeterministicChargeOptimizer,
     PlanningCancelled,
@@ -24,7 +25,7 @@ from ...charge_planning import (
     input_token,
     resolve_planning_telemetry,
 )
-from ...models import ChargeConstraint
+from ...models import TemperatureTarget, validate_temperature_targets
 from ...persistence import ConfigValidationError
 from ..dependencies import usable_store
 from ..schemas import (
@@ -38,8 +39,6 @@ from ..schemas import (
     PlanningSlotView,
     PlanningTimelineSlotView,
     READ_RESPONSES,
-    ChargeConstraintRequest,
-    ChargeConstraintView,
     ChargeTelemetryView,
     PlanningActivateRequest,
     PlanningDeficitView,
@@ -50,16 +49,23 @@ from ..schemas import (
     PlanningSiteConfigResponse,
     PlanningCheckView,
     PlanningPreviewJobResponse,
+    TemperatureTargetRequest,
+    TemperatureTargetView,
 )
 from ..errors import not_found
+from ...persistence.mapping import (
+    format_temperature_target_end_time,
+    parse_temperature_target_end_time,
+    parse_time,
+)
 
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 PREVIEW_STEP_NAMES = (
-    "input_validation", "telemetry", "aemet_coverage", "demand_estimation",
-    "constraints", "resolution", "safety_validation", "operator_summary",
+    "input_validation", "telemetry", "aemet_coverage", "room_model",
+    "resolution", "safety_validation", "operator_summary",
 )
 
 
@@ -89,29 +95,33 @@ class PreviewJobRunner:
             site = repository.site()
             config, configuration_revision = store.repository.current()
             if configuration_revision != job["configuration_revision"] or site["revision"] != job["constraints_revision"]:
-                repository.finish_preview_job(job_id, status="error", error_code="stale_input", error_detail="La configuración o las constraints cambiaron antes de iniciar el cálculo.")
+                repository.finish_preview_job(job_id, status="error", error_code="stale_input", error_detail="La configuración o los objetivos térmicos cambiaron antes de iniciar el cálculo.")
                 return
-            constraints = _parse_constraints([
-                ChargeConstraintRequest.model_validate(item)
-                for item in job["request"]["constraints"]
-            ])
+            raw_targets = job["request"].get("temperature_targets")
+            temperature_targets = _resolve_temperature_targets(
+                store,
+                None
+                if raw_targets is None
+                else [TemperatureTargetRequest.model_validate(item) for item in raw_targets],
+            )
 
             def progress(step: str) -> None:
                 mapped = {
                     "inputs": "input_validation", "coverage": "aemet_coverage",
-                    "telemetry": "telemetry", "demand": "demand_estimation",
-                    "constraints": "constraints", "safety": "safety_validation",
+                    "telemetry": "telemetry", "room_model": "room_model",
+                    "safety": "safety_validation",
                     "summary": "operator_summary",
                 }.get(step, "resolution" if step.startswith("solver_phase_") else None)
                 if mapped is not None:
                     repository.update_preview_step(job_id, mapped, "running")
 
             plan = _build_automatic_plan(
-                store, self._clock(), constraints, site,
+                store, self._clock(), site,
+                temperature_targets=temperature_targets,
                 progress_callback=progress,
                 cancellation_probe=lambda: repository.preview_job_cancel_requested(job_id),
             )
-            payload = _preview_response(plan, constraints, site=site).model_dump(mode="json")
+            payload = _preview_response(plan, temperature_targets, site=site).model_dump(mode="json")
             repository.finish_preview_job(job_id, status="completed", result=payload)
             if plan.status == "INVALID" and plan.violations:
                 reason = plan.violations[0].reason.split(":", 1)[0]
@@ -300,14 +310,20 @@ def preview_planning(
     app_request: Request,
     store: Store = Depends(usable_store),
 ) -> PlanningPreviewResponse:
-    logger.info("Planning preview requested: constraints=%d", len(request.constraints))
+    logger.info(
+        "Planning preview requested: temperature_targets=%d",
+        len(request.temperature_targets or []),
+    )
     site = store.planning.site()
     if request.expected_revision is not None and request.expected_revision != site["revision"]:
         raise ConfigValidationError("planning configuration changed; recalculate before saving")
-    constraints = _parse_constraints(request.constraints)
-    plan = _build_automatic_plan(store, app_request.app.state.clock(), constraints, site)
+    temperature_targets = _resolve_temperature_targets(store, request.temperature_targets)
+    plan = _build_automatic_plan(
+        store, app_request.app.state.clock(), site,
+        temperature_targets=temperature_targets,
+    )
     logger.info("Planning preview completed: status=%s violations=%d", plan.status, len(plan.violations))
-    return _preview_response(plan, constraints, site=site)
+    return _preview_response(plan, temperature_targets, site=site)
 
 
 @router.post("/planning/preview/jobs", response_model=PlanningPreviewJobResponse, responses=ERROR_RESPONSES)
@@ -319,11 +335,11 @@ def start_preview_job(
     site = store.planning.site()
     if request.expected_revision is not None and request.expected_revision != site["revision"]:
         raise ConfigValidationError("planning configuration changed; recalculate before saving")
-    constraints = _parse_constraints(request.constraints)
-    _validate_constraint_heaters(store, constraints)
+    temperature_targets = _resolve_temperature_targets(store, request.temperature_targets)
     _config, configuration_revision = store.repository.current()
     job_id = store.planning.create_preview_job(
-        [item.model_dump() for item in request.constraints],
+        [],
+        temperature_targets=_temperature_target_payload(temperature_targets),
         configuration_revision=configuration_revision,
         constraints_revision=int(site["revision"]),
         requested_at=app_request.app.state.clock(),
@@ -362,17 +378,18 @@ def activate_planning(
 ) -> PlanningPreviewResponse:
     site = store.planning.site()
     if request.expected_revision != site["revision"]:
-        raise ConfigValidationError("constraints changed; recalculate before saving")
-    constraints = _parse_constraints(request.constraints)
+        raise ConfigValidationError("temperature targets changed; recalculate before saving")
+    temperature_targets = _resolve_temperature_targets(store, request.temperature_targets)
     observed_at = app_request.app.state.clock()
-    planning_request = _build_automatic_request(store, observed_at, constraints, site)
+    planning_request = _build_automatic_request(
+        store, observed_at, site, temperature_targets=temperature_targets
+    )
     if input_token(planning_request) != request.token:
         raise ConfigValidationError("the preview inputs changed; recalculate before activating")
     _config, configuration_revision = store.repository.current()
     plan = _cached_preview_plan(
         store,
         planning_request,
-        constraints,
         configuration_revision=configuration_revision,
         constraints_revision=int(site["revision"]),
     )
@@ -380,9 +397,16 @@ def activate_planning(
         plan = DeterministicChargeOptimizer().build(planning_request)
     if plan.status == "INVALID":
         raise ConfigValidationError("the plan is invalid and cannot be activated", field="planning")
-    new_revision = store.planning.replace_constraints(constraints, request.expected_revision)
+    new_revision = (
+        store.planning.replace_all_temperature_targets(
+            temperature_targets,
+            request.expected_revision,
+        )
+        if temperature_targets
+        else int(site["revision"])
+    )
     store.planning.save_plan(plan, configuration_revision=configuration_revision, constraints_revision=new_revision, reason="activated", active=True)
-    return _preview_response(plan, constraints, site=site)
+    return _preview_response(plan, temperature_targets, site=site)
 
 
 @router.get(
@@ -455,7 +479,13 @@ def _automatic_planning_response(
                 total_power_w=item["power_w"],
                 temperature_c=item["outdoor_temperature_c"],
                 temperature_interpolated=False,
-                stored_charge_percent_by_heater=item["stored_charge_percent"],
+                stored_energy_kwh_by_heater=item.get("stored_energy_kwh", {}),
+                indoor_temperature_c_by_heater=item.get("indoor_temperature_c", {}),
+                target_temperature_c_by_heater=item.get("target_temperature_c", {}),
+                heat_delivered_kwh_by_heater=item.get("heat_delivered_kwh", {}),
+                thermal_loss_kwh_by_heater=item.get("thermal_loss_kwh", {}),
+                temperature_shortfall_c_by_heater=item.get("temperature_shortfall_c", {}),
+                charge_energy_kwh_by_heater=item.get("charge_energy_kwh", {}),
             )
             for item in automatic["slots"]
             if item["start"] < window_end
@@ -492,37 +522,53 @@ def _enrich(response: PlanningResponse, store: Store, observed_at: datetime) -> 
     for heater in response.heaters:
         value = telemetry.get(heater.id)
         if value is None:
-            views.append(ChargeTelemetryView(heater_id=heater.id, missing_fields=["temperature_c", "target_temperature_c", "stored_charge_percent"]))
+            views.append(ChargeTelemetryView(heater_id=heater.id, missing_fields=["indoor_temperature_c", "stored_soc_percent"]))
             continue
         ages = [
             (observed_at - stamp).total_seconds()
-            for stamp in (value.temperature_received_at, value.target_received_at, value.stored_charge_received_at)
+            for stamp in (value.indoor_received_at, value.stored_soc_received_at)
             if stamp is not None
         ]
-        missing = [field for field, item in (("temperature_c", value.temperature_c), ("target_temperature_c", value.target_temperature_c), ("stored_charge_percent", value.stored_charge_percent)) if item is None]
+        missing = [field for field, item in (("indoor_temperature_c", value.indoor_temperature_c), ("stored_soc_percent", value.stored_soc_percent)) if item is None]
         oldest = max(ages, default=None)
         stale = bool(missing or oldest is None or oldest > 900)
         views.append(ChargeTelemetryView(
             heater_id=heater.id,
-            temperature_c=value.temperature_c,
-            target_temperature_c=value.target_temperature_c,
-            stored_charge_percent=value.stored_charge_percent,
-            temperature_received_at=value.temperature_received_at,
-            target_received_at=value.target_received_at,
-            stored_charge_received_at=value.stored_charge_received_at,
+            indoor_temperature_c=value.indoor_temperature_c,
+            stored_soc_percent=value.stored_soc_percent,
+            indoor_received_at=value.indoor_received_at,
+            stored_soc_received_at=value.stored_soc_received_at,
             state="telemetry_stale" if stale else "ready",
             missing_fields=missing,
             oldest_age_seconds=oldest,
+            stored_energy_kwh=(
+                None
+                if value.stored_soc_percent is None
+                else value.stored_soc_percent / 100 * next(
+                    item.capacity_kwh for item in store.repository.current()[0].heaters if item.id == heater.id
+                )
+            ),
         ))
-    constraints = [ChargeConstraintView(id=item.id, heater_id=item.heater_id, target_charge=item.target_charge, at_time=item.at.strftime("%H:%M"), weekdays=list(item.weekdays)) for item in planning.constraints()]
     active = planning.active_plan()
-    response.constraints = constraints
+    response.temperature_targets = [
+        TemperatureTargetView(
+            id=target.id,
+            heater_id=heater.id,
+            target_temperature_c=target.target_temperature_c,
+            start_time=target.start_time.strftime("%H:%M"),
+            end_time=format_temperature_target_end_time(target.start_time, target.end_time),
+            weekdays=list(target.weekdays),
+            enabled=target.enabled,
+        )
+        for heater in store.repository.current()[0].heaters
+        for target in heater.temperature_targets
+    ]
     response.telemetry = views
     response.plan_status = None if active is None else active["status"]
     response.deficits = [] if active is None else [PlanningDeficitView(**item) for item in active["deficits"]]
     response.preview_token = None if active is None else active["input_token"]
     site = planning.site()
-    response.constraints_revision = site["revision"]
+    response.temperature_targets_revision = site["revision"]
     response.base_load_w = int(site.get("base_load_w", 0))
     response.max_heating_power_w = int(site.get("max_heating_power_w", response.max_total_power_w))
     latest_job = planning.latest_preview_job()
@@ -530,33 +576,81 @@ def _enrich(response: PlanningResponse, store: Store, observed_at: datetime) -> 
     return response
 
 
-def _parse_constraints(items: list[ChargeConstraintRequest]) -> tuple[ChargeConstraint, ...]:
-    result = []
-    from ...persistence.mapping import parse_time
+def _parse_temperature_targets(
+    items: list[TemperatureTargetRequest],
+) -> dict[str, tuple[TemperatureTarget, ...]]:
+    result: dict[str, list[TemperatureTarget]] = {}
+
     for item in items:
         try:
-            parsed_time = parse_time(item.at_time, "at_time")
-            weekdays = tuple(item.weekdays)
-            result.append(ChargeConstraint(heater_id=item.heater_id, target_charge=item.target_charge, at=parsed_time, weekdays=weekdays))
+            target = TemperatureTarget(
+                target_temperature_c=item.target_temperature_c,
+                start_time=parse_time(item.start_time, "start_time"),
+                end_time=parse_temperature_target_end_time(item.end_time, "end_time"),
+                weekdays=tuple(sorted(set(item.weekdays))),
+                enabled=item.enabled,
+            )
         except (ValueError, TypeError) as exc:
-            raise ConfigValidationError(str(exc), field="constraints", heater_id=item.heater_id) from exc
-    return tuple(result)
+            raise ConfigValidationError(
+                str(exc), field="temperature_targets", heater_id=item.heater_id
+            ) from exc
+        if not item.heater_id:
+            raise ConfigValidationError(
+                "temperature target requires a heater id", field="heater_id"
+            )
+        result.setdefault(item.heater_id, []).append(target)
+    normalized: dict[str, tuple[TemperatureTarget, ...]] = {}
+    for heater_id, targets in result.items():
+        normalized_targets = tuple(
+            sorted(
+                targets,
+                key=lambda target: (
+                    target.start_time,
+                    target.end_time,
+                    target.weekdays,
+                ),
+            )
+        )
+        try:
+            validate_temperature_targets(normalized_targets)
+        except ValueError as exc:
+            raise ConfigValidationError(
+                str(exc), field="temperature_targets", heater_id=heater_id
+            ) from exc
+        normalized[heater_id] = normalized_targets
+    return normalized
+
+
+def _resolve_temperature_targets(
+    store: Store,
+    items: list[TemperatureTargetRequest] | None,
+) -> dict[str, tuple[TemperatureTarget, ...]]:
+    """Resolve an omitted schedule separately from an explicitly empty one."""
+    if items is None:
+        return _configured_temperature_targets(store)
+    parsed = _parse_temperature_targets(items)
+    _validate_temperature_target_heaters(store, parsed)
+    config, _revision = store.repository.current()
+    return {
+        heater.id: tuple(parsed.get(heater.id, ()))
+        for heater in config.heaters
+    }
 
 
 def _build_automatic_plan(
     store: Store,
     observed_at: datetime,
-    constraints: tuple[ChargeConstraint, ...],
     site: dict[str, int | float],
     *,
+    temperature_targets: dict[str, tuple[TemperatureTarget, ...]] | None = None,
     progress_callback=None,
     cancellation_probe=None,
 ):
     return DeterministicChargeOptimizer().build(_build_automatic_request(
         store,
         observed_at,
-        constraints,
         site,
+        temperature_targets=temperature_targets,
         progress_callback=progress_callback,
         cancellation_probe=cancellation_probe,
     ))
@@ -565,17 +659,18 @@ def _build_automatic_plan(
 def _build_automatic_request(
     store: Store,
     observed_at: datetime,
-    constraints: tuple[ChargeConstraint, ...],
     site: dict[str, int | float],
     *,
+    temperature_targets: dict[str, tuple[TemperatureTarget, ...]] | None = None,
     progress_callback=None,
     cancellation_probe=None,
 ) -> PlanningInput:
     config, _revision = store.repository.current()
     known_heaters = {heater.id for heater in config.heaters}
-    for constraint in constraints:
-        if constraint.heater_id not in known_heaters:
-            raise ConfigValidationError("heater does not exist", field="heater_id", heater_id=constraint.heater_id)
+    if temperature_targets is not None:
+        for heater_id in temperature_targets:
+            if heater_id not in known_heaters:
+                raise ConfigValidationError("heater does not exist", field="heater_id", heater_id=heater_id)
     timezone_name = config.schedule.timezone if config.schedule is not None else "UTC"
     mqtt = (
         store.system_configuration.current().configuration.mqtt
@@ -595,7 +690,14 @@ def _build_automatic_request(
             observed_at,
             mqtt=mqtt,
         ),
-        constraints=constraints,
+        constraints=(),
+        temperature_targets=(
+            temperature_targets
+            if temperature_targets is not None
+            else {
+                heater.id: heater.temperature_targets for heater in config.heaters
+            }
+        ),
         forecast=store.planning.latest_forecast(observed_at),
         horizon_start=observed_at,
         horizon_hours=int(site["forecast_horizon_hours"]),
@@ -603,15 +705,13 @@ def _build_automatic_request(
         max_total_power_w=int(site["contracted_power_w"]),
         base_load_w=int(site.get("base_load_w", 0)),
         max_heating_power_w=int(site["max_heating_power_w"]),
-        design_indoor_temperature_c=float(site["design_indoor_temperature_c"]),
-        design_outdoor_temperature_c=float(site["design_outdoor_temperature_c"]),
-        feedback_horizon_hours=float(site["feedback_horizon_hours"]),
         solver_time_limit_seconds=int(site["solver_time_limit_seconds"]),
-        forecast_automatic_eligible=(store.planning.latest_forecast_automatic_eligible() if hasattr(store.planning, "latest_forecast_automatic_eligible") else True),
+        forecast_automatic_eligible=True,
         generated_at=observed_at,
         timezone_name=timezone_name,
         progress_callback=progress_callback,
         cancellation_probe=cancellation_probe,
+        room_energy_model=True,
     )
     return request
 
@@ -619,7 +719,6 @@ def _build_automatic_request(
 def _cached_preview_plan(
     store: Store,
     request: PlanningInput,
-    constraints: tuple[ChargeConstraint, ...],
     *,
     configuration_revision: int,
     constraints_revision: int,
@@ -630,7 +729,7 @@ def _cached_preview_plan(
     job = finder(
         configuration_revision=configuration_revision,
         constraints_revision=constraints_revision,
-        constraints=_constraint_payload(constraints),
+        temperature_targets=_temperature_target_payload(request.temperature_targets),
     )
     if job is None:
         return None
@@ -648,13 +747,21 @@ def _cached_preview_plan(
     return plan
 
 
-def _constraint_payload(constraints: tuple[ChargeConstraint, ...]) -> list[dict[str, Any]]:
-    return [{
-        "heater_id": item.heater_id,
-        "target_charge": item.target_charge,
-        "at_time": item.at.strftime("%H:%M"),
-        "weekdays": list(item.weekdays),
-    } for item in constraints]
+def _temperature_target_payload(
+    targets: dict[str, tuple[TemperatureTarget, ...]],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "heater_id": heater_id,
+            "target_temperature_c": target.target_temperature_c,
+            "start_time": target.start_time.strftime("%H:%M"),
+            "end_time": format_temperature_target_end_time(target.start_time, target.end_time),
+            "weekdays": list(target.weekdays),
+            "enabled": target.enabled,
+        }
+        for heater_id, items in sorted(targets.items())
+        for target in items
+    ]
 
 
 def _automatic_plan_from_preview_payload(payload: dict[str, Any]) -> AutomaticPlan:
@@ -668,10 +775,16 @@ def _automatic_plan_from_preview_payload(payload: dict[str, Any]) -> AutomaticPl
             _preview_float_map(item.get("stored_charge_percent")),
             _preview_float_map(item.get("required_charge_percent")),
             _preview_optional_float(item.get("outdoor_temperature_c")),
-            None,
+            _preview_float_map(item.get("indoor_temperature_c")),
             _preview_float_map(item.get("initial_soc_percent")),
             _preview_float_map(item.get("demand_kwh")),
             _preview_int_map(item.get("heater_power_w")),
+            _preview_float_map(item.get("stored_energy_kwh")),
+            _preview_float_map(item.get("target_temperature_c")),
+            _preview_float_map(item.get("heat_delivered_kwh")),
+            _preview_float_map(item.get("thermal_loss_kwh")),
+            _preview_float_map(item.get("temperature_shortfall_c")),
+            _preview_float_map(item.get("charge_energy_kwh")),
         )
         for item in _preview_dict_list(payload.get("slots"))
     )
@@ -690,11 +803,11 @@ def _automatic_plan_from_preview_payload(payload: dict[str, Any]) -> AutomaticPl
     explanations = tuple(
         HeaterExplanation(
             str(item["heater_id"]),
-            float(item["actual_soc_percent"]),
-            float(item["total_demand_kwh"]),
-            float(item["demand_factor"]),
-            float(item["reserve_percent"]),
-            _preview_optional_datetime(item.get("next_constraint_at")),
+            float(item.get("actual_soc_percent", 0.0)),
+            float(item.get("total_demand_kwh", item.get("total_heat_delivered_kwh", 0.0))),
+            1.0,
+            0.0,
+            None,
             tuple(
                 (_preview_datetime(period[0]), _preview_datetime(period[1]))
                 for period in item.get("charge_periods", [])
@@ -703,22 +816,45 @@ def _automatic_plan_from_preview_payload(payload: dict[str, Any]) -> AutomaticPl
         )
         for item in _preview_dict_list(payload.get("explanations"))
     )
-    demand = tuple(
-        DemandEstimate(
-            str(item["heater_id"]),
-            _preview_datetime(item["start"]),
-            _preview_datetime(item["end"]),
-            float(item["outdoor_temperature_c"]),
-            float(item["target_temperature_c"]),
-            float(item["feedback_temperature_c"]),
-            float(item["degree_hours"]),
-            float(item["thermal_coefficient"]),
-            float(item["demand_factor"]),
-            float(item["reserve_percent"]),
-            float(item["demand_kwh"]),
+    demand_items = _preview_dict_list(payload.get("demand"))
+    if demand_items and "indoor_temperature_next_c" in demand_items[0]:
+        demand = tuple(
+            RoomEnergyInterval(
+                str(item["heater_id"]),
+                _preview_datetime(item["start"]),
+                _preview_datetime(item["end"]),
+                float(item["outdoor_temperature_c"]),
+                _preview_optional_float(item.get("target_temperature_c")),
+                float(item["indoor_temperature_c"]),
+                float(item["indoor_temperature_next_c"]),
+                float(item["stored_energy_kwh"]),
+                float(item["stored_energy_next_kwh"]),
+                float(item["stored_soc_percent"]),
+                float(item["stored_soc_next_percent"]),
+                float(item["charge_energy_kwh"]),
+                float(item["heat_delivered_kwh"]),
+                float(item["thermal_loss_kwh"]),
+                float(item["temperature_shortfall_c"]),
+            )
+            for item in demand_items
         )
-        for item in _preview_dict_list(payload.get("demand"))
-    )
+    else:
+        demand = tuple(
+            DemandEstimate(
+                str(item["heater_id"]),
+                _preview_datetime(item["start"]),
+                _preview_datetime(item["end"]),
+                float(item["outdoor_temperature_c"]),
+                float(item["target_temperature_c"]),
+                float(item["feedback_temperature_c"]),
+                float(item["degree_hours"]),
+                float(item["thermal_coefficient"]),
+                float(item["demand_factor"]),
+                float(item["reserve_percent"]),
+                float(item["demand_kwh"]),
+            )
+            for item in demand_items
+        )
     return AutomaticPlan(
         _preview_datetime(payload["horizon_start"]),
         _preview_datetime(payload["horizon_end"]),
@@ -775,8 +911,31 @@ def _preview_int_map(value: Any) -> dict[str, int]:
     return {str(key): int(item) for key, item in value.items()}
 
 
-def _preview_response(plan, constraints, *, site: dict[str, int | float] | None = None) -> PlanningPreviewResponse:
-    violations = [PlanningDeficitView(**item.__dict__, target_charge_percent=item.target_charge_percent, projected_charge_percent=item.projected_charge_percent, deficit_percent=item.deficit_percent) for item in plan.violations]
+def _preview_response(
+    plan,
+    temperature_targets: dict[str, tuple[TemperatureTarget, ...]] | None = None,
+    *,
+    site: dict[str, int | float] | None = None,
+) -> PlanningPreviewResponse:
+    violations = [
+        PlanningDeficitView(
+            **item.__dict__,
+            target_temperature_c=(
+                item.achievable_value + item.shortfall
+                if item.requirement == "temperature_comfort"
+                and item.achievable_value is not None
+                and item.shortfall is not None
+                else None
+            ),
+            projected_temperature_c=item.achievable_value
+            if item.requirement == "temperature_comfort"
+            else None,
+            shortfall_c=item.shortfall
+            if item.requirement == "temperature_comfort"
+            else None,
+        )
+        for item in plan.violations
+    ]
     planning_window_hours = 12 if site is None else int(site["planning_window_hours"])
     horizon_hours = PLANNING_HORIZON_HOURS if site is None else int(site["forecast_horizon_hours"])
     window_end = plan.horizon_start + timedelta(hours=planning_window_hours)
@@ -786,13 +945,21 @@ def _preview_response(plan, constraints, *, site: dict[str, int | float] | None 
         cause = item.reason.split(":", 1)[0]
         warning = warnings.setdefault(cause, {"cause": cause, "count": 0, "recommended_action": _recommended_action(cause)})
         warning["count"] += 1
-    capacity_by_heater = {item.heater_id: item.capacity_kwh for item in plan.explanations}
+    room_energy_model = bool(
+        plan.demand and isinstance(plan.demand[0], RoomEnergyInterval)
+    )
     operator_summary = {
         "window": {"start": plan.horizon_start, "end": window_end, "hours": planning_window_hours},
         "horizon": {"start": plan.horizon_start, "end": plan.horizon_end, "hours": horizon_hours},
         "forecast": {"source": "AEMET" if forecast_points else "no utilizable", "points_used": forecast_points},
-        "demand_kwh_by_heater": {heater_id: round(sum(item.demand_kwh for item in plan.demand if item.heater_id == heater_id), 6) for heater_id in sorted({item.heater_id for item in plan.demand})},
-        "constraints": {"count": len(constraints), "satisfied": not any(item.requirement == "minimum_soc" for item in violations)},
+        "heat_delivered_kwh_by_heater": {
+            heater_id: round(
+                sum(item.heat_delivered_kwh for item in plan.demand if item.heater_id == heater_id),
+                6,
+            )
+            for heater_id in sorted({item.heater_id for item in plan.demand})
+        } if room_energy_model else {},
+        "room_energy_model": room_energy_model,
         "warnings": list(warnings.values()),
         "recommended_action": "Revisa los avisos agrupados y corrige la entrada indicada." if warnings else "No se requieren acciones adicionales.",
         "power_limits": {
@@ -806,12 +973,49 @@ def _preview_response(plan, constraints, *, site: dict[str, int | float] | None 
         window_start=plan.horizon_start, window_end=window_end,
         horizon_start=plan.horizon_start, horizon_end=plan.horizon_end,
         slot_minutes=plan.slot_minutes,
-        slots=[{"start": item.start, "end": item.end, "heater_ids": list(item.heater_ids), "power_w": item.power_w, "stored_charge_percent": item.stored_charge_percent, "initial_soc_percent": item.initial_soc_percent, "demand_kwh": item.demand_kwh, "heater_power_w": item.heater_power_w, "required_charge_percent": item.required_charge_percent, "outdoor_temperature_c": item.outdoor_temperature_c, "energy_delivered_kwh": {heater_id: round(power / 1000 * (item.end - item.start).total_seconds() / 3600, 6) for heater_id, power in (item.heater_power_w or {}).items() if power > 0}, "capacity_percent_by_heater": {heater_id: round((power / 1000 * (item.end - item.start).total_seconds() / 3600) / capacity * 100, 6) for heater_id, power in (item.heater_power_w or {}).items() if power > 0 and (capacity := capacity_by_heater.get(heater_id, 0)) > 0}} for item in plan.slots],
+        slots=[{
+            "start": item.start,
+            "end": item.end,
+            "heater_ids": list(item.heater_ids),
+            "power_w": item.power_w,
+            "outdoor_temperature_c": item.outdoor_temperature_c,
+            "stored_energy_kwh": item.stored_energy_kwh or {},
+            "indoor_temperature_c": item.indoor_temperature_c or {},
+            "target_temperature_c": item.target_temperature_c or {},
+            "heat_delivered_kwh": item.heat_delivered_kwh or {},
+            "thermal_loss_kwh": item.thermal_loss_kwh or {},
+            "temperature_shortfall_c": item.temperature_shortfall_c or {},
+            "charge_energy_kwh": item.charge_energy_kwh or {},
+        } for item in plan.slots],
         deficits=violations,
         violations=violations,
-        explanations=[item.__dict__ for item in plan.explanations],
+        explanations=[
+            {
+                "heater_id": item.heater_id,
+                "capacity_kwh": item.capacity_kwh,
+                "initial_indoor_temperature_c": item.initial_indoor_temperature_c,
+                "final_indoor_temperature_c": item.final_indoor_temperature_c,
+                "total_heat_delivered_kwh": item.total_heat_delivered_kwh,
+                "total_thermal_loss_kwh": item.total_thermal_loss_kwh,
+                "maximum_temperature_shortfall_c": item.maximum_temperature_shortfall_c,
+                "charge_periods": item.charge_periods,
+            }
+            for item in plan.explanations
+        ],
         demand=[item.__dict__ for item in plan.demand],
-        constraints=[ChargeConstraintView(id=item.id, heater_id=item.heater_id, target_charge=item.target_charge, at_time=item.at.strftime("%H:%M"), weekdays=list(item.weekdays)) for item in constraints],
+        temperature_targets=[
+            TemperatureTargetView(
+                id=target.id,
+                heater_id=heater_id,
+                target_temperature_c=target.target_temperature_c,
+                start_time=target.start_time.strftime("%H:%M"),
+                end_time=format_temperature_target_end_time(target.start_time, target.end_time),
+                weekdays=list(target.weekdays),
+                enabled=target.enabled,
+            )
+            for heater_id, targets in sorted((temperature_targets or {}).items())
+            for target in targets
+        ],
         operator_summary=operator_summary,
     )
 
@@ -820,9 +1024,9 @@ def _recommended_action(reason: str) -> str:
     if reason == "missing_aemet_coverage":
         return "Espera una previsión AEMET horaria completa de 24 horas o revisa la conexión meteorológica."
     if reason == "missing_required_state":
-        return "Comprueba que cada acumulador publica temperatura, consigna y carga reciente."
+        return "Comprueba que cada acumulador publica temperatura interior y SOC reciente."
     if reason in {"insufficient_capacity_or_power", "insufficient_stored_energy_or_power"}:
-        return "Revisa potencia disponible, capacidad y el objetivo de carga."
+        return "Revisa potencia disponible, capacidad térmica y la programación de temperatura."
     if reason.startswith("solver"):
         return "Revisa la configuración del optimizador o contacta con soporte."
     return "Revisa la entrada indicada y vuelve a calcular."
@@ -856,11 +1060,25 @@ def _job_response(
     )
 
 
-def _validate_constraint_heaters(store: Store, constraints: tuple[ChargeConstraint, ...]) -> None:
+def _validate_temperature_target_heaters(
+    store: Store,
+    targets: dict[str, tuple[TemperatureTarget, ...]],
+) -> None:
     known_heaters = {heater.id for heater in store.repository.current()[0].heaters}
-    for constraint in constraints:
-        if constraint.heater_id not in known_heaters:
-            raise ConfigValidationError("heater does not exist", field="heater_id", heater_id=constraint.heater_id)
+    unknown = sorted(set(targets) - known_heaters)
+    if unknown:
+        raise ConfigValidationError(
+            f"heater {unknown[0]!r} does not exist",
+            field="heater_id",
+            heater_id=unknown[0],
+        )
+
+
+def _configured_temperature_targets(store: Store) -> dict[str, tuple[TemperatureTarget, ...]]:
+    return {
+        heater.id: tuple(heater.temperature_targets)
+        for heater in store.repository.current()[0].heaters
+    }
 
 
 def _ordered_plan_slots(slots: list[PlanningSlotView]) -> list[dict]:
@@ -873,7 +1091,13 @@ def _ordered_plan_slots(slots: list[PlanningSlotView]) -> list[dict]:
             "outdoor_temperature_c": slot.temperature_c,
             "temperature_c": slot.temperature_c,
             "temperature_interpolated": slot.temperature_interpolated,
-            "stored_charge_percent": slot.stored_charge_percent_by_heater or None,
+            "stored_energy_kwh": slot.stored_energy_kwh_by_heater,
+            "indoor_temperature_c": slot.indoor_temperature_c_by_heater,
+            "target_temperature_c": slot.target_temperature_c_by_heater,
+            "heat_delivered_kwh": slot.heat_delivered_kwh_by_heater,
+            "thermal_loss_kwh": slot.thermal_loss_kwh_by_heater,
+            "temperature_shortfall_c": slot.temperature_shortfall_c_by_heater,
+            "charge_energy_kwh": slot.charge_energy_kwh_by_heater,
         }
         for slot in slots
     ]
@@ -884,13 +1108,11 @@ def _plan_slot_maps(
 ) -> tuple[
     dict[int, list[str]],
     dict[int, tuple[float | None, bool]],
-    dict[int, dict[str, float]],
     dict[int, int],
 ]:
     """Map contiguous plan slots to timeline indices by order, not datetime keys."""
     assigned_by_index: dict[int, list[str]] = {}
     temperatures_by_index: dict[int, tuple[float | None, bool]] = {}
-    soc_by_index: dict[int, dict[str, float]] = {}
     power_by_index: dict[int, int] = {}
     for index, item in enumerate(ordered_plan_slots):
         assigned_by_index[index] = list(item.get("heater_ids") or [])
@@ -899,22 +1121,9 @@ def _plan_slot_maps(
             outdoor,
             bool(item.get("temperature_interpolated", False)),
         )
-        projected = item.get("stored_charge_percent")
-        if projected:
-            soc_by_index[index] = projected
         if item.get("power_w") is not None:
             power_by_index[index] = int(item["power_w"])
-    return assigned_by_index, temperatures_by_index, soc_by_index, power_by_index
-
-
-def _estimate_accumulator_temperature(heater, outdoor_c: float | None, soc_percent: float) -> float | None:
-    """Estimate room temperature from outdoor forecast and planned stored charge."""
-    if outdoor_c is None:
-        return None
-    profile = heater.thermal
-    target = profile.target_temperature_c if profile is not None else outdoor_c
-    bounded_soc = max(0.0, min(100.0, soc_percent))
-    return outdoor_c + (target - outdoor_c) * (bounded_soc / 100)
+    return assigned_by_index, temperatures_by_index, power_by_index
 
 
 def _build_timeline(
@@ -927,13 +1136,9 @@ def _build_timeline(
     slot_delta: timedelta,
 ) -> list[PlanningTimelineSlotView]:
     """Project the accepted plan across the configured forecast horizon."""
-    heater_by_id = {heater.id: heater for heater in heaters}
-    charge_minutes = {heater.id: 0.0 for heater in heaters}
-    stored_charge_percent = {heater.id: 0.0 for heater in heaters}
-    assigned_by_index, temperatures_by_index, soc_by_index, power_by_index = _plan_slot_maps(
+    assigned_by_index, temperatures_by_index, power_by_index = _plan_slot_maps(
         ordered_plan_slots,
     )
-    has_projected_soc = bool(soc_by_index)
     timeline: list[PlanningTimelineSlotView] = []
     cursor = horizon_start
     slot_index = 0
@@ -943,22 +1148,32 @@ def _build_timeline(
         temperature, interpolated = temperatures_by_index.get(
             slot_index, _temperature_for_interval(forecast, cursor, end)
         )
-        slot_minutes = (end - cursor).total_seconds() / 60
-        projected = soc_by_index.get(slot_index)
-        if projected is not None:
-            for heater in heaters:
-                soc = projected.get(heater.id, 0.0)
-                stored_charge_percent[heater.id] = soc
-                charge_minutes[heater.id] = soc / 100 * heater.full_charge_minutes
-        elif not has_projected_soc:
-            for heater in heaters:
-                if heater.id in heater_ids:
-                    charge_minutes[heater.id] += slot_minutes
-                stored_charge_percent[heater.id] = (
-                    charge_minutes[heater.id] / heater.full_charge_minutes * 100
-                    if heater.full_charge_minutes
-                    else 0.0
-                )
+        source_slot = ordered_plan_slots[slot_index] if slot_index < len(ordered_plan_slots) else {}
+        stored_energy = {str(key): float(value) for key, value in (source_slot.get("stored_energy_kwh", {}) or {}).items()}
+        indoor_projection = {
+            str(key): float(value)
+            for key, value in (source_slot.get("indoor_temperature_c", {}) or {}).items()
+        }
+        target_projection = {
+            str(key): float(value)
+            for key, value in (source_slot.get("target_temperature_c", {}) or {}).items()
+        }
+        heat_projection = {
+            str(key): float(value)
+            for key, value in (source_slot.get("heat_delivered_kwh", {}) or {}).items()
+        }
+        loss_projection = {
+            str(key): float(value)
+            for key, value in (source_slot.get("thermal_loss_kwh", {}) or {}).items()
+        }
+        shortfall_projection = {
+            str(key): float(value)
+            for key, value in (source_slot.get("temperature_shortfall_c", {}) or {}).items()
+        }
+        charge_projection = {
+            str(key): float(value)
+            for key, value in (source_slot.get("charge_energy_kwh", {}) or {}).items()
+        }
 
         timeline.append(
             PlanningTimelineSlotView(
@@ -971,23 +1186,13 @@ def _build_timeline(
                 ),
                 temperature_c=temperature,
                 temperature_interpolated=interpolated,
-                charge_minutes_by_heater={
-                    heater_id: round(charge_minutes[heater_id], 2)
-                    for heater_id in heater_by_id
-                },
-                stored_charge_percent_by_heater={
-                    heater_id: round(stored_charge_percent[heater_id], 2)
-                    for heater_id in heater_by_id
-                },
-                estimated_temperature_c_by_heater={
-                    heater_id: round(estimated, 2)
-                    for heater_id in heater_by_id
-                    if (estimated := _estimate_accumulator_temperature(
-                        heater_by_id[heater_id],
-                        temperature,
-                        stored_charge_percent[heater_id],
-                    )) is not None
-                },
+                stored_energy_kwh_by_heater={heater_id: round(value, 6) for heater_id, value in stored_energy.items()},
+                indoor_temperature_c_by_heater={heater_id: round(value, 6) for heater_id, value in indoor_projection.items()},
+                target_temperature_c_by_heater={heater_id: round(value, 6) for heater_id, value in target_projection.items()},
+                heat_delivered_kwh_by_heater={heater_id: round(value, 6) for heater_id, value in heat_projection.items()},
+                thermal_loss_kwh_by_heater={heater_id: round(value, 6) for heater_id, value in loss_projection.items()},
+                temperature_shortfall_c_by_heater={heater_id: round(value, 6) for heater_id, value in shortfall_projection.items()},
+                charge_energy_kwh_by_heater={heater_id: round(value, 6) for heater_id, value in charge_projection.items()},
             )
         )
         cursor = end

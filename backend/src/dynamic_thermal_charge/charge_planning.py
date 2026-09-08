@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -12,7 +12,13 @@ from time import monotonic
 from typing import Callable, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
-from .models import ChargeConstraint, ChargeTelemetry, Heater
+from .models import (
+    ChargeConstraint,
+    ChargeTelemetry,
+    Heater,
+    TemperatureTarget,
+    validate_temperature_targets,
+)
 from .scheduler import _normalize, advance_real, align_to_slot, next_slot_boundary
 from .system_settings import MqttSystemSettings
 from .weather import HourlyForecastPoint
@@ -54,11 +60,9 @@ def resolve_planning_telemetry(
         return {
             heater.id: ChargeTelemetry(
                 heater_id=heater.id,
-                temperature_c=mqtt.fixed_temperature_c,
-                target_temperature_c=mqtt.fixed_target_temperature_c,
-                stored_charge_percent=mqtt.fixed_stored_charge_percent,
+                temperature_c=getattr(mqtt, "fixed_indoor_temperature_c", 20.0),
+                stored_charge_percent=getattr(mqtt, "fixed_stored_soc_percent", 50.0),
                 temperature_received_at=observed_at,
-                target_received_at=observed_at,
                 stored_charge_received_at=observed_at,
             )
             for heater in heaters
@@ -71,11 +75,7 @@ def resolve_planning_telemetry(
         value = persisted.get(heater.id)
         if value is None:
             continue
-        stamps = (
-            value.temperature_received_at,
-            value.target_received_at,
-            value.stored_charge_received_at,
-        )
+        stamps = (value.temperature_received_at, value.stored_charge_received_at)
         if all(
             item is not None and (observed_at - item).total_seconds() <= max_age_seconds
             for item in stamps
@@ -150,6 +150,15 @@ class AutomaticPlanSlot:
     initial_soc_percent: dict[str, float] | None = None
     demand_kwh: dict[str, float] | None = None
     heater_power_w: dict[str, int] | None = None
+    # Room-energy projection.  The historical fields above remain populated
+    # for readers of old plans; these are the authoritative values for new
+    # plans.
+    stored_energy_kwh: dict[str, float] | None = None
+    target_temperature_c: dict[str, float] | None = None
+    heat_delivered_kwh: dict[str, float] | None = None
+    thermal_loss_kwh: dict[str, float] | None = None
+    temperature_shortfall_c: dict[str, float] | None = None
+    charge_energy_kwh: dict[str, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -162,6 +171,11 @@ class HeaterExplanation:
     next_constraint_at: datetime | None
     charge_periods: tuple[tuple[datetime, datetime], ...]
     capacity_kwh: float = 0.0
+    initial_indoor_temperature_c: float | None = None
+    final_indoor_temperature_c: float | None = None
+    total_heat_delivered_kwh: float = 0.0
+    total_thermal_loss_kwh: float = 0.0
+    maximum_temperature_shortfall_c: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -205,6 +219,13 @@ class PlanningInput:
     exploration_limit: int = 100_000
     progress_callback: Callable[[str], None] | None = None
     cancellation_probe: Callable[[], bool] | None = None
+    # Explicitly supplied by the room-energy API.  Keeping it separate from
+    # the legacy percentage constraints lets historical preview payloads remain
+    # readable while ensuring new planning has no percentage input.
+    temperature_targets: Mapping[str, Sequence[TemperatureTarget]] = field(
+        default_factory=dict
+    )
+    room_energy_model: bool = False
 
 
 class DegreeHoursDemandEstimator:
@@ -287,6 +308,8 @@ class MilpChargePlanner:
     """Lexicographic ON/OFF planner using PuLP and single-threaded CBC."""
 
     def build(self, request: PlanningInput) -> AutomaticPlan:
+        if _is_room_energy_request(request):
+            return _build_room_energy_plan(request)
         generated_at = request.generated_at or request.horizon_start
         _notify(request, "inputs")
         _check_cancelled(request)
@@ -595,26 +618,72 @@ def input_token(request: PlanningInput) -> str:
     token_horizon_start = request.horizon_start
     if request.slot_minutes > 0:
         token_horizon_start = align_to_slot(request.horizon_start, request.slot_minutes)
+    room_energy = _is_room_energy_request(request)
     payload = {
-        "heaters": [(h.id, h.power_w, h.full_charge_minutes, h.enabled, h.priority, h.demand_factor, h.reserve_percent) for h in request.heaters],
-        "telemetry": {key: _json_telemetry(value) for key, value in sorted(request.telemetry.items())},
-        "constraints": [(c.id, c.heater_id, c.target_charge, c.at.isoformat(), c.weekdays) for c in request.constraints],
+        "heaters": (
+            [
+                (h.id, h.power_w, h.full_charge_minutes, h.enabled, h.priority)
+                for h in request.heaters
+            ]
+            if room_energy
+            else [
+                (h.id, h.power_w, h.full_charge_minutes, h.enabled, h.priority, h.demand_factor, h.reserve_percent)
+                for h in request.heaters
+            ]
+        ),
+        "telemetry": {key: _json_telemetry(value, room_energy=room_energy) for key, value in sorted(request.telemetry.items())},
         "forecast": [(point.timestamp.isoformat(), point.temperature_c, point.interpolated) for point in request.forecast],
         "horizon_start": token_horizon_start.astimezone(timezone.utc).isoformat(),
         "horizon_hours": request.horizon_hours, "slot_minutes": request.slot_minutes,
         "max_total_power_w": request.max_total_power_w, "base_load_w": request.base_load_w, "max_heating_power_w": request.max_heating_power_w,
-        "timezone_name": request.timezone_name, "design_indoor_temperature_c": request.design_indoor_temperature_c,
-        "design_outdoor_temperature_c": request.design_outdoor_temperature_c, "feedback_horizon_hours": request.feedback_horizon_hours,
+        "timezone_name": request.timezone_name,
         "forecast_automatic_eligible": request.forecast_automatic_eligible,
         "solver_time_limit_seconds": request.solver_time_limit_seconds or SOLVER_TIME_LIMIT_SECONDS,
     }
+    if room_energy:
+        payload["room_energy_model"] = True
+        payload["room_coefficients"] = {
+            heater.id: {
+                "capacity_kwh_per_c": heater.room_thermal_capacity_kwh_per_c,
+                "heat_loss_kw_per_c": heater.room_heat_loss_kw_per_c,
+            }
+            for heater in sorted(request.heaters, key=lambda item: item.id)
+        }
+        payload["temperature_targets"] = {
+            heater.id: [
+                {
+                    "target_temperature_c": target.target_temperature_c,
+                    "start_time": target.start_time.strftime("%H:%M"),
+                    "end_time": target.end_time.strftime("%H:%M"),
+                    "weekdays": list(target.weekdays),
+                    "enabled": target.enabled,
+                }
+                for target in _room_targets(request, heater)
+            ]
+            for heater in sorted(request.heaters, key=lambda item: item.id)
+        }
+    else:
+        payload.update(
+            {
+                "constraints": [(c.id, c.heater_id, c.target_charge, c.at.isoformat(), c.weekdays) for c in request.constraints],
+                "design_indoor_temperature_c": request.design_indoor_temperature_c,
+                "design_outdoor_temperature_c": request.design_outdoor_temperature_c,
+                "feedback_horizon_hours": request.feedback_horizon_hours,
+            }
+        )
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-def _json_telemetry(value: ChargeTelemetry) -> dict[str, object]:
+def _json_telemetry(value: ChargeTelemetry, *, room_energy: bool = False) -> dict[str, object]:
     # Receipt times validate freshness but do not affect the plan itself. They
     # must not invalidate activation when the same fixed/live values are read
     # again a few minutes after the preview.
+    if room_energy:
+        return {
+            "heater_id": value.heater_id,
+            "indoor_temperature_c": value.indoor_temperature_c,
+            "stored_soc_percent": value.stored_soc_percent,
+        }
     return {
         "heater_id": value.heater_id,
         "temperature_c": value.temperature_c,
@@ -648,10 +717,11 @@ def _validate_input(request: PlanningInput) -> None:
         raise ValueError("solver_time_limit_seconds must be a positive integer")
     if request.max_total_power_w <= 0 or request.base_load_w < 0 or (request.max_heating_power_w is not None and request.max_heating_power_w <= 0):
         raise ValueError("power limits must be positive")
-    if request.design_indoor_temperature_c <= request.design_outdoor_temperature_c:
-        raise ValueError("design indoor temperature must exceed design outdoor temperature")
-    if request.feedback_horizon_hours <= 0:
-        raise ValueError("feedback_horizon_hours must be positive")
+    if not _is_room_energy_request(request):
+        if request.design_indoor_temperature_c <= request.design_outdoor_temperature_c:
+            raise ValueError("design indoor temperature must exceed design outdoor temperature")
+        if request.feedback_horizon_hours <= 0:
+            raise ValueError("feedback_horizon_hours must be positive")
     ZoneInfo(request.timezone_name)
 
 
@@ -732,7 +802,12 @@ def _heater(heaters: Sequence[Heater], heater_id: str) -> Heater:
     return next(item for item in heaters if item.id == heater_id)
 
 
-def _cbc_solver(pulp, *, time_limit_seconds: float | None = None):
+def _cbc_solver(
+    pulp,
+    *,
+    time_limit_seconds: float | None = None,
+    gap_relative: float | None = None,
+):
     import shutil
     kwargs = {
         "msg": False,
@@ -740,6 +815,8 @@ def _cbc_solver(pulp, *, time_limit_seconds: float | None = None):
         "options": ["randomSeed 0"],
         "timeLimit": time_limit_seconds,
     }
+    if gap_relative is not None:
+        kwargs["gapRel"] = gap_relative
     if shutil.which("cbc"):
         return pulp.COIN_CMD(**kwargs)
     return pulp.PULP_CBC_CMD(**kwargs)
@@ -797,10 +874,733 @@ def _invalid_plan(request: PlanningInput, start: datetime, starts: Sequence[date
     return AutomaticPlan(start, horizon_end, request.slot_minutes, slots, violations, INVALID, (), input_token(request), generated_at)
 
 
+# --------------------------------------------------------------------------- #
+# Room-energy model
+# --------------------------------------------------------------------------- #
+
+@dataclass(frozen=True)
+class RoomEnergyInterval:
+    """Auditable physical quantities for one heater and one planning slot."""
+
+    heater_id: str
+    start: datetime
+    end: datetime
+    outdoor_temperature_c: float
+    target_temperature_c: float | None
+    indoor_temperature_c: float
+    indoor_temperature_next_c: float
+    stored_energy_kwh: float
+    stored_energy_next_kwh: float
+    stored_soc_percent: float
+    stored_soc_next_percent: float
+    charge_energy_kwh: float
+    heat_delivered_kwh: float
+    thermal_loss_kwh: float
+    temperature_shortfall_c: float
+
+    @property
+    def demand_kwh(self) -> float:
+        """Compatibility name for consumers that call the interval heat need."""
+        return max(0.0, self.heat_delivered_kwh)
+
+
+def _is_room_energy_request(request: PlanningInput) -> bool:
+    if request.room_energy_model or bool(request.temperature_targets):
+        return True
+    # A new telemetry snapshot has no controller-provided target.  Combined
+    # with a weekly target on the heater (or a profile created with only the new
+    # coefficients), this is enough to select the new calculation for direct
+    # callers without making them know about the API switch.
+    for heater in request.heaters:
+        if not heater.enabled:
+            continue
+        state = request.telemetry.get(heater.id)
+        if state is not None and state.target_temperature_c is None:
+            if heater.temperature_targets or (
+                heater.thermal is not None
+                and heater.thermal.target_temperature_c is None
+            ):
+                return True
+    return False
+
+
+def _room_targets(
+    request: PlanningInput, heater: Heater
+) -> tuple[TemperatureTarget, ...]:
+    if heater.id in request.temperature_targets:
+        supplied = tuple(request.temperature_targets[heater.id])
+        return tuple(sorted(supplied, key=_target_sort_key))
+    return tuple(sorted(heater.temperature_targets, key=_target_sort_key))
+
+
+def _target_sort_key(target: TemperatureTarget) -> tuple[object, ...]:
+    return (
+        target.start_time.hour,
+        target.start_time.minute,
+        target.end_time.hour,
+        target.end_time.minute,
+        target.weekdays,
+        target.id if target.id is not None else -1,
+    )
+
+
+def active_temperature_target(
+    targets: Sequence[TemperatureTarget], at: datetime, timezone_name: str
+) -> float | None:
+    """Return the target active at an instant according to weekly wall time.
+
+    The selected weekday belongs to the interval start.  A cross-midnight
+    interval therefore remains active on the following natural day until its
+    exclusive end.  No previous rule is carried forward across a gap.
+    """
+    if not targets:
+        return None
+    validate_temperature_targets(tuple(targets))
+    zone = ZoneInfo(timezone_name)
+    local = at.astimezone(zone)
+    minute = local.hour * 60 + local.minute + local.second / 60 + local.microsecond / 60_000_000
+    weekday = local.weekday()
+    matches: list[TemperatureTarget] = []
+    for target in targets:
+        if not target.enabled:
+            continue
+        start = target.start_time.hour * 60 + target.start_time.minute
+        end = target.end_time.hour * 60 + target.end_time.minute
+        if start == end:
+            active = weekday in target.weekdays
+        elif end > start:
+            active = weekday in target.weekdays and start <= minute < end
+        else:
+            active = (
+                (weekday in target.weekdays and minute >= start)
+                or (((weekday - 1) % 7) in target.weekdays and minute < end)
+            )
+        if active:
+            matches.append(target)
+    if not matches:
+        return None
+    if len(matches) > 1:
+        # The domain validation above should make this unreachable, but keep a
+        # deterministic guard for callers supplying a non-standard sequence.
+        raise ValueError("multiple temperature target intervals are active")
+    return float(matches[0].target_temperature_c)
+
+
+def _room_telemetry_usable(value: ChargeTelemetry | None) -> bool:
+    if value is None or value.indoor_temperature_c is None or value.stored_soc_percent is None:
+        return False
+    return value.indoor_received_at is not None and value.stored_soc_received_at is not None
+
+
+def _room_telemetry_fresh(
+    value: ChargeTelemetry | None,
+    observed_at: datetime,
+    max_age_seconds: float = 900,
+) -> bool:
+    if not _room_telemetry_usable(value):
+        return False
+    assert value is not None
+    return all(
+        0 <= (observed_at - received_at).total_seconds() <= max_age_seconds
+        for received_at in (value.indoor_received_at, value.stored_soc_received_at)
+        if received_at is not None
+    )
+
+
+def room_energy_step(
+    heater: Heater,
+    *,
+    start: datetime,
+    outdoor_temperature_c: float,
+    target_temperature_c: float | None,
+    indoor_temperature_c: float,
+    stored_energy_kwh: float,
+    slot_minutes: int,
+    charge_on: bool = False,
+    heat_delivered_kwh: float | None = None,
+) -> RoomEnergyInterval:
+    """Project one physical room/storage interval.
+
+    ``charge_on`` is the discrete electrical decision.  If no heat quantity is
+    supplied, the ideal room controller delivers the least heat that reaches
+    the target, limited by the energy available after that charge decision.
+    This helper is also the equation boundary used by tests and explanations;
+    it never maps SOC directly to a temperature.
+    """
+    if slot_minutes <= 0:
+        raise ValueError("slot_minutes must be positive")
+    values = (outdoor_temperature_c, indoor_temperature_c, stored_energy_kwh)
+    if not all(math.isfinite(float(value)) for value in values):
+        raise ValueError("room-energy values must be finite")
+    if target_temperature_c is not None and not math.isfinite(float(target_temperature_c)):
+        raise ValueError("target_temperature_c must be finite when present")
+    capacity = heater.room_thermal_capacity_kwh_per_c
+    heat_loss_coefficient = heater.room_heat_loss_kw_per_c
+    if stored_energy_kwh < -1e-9 or stored_energy_kwh > heater.capacity_kwh + 1e-9:
+        raise ValueError("stored energy must be between zero and accumulator capacity")
+    stored_energy_kwh = max(0.0, min(heater.capacity_kwh, stored_energy_kwh))
+    hours = slot_minutes / 60
+    charge_energy = heater.charge_power_kw * hours if charge_on else 0.0
+    thermal_loss = heat_loss_coefficient * (
+        indoor_temperature_c - outdoor_temperature_c
+    ) * hours
+    no_heat_next = indoor_temperature_c - thermal_loss / capacity
+    required_heat = (
+        0.0
+        if target_temperature_c is None
+        else max(0.0, (target_temperature_c - no_heat_next) * capacity)
+    )
+    available = stored_energy_kwh + charge_energy
+    heat = required_heat if heat_delivered_kwh is None else float(heat_delivered_kwh)
+    if not math.isfinite(heat) or heat < 0:
+        raise ValueError("heat_delivered_kwh must be finite and non-negative")
+    heat = min(heat, available)
+    stored_next = max(0.0, min(heater.capacity_kwh, available - heat))
+    indoor_next = indoor_temperature_c + (heat - thermal_loss) / capacity
+    return RoomEnergyInterval(
+        heater_id=heater.id,
+        start=start,
+        end=advance_real(start, slot_minutes),
+        outdoor_temperature_c=float(outdoor_temperature_c),
+        target_temperature_c=(
+            None if target_temperature_c is None else float(target_temperature_c)
+        ),
+        indoor_temperature_c=float(indoor_temperature_c),
+        indoor_temperature_next_c=float(indoor_next),
+        stored_energy_kwh=float(stored_energy_kwh),
+        stored_energy_next_kwh=float(stored_next),
+        stored_soc_percent=float(stored_energy_kwh / heater.capacity_kwh * 100),
+        stored_soc_next_percent=float(stored_next / heater.capacity_kwh * 100),
+        charge_energy_kwh=float(charge_energy),
+        heat_delivered_kwh=float(heat),
+        thermal_loss_kwh=float(thermal_loss),
+        temperature_shortfall_c=(
+            0.0
+            if target_temperature_c is None
+            else float(max(0.0, target_temperature_c - indoor_next))
+        ),
+    )
+
+
+class RoomEnergyDemandEstimator:
+    """Calculate the room balance without deriving temperature from SOC."""
+
+    name = "room_energy_balance_v1"
+
+    def estimate(
+        self,
+        heaters: Sequence[Heater],
+        telemetry: Mapping[str, ChargeTelemetry],
+        forecast: Sequence[HourlyForecastPoint],
+        starts: Sequence[datetime],
+        slot_minutes: int,
+        *,
+        timezone_name: str = "UTC",
+        targets: Mapping[str, Sequence[TemperatureTarget]] | None = None,
+        charge_on: Mapping[str, Sequence[bool]] | None = None,
+        heat_delivered_kwh: Mapping[str, Sequence[float | None]] | None = None,
+    ) -> tuple[RoomEnergyInterval, ...]:
+        result: list[RoomEnergyInterval] = []
+        target_map = {} if targets is None else targets
+        for heater in sorted((item for item in heaters if item.enabled), key=lambda item: item.id):
+            state = telemetry.get(heater.id)
+            if not _room_telemetry_usable(state):
+                raise ValueError(f"missing required telemetry for heater {heater.id}")
+            assert state is not None
+            target_rules = (
+                tuple(target_map[heater.id])
+                if heater.id in target_map
+                else tuple(heater.temperature_targets)
+            )
+            validate_temperature_targets(target_rules)
+            if not any(target.enabled for target in target_rules):
+                raise ValueError(f"missing weekly temperature target schedule for heater {heater.id}")
+            inside = float(state.indoor_temperature_c)
+            stored = heater.capacity_kwh * float(state.stored_soc_percent) / 100
+            on_values = tuple(charge_on.get(heater.id, (False,) * len(starts))) if charge_on else (False,) * len(starts)
+            heat_values = tuple(heat_delivered_kwh.get(heater.id, (None,) * len(starts))) if heat_delivered_kwh else (None,) * len(starts)
+            if len(on_values) != len(starts) or len(heat_values) != len(starts):
+                raise ValueError(f"room-energy decisions for heater {heater.id} do not cover every interval")
+            for index, start in enumerate(starts):
+                outdoor = _weather_at(start, forecast)
+                target = active_temperature_target(target_rules, start, timezone_name)
+                if outdoor is None:
+                    raise ValueError(f"missing room-energy inputs at {start.isoformat()}")
+                interval = room_energy_step(
+                    heater,
+                    start=start,
+                    outdoor_temperature_c=outdoor,
+                    target_temperature_c=target,
+                    indoor_temperature_c=inside,
+                    stored_energy_kwh=stored,
+                    slot_minutes=slot_minutes,
+                    charge_on=on_values[index],
+                    heat_delivered_kwh=heat_values[index],
+                )
+                result.append(interval)
+                inside, stored = interval.indoor_temperature_next_c, interval.stored_energy_next_kwh
+        return tuple(result)
+
+
+class RoomEnergyPlanner:
+    """Public planner entry point for the coupled room/storage model."""
+
+    def build(self, request: PlanningInput) -> AutomaticPlan:
+        return _build_room_energy_plan(request)
+
+
+def _build_room_energy_plan(request: PlanningInput) -> AutomaticPlan:
+    generated_at = request.generated_at or request.horizon_start
+    _notify(request, "inputs")
+    _check_cancelled(request)
+    try:
+        _validate_input(request)
+        if request.constraints:
+            raise ValueError("percentage charge constraints are not accepted by the room-energy planner")
+        horizon_start = align_to_slot(request.horizon_start, request.slot_minutes)
+    except (ValueError, ArithmeticError) as exc:
+        return _invalid_room_plan(
+            request, request.horizon_start, (), str(exc), "invalid_configuration", generated_at
+        )
+    boundaries = _continuous_forecast_slots(
+        horizon_start, request.forecast, request.horizon_hours, request.slot_minutes
+    )
+    starts = boundaries[:-1] if boundaries else ()
+    if not starts or not request.forecast_automatic_eligible:
+        reason = "forecast_not_eligible" if not request.forecast_automatic_eligible else "missing_forecast_coverage"
+        return _invalid_room_plan(request, horizon_start, starts, reason, reason, generated_at)
+    missing_telemetry = [
+        heater.id
+        for heater in request.heaters
+        if heater.enabled and not _room_telemetry_fresh(
+            request.telemetry.get(heater.id), request.horizon_start
+        )
+    ]
+    if missing_telemetry:
+        return _invalid_room_plan(
+            request,
+            horizon_start,
+            starts,
+            "missing fresh indoor temperature or stored SOC telemetry",
+            "missing_required_state",
+            generated_at,
+            missing_telemetry,
+        )
+    missing_targets = [
+        heater.id
+        for heater in request.heaters
+        if heater.enabled
+        and not any(target.enabled for target in _room_targets(request, heater))
+    ]
+    if missing_targets:
+        return _invalid_room_plan(
+            request,
+            horizon_start,
+            starts,
+            "missing weekly temperature target schedule",
+            "missing_temperature_schedule",
+            generated_at,
+            missing_targets,
+        )
+    try:
+        for heater in request.heaters:
+            if heater.enabled:
+                validate_temperature_targets(_room_targets(request, heater))
+    except ValueError as exc:
+        return _invalid_room_plan(
+            request,
+            horizon_start,
+            starts,
+            str(exc),
+            "invalid_temperature_schedule",
+            generated_at,
+        )
+    _notify(request, "telemetry")
+    _notify(request, "room_model")
+    try:
+        return _solve_room_energy(request, boundaries, generated_at)
+    except (ValueError, ArithmeticError) as exc:
+        logger.debug("Room-energy planning rejected: %s", exc)
+        return _invalid_room_plan(
+            request, horizon_start, starts, str(exc), "invalid_configuration", generated_at
+        )
+
+
+def _solve_room_energy(
+    request: PlanningInput, boundaries: Sequence[datetime], generated_at: datetime
+) -> AutomaticPlan:
+    try:
+        import pulp
+    except ImportError:
+        return _invalid_room_plan(
+            request, boundaries[0], boundaries[:-1], "PuLP is unavailable", "solver_unavailable", generated_at
+        )
+    heaters = tuple(sorted((item for item in request.heaters if item.enabled), key=lambda item: item.id))
+    starts = tuple(boundaries[:-1])
+    slot_hours = request.slot_minutes / 60
+    limit_w = min(
+        request.max_heating_power_w or request.max_total_power_w,
+        request.max_total_power_w - request.base_load_w,
+    )
+    if limit_w <= 0:
+        return _invalid_room_plan(
+            request, starts[0], starts, "no electrical power remains for heating", "infeasible_power_configuration", generated_at
+        )
+    model = pulp.LpProblem("dynamic_room_energy", pulp.LpMinimize)
+    on = {
+        (heater.id, index): pulp.LpVariable(f"room_on_{heater.id}_{index:03d}", cat="Binary")
+        for heater in heaters
+        for index in range(len(starts))
+    }
+    stored = {
+        (heater.id, index): pulp.LpVariable(
+            f"stored_energy_{heater.id}_{index:03d}",
+            lowBound=0,
+            upBound=heater.capacity_kwh,
+        )
+        for heater in heaters
+        for index in range(len(starts) + 1)
+    }
+    indoor = {
+        (heater.id, index): pulp.LpVariable(
+            f"indoor_temperature_{heater.id}_{index:03d}",
+            lowBound=-100,
+            upBound=100,
+        )
+        for heater in heaters
+        for index in range(len(starts) + 1)
+    }
+    heat = {
+        (heater.id, index): pulp.LpVariable(
+            f"heat_delivered_{heater.id}_{index:03d}", lowBound=0
+        )
+        for heater in heaters
+        for index in range(len(starts))
+    }
+    shortfall = {
+        (heater.id, index): pulp.LpVariable(
+            f"temperature_shortfall_{heater.id}_{index:03d}", lowBound=0, upBound=200
+        )
+        for heater in heaters
+        for index in range(len(starts))
+    }
+    charge = {
+        (heater.id, index): heater.charge_power_kw * slot_hours * on[(heater.id, index)]
+        for heater in heaters
+        for index in range(len(starts))
+    }
+    target_values: dict[tuple[str, int], float | None] = {}
+    outdoor_values: dict[tuple[str, int], float] = {}
+    for heater in heaters:
+        state = request.telemetry[heater.id]
+        model += stored[(heater.id, 0)] == heater.capacity_kwh * float(state.stored_soc_percent) / 100
+        model += indoor[(heater.id, 0)] == float(state.indoor_temperature_c)
+        targets = _room_targets(request, heater)
+        for index, start in enumerate(starts):
+            outdoor = _weather_at(start, request.forecast)
+            target = active_temperature_target(targets, start, request.timezone_name)
+            if outdoor is None:
+                raise ValueError(f"missing forecast at {start.isoformat()}")
+            outdoor_values[(heater.id, index)] = outdoor
+            target_values[(heater.id, index)] = target
+            loss_factor = heater.room_heat_loss_kw_per_c * slot_hours
+            capacity = heater.room_thermal_capacity_kwh_per_c
+            model += heat[(heater.id, index)] <= stored[(heater.id, index)] + charge[(heater.id, index)]
+            model += stored[(heater.id, index + 1)] == stored[(heater.id, index)] + charge[(heater.id, index)] - heat[(heater.id, index)]
+            # E_loss = K_room * (T_inside - T_outside) * dt, substituted into
+            # the affine temperature balance below.  This retains the sign:
+            # warmer outdoor air produces a negative exchange.
+            model += indoor[(heater.id, index + 1)] == (
+                (1 - loss_factor / capacity) * indoor[(heater.id, index)]
+                + heat[(heater.id, index)] / capacity
+                + loss_factor * outdoor / capacity
+            )
+            if target is None:
+                model += shortfall[(heater.id, index)] == 0
+            else:
+                model += shortfall[(heater.id, index)] >= target - indoor[(heater.id, index + 1)]
+    for index in range(len(starts)):
+        model += sum(heater.power_w * on[(heater.id, index)] for heater in heaters) <= limit_w
+
+    total_charge = sum(charge.values())
+    total_heat = sum(heat.values())
+    deterministic = sum(
+        on[(heater.id, index)] * (index + 1) * (position + 1)
+        for position, heater in enumerate(heaters)
+        for index in range(len(starts))
+    )
+    # Encode comfort and priority into one deterministic objective. A single
+    # solve is important here: the rolling horizon may contain four rooms and
+    # 48 slots, and repeated lexicographic MILP solves would consume the entire
+    # planning budget before producing an actionable plan. Priority weights
+    # make a higher-priority room dominate an equivalent lower-priority demand,
+    # while charge, delivered heat, and ON/OFF order are tie-breakers.
+    comfort_objective = sum(
+        max(1.0, float(heater.priority)) * shortfall[(heater.id, index)]
+        for heater in heaters
+        for index in range(len(starts))
+    )
+    charge_bound = max(
+        1.0,
+        sum(
+            heater.capacity_kwh
+            + heater.charge_power_kw * slot_hours * len(starts)
+            for heater in heaters
+        ),
+    )
+    heat_bound = charge_bound
+    deterministic_bound = max(
+        1.0,
+        sum(
+            (index + 1) * (position + 1)
+            for position in range(len(heaters))
+            for index in range(len(starts))
+        ),
+    )
+    objective = (
+        comfort_objective
+        + total_charge / charge_bound
+        + 1e-3 * total_heat / heat_bound
+        + 1e-6 * deterministic / deterministic_bound
+    )
+    score: list[float] = []
+    started = monotonic()
+    time_limit = float(request.solver_time_limit_seconds or SOLVER_TIME_LIMIT_SECONDS)
+    time_limited = False
+    _notify(request, "solver")
+    _check_cancelled(request)
+    model.setObjective(objective)
+    status = model.solve(
+        _cbc_solver(pulp, time_limit_seconds=time_limit, gap_relative=1.0)
+    )
+    logger.debug(
+        "Room-energy solver status=%s duration_seconds=%.6g "
+        "total_elapsed_seconds=%.6g budget_seconds=%.6g variables=%d constraints=%d",
+        pulp.LpStatus[status],
+        monotonic() - started,
+        monotonic() - started,
+        time_limit,
+        len(model.variables()),
+        len(model.constraints),
+    )
+    if status == pulp.LpStatusNotSolved:
+        if not _model_solution_is_feasible(model, pulp, on):
+            return _invalid_room_plan(
+                request, starts[0], starts, "solver did not return a feasible room-energy plan", "solver_failure", generated_at
+            )
+        time_limited = True
+    elif status != pulp.LpStatusOptimal:
+        return _invalid_room_plan(
+            request, starts[0], starts, f"solver status {pulp.LpStatus[status]}", "solver_failure", generated_at
+        )
+    score.append(_required_solver_value(pulp.value(objective), "room-energy objective"))
+
+    violations: list[PlanningViolation] = []
+    for heater in heaters:
+        if heater.power_w > limit_w:
+            violations.append(
+                PlanningViolation(
+                    heater.id,
+                    "individual_power_limit",
+                    0.0,
+                    float(heater.power_w - limit_w),
+                    starts[0],
+                    "heater_power_exceeds_global_limit",
+                )
+            )
+    room_intervals: list[RoomEnergyInterval] = []
+    plan_slots: list[AutomaticPlanSlot] = []
+    for index, start in enumerate(starts):
+        interval_heat: dict[str, float] = {}
+        interval_loss: dict[str, float] = {}
+        interval_charge: dict[str, float] = {}
+        interval_stored: dict[str, float] = {}
+        interval_next_stored: dict[str, float] = {}
+        interval_indoor: dict[str, float] = {}
+        interval_next_indoor: dict[str, float] = {}
+        interval_target: dict[str, float] = {}
+        interval_shortfall: dict[str, float] = {}
+        initial_soc: dict[str, float] = {}
+        demand: dict[str, float] = {}
+        power_by_heater: dict[str, int] = {}
+        active: list[str] = []
+        for heater in heaters:
+            state = request.telemetry[heater.id]
+            on_value = float(on[(heater.id, index)].value() or 0)
+            stored_value = _required_solver_value(stored[(heater.id, index)].value(), "stored energy")
+            next_stored_value = _required_solver_value(stored[(heater.id, index + 1)].value(), "next stored energy")
+            indoor_value = _required_solver_value(indoor[(heater.id, index)].value(), "indoor temperature")
+            next_indoor_value = _required_solver_value(indoor[(heater.id, index + 1)].value(), "next indoor temperature")
+            heat_value = _required_solver_value(heat[(heater.id, index)].value(), "heat delivered")
+            target = target_values[(heater.id, index)]
+            outdoor = outdoor_values[(heater.id, index)]
+            loss_value = heater.room_heat_loss_kw_per_c * (indoor_value - outdoor) * slot_hours
+            charge_value = heater.charge_power_kw * slot_hours * on_value
+            short_value = 0.0 if target is None else max(0.0, target - next_indoor_value)
+            if target is not None and short_value > 1e-6:
+                violations.append(
+                    PlanningViolation(
+                        heater.id,
+                        "temperature_comfort",
+                        next_indoor_value,
+                        short_value,
+                        start,
+                        "insufficient_stored_energy_or_power",
+                    )
+                )
+            if on_value > 0.5:
+                active.append(heater.id)
+            interval_stored[heater.id] = round(stored_value, 9)
+            interval_next_stored[heater.id] = round(next_stored_value, 9)
+            interval_indoor[heater.id] = round(indoor_value, 9)
+            interval_next_indoor[heater.id] = round(next_indoor_value, 9)
+            if target is not None:
+                interval_target[heater.id] = target
+            interval_heat[heater.id] = round(heat_value, 9)
+            interval_loss[heater.id] = round(loss_value, 9)
+            interval_charge[heater.id] = round(charge_value, 9)
+            interval_shortfall[heater.id] = round(short_value, 9)
+            initial_soc[heater.id] = round(stored_value / heater.capacity_kwh * 100, 6)
+            demand[heater.id] = round(heat_value, 9)
+            power_by_heater[heater.id] = heater.power_w if on_value > 0.5 else 0
+            room_intervals.append(
+                RoomEnergyInterval(
+                    heater.id,
+                    start,
+                    boundaries[index + 1],
+                    outdoor,
+                    target,
+                    indoor_value,
+                    next_indoor_value,
+                    stored_value,
+                    next_stored_value,
+                    stored_value / heater.capacity_kwh * 100,
+                    next_stored_value / heater.capacity_kwh * 100,
+                    charge_value,
+                    heat_value,
+                    loss_value,
+                    short_value,
+                )
+            )
+        plan_slots.append(
+            AutomaticPlanSlot(
+                start,
+                boundaries[index + 1],
+                tuple(active),
+                sum(power_by_heater.values()),
+                {key: round(value / _heater(heaters, key).capacity_kwh * 100, 6) for key, value in interval_next_stored.items()},
+                {key: 0.0 for key in interval_target},
+                outdoor_values[(heaters[0].id, index)] if heaters else None,
+                interval_next_indoor,
+                initial_soc,
+                demand,
+                power_by_heater,
+                interval_next_stored,
+                interval_target,
+                interval_heat,
+                interval_loss,
+                interval_shortfall,
+                interval_charge,
+            )
+        )
+    by_heater = {heater.id: [item for item in room_intervals if item.heater_id == heater.id] for heater in heaters}
+    explanations = tuple(
+        HeaterExplanation(
+            heater.id,
+            float(request.telemetry[heater.id].stored_soc_percent),
+            sum(item.heat_delivered_kwh for item in by_heater[heater.id]),
+            1.0,
+            0.0,
+            None,
+            tuple((slot.start, slot.end) for slot in plan_slots if heater.id in slot.heater_ids),
+            heater.capacity_kwh,
+            float(request.telemetry[heater.id].indoor_temperature_c),
+            by_heater[heater.id][-1].indoor_temperature_next_c if by_heater[heater.id] else float(request.telemetry[heater.id].indoor_temperature_c),
+            sum(item.heat_delivered_kwh for item in by_heater[heater.id]),
+            sum(item.thermal_loss_kwh for item in by_heater[heater.id]),
+            max((item.temperature_shortfall_c for item in by_heater[heater.id]), default=0.0),
+        )
+        for heater in heaters
+    )
+    if time_limited:
+        violations.append(PlanningViolation(None, "solver_time_limit", None, None, starts[0], "solver_time_limit"))
+    status = DEGRADED if violations else FEASIBLE
+    plan = AutomaticPlan(
+        starts[0], boundaries[-1], request.slot_minutes, tuple(plan_slots), tuple(violations),
+        status, tuple(score), input_token(request), generated_at, explanations,
+        tuple(room_intervals),
+    )
+    _notify(request, "safety")
+    _notify(request, "summary")
+    return plan
+
+
+def _invalid_room_plan(
+    request: PlanningInput,
+    start: datetime,
+    starts: Sequence[datetime],
+    detail: str,
+    reason: str,
+    generated_at: datetime,
+    heater_ids: Sequence[str] = (),
+) -> AutomaticPlan:
+    enabled = tuple(sorted((item for item in request.heaters if item.enabled), key=lambda item: item.id))
+    violations = tuple(
+        PlanningViolation(heater_id, "safe_planning_input", None, None, start, reason)
+        for heater_id in heater_ids
+    ) or (PlanningViolation(None, "safe_planning_input", None, None, start, f"{reason}: {detail}"),)
+    slots: list[AutomaticPlanSlot] = []
+    for at in starts:
+        end = advance_real(at, request.slot_minutes)
+        stored: dict[str, float] = {}
+        indoor: dict[str, float] = {}
+        target: dict[str, float] = {}
+        for heater in enabled:
+            state = request.telemetry.get(heater.id)
+            soc = 0.0 if state is None or state.stored_soc_percent is None else float(state.stored_soc_percent)
+            value = 0.0 if state is None or state.indoor_temperature_c is None else float(state.indoor_temperature_c)
+            stored[heater.id] = soc * heater.capacity_kwh / 100
+            indoor[heater.id] = value
+            active = active_temperature_target(_room_targets(request, heater), at, request.timezone_name)
+            if active is not None:
+                target[heater.id] = active
+        slots.append(
+            AutomaticPlanSlot(
+                at, end, (), 0,
+                {heater.id: (stored[heater.id] / heater.capacity_kwh * 100) for heater in enabled},
+                {heater.id: 0.0 for heater in enabled},
+                _weather_at(at, request.forecast),
+                indoor,
+                {heater.id: (stored[heater.id] / heater.capacity_kwh * 100) for heater in enabled},
+                {heater.id: 0.0 for heater in enabled},
+                {heater.id: 0 for heater in enabled},
+                stored,
+                target,
+                {heater.id: 0.0 for heater in enabled},
+                {heater.id: 0.0 for heater in enabled},
+                {heater.id: max(0.0, target.get(heater.id, indoor[heater.id]) - indoor[heater.id]) for heater in enabled},
+                {heater.id: 0.0 for heater in enabled},
+            )
+        )
+    horizon_end = advance_real(starts[-1], request.slot_minutes) if starts else advance_real(start, request.horizon_hours * 60)
+    return AutomaticPlan(
+        start,
+        horizon_end,
+        request.slot_minutes,
+        tuple(slots),
+        violations,
+        INVALID,
+        (),
+        input_token(request),
+        generated_at,
+    )
+
+
 __all__ = [
     "AutomaticPlan", "AutomaticPlanSlot", "DEGRADED", "DemandEstimate",
     "DegreeHoursDemandEstimator", "DeterministicChargeOptimizer", "FEASIBLE",
     "HeaterExplanation", "INVALID", "MaterializedConstraint", "MilpChargePlanner",
     "PlanningCancelled", "PlanningDeficit", "PlanningInput", "PlanningViolation", "PLANNING_HORIZON_HOURS", "SOLVER_TIME_LIMIT_SECONDS", "input_token",
-    "materialize_constraints", "resolve_planning_telemetry",
+    "materialize_constraints", "resolve_planning_telemetry", "RoomEnergyDemandEstimator",
+    "RoomEnergyInterval", "RoomEnergyPlanner", "active_temperature_target", "room_energy_step",
 ]

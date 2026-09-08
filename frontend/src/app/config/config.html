@@ -113,7 +113,7 @@
   @if (areaIs('heaters') && config(); as data) {
     <section class="workspace-panel" aria-labelledby="heaters-title">
       <div class="section-heading">
-        <div><p class="eyebrow">Equipos</p><h2 id="heaters-title">Acumuladores</h2><p class="section-lead">Define la capacidad, el comportamiento y la conexión de cada equipo. El objetivo base es el valor por defecto; las necesidades por horario se gestionan en Planificación.</p></div>
+        <div><p class="eyebrow">Equipos</p><h2 id="heaters-title">Acumuladores</h2><p class="section-lead">Define la potencia, la capacidad térmica de la sala y las conexiones de telemetría. Las consignas semanales se gestionan en Planificación.</p></div>
         <button mat-flat-button color="primary" type="button" (click)="openAddHeater()" [disabled]="!writable()" data-testid="add-heater"><mat-icon aria-hidden="true">add</mat-icon> Nuevo acumulador</button>
       </div>
 
@@ -152,8 +152,8 @@
             <mat-card-header><mat-card-title>{{ heater.name }}</mat-card-title><mat-card-subtitle>{{ heater.id }} · {{ heater.power_kw }} kW · {{ heater.output.kind === 'gpio' ? 'GPIO' : 'Simulada' }} · {{ heater.enabled ? 'Activo' : 'Desactivado' }}</mat-card-subtitle></mat-card-header>
             <mat-card-content>
               <dl class="heater-summary">
-                <div><dt class="summary-term">Objetivo base<dtc-param-help field="target_charge" label="Objetivo base" /></dt><dd>{{ heater.target_charge * 100 }}%</dd></div>
-                <div><dt class="summary-term">Reserva<dtc-param-help field="reserve_percent" label="Reserva de demanda" /></dt><dd>{{ heater.reserve_percent }}%</dd></div>
+                <div><dt class="summary-term">Capacidad térmica<dtc-param-help field="room_thermal_capacity_kwh_per_c" label="Capacidad térmica" /></dt><dd>{{ heater.room_thermal_capacity_kwh_per_c }} kWh/°C</dd></div>
+                <div><dt class="summary-term">Pérdida térmica<dtc-param-help field="room_heat_loss_kw_per_c" label="Pérdida térmica" /></dt><dd>{{ heater.room_heat_loss_kw_per_c }} kW/°C</dd></div>
                 <div><dt class="summary-term">Prioridad<dtc-param-help field="priority" label="Prioridad" /></dt><dd>{{ heater.priority }}</dd></div>
               </dl>
             </mat-card-content>
@@ -166,7 +166,7 @@
 
   @if (areaIs('planning') && planningConfig(); as planning) {
     <section class="workspace-panel" aria-labelledby="planning-title">
-      <div class="section-heading"><div><p class="eyebrow">Optimización automática</p><h2 id="planning-title">Planificación</h2><p class="section-lead">Aquí se define la capacidad y el modelo que usa el optimizador. Las restricciones por acumulador y horario siguen en el módulo Planificación.</p></div><span class="revision-chip">Rev. {{ planning.revision }}</span></div>
+        <div class="section-heading"><div><p class="eyebrow">Optimización automática</p><h2 id="planning-title">Planificación</h2><p class="section-lead">Aquí se definen los límites eléctricos, el horizonte y la simulación. Las consignas de temperatura por acumulador se editan en el módulo Planificación.</p></div><span class="revision-chip">Rev. {{ planning.revision }}</span></div>
       <div class="canonical-note"><mat-icon aria-hidden="true">bolt</mat-icon><p><strong>Potencia total canónica:</strong> {{ formatPower(canonicalPower()) }}. Este mismo valor alimenta el optimizador automático y el indicador de Estado.</p></div>
       <form (ngSubmit)="savePlanning()" aria-label="Parámetros de planificación">
         @for (group of planningGroups(); track group.title) {

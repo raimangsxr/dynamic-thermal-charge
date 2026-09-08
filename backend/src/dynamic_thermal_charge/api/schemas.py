@@ -144,7 +144,13 @@ class PlanningSlotView(PlanSlotView):
     total_power_w: int = 0
     temperature_c: float | None = None
     temperature_interpolated: bool = False
-    stored_charge_percent_by_heater: dict[str, float] = Field(default_factory=dict)
+    stored_energy_kwh_by_heater: dict[str, float] = Field(default_factory=dict)
+    indoor_temperature_c_by_heater: dict[str, float] = Field(default_factory=dict)
+    target_temperature_c_by_heater: dict[str, float] = Field(default_factory=dict)
+    heat_delivered_kwh_by_heater: dict[str, float] = Field(default_factory=dict)
+    thermal_loss_kwh_by_heater: dict[str, float] = Field(default_factory=dict)
+    temperature_shortfall_c_by_heater: dict[str, float] = Field(default_factory=dict)
+    charge_energy_kwh_by_heater: dict[str, float] = Field(default_factory=dict)
 
 
 class PlanningTimelineSlotView(BaseModel):
@@ -154,9 +160,13 @@ class PlanningTimelineSlotView(BaseModel):
     total_power_w: int = 0
     temperature_c: float | None = None
     temperature_interpolated: bool = False
-    charge_minutes_by_heater: dict[str, float] = Field(default_factory=dict)
-    stored_charge_percent_by_heater: dict[str, float] = Field(default_factory=dict)
-    estimated_temperature_c_by_heater: dict[str, float] = Field(default_factory=dict)
+    stored_energy_kwh_by_heater: dict[str, float] = Field(default_factory=dict)
+    indoor_temperature_c_by_heater: dict[str, float] = Field(default_factory=dict)
+    target_temperature_c_by_heater: dict[str, float] = Field(default_factory=dict)
+    heat_delivered_kwh_by_heater: dict[str, float] = Field(default_factory=dict)
+    thermal_loss_kwh_by_heater: dict[str, float] = Field(default_factory=dict)
+    temperature_shortfall_c_by_heater: dict[str, float] = Field(default_factory=dict)
+    charge_energy_kwh_by_heater: dict[str, float] = Field(default_factory=dict)
 
 
 class PlanningHeaterView(BaseModel):
@@ -187,12 +197,11 @@ class PlanningResponse(BaseModel):
     horizon_end: datetime | None = None
     timeline: list[PlanningTimelineSlotView] = Field(default_factory=list)
     absence_reason: str | None = None
-    constraints: list["ChargeConstraintView"] = Field(default_factory=list)
     telemetry: list["ChargeTelemetryView"] = Field(default_factory=list)
     plan_status: str | None = None
     deficits: list["PlanningDeficitView"] = Field(default_factory=list)
     preview_token: str | None = None
-    constraints_revision: int = 1
+    temperature_targets_revision: int = 1
     forecast_status: str | None = None
     forecast_last_attempt_at: datetime | None = None
     forecast_last_error: str | None = None
@@ -200,6 +209,7 @@ class PlanningResponse(BaseModel):
     preview_job: "PlanningPreviewJobResponse | None" = None
     base_load_w: int = 0
     max_heating_power_w: int = 0
+    temperature_targets: list["TemperatureTargetView"] = Field(default_factory=list)
 
 
 class WeatherRefreshResponse(BaseModel):
@@ -211,26 +221,16 @@ class WeatherRefreshResponse(BaseModel):
     forecast: PlanningForecastView | None = None
 
 
-class ChargeConstraintView(BaseModel):
-    id: int | None = None
-    heater_id: str
-    target_charge: float
-    at_time: str
-    weekdays: list[int]
-    enabled: bool = True
-
-
 class ChargeTelemetryView(BaseModel):
     heater_id: str
-    temperature_c: float | None = None
-    target_temperature_c: float | None = None
-    stored_charge_percent: float | None = None
-    temperature_received_at: datetime | None = None
-    target_received_at: datetime | None = None
-    stored_charge_received_at: datetime | None = None
+    indoor_temperature_c: float | None = None
+    stored_soc_percent: float | None = None
+    indoor_received_at: datetime | None = None
+    stored_soc_received_at: datetime | None = None
     state: str = "telemetry_stale"
     missing_fields: list[str] = Field(default_factory=list)
     oldest_age_seconds: float | None = None
+    stored_energy_kwh: float | None = None
 
 
 class PlanningDeficitView(BaseModel):
@@ -240,20 +240,36 @@ class PlanningDeficitView(BaseModel):
     shortfall: float | None = None
     at: datetime | None = None
     reason: str
-    target_charge_percent: float = 0.0
-    projected_charge_percent: float = 0.0
-    deficit_percent: float = 0.0
+    target_temperature_c: float | None = None
+    projected_temperature_c: float | None = None
+    shortfall_c: float | None = None
+    stored_energy_kwh: float | None = None
+    stored_soc_percent: float | None = None
 
 
-class ChargeConstraintRequest(BaseModel):
-    heater_id: str
-    target_charge: float = Field(ge=0, le=1)
-    at_time: str
+class TemperatureTargetRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    heater_id: str = ""
+    target_temperature_c: float = Field(ge=-50, le=80)
+    start_time: str
+    end_time: str
     weekdays: list[int] = Field(min_length=1)
+    enabled: bool = True
+
+
+class TemperatureTargetView(BaseModel):
+    id: int | None = None
+    heater_id: str
+    target_temperature_c: float
+    start_time: str
+    end_time: str
+    weekdays: list[int]
+    enabled: bool = True
 
 
 class PlanningPreviewRequest(BaseModel):
-    constraints: list[ChargeConstraintRequest]
+    model_config = ConfigDict(extra="forbid")
+    temperature_targets: list[TemperatureTargetRequest] | None = None
     expected_revision: int | None = None
 
 
@@ -271,7 +287,7 @@ class PlanningPreviewResponse(BaseModel):
     violations: list[PlanningDeficitView] = Field(default_factory=list)
     explanations: list[dict] = Field(default_factory=list)
     demand: list[dict] = Field(default_factory=list)
-    constraints: list[ChargeConstraintView] = Field(default_factory=list)
+    temperature_targets: list[TemperatureTargetView] = Field(default_factory=list)
     operator_summary: dict = Field(default_factory=dict)
 
 
@@ -298,8 +314,9 @@ class PlanningPreviewJobResponse(BaseModel):
 
 
 class PlanningActivateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     token: str
-    constraints: list[ChargeConstraintRequest]
+    temperature_targets: list[TemperatureTargetRequest] | None = None
     expected_revision: int
 
 
@@ -317,14 +334,12 @@ class AutomaticPlanAuditPage(BaseModel):
 
 
 class HeaterChargeConfigRequest(BaseModel):
-    temperature_topic: str | None = None
-    target_temperature_topic: str | None = None
-    stored_charge_topic: str | None = None
-    reserve_percent: float = Field(ge=0)
-    demand_factor: float = Field(gt=0, default=1.0)
+    model_config = ConfigDict(extra="forbid")
+    stored_soc_topic: str | None = None
 
 
 class PlanningSiteConfigRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     expected_revision: int
     replan_minutes: int = Field(gt=0)
     planning_window_hours: StrictInt = Field(gt=0, le=48, default=12)
@@ -334,20 +349,11 @@ class PlanningSiteConfigRequest(BaseModel):
     contracted_power_w: int = Field(gt=0)
     max_heating_power_w: int = Field(gt=0)
     base_load_w: int = Field(ge=0, default=0)
-    design_indoor_temperature_c: float
-    design_outdoor_temperature_c: float
-    feedback_horizon_hours: float = Field(gt=0)
     mqtt_simulation_enabled: bool = False
     mqtt_simulation_initial_temperature_c: float = Field(ge=-50, le=80, default=45.0)
     mqtt_simulation_publish_seconds: float = Field(gt=0, default=30.0)
     mqtt_simulation_topic_prefix: str = Field(min_length=1, default="dtc/sim")
     mqtt_simulation_thermal_loss_c_per_hour: float = Field(ge=0, default=2.0)
-
-    @model_validator(mode="after")
-    def validate_design_temperatures(self):
-        if self.design_indoor_temperature_c <= self.design_outdoor_temperature_c:
-            raise ValueError("design indoor temperature must exceed design outdoor temperature")
-        return self
 
     @model_validator(mode="after")
     def validate_planning_durations(self):
@@ -366,9 +372,6 @@ class PlanningSiteConfigResponse(BaseModel):
     contracted_power_w: int
     max_heating_power_w: int
     base_load_w: int
-    design_indoor_temperature_c: float
-    design_outdoor_temperature_c: float
-    feedback_horizon_hours: float
     mqtt_simulation_enabled: bool
     mqtt_simulation_initial_temperature_c: float
     mqtt_simulation_publish_seconds: float
@@ -407,16 +410,14 @@ class HeaterResponse(BaseModel):
     model: str | None = None
     power_kw: float
     full_charge_hours: float
-    target_charge: float
     priority: int
     enabled: bool
     indoor_topic: str | None = None
-    temperature_topic: str | None = None
-    target_temperature_topic: str | None = None
-    stored_charge_topic: str | None = None
-    reserve_percent: float = 0.0
-    demand_factor: float = 1.0
+    stored_soc_topic: str | None = None
     output: OutputView
+    room_thermal_capacity_kwh_per_c: float = 2.5
+    room_heat_loss_kw_per_c: float = 0.12
+    temperature_targets: list[TemperatureTargetView] = Field(default_factory=list)
 
 
 class ScheduleView(BaseModel):
@@ -471,18 +472,16 @@ class AddHeaterRequest(BaseModel):
     full_charge_hours: float
     name: str | None = None
     model: str | None = None
-    target_charge: float = 1.0
     priority: int = 0
     enabled: bool = True
     indoor_topic: str | None = None
-    temperature_topic: str | None = None
-    target_temperature_topic: str | None = None
-    stored_charge_topic: str | None = None
-    reserve_percent: float = Field(ge=0, default=0.0)
-    demand_factor: float = Field(gt=0, default=1.0)
+    stored_soc_topic: str | None = None
     output: str = "simulated"
     pin: int | None = None
     active_high: bool = True
+    room_thermal_capacity_kwh_per_c: float = Field(gt=0, default=2.5)
+    room_heat_loss_kw_per_c: float = Field(ge=0, default=0.12)
+    temperature_targets: list[TemperatureTargetRequest] = Field(default_factory=list)
 
 
 class UpdateHeaterRequest(BaseModel):
@@ -492,18 +491,16 @@ class UpdateHeaterRequest(BaseModel):
     model: str | None = None
     power_kw: float = Field(gt=0)
     full_charge_hours: float = Field(gt=0)
-    target_charge: float = Field(ge=0, le=1)
     priority: int = 0
     enabled: bool = True
     indoor_topic: str | None = None
-    temperature_topic: str | None = None
-    target_temperature_topic: str | None = None
-    stored_charge_topic: str | None = None
-    reserve_percent: float = Field(ge=0)
-    demand_factor: float = Field(gt=0, default=1.0)
+    stored_soc_topic: str | None = None
     output: str = "simulated"
     pin: int | None = None
     active_high: bool = True
+    room_thermal_capacity_kwh_per_c: float = Field(gt=0, default=2.5)
+    room_heat_loss_kw_per_c: float = Field(ge=0, default=0.12)
+    temperature_targets: list[TemperatureTargetRequest] | None = None
 
 
 class ChangeResponse(BaseModel):
@@ -722,6 +719,15 @@ __all__ = [
     "PlanningPlanView",
     "PlanningSlotView",
     "PlanningHeaterView",
+    "PlanningDeficitView",
+    "ChargeTelemetryView",
+    "TemperatureTargetRequest",
+    "TemperatureTargetView",
+    "PlanningPreviewRequest",
+    "PlanningActivateRequest",
+    "HeaterChargeConfigRequest",
+    "PlanningSiteConfigRequest",
+    "PlanningSiteConfigResponse",
     "HourlyForecastPointView",
     "PowerSnapshot",
     "PruneResponse",

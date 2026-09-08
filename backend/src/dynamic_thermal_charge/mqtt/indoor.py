@@ -80,7 +80,7 @@ class IndoorMessageProcessor:
 
 
 class ChargeTelemetryMessageProcessor:
-    """Validate and persist the three independent accumulator MQTT values."""
+    """Validate and persist indoor temperature and stored SOC telemetry."""
 
     def __init__(self, config_repository, planning_repository, *, clock: Callable[[], datetime]):
         self._config_repository = config_repository
@@ -109,9 +109,9 @@ class ChargeTelemetryMessageProcessor:
             value = float(raw)
             if not raw or not math.isfinite(value):
                 raise ValueError("empty or non-finite value")
-            if field == "stored_charge_percent" and not 0 <= value <= 100:
+            if field == "stored_soc_percent" and not 0 <= value <= 100:
                 raise ValueError("stored charge must be between 0 and 100")
-            if field != "stored_charge_percent" and not -50 <= value <= 80:
+            if field == "indoor_temperature_c" and not -50 <= value <= 80:
                 raise ValueError("temperature is outside the safe range")
         except (UnicodeDecodeError, ValueError) as exc:
             logger.error("Invalid %s for heater %s on topic %s: %s", field, heater_id, message.topic, exc)

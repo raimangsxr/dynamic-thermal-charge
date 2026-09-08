@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
 
 import pytest
 from sqlalchemy import func, select
 
-from dynamic_thermal_charge.models import Heater, OutputConfig, ThermalProfile
+from dynamic_thermal_charge.models import Heater, OutputConfig, TemperatureTarget, ThermalProfile
 from dynamic_thermal_charge.persistence import (
     ConfigConflictError,
     ConfigValidationError,
@@ -26,11 +26,12 @@ def _new_heater(heater_id: str = "cocina", pin: int | None = 24) -> Heater:
         name=heater_id.capitalize(),
         power_w=1200,
         full_charge_minutes=420,
-        target_charge=1.0,
         priority=10,
         thermal=ThermalProfile(
-            target_temperature_c=20.0, design_outdoor_temperature_c=-2.0
+            room_thermal_capacity_kwh_per_c=2.5,
+            room_heat_loss_kw_per_c=0.12,
         ),
+        temperature_targets=(TemperatureTarget(20.0, time(0, 0)),),
         output=OutputConfig(
             kind="gpio" if pin is not None else "simulated",
             pin=pin,
@@ -86,12 +87,12 @@ def test_an_installation_field_changes_and_reports_both_values(initialised_store
 def test_a_heater_field_changes_only_that_heater(initialised_store):
     repository = initialised_store.repository
     before, revision = repository.current()
-    repository.set_field(revision, "heater", "entrada", "target_charge", "0.5")
+    repository.set_field(revision, "heater", "entrada", "room_heat_loss_kw_per_c", "0.2")
     after, _ = repository.current()
     changed = {heater.id: heater for heater in after.heaters}
     for heater in before.heaters:
         if heater.id == "entrada":
-            assert changed[heater.id].target_charge == 0.5
+            assert changed[heater.id].room_heat_loss_kw_per_c == 0.2
         else:
             assert changed[heater.id] == heater, "an unrelated heater changed"
 
@@ -99,12 +100,12 @@ def test_a_heater_field_changes_only_that_heater(initialised_store):
 def test_a_charge_field_changes_only_that_heater(initialised_store):
     repository = initialised_store.repository
     before, revision = repository.current()
-    repository.set_field(revision, "heater", "salon", "demand_factor", "1.25")
+    repository.set_field(revision, "heater", "salon", "stored_soc_topic", "ha/salon/soc")
     after, _ = repository.current()
     changed = {heater.id: heater for heater in after.heaters}
     unchanged = {heater.id: heater for heater in before.heaters}
-    assert changed["salon"].demand_factor == 1.25
-    assert changed["entrada"].demand_factor == unchanged["entrada"].demand_factor
+    assert changed["salon"].stored_soc_topic == "ha/salon/soc"
+    assert changed["entrada"].stored_soc_topic == unchanged["entrada"].stored_soc_topic
 
 
 def test_disabling_a_heater_keeps_it_in_the_configuration(initialised_store):
@@ -234,9 +235,9 @@ def _snapshot(store):
         ("installation", None, "weekdays", "1,0", ConfigValidationError),
         ("installation", None, "retention_days", "0", ConfigValidationError),
         ("heater", "entrada", "pin", "17", ConfigValidationError),
-        ("heater", "entrada", "target_charge", "1.5", ConfigValidationError),
+        ("heater", "entrada", "room_thermal_capacity_kwh_per_c", "0", ConfigValidationError),
         ("heater", "entrada", "power_kw", "-1", ConfigValidationError),
-        ("heater", "salon", "max_charge", "1.5", ConfigValidationError),
+        ("heater", "salon", "room_heat_loss_kw_per_c", "-1", ConfigValidationError),
         ("heater", "salon", "design_outdoor_temperature_c", "30", ConfigValidationError),
         ("installation", None, "nonexistent_field", "1", ConfigValidationError),
         ("heater", "cocina", "priority", "1", ConfigValidationError),

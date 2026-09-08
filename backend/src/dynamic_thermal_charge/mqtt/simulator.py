@@ -65,13 +65,12 @@ def simulation_topics(
     heater: Heater,
     *,
     topic_prefix: str,
-) -> tuple[str, str, str]:
-    """Resolve the three MQTT topics used by automatic planning."""
+) -> tuple[str, str]:
+    """Resolve the indoor-temperature and stored-SOC simulation topics."""
     prefix = topic_prefix.strip("/")
-    temperature = heater.temperature_topic or f"{prefix}/{heater.id}/temperature"
-    target = heater.target_temperature_topic or f"{prefix}/{heater.id}/target"
-    stored_charge = heater.stored_charge_topic or f"{prefix}/{heater.id}/stored_charge"
-    return temperature, target, stored_charge
+    indoor = heater.indoor_topic or f"{prefix}/{heater.id}/indoor_temperature"
+    stored_soc = heater.stored_soc_topic or f"{prefix}/{heater.id}/stored_soc"
+    return indoor, stored_soc
 
 
 def heater_telemetry_topics(
@@ -81,20 +80,18 @@ def heater_telemetry_topics(
 ) -> dict[str, str]:
     """Map MQTT topics to telemetry fields for one heater."""
     if simulation is not None and simulation.enabled:
-        temperature, target, stored_charge = simulation_topics(
+        indoor, stored_soc = simulation_topics(
             heater,
             topic_prefix=simulation.topic_prefix,
         )
         candidates = {
-            heater.temperature_topic or heater.indoor_topic or temperature: "temperature_c",
-            heater.target_temperature_topic or target: "target_temperature_c",
-            heater.stored_charge_topic or stored_charge: "stored_charge_percent",
+            indoor: "indoor_temperature_c",
+            stored_soc: "stored_soc_percent",
         }
     else:
         candidates = {
-            (heater.temperature_topic or heater.indoor_topic): "temperature_c",
-            heater.target_temperature_topic: "target_temperature_c",
-            heater.stored_charge_topic: "stored_charge_percent",
+            heater.indoor_topic: "indoor_temperature_c",
+            heater.stored_soc_topic: "stored_soc_percent",
         }
     return {
         topic: field for topic, field in candidates.items() if topic is not None
@@ -136,10 +133,12 @@ class MqttPlanningSimulator:
         self._charging_state_provider = charging_state_provider
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._temperatures: dict[str, float] = {}
+        self._stored_soc: dict[str, float] = {}
         self._last_advanced_at: datetime | None = None
 
     def reset(self) -> None:
         self._temperatures.clear()
+        self._stored_soc.clear()
         self._last_advanced_at = None
 
     def publish_cycle(self) -> None:
@@ -153,7 +152,6 @@ class MqttPlanningSimulator:
             0.0, (now - self._last_advanced_at).total_seconds() / 3600.0
         )
         charging = self._charging_state_provider()
-        target_temperature_c = config.initial_temperature_c + 10.0
         published_heaters = 0
         published_messages: list[str] = []
         for heater in self._heaters_provider():
@@ -170,15 +168,20 @@ class MqttPlanningSimulator:
                 elapsed_hours=elapsed_hours,
             )
             self._temperatures[heater.id] = current
-            temperature_topic, target_topic, stored_charge_topic = simulation_topics(
+            indoor_topic, stored_soc_topic = simulation_topics(
                 heater,
                 topic_prefix=config.topic_prefix,
             )
-            stored_charge = temperature_to_stored_charge_percent(current)
+            stored_soc = self._stored_soc.setdefault(heater.id, 50.0)
+            if is_charging:
+                stored_soc = min(
+                    100.0,
+                    stored_soc + elapsed_hours / heater.full_charge_time_hours * 100.0,
+                )
+            self._stored_soc[heater.id] = stored_soc
             messages = (
-                (temperature_topic, f"{current:.2f}"),
-                (target_topic, f"{target_temperature_c:.2f}"),
-                (stored_charge_topic, f"{stored_charge:.1f}"),
+                (indoor_topic, f"{current:.2f}"),
+                (stored_soc_topic, f"{stored_soc:.1f}"),
             )
             for topic, payload in messages:
                 self._publish(topic, payload)

@@ -33,7 +33,7 @@ def test_preview_job_is_durable_and_returns_all_final_checks(client):
     started = client.post(
         "/api/v1/planning/preview/jobs",
         headers=headers,
-        json={"constraints": []},
+        json={},
     )
     assert started.status_code == 200, started.text
     job_id = started.json()["job_id"]
@@ -51,11 +51,28 @@ def test_preview_job_is_durable_and_returns_all_final_checks(client):
     assert final["result"]["status"] == "INVALID"
     assert len(final["result"]["slots"]) == 0
     assert {item["name"] for item in final["checks"]} == {
-        "input_validation", "telemetry", "aemet_coverage", "demand_estimation",
-        "constraints", "resolution", "safety_validation", "operator_summary",
+        "input_validation", "telemetry", "aemet_coverage", "room_model",
+        "resolution", "safety_validation", "operator_summary",
     }
     assert final["operator_summary"]["window"]["hours"] == 12
     assert final["operator_summary"]["horizon"]["hours"] == 24
+
+
+def test_explicitly_empty_temperature_targets_are_not_replaced_by_saved_defaults(
+    client, initialised_store
+):
+    _configuration_revision, constraints_revision = _seed_valid_preview_inputs(initialised_store)
+
+    response = client.post(
+        "/api/v1/planning/preview",
+        headers=AUTH,
+        json={"temperature_targets": [], "expected_revision": constraints_revision},
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["status"] == "INVALID"
+    assert result["violations"][0]["reason"] == "missing_temperature_schedule"
 
 
 def test_preview_job_cancel_is_visible_and_cannot_produce_a_result(initialised_store):
@@ -85,7 +102,7 @@ def test_preview_job_with_legacy_result_remains_readable(client, initialised_sto
     started = client.post(
         "/api/v1/planning/preview/jobs",
         headers=headers,
-        json={"constraints": []},
+        json={},
     )
     assert started.status_code == 200, started.text
     job_id = started.json()["job_id"]
@@ -130,9 +147,8 @@ def _seed_valid_preview_inputs(initialised_store):
     ))
     for heater in config.heaters:
         for field, value in (
-            ("temperature_c", 21.0),
-            ("target_temperature_c", 21.0),
-            ("stored_charge_percent", 100.0),
+            ("indoor_temperature_c", 21.0),
+            ("stored_soc_percent", 100.0),
         ):
             initialised_store.planning.record_telemetry(heater.id, field, value, API_NOW)
     return configuration_revision, initialised_store.planning.site()["revision"]
@@ -143,6 +159,14 @@ def _persist_preview_job(initialised_store, result, configuration_revision, cons
 
     job_id = initialised_store.planning.create_preview_job(
         [],
+        temperature_targets=[
+            {
+                key: value
+                for key, value in item.items()
+                if key != "id"
+            }
+            for item in result.get("temperature_targets", [])
+        ],
         configuration_revision=configuration_revision,
         constraints_revision=constraints_revision,
         requested_at=API_NOW,
@@ -163,7 +187,7 @@ def test_activation_reuses_completed_preview_without_second_solver_call(
     preview = client.post(
         "/api/v1/planning/preview",
         headers=AUTH,
-        json={"constraints": [], "expected_revision": constraints_revision},
+        json={"expected_revision": constraints_revision},
     )
     assert preview.status_code == 200, preview.text
     result = preview.json()
@@ -186,7 +210,6 @@ def test_activation_reuses_completed_preview_without_second_solver_call(
         headers=AUTH,
         json={
             "token": result["token"],
-            "constraints": [],
             "expected_revision": constraints_revision,
         },
     )
@@ -203,7 +226,7 @@ def test_changed_telemetry_cannot_activate_cached_preview(
     preview = client.post(
         "/api/v1/planning/preview",
         headers=AUTH,
-        json={"constraints": [], "expected_revision": constraints_revision},
+        json={"expected_revision": constraints_revision},
     )
     assert preview.status_code == 200, preview.text
     result = preview.json()
@@ -216,7 +239,7 @@ def test_changed_telemetry_cannot_activate_cached_preview(
         headers=AUTH,
         json={
             "expected_revision": system["revision"],
-            "values": {"fixed_stored_charge_percent": 40.0},
+            "values": {"fixed_stored_soc_percent": 40.0},
         },
     )
     assert changed.status_code == 200, changed.text
@@ -236,7 +259,6 @@ def test_changed_telemetry_cannot_activate_cached_preview(
         headers=AUTH,
         json={
             "token": result["token"],
-            "constraints": [],
             "expected_revision": constraints_revision,
         },
     )

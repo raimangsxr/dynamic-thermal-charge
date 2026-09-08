@@ -28,7 +28,7 @@ import type {
   StatusDto,
   PlanningDto,
   PlanningSiteConfigDto,
-  PlanningConstraintRequest, PlanningPreviewDto, PlanningPreviewJobDto, AutomaticPlanAuditPage,
+  TemperatureTargetRequest, PlanningPreviewDto, PlanningPreviewJobDto, AutomaticPlanAuditPage,
   ControllerLogPageDto, ControllerLogLevel,
   TransitionHistoryDto,
   RelayTestStartDto, RelayTestViewDto,
@@ -71,11 +71,11 @@ export class Api {
     });
   }
 
-  planningPreview(constraints: PlanningConstraintRequest[], expectedRevision?: number): Observable<PlanningPreviewDto> {
-    return this.http.post<PlanningPreviewDto>(`${BASE}/planning/preview`, { constraints, expected_revision: expectedRevision });
+  planningPreview(temperatureTargets: TemperatureTargetRequest[], expectedRevision?: number): Observable<PlanningPreviewDto> {
+    return this.http.post<PlanningPreviewDto>(`${BASE}/planning/preview`, { temperature_targets: temperatureTargets, expected_revision: expectedRevision });
   }
-  planningPreviewJobStart(constraints: PlanningConstraintRequest[], expectedRevision?: number): Observable<PlanningPreviewJobDto> {
-    return this.http.post<PlanningPreviewJobDto>(`${BASE}/planning/preview/jobs`, { constraints, expected_revision: expectedRevision });
+  planningPreviewJobStart(temperatureTargets: TemperatureTargetRequest[], expectedRevision?: number): Observable<PlanningPreviewJobDto> {
+    return this.http.post<PlanningPreviewJobDto>(`${BASE}/planning/preview/jobs`, { temperature_targets: temperatureTargets, expected_revision: expectedRevision });
   }
   planningPreviewJob(jobId: string): Observable<PlanningPreviewJobDto> {
     return this.http.get<PlanningPreviewJobDto>(`${BASE}/planning/preview/jobs/${encodeURIComponent(jobId)}`);
@@ -83,8 +83,8 @@ export class Api {
   planningPreviewJobCancel(jobId: string): Observable<PlanningPreviewJobDto> {
     return this.http.post<PlanningPreviewJobDto>(`${BASE}/planning/preview/jobs/${encodeURIComponent(jobId)}/cancel`, {});
   }
-  planningActivate(token: string, constraints: PlanningConstraintRequest[], expectedRevision: number): Observable<PlanningPreviewDto> {
-    return this.http.post<PlanningPreviewDto>(`${BASE}/planning/activate`, { token, constraints, expected_revision: expectedRevision });
+  planningActivate(token: string, temperatureTargets: TemperatureTargetRequest[], expectedRevision: number): Observable<PlanningPreviewDto> {
+    return this.http.post<PlanningPreviewDto>(`${BASE}/planning/activate`, { token, temperature_targets: temperatureTargets, expected_revision: expectedRevision });
   }
 
   controllerLog(query: { limit?: number; beforeId?: number; afterId?: number; level?: ControllerLogLevel; q?: string } = {}): Observable<ControllerLogPageDto> {

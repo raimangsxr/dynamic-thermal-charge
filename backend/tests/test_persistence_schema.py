@@ -93,7 +93,6 @@ def test_deleting_an_installation_cascades_to_its_heaters(sqlite_url):
                 name="Salon",
                 power_w=1500,
                 full_charge_minutes=480,
-                target_charge=1.0,
                 priority=0,
                 enabled=True,
                 position=0,
@@ -138,7 +137,6 @@ def test_a_gpio_output_without_a_pin_is_rejected(sqlite_url):
                 name="Salon",
                 power_w=1500,
                 full_charge_minutes=480,
-                target_charge=1.0,
                 priority=0,
                 enabled=True,
                 position=0,
@@ -160,6 +158,7 @@ def test_the_schema_declares_every_expected_table():
         "heater",
         "output_config",
         "thermal_profile",
+        "temperature_target",
             "forecast",
             "forecast_hour",
         "plan",
@@ -194,6 +193,8 @@ def test_indoor_configuration_columns_have_compatible_defaults():
 
 
 def test_migrating_from_0002_preserves_existing_configuration(sqlite_url):
+    from dataclasses import replace
+
     from alembic import command
 
     from dynamic_thermal_charge.persistence.bootstrap import initialise, open_legacy_store
@@ -207,7 +208,15 @@ def test_migrating_from_0002_preserves_existing_configuration(sqlite_url):
     command.upgrade(_config(store.engine), "head")
 
     config_after, revision_after = store.repository.current()
-    assert config_after == config_before
+    expected = replace(
+        config_before,
+        heaters=tuple(
+            replace(heater, temperature_targets=())
+            for heater in config_before.heaters
+        ),
+    )
+    assert config_after == expected
+    assert all(not heater.temperature_targets for heater in config_after.heaters)
     assert revision_after == revision_before
 
 

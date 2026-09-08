@@ -142,7 +142,7 @@ def test_planning_endpoint_returns_hourly_series_and_all_intervals(
         )
     )
     for heater in config.heaters:
-        for field, value in (("temperature_c", 21), ("target_temperature_c", 21), ("stored_charge_percent", 100)):
+        for field, value in (("indoor_temperature_c", 21), ("stored_soc_percent", 100)):
             initialised_store.planning.record_telemetry(heater.id, field, value, API_NOW)
     activated = client.post(
         "/api/v1/planning/activate",
@@ -150,8 +150,8 @@ def test_planning_endpoint_returns_hourly_series_and_all_intervals(
         json={"token": client.post(
             "/api/v1/planning/preview",
             headers=AUTH,
-            json={"constraints": [], "expected_revision": revision},
-        ).json()["token"], "constraints": [], "expected_revision": revision},
+            json={"expected_revision": revision},
+        ).json()["token"], "expected_revision": revision},
     )
     assert activated.status_code == 200, activated.text
     response = client.get("/api/v1/planning", headers=AUTH)
@@ -162,8 +162,12 @@ def test_planning_endpoint_returns_hourly_series_and_all_intervals(
     assert len(body["timeline"]) == 24 * 60 // config.site.slot_minutes
     assert body["horizon_end"]
     assert body["max_total_power_w"] == initialised_store.planning.site()["contracted_power_w"]
-    salon_minutes = [slot["charge_minutes_by_heater"]["salon"] for slot in body["timeline"][:4]]
-    assert salon_minutes[0] >= salon_minutes[-1]
+    first = body["timeline"][0]
+    assert set(first["stored_energy_kwh_by_heater"]) == {heater.id for heater in config.heaters}
+    assert set(first["indoor_temperature_c_by_heater"]) == {heater.id for heater in config.heaters}
+    assert set(first["target_temperature_c_by_heater"]) == {heater.id for heater in config.heaters}
+    assert set(first["heat_delivered_kwh_by_heater"]) == {heater.id for heater in config.heaters}
+    assert set(first["thermal_loss_kwh_by_heater"]) == {heater.id for heater in config.heaters}
 
 
 def test_planning_endpoint_excludes_past_forecast_hours(
@@ -264,14 +268,23 @@ def test_planning_endpoint_prefers_automatic_plan_slot_minutes_over_legacy_plan(
     assert (slot_end - slot_start).total_seconds() == 15 * 60
 
 
-def test_planning_estimated_temperature_interpolates_between_outdoor_and_target():
-    from dynamic_thermal_charge.api.routes.planning import _estimate_accumulator_temperature
+def test_planning_projection_reports_signed_room_exchange():
+    from dynamic_thermal_charge.charge_planning import room_energy_step
     from dynamic_thermal_charge.persistence.seed import example_installation
 
     heater = example_installation().heaters[0]
-    assert _estimate_accumulator_temperature(heater, 17.0, 0.0) == pytest.approx(17.0)
-    assert _estimate_accumulator_temperature(heater, 17.0, 100.0) == pytest.approx(21.0)
-    assert _estimate_accumulator_temperature(heater, 17.0, 50.0) == pytest.approx(19.0)
+    interval = room_energy_step(
+        heater,
+        start=API_NOW,
+        outdoor_temperature_c=25.0,
+        target_temperature_c=21.0,
+        indoor_temperature_c=20.0,
+        stored_energy_kwh=heater.capacity_kwh,
+        slot_minutes=60,
+        heat_delivered_kwh=0.0,
+    )
+    assert interval.thermal_loss_kwh == pytest.approx(-0.6)
+    assert interval.indoor_temperature_next_c == pytest.approx(20.24)
 
 
 def test_planning_timeline_matches_plan_slots_by_index_not_exact_datetime_keys(
@@ -310,6 +323,13 @@ def test_planning_timeline_matches_plan_slots_by_index_not_exact_datetime_keys(
                 {heater.id: 10.0 * (index + 1) for heater in config.heaters},
                 {heater.id: 0.0 for heater in config.heaters},
                 outdoor_temperature_c=6.0,
+                indoor_temperature_c={heater.id: 20.0 for heater in config.heaters},
+                stored_energy_kwh={heater.id: 2.5 for heater in config.heaters},
+                target_temperature_c={heater.id: 21.0 for heater in config.heaters},
+                heat_delivered_kwh={heater.id: 0.5 for heater in config.heaters},
+                thermal_loss_kwh={heater.id: 0.1 for heater in config.heaters},
+                temperature_shortfall_c={heater.id: 0.5 for heater in config.heaters},
+                charge_energy_kwh={heater.id: 1.4 for heater in config.heaters},
             )
         )
         cursor = end
@@ -337,8 +357,8 @@ def test_planning_timeline_matches_plan_slots_by_index_not_exact_datetime_keys(
     body = response.json()
     for plan_slot, timeline_slot in zip(body["plan"]["slots"], body["timeline"]):
         assert set(plan_slot["heater_ids"]) == set(timeline_slot["heater_ids"])
-        assert timeline_slot["stored_charge_percent_by_heater"]
-        assert timeline_slot["estimated_temperature_c_by_heater"]
+        assert timeline_slot["stored_energy_kwh_by_heater"]
+        assert timeline_slot["indoor_temperature_c_by_heater"]
     assert body["timeline"][0]["heater_ids"]
     assert body["timeline"][1]["heater_ids"]
     assert body["timeline"][0]["heater_ids"] != body["timeline"][1]["heater_ids"]
@@ -598,9 +618,6 @@ def test_planning_config_endpoint_updates_site_parameters(client):
             "aemet_query_hour": current["aemet_query_hour"],
             "contracted_power_w": current["contracted_power_w"],
             "max_heating_power_w": current["max_heating_power_w"],
-            "design_indoor_temperature_c": current["design_indoor_temperature_c"],
-            "design_outdoor_temperature_c": current["design_outdoor_temperature_c"],
-            "feedback_horizon_hours": current["feedback_horizon_hours"],
             "mqtt_simulation_enabled": True,
             "mqtt_simulation_initial_temperature_c": 42.0,
             "mqtt_simulation_publish_seconds": 15.0,
@@ -635,9 +652,6 @@ def test_planning_config_rejects_invalid_durations(client, window_hours, horizon
             "aemet_query_hour": current["aemet_query_hour"],
             "contracted_power_w": current["contracted_power_w"],
             "max_heating_power_w": current["max_heating_power_w"],
-            "design_indoor_temperature_c": current["design_indoor_temperature_c"],
-            "design_outdoor_temperature_c": current["design_outdoor_temperature_c"],
-            "feedback_horizon_hours": current["feedback_horizon_hours"],
         },
     )
     assert response.status_code == 422
@@ -659,9 +673,6 @@ def test_planning_config_rejects_invalid_solver_time_limit_without_persisting(cl
             "contracted_power_w": current["contracted_power_w"],
             "max_heating_power_w": current["max_heating_power_w"],
             "base_load_w": current["base_load_w"],
-            "design_indoor_temperature_c": current["design_indoor_temperature_c"],
-            "design_outdoor_temperature_c": current["design_outdoor_temperature_c"],
-            "feedback_horizon_hours": current["feedback_horizon_hours"],
         },
     )
     assert response.status_code == 422, response.text
@@ -685,9 +696,6 @@ def test_planning_config_updates_solver_time_limit(client):
             "contracted_power_w": current["contracted_power_w"],
             "max_heating_power_w": current["max_heating_power_w"],
             "base_load_w": current["base_load_w"],
-            "design_indoor_temperature_c": current["design_indoor_temperature_c"],
-            "design_outdoor_temperature_c": current["design_outdoor_temperature_c"],
-            "feedback_horizon_hours": current["feedback_horizon_hours"],
         },
     )
     assert response.status_code == 200, response.text
@@ -712,7 +720,6 @@ def test_preview_build_receives_the_persisted_solver_time_limit(monkeypatch, ini
     planning_route._build_automatic_plan(
         initialised_store,
         API_NOW,
-        (),
         initialised_store.planning.site(),
     )
 

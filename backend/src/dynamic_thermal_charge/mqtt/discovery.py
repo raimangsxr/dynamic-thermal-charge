@@ -252,18 +252,6 @@ def discovery_entities(
                     payload_on="ON",
                     payload_off="OFF",
                 ),
-                _entity(
-                    **common,
-                    key=f"heater_{heater.id}_target_charge",
-                    component="number",
-                    entity="target_charge",
-                    name="Carga objetivo",
-                    value="target_charge",
-                    command_topic=topics.command(heater.id, "target_charge"),
-                    min=0,
-                    max=1,
-                    step=0.01,
-                ),
             ]
         )
         for field, label in (

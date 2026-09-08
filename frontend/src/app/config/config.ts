@@ -76,23 +76,20 @@ export interface HeaterForm {
   model: string;
   power_kw: string;
   full_charge_hours: string;
-  target_charge: string;
-  reserve_percent: string;
-  demand_factor: string;
+  room_thermal_capacity_kwh_per_c: string;
+  room_heat_loss_kw_per_c: string;
   priority: string;
   enabled: boolean;
   indoor_topic: string;
-  temperature_topic: string;
-  target_temperature_topic: string;
-  stored_charge_topic: string;
+  stored_soc_topic: string;
   output: 'simulated' | 'gpio';
   pin: string;
   active_high: boolean;
 }
 
 const HEATER_EDIT_FIELDS = [
-  'name', 'model', 'power_kw', 'full_charge_hours', 'target_charge', 'reserve_percent', 'demand_factor', 'priority',
-  'enabled', 'indoor_topic', 'temperature_topic', 'target_temperature_topic', 'stored_charge_topic',
+  'name', 'model', 'power_kw', 'full_charge_hours', 'room_thermal_capacity_kwh_per_c', 'room_heat_loss_kw_per_c', 'priority',
+  'enabled', 'indoor_topic', 'stored_soc_topic',
   'output_type', 'pin', 'active_high',
 ] as const;
 
@@ -135,11 +132,10 @@ const HEATER_FORM_FIELDS: readonly HeaterFormFieldMeta[] = [
   { key: 'power_kw', label: 'Potencia nominal (kW)', type: 'number', step: '0.1', required: true },
   { key: 'full_charge_hours', label: 'Carga completa (horas)', type: 'number', step: '0.1', required: true },
   {
-    key: 'target_charge', label: 'Objetivo base (0–1)', type: 'number', min: '0', max: '1', step: '0.01',
-    hint: 'Valor por defecto; las necesidades programadas se definen en Planificación.',
+    key: 'room_thermal_capacity_kwh_per_c', label: 'Capacidad térmica de la sala (kWh/°C)', type: 'number', min: '0.0001', step: '0.1', required: true,
+    hint: 'Energía necesaria para elevar un grado la temperatura interior.',
   },
-  { key: 'reserve_percent', label: 'Reserva de demanda (%)', type: 'number', min: '0', step: '1', hint: 'Margen sobre la demanda estimada.' },
-  { key: 'demand_factor', label: 'Factor de demanda', type: 'number', min: '0.01', step: '0.05' },
+  { key: 'room_heat_loss_kw_per_c', label: 'Pérdida térmica de la sala (kW/°C)', type: 'number', min: '0', step: '0.01', required: true, hint: 'Intercambio térmico firmado frente al exterior.' },
   { key: 'priority', label: 'Prioridad', type: 'number', hint: 'Un número menor significa mayor prioridad.' },
   {
     key: 'enabled', label: 'Estado', type: 'select',
@@ -155,15 +151,13 @@ const HEATER_FORM_FIELDS: readonly HeaterFormFieldMeta[] = [
     selectOptions: [{ value: true, label: 'Alto' }, { value: false, label: 'Bajo' }],
   },
   { key: 'indoor_topic', label: 'Tópico de temperatura interior', type: 'text' },
-  { key: 'temperature_topic', label: 'Tópico de temperatura', type: 'text' },
-  { key: 'target_temperature_topic', label: 'Tópico de objetivo', type: 'text' },
-  { key: 'stored_charge_topic', label: 'Tópico de carga almacenada', type: 'text' },
+  { key: 'stored_soc_topic', label: 'Tópico de SOC almacenado', type: 'text' },
 ];
 
 const HEATER_FORM_GROUPS = [
-  { title: 'Identificación y capacidad', fields: ['id', 'name', 'model', 'power_kw', 'full_charge_hours'] },
-  { title: 'Comportamiento de carga', fields: ['target_charge', 'reserve_percent', 'demand_factor', 'priority', 'enabled'] },
-  { title: 'Salida y telemetría', fields: ['output', 'pin', 'active_high', 'indoor_topic', 'temperature_topic', 'target_temperature_topic', 'stored_charge_topic'] },
+  { title: 'Identificación y acumulador', fields: ['id', 'name', 'model', 'power_kw', 'full_charge_hours'] },
+  { title: 'Modelo térmico y prioridad', fields: ['room_thermal_capacity_kwh_per_c', 'room_heat_loss_kw_per_c', 'priority', 'enabled'] },
+  { title: 'Salida y telemetría', fields: ['output', 'pin', 'active_high', 'indoor_topic', 'stored_soc_topic'] },
 ] as const;
 
 const WEATHER_PROVIDERS: readonly Option[] = [
@@ -189,9 +183,6 @@ const PLANNING_FIELDS: readonly FieldDefinition[] = [
   { name: 'contracted_power_w', label: 'Potencia total contratada (W)', type: 'number', min: '1', step: '100', hint: 'Fuente única para el optimizador y el indicador de Estado.' },
   { name: 'max_heating_power_w', label: 'Límite de calefacción (W)', type: 'number', min: '1', step: '100' },
   { name: 'base_load_w', label: 'Consumo base estimado (W)', type: 'number', min: '0', step: '100' },
-  { name: 'design_indoor_temperature_c', label: 'Temperatura interior de diseño (°C)', type: 'number', step: '0.1' },
-  { name: 'design_outdoor_temperature_c', label: 'Temperatura exterior de diseño (°C)', type: 'number', step: '0.1' },
-  { name: 'feedback_horizon_hours', label: 'Histórico para feedback (horas)', type: 'number', min: '0', step: '1' },
   { name: 'mqtt_simulation_enabled', label: 'Activar simulación MQTT', type: 'boolean' },
   { name: 'mqtt_simulation_initial_temperature_c', label: 'Temperatura inicial simulada (°C)', type: 'number', step: '0.1' },
   { name: 'mqtt_simulation_publish_seconds', label: 'Publicación simulada (s)', type: 'number', min: '1', step: '1' },
@@ -222,9 +213,7 @@ const SYSTEM_FIELDS: Record<SystemSection, readonly FieldDefinition[]> = {
     { name: 'prefix', label: 'Prefijo de tópicos', type: 'text' },
     { name: 'discovery_prefix', label: 'Prefijo de descubrimiento', type: 'text' },
     { name: 'publish_seconds', label: 'Publicación de estado (s)', type: 'number', min: '1', step: '1' },
-    { name: 'fixed_temperature_c', label: 'Temperatura fija del acumulador (°C)', type: 'number', step: '0.1' },
-    { name: 'fixed_target_temperature_c', label: 'Objetivo fijo del acumulador (°C)', type: 'number', step: '0.1' },
-    { name: 'fixed_stored_charge_percent', label: 'Carga almacenada fija (%)', type: 'number', min: '0', max: '100', step: '1' },
+    { name: 'fixed_stored_soc_percent', label: 'SOC almacenado fijo (%)', type: 'number', min: '0', max: '100', step: '1' },
     { name: 'fixed_indoor_temperature_c', label: 'Temperatura interior fija (°C)', type: 'number', step: '0.1' },
   ],
   weather: [
@@ -439,7 +428,7 @@ export class Config {
     if (section === 'mqtt') {
       const enabled = fields[0];
       return this.mqttEnabled()
-        ? [{ title: 'Conexión MQTT', description: 'Broker y publicación de estados de los acumuladores.', fields: [enabled, ...fields.slice(1, 7)] }, { title: 'Valores fijos de prueba', description: 'Se conservan para pruebas cuando MQTT está desactivado.', fields: fields.slice(7) }]
+        ? [{ title: 'Conexión MQTT', description: 'Broker y publicación de temperatura interior y SOC de los acumuladores.', fields: [enabled, ...fields.slice(1, 7)] }, { title: 'Valores fijos de prueba', description: 'Se conservan para pruebas cuando MQTT está desactivado.', fields: fields.slice(7) }]
         : [{ title: 'Modo de integración', fields: [enabled] }, { title: 'Valores fijos de prueba', description: 'Se usan para todos los acumuladores mientras MQTT está desactivado.', fields: fields.slice(7) }];
     }
     if (section === 'weather') {
@@ -454,9 +443,8 @@ export class Config {
   planningGroups(): readonly FieldGroup[] {
     return [
       { title: 'Cadencia y horizonte', description: 'Define cuánto mira el optimizador y cuándo vuelve a calcular.', fields: PLANNING_FIELDS.slice(0, 5) },
-      { title: 'Límites de potencia', description: 'La potencia contratada total es la fuente única que usa el optimizador y Estado.', fields: PLANNING_FIELDS.slice(5, 7) },
-      { title: 'Modelo de demanda', fields: PLANNING_FIELDS.slice(7, 11) },
-      { title: 'Simulación MQTT de acumuladores', description: 'Solo se usa para pruebas controladas.', fields: PLANNING_FIELDS.slice(11) },
+      { title: 'Límites de potencia', description: 'La potencia contratada total es la fuente única que usa el optimizador y Estado.', fields: PLANNING_FIELDS.slice(5, 8) },
+      { title: 'Simulación MQTT de acumuladores', description: 'Solo se usa para pruebas controladas.', fields: PLANNING_FIELDS.slice(8) },
     ];
   }
   mqttEnabled(): boolean {
@@ -564,15 +552,15 @@ export class Config {
     this.activeArea.set('heaters');
     this.heaterFormMode.set('add');
     this.heaterFormError.set('');
-    this.heaterForm.set({ id: '', name: '', model: '', power_kw: '1', full_charge_hours: '8', target_charge: '1', reserve_percent: '0', demand_factor: '1', priority: '0', enabled: true, indoor_topic: '', temperature_topic: '', target_temperature_topic: '', stored_charge_topic: '', output: 'simulated', pin: '', active_high: true });
+    this.heaterForm.set({ id: '', name: '', model: '', power_kw: '1', full_charge_hours: '8', room_thermal_capacity_kwh_per_c: '2.5', room_heat_loss_kw_per_c: '0.12', priority: '0', enabled: true, indoor_topic: '', stored_soc_topic: '', output: 'simulated', pin: '', active_high: true });
   }
   openEditHeater(heater: ConfigDto['heaters'][number]): void {
     this.activeArea.set('heaters');
     this.heaterFormMode.set('edit');
     this.heaterFormError.set('');
     this.heaterForm.set({
-      id: heater.id, name: heater.name, model: heater.model ?? '', power_kw: String(heater.power_kw), full_charge_hours: String(heater.full_charge_hours), target_charge: String(heater.target_charge), reserve_percent: String(heater.reserve_percent), demand_factor: String(heater.demand_factor), priority: String(heater.priority), enabled: heater.enabled, indoor_topic: heater.indoor_topic ?? '',
-      temperature_topic: heater.temperature_topic ?? '', target_temperature_topic: heater.target_temperature_topic ?? '', stored_charge_topic: heater.stored_charge_topic ?? '', output: heater.output.kind, pin: heater.output.pin === null ? '' : String(heater.output.pin), active_high: heater.output.active_high,
+      id: heater.id, name: heater.name, model: heater.model ?? '', power_kw: String(heater.power_kw), full_charge_hours: String(heater.full_charge_hours), room_thermal_capacity_kwh_per_c: String(heater.room_thermal_capacity_kwh_per_c), room_heat_loss_kw_per_c: String(heater.room_heat_loss_kw_per_c), priority: String(heater.priority), enabled: heater.enabled, indoor_topic: heater.indoor_topic ?? '',
+      stored_soc_topic: heater.stored_soc_topic ?? '', output: heater.output.kind, pin: heater.output.pin === null ? '' : String(heater.output.pin), active_high: heater.output.active_high,
     });
   }
   cancelHeaterForm(): void { this.heaterForm.set(null); this.heaterFormMode.set(null); this.heaterFormError.set(''); }
@@ -586,16 +574,17 @@ export class Config {
       this.heaterFormError.set('Indica un identificador, una potencia y un tiempo de carga válidos.');
       return;
     }
-    if (!this.validNumber(form.demand_factor) || Number(form.demand_factor) <= 0 || !this.validNumber(form.reserve_percent) || Number(form.reserve_percent) < 0) {
-      this.heaterFormError.set('El factor de demanda debe ser positivo y la reserva no negativa.');
+    if (!this.validNumber(form.room_thermal_capacity_kwh_per_c) || Number(form.room_thermal_capacity_kwh_per_c) <= 0 || !this.validNumber(form.room_heat_loss_kw_per_c) || Number(form.room_heat_loss_kw_per_c) < 0) {
+      this.heaterFormError.set('La capacidad térmica debe ser positiva y la pérdida térmica no negativa.');
       return;
     }
     this.heaterSaving.set(true);
     if (this.heaterFormMode() === 'add') {
       const payload: AddHeaterRequest = {
         revision: snapshot.config_revision, id: form.id.trim(), name: form.name.trim() || undefined, model: form.model.trim() || undefined,
-        power_kw: Number(form.power_kw), full_charge_hours: Number(form.full_charge_hours), target_charge: Number(form.target_charge), reserve_percent: Number(form.reserve_percent), demand_factor: Number(form.demand_factor), priority: Number(form.priority), enabled: form.enabled,
-        indoor_topic: form.indoor_topic.trim() || null, temperature_topic: form.temperature_topic.trim() || null, target_temperature_topic: form.target_temperature_topic.trim() || null, stored_charge_topic: form.stored_charge_topic.trim() || null, output: form.output, pin: form.pin.trim() ? Number(form.pin) : null, active_high: form.active_high,
+        power_kw: Number(form.power_kw), full_charge_hours: Number(form.full_charge_hours), room_thermal_capacity_kwh_per_c: Number(form.room_thermal_capacity_kwh_per_c), room_heat_loss_kw_per_c: Number(form.room_heat_loss_kw_per_c), priority: Number(form.priority), enabled: form.enabled,
+        indoor_topic: form.indoor_topic.trim() || null, stored_soc_topic: form.stored_soc_topic.trim() || null, output: form.output, pin: form.pin.trim() ? Number(form.pin) : null, active_high: form.active_high,
+        temperature_targets: [],
       };
       this.api.addHeater(payload).subscribe({ next: (change) => this.finishHeaterSave(`Acumulador creado: ${change.entity_key ?? form.id}`), error: (error: unknown) => this.rejectHeater(error) });
       return;
@@ -681,8 +670,8 @@ export class Config {
     const revision = this.config()?.config_revision;
     if (!form || revision === undefined) return;
     const payload: UpdateHeaterRequest = {
-      revision, name: form.name.trim(), model: form.model.trim() || null, power_kw: Number(form.power_kw), full_charge_hours: Number(form.full_charge_hours), target_charge: Number(form.target_charge), reserve_percent: Number(form.reserve_percent), demand_factor: Number(form.demand_factor), priority: Number(form.priority), enabled: form.enabled,
-      indoor_topic: form.indoor_topic.trim() || null, temperature_topic: form.temperature_topic.trim() || null, target_temperature_topic: form.target_temperature_topic.trim() || null, stored_charge_topic: form.stored_charge_topic.trim() || null, output: form.output, pin: form.pin.trim() ? Number(form.pin) : null, active_high: form.active_high,
+      revision, name: form.name.trim(), model: form.model.trim() || null, power_kw: Number(form.power_kw), full_charge_hours: Number(form.full_charge_hours), room_thermal_capacity_kwh_per_c: Number(form.room_thermal_capacity_kwh_per_c), room_heat_loss_kw_per_c: Number(form.room_heat_loss_kw_per_c), priority: Number(form.priority), enabled: form.enabled,
+      indoor_topic: form.indoor_topic.trim() || null, stored_soc_topic: form.stored_soc_topic.trim() || null, output: form.output, pin: form.pin.trim() ? Number(form.pin) : null, active_high: form.active_high,
     };
     this.heaterSaving.set(true);
     this.api.updateHeater(heaterId, payload).subscribe({
@@ -716,7 +705,7 @@ export class Config {
     const number = (name: string): number => Number(this.planningValue(name));
     const values = {
       replan_minutes: number('replan_minutes'), planning_window_hours: number('planning_window_hours'), forecast_horizon_hours: number('forecast_horizon_hours'), aemet_query_hour: number('aemet_query_hour'), solver_time_limit_seconds: number('solver_time_limit_seconds'),
-      contracted_power_w: number('contracted_power_w'), max_heating_power_w: number('max_heating_power_w'), base_load_w: number('base_load_w'), design_indoor_temperature_c: number('design_indoor_temperature_c'), design_outdoor_temperature_c: number('design_outdoor_temperature_c'), feedback_horizon_hours: number('feedback_horizon_hours'),
+      contracted_power_w: number('contracted_power_w'), max_heating_power_w: number('max_heating_power_w'), base_load_w: number('base_load_w'),
       mqtt_simulation_enabled: this.planningValue('mqtt_simulation_enabled') === true || this.planningValue('mqtt_simulation_enabled') === 'true', mqtt_simulation_initial_temperature_c: number('mqtt_simulation_initial_temperature_c'), mqtt_simulation_publish_seconds: number('mqtt_simulation_publish_seconds'), mqtt_simulation_topic_prefix: String(this.planningValue('mqtt_simulation_topic_prefix')), mqtt_simulation_thermal_loss_c_per_hour: number('mqtt_simulation_thermal_loss_c_per_hour'),
     };
     this.planningSaving.set(true);

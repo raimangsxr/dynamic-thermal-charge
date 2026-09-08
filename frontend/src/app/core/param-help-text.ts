@@ -28,12 +28,10 @@ const HEATER: Record<string, string> = {
     'Potencia nominal del resistivo (kW). El optimizador usa este valor para calcular cuánta energía puede cargar en cada intervalo.',
   full_charge_hours:
     'Horas necesarias a potencia plena para llenar el acumulador. Define la capacidad energética (kWh) junto con la potencia.',
-  target_charge:
-    'Objetivo base (0–1) del acumulador. Las necesidades concretas por hora y día se configuran como restricciones en Planificación.',
-  reserve_percent:
-    'Margen multiplicativo (%) sobre la demanda estimada del modelo degree-hours. Aumenta la energía objetivo sin cambiar el factor base.',
-  demand_factor:
-    'Factor multiplicativo de la demanda térmica estimada. Valores mayores planifican más carga; debe ser positivo.',
+  room_thermal_capacity_kwh_per_c:
+    'Capacidad térmica efectiva de la sala (kWh/°C). El balance usa esta constante para convertir calor neto en variación de temperatura.',
+  room_heat_loss_kw_per_c:
+    'Coeficiente de intercambio térmico de la sala (kW/°C). La pérdida se firma según la diferencia entre interior y exterior.',
   priority:
     'Orden de preferencia cuando la potencia disponible no alcanza para todos. Menor número = mayor prioridad.',
   enabled:
@@ -45,11 +43,7 @@ const HEATER: Record<string, string> = {
     'Nivel lógico que energiza el relé: alto (3,3 V) o bajo (0 V). Debe coincidir con el cableado.',
   indoor_topic:
     'Tópico MQTT de temperatura interior. Si está vacío, se usa el prefijo global y el identificador del acumulador.',
-  temperature_topic:
-    'Tópico MQTT de temperatura del acumulador. Obligatorio para planificación automática con MQTT habilitado.',
-  target_temperature_topic:
-    'Tópico MQTT del objetivo de temperatura del acumulador.',
-  stored_charge_topic:
+  stored_soc_topic:
     'Tópico MQTT del estado de carga almacenada (%). La planificación automática lo usa como SOC inicial.',
 };
 
@@ -81,12 +75,8 @@ const SYSTEM: Record<string, Record<string, string>> = {
     prefix: 'Prefijo base de los tópicos publicados por este sistema.',
     discovery_prefix: 'Prefijo de descubrimiento para integraciones tipo Home Assistant.',
     publish_seconds: 'Intervalo entre publicaciones periódicas de estado al broker.',
-    fixed_temperature_c:
-      'Temperatura fija del acumulador usada en planificación cuando MQTT está desactivado.',
-    fixed_target_temperature_c:
-      'Objetivo de temperatura fijo usado en planificación cuando MQTT está desactivado.',
-    fixed_stored_charge_percent:
-      'Carga almacenada fija (%) usada como SOC en planificación cuando MQTT está desactivado.',
+    fixed_stored_soc_percent:
+      'SOC almacenado fijo (%) usado como telemetría simulada cuando MQTT está desactivado.',
     fixed_indoor_temperature_c:
       'Temperatura interior fija usada en el modelo de demanda cuando MQTT está desactivado.',
   },
@@ -108,7 +98,7 @@ const SYSTEM: Record<string, Record<string, string>> = {
   },
   planning: {
     replan_minutes:
-      'Cadencia prevista de replanificación automática. Guardado en configuración; el runtime puede replanificar también al cambiar restricciones o forecast.',
+      'Cadencia prevista de replanificación automática. Guardado en configuración; el runtime puede replanificar también al cambiar consignas o forecast.',
     solver_time_limit_seconds:
       'Tiempo máximo total (segundos) que el optimizador puede dedicar a una planificación. Debe ser un entero positivo.',
     aemet_query_hour:
@@ -119,20 +109,14 @@ const SYSTEM: Record<string, Record<string, string>> = {
       'Límite de potencia dedicada a calefacción/acumuladores (W) en el optimizador.',
     base_load_w:
       'Carga base simultánea de la vivienda (W), que se descuenta de la potencia contratada.',
-    design_indoor_temperature_c:
-      'Temperatura interior de diseño (°C) del modelo degree-hours para estimar demanda.',
-    design_outdoor_temperature_c:
-      'Temperatura exterior de diseño (°C). Debe ser inferior a la interior de diseño.',
-    feedback_horizon_hours:
-      'Horas de histórico de temperatura interior usadas para ajustar la demanda estimada.',
     mqtt_simulation_enabled:
       'Activa un cliente MQTT que publica telemetría simulada de acumuladores. Requiere MQTT habilitado en Configuración → Integraciones.',
     mqtt_simulation_initial_temperature_c:
       'Temperatura inicial (°C) de todos los acumuladores al arrancar o reiniciar la simulación.',
     mqtt_simulation_publish_seconds:
-      'Intervalo entre publicaciones MQTT de temperatura, objetivo y carga almacenada simuladas.',
+      'Intervalo entre publicaciones MQTT de temperatura interior y SOC almacenado simulados.',
     mqtt_simulation_topic_prefix:
-      'Prefijo base de los tópicos simulados. Cada acumulador publica en {prefijo}/{id}/temperature (y target/stored_charge) salvo que tenga tópicos propios configurados.',
+      'Prefijo base de los tópicos simulados. Cada acumulador publica temperatura interior y SOC salvo que tenga tópicos propios configurados.',
     mqtt_simulation_thermal_loss_c_per_hour:
       'Pérdida térmica general (°C/h) aplicada a todos los acumuladores en reposo. Se invierte mientras el acumulador está cargando.',
   },
