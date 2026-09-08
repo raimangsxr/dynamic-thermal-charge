@@ -5,10 +5,15 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, update
 
+from dynamic_thermal_charge.charge_planning import (
+    AutomaticPlan,
+    AutomaticPlanSlot,
+)
 from dynamic_thermal_charge.persistence.mapping import from_utc
 from dynamic_thermal_charge.persistence.schema import (
+    automatic_plan,
     forecast as forecast_table,
     output_transition,
     plan as plan_table,
@@ -382,3 +387,88 @@ def test_instants_come_back_as_aware_utc(initialised_store, reader):
     for item in reader.plans().items:
         assert item["created_at"].tzinfo is not None
         assert item["created_at"].utcoffset() == timedelta(0)
+
+
+def test_combined_plan_history_keeps_source_when_ids_and_instants_collide(
+    initialised_store, recorder, reader
+):
+    """Automatic and legacy tables have independent integer identities."""
+    legacy_ref = recorder.record_plan(_plan(initialised_store), None, 1)
+    assert legacy_ref is not None
+
+    automatic = AutomaticPlan(
+        WINDOW_START,
+        WINDOW_START + timedelta(minutes=30),
+        30,
+        (
+            AutomaticPlanSlot(
+                WINDOW_START,
+                WINDOW_START + timedelta(minutes=30),
+                (),
+                0,
+                {},
+                {},
+            ),
+        ),
+        (),
+        "FEASIBLE",
+        (),
+        "automatic-history",
+        WINDOW_START,
+    )
+    automatic_id = initialised_store.planning.save_plan(
+        automatic,
+        configuration_revision=1,
+        constraints_revision=initialised_store.planning.site()["revision"],
+        reason="activated",
+        active=False,
+    )
+    with initialised_store.engine.begin() as connection:
+        connection.execute(
+            update(automatic_plan)
+            .where(automatic_plan.c.id == automatic_id)
+            .values(created_at=WINDOW_START.replace(tzinfo=None))
+        )
+
+    first = reader.plans(limit=1)
+    assert [(item["source"], item["id"]) for item in first.items] == [
+        ("automatic", automatic_id)
+    ]
+    assert first.has_more
+
+    second = reader.plans(limit=1, cursor=first.next_cursor)
+    assert [(item["source"], item["id"]) for item in second.items] == [
+        ("legacy", legacy_ref.id)
+    ]
+
+
+def test_automatic_plan_status_aliases_are_read_as_canonical_codes(initialised_store):
+    automatic = AutomaticPlan(
+        WINDOW_START,
+        WINDOW_START + timedelta(minutes=30),
+        30,
+        (
+            AutomaticPlanSlot(
+                WINDOW_START,
+                WINDOW_START + timedelta(minutes=30),
+                (),
+                0,
+                {},
+                {},
+            ),
+        ),
+        (),
+        "feasible",
+        (),
+        "status-alias",
+        WINDOW_START,
+    )
+    initialised_store.planning.save_plan(
+        automatic,
+        configuration_revision=1,
+        constraints_revision=initialised_store.planning.site()["revision"],
+        reason="preview",
+        active=False,
+    )
+
+    assert initialised_store.planning.latest_plan()["status"] == "FEASIBLE"

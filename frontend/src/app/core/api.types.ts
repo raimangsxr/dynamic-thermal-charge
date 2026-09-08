@@ -140,6 +140,7 @@ export interface PlanningSiteConfigDto {
 
 export interface PlanningDto {
   observed_at: string;
+  timezone?: string;
   max_total_power_w: number;
   max_heating_power_w: number;
   base_load_w: number;
@@ -161,6 +162,8 @@ export interface PlanningDto {
   forecast_last_attempt_at?: string | null;
   forecast_last_error?: string | null;
   forecast_next_run_at?: string | null;
+  forecast_next_run_kind?: string | null;
+  forecast_stale?: boolean | null;
   preview_job?: PlanningPreviewJobDto | null;
 }
 
@@ -183,6 +186,7 @@ export interface AllocationDto {
 
 export interface StatusDto {
   observed_at: string;
+  timezone?: string;
   controller: ControllerHealthDto;
   /** Null when the state is not current: an unconfirmable figure is not published. */
   power: PowerDto | null;
@@ -194,6 +198,15 @@ export interface StatusDto {
   telemetry?: ChargeTelemetryDto[];
   plan_status?: string | null;
   deficits?: PlanningDeficitDto[];
+  horizon_start?: string | null;
+  horizon_end?: string | null;
+  absence_reason?: string | null;
+  forecast_status?: string | null;
+  forecast_last_attempt_at?: string | null;
+  forecast_last_error?: string | null;
+  forecast_next_run_at?: string | null;
+  forecast_next_run_kind?: string | null;
+  forecast_stale?: boolean | null;
 }
 
 export type ControllerLogLevel = 'DEBUG' | 'INFO' | 'WARNING' | 'ERROR' | 'CRITICAL';
@@ -319,6 +332,7 @@ export interface PageDto<T> {
   has_more: boolean;
   /** Opaque. Sent back verbatim; never parsed nor constructed. */
   next_cursor: string | null;
+  availability?: 'available' | 'unavailable' | string;
 }
 
 export interface PlanHistoryDto {
@@ -329,6 +343,10 @@ export interface PlanHistoryDto {
   slot_minutes: number;
   installation_revision: number;
   forecast_id: number | null;
+  source?: 'automatic' | 'legacy' | string;
+  status?: string | null;
+  reason?: string | null;
+  active?: boolean | null;
 }
 
 export interface ForecastHistoryDto {
@@ -397,6 +415,7 @@ export interface WeatherRefreshDto {
   forecast_last_attempt_at: string;
   forecast_last_error: string | null;
   forecast_next_run_at: string | null;
+  forecast_next_run_kind?: string | null;
   forecast: PlanningForecastDto | null;
 }
 

@@ -4,6 +4,7 @@
       <p class="eyebrow">Panel operativo</p>
       <h1>Planificación</h1>
       <p class="intro">Consulta el balance energético y térmico, prepara consignas y revisa la previsión.</p>
+      @if (snapshot(); as data) { <p class="observed">Horas de instalación: {{ data.timezone || 'Europe/Madrid' }}</p> }
     </div>
     <button mat-stroked-button type="button" (click)="refresh()"><mat-icon aria-hidden="true">refresh</mat-icon> Actualizar</button>
   </header>
@@ -36,7 +37,7 @@
               <h2>Planificación activa</h2>
               <p class="hint">El plan aceptado por el controlador y sus indicadores operativos.</p>
             </div>
-            @if (data.plan) { <span class="status-chip active-chip">Plan activo</span> }
+            @if (data.plan_status) { <span class="status-chip active-chip">{{ planStatus(data.plan_status) }}</span> }
           </div>
 
           <div class="summary-grid single-summary-grid" data-testid="planning-summaries">
@@ -49,22 +50,30 @@
                 <dl class="summary-list">
                   <div><dt>Ventana</dt><dd>{{ dateTime(plan.window_start) }}–{{ dateTime(plan.window_end) }}</dd></div>
                   <div><dt>Horizonte</dt><dd>{{ dateTime(data.horizon_start) }}–{{ dateTime(data.horizon_end) }}</dd></div>
-                  <div><dt>Intervalos</dt><dd>{{ plan.slots.length }} de {{ plan.slot_minutes }} minutos</dd></div>
+                  <div><dt>Intervalos</dt><dd>{{ plan.slots.length }} intervalos de {{ plan.slot_minutes }} minutos</dd></div>
                   <div><dt>Revisión de configuración</dt><dd>{{ plan.installation_revision }}</dd></div>
+                  <div><dt>Zona horaria</dt><dd>{{ data.timezone || 'Europe/Madrid' }}</dd></div>
                 </dl>
               } @else {
-                <p class="empty">No hay un plan actual ni próximo.</p>
+                @if (data.plan_status === 'INVALID' || data.plan_status === 'invalid') { <p class="empty">El plan automático no es válido.</p><p class="warning">Las salidas permanecen apagadas hasta corregir la planificación.</p> }
+                @else if (data.absence_reason === 'outside_visible_window') { <p class="empty">Hay un plan automático dentro del horizonte, pero ahora está fuera de la ventana visible.</p> }
+                @else { <p class="empty">No hay un plan actual ni próximo.</p> }
               }
             </section>
           </div>
 
           @if (data.plan; as plan) {
-            <p class="window" data-testid="planning-window">Ventana {{ dateTime(plan.window_start) }}–{{ dateTime(plan.window_end) }} · horizonte {{ dateTime(data.horizon_start) }}–{{ dateTime(data.horizon_end) }} · configuración rev. {{ plan.installation_revision }}</p>
+            <p class="window" data-testid="planning-window">Ventana visible {{ dateTime(plan.window_start) }}–{{ dateTime(plan.window_end) }} · horizonte {{ dateTime(data.horizon_start) }}–{{ dateTime(data.horizon_end) }} · configuración rev. {{ plan.installation_revision }}</p>
             @if (hasUnmet(data)) {
               <div class="banner warn" role="alert" data-testid="planning-deficit">
                 <div class="banner-content"><mat-icon aria-hidden="true">warning</mat-icon><div><strong>Carga no atendida</strong><ul>@for (allocation of data.allocations; track allocation.heater_id) {
-                  @if (allocation.unmet_minutes > 0) { <li>{{ allocation.heater_id }}: faltan {{ hours(allocation.unmet_minutes) }} h</li> }
+                  @if (allocation.unmet_minutes > 0) { <li>{{ heaterText(allocation.heater_id) }}: faltan {{ hours(allocation.unmet_minutes) }} h</li> }
                 }</ul></div></div>
+              </div>
+            }
+            @if (hasDeficits(data)) {
+              <div class="banner warn" role="status" data-testid="planning-status-deficits">
+                <div class="banner-content"><mat-icon aria-hidden="true">warning</mat-icon><div><strong>Avisos de planificación</strong><ul>@for (deficit of data.deficits ?? []; track $index) { <li>{{ deficitText(deficit) }}</li> }</ul></div></div>
               </div>
             }
 
@@ -100,7 +109,7 @@
               <h2>Nueva planificación</h2>
               <p class="hint">Ajusta las consignas semanales y comprueba el resultado antes de reemplazar el plan activo.</p>
             </div>
-            @if (preview(); as candidate) { <span class="status-chip" [attr.data-status]="candidate.status">Vista previa {{ candidate.status }}</span> }
+            @if (preview(); as candidate) { <span class="status-chip" [attr.data-status]="candidate.status">Vista previa: {{ planStatus(candidate.status) }}</span> }
           </div>
 
           <section class="constraints" aria-labelledby="targets-title">
@@ -139,8 +148,8 @@
                 @for (check of job.checks; track check.name) { <li class="check" [attr.data-state]="check.status"><span>{{ checkText(check.name) }}</span><strong>{{ checkStatusText(check.status) }}</strong>@if (check.detail) { <small>{{ check.detail }}</small> } @if (check.status === 'error') { <button mat-stroked-button type="button" (click)="openPreviewFailure(job, check)" data-testid="preview-check-failure-button">Ver detalle</button> }</li> }
               </ol>
               @if (job.result; as result) {
-                <div class="operator-result" data-testid="operator-summary"><strong>Resultado para el operador</strong><p>Ventana {{ dateTime(result.window_start) }}–{{ dateTime(result.window_end) }} · horizonte {{ dateTime(result.horizon_start) }}–{{ dateTime(result.horizon_end) }} · previsión AEMET usada: {{ result.operator_summary['forecast'] ? 'sí' : 'no disponible' }}</p><p>Carga prevista: {{ previewSummaryText(result.operator_summary) }}</p><p>{{ result.operator_summary['recommended_action'] }}</p></div>
-                @if (result.temperature_targets.length) { <div class="semantic-table chart-table" role="table" data-testid="target-markers" aria-label="Consignas de temperatura por acumulador"><div role="row" class="semantic-row header"><span role="columnheader">Acumulador</span><span role="columnheader">Objetivo</span><span role="columnheader">Inicio</span><span role="columnheader">Fin</span></div>@for (target of result.temperature_targets; track $index) { <div role="row" class="semantic-row"><span role="cell">{{ target.heater_id }}</span><span role="cell">{{ target.target_temperature_c }} °C</span><span role="cell">{{ target.start_time }}</span><span role="cell">{{ target.end_time }}</span></div> }</div> }
+                <div class="operator-result" data-testid="operator-summary"><strong>Resultado para el operador</strong><p>Ventana {{ dateTime(result.window_start) }}–{{ dateTime(result.window_end) }} · horizonte {{ dateTime(result.horizon_start) }}–{{ dateTime(result.horizon_end) }} · previsión: {{ operatorForecastText(result.operator_summary) }}</p><p>Carga prevista: {{ previewSummaryText(result.operator_summary) }}</p><p>{{ result.operator_summary['recommended_action'] }}</p></div>
+                @if (result.temperature_targets.length) { <div class="semantic-table chart-table" role="table" data-testid="target-markers" aria-label="Consignas de temperatura por acumulador"><div role="row" class="semantic-row header"><span role="columnheader">Acumulador</span><span role="columnheader">Objetivo</span><span role="columnheader">Inicio</span><span role="columnheader">Fin</span></div>@for (target of result.temperature_targets; track $index) { <div role="row" class="semantic-row"><span role="cell">{{ heaterText(target.heater_id) }}</span><span role="cell">{{ target.target_temperature_c }} °C</span><span role="cell">{{ target.start_time }}</span><span role="cell">{{ target.end_time }}</span></div> }</div> }
                 @if (previewProblems(result).length) { <button mat-stroked-button type="button" class="preview-problems-button" (click)="openPreviewProblems(result)" data-testid="preview-problems-button">Ver detalle de problemas ({{ previewProblems(result).length }})</button> }
                 <div class="preview-visualization" data-testid="preview-visualization">
                   <div class="card-header"><h3 id="preview-visualization-title">Vista previa por acumulador</h3><button mat-stroked-button type="button" (click)="openPreviewChartDetails()" data-testid="preview-chart-detail-button">Ver detalle</button></div>
@@ -152,7 +161,7 @@
           }
           @if (preview(); as candidate) {
             <div class="preview" role="status">
-              <strong>Vista previa: {{ candidate.status }}</strong>
+              <strong>Vista previa: {{ planStatus(candidate.status) }}</strong>
               · {{ previewIntervalCount(candidate) }} intervalos de {{ candidate.slot_minutes }} minutos
               @if (previewProblems(candidate).length) {
                 <span class="warning"> · Problemas detectados: {{ previewProblems(candidate).length }}</span>
@@ -198,8 +207,11 @@
                 <p class="empty" data-testid="planning-no-forecast">No hay previsión utilizable.</p>
               }
               <dl class="summary-list summary-list-compact">
+                <div><dt>Estado de consulta</dt><dd>{{ forecastStatusText(data.forecast_status) }}</dd></div>
                 <div><dt>Última consulta</dt><dd>{{ dateTime(data.forecast_last_attempt_at) }}</dd></div>
-                <div><dt>Próxima consulta</dt><dd>{{ dateTime(data.forecast_next_run_at) }}</dd></div>
+                <div><dt>{{ forecastNextText(data.forecast_next_run_kind) }}</dt><dd>{{ dateTime(data.forecast_next_run_at) }}</dd></div>
+                @if (data.forecast?.source === 'fallback') { <div><dt>Advertencia</dt><dd class="warning">Es un valor de reserva, no una previsión actual del proveedor.</dd></div> }
+                @if (data.forecast_stale) { <div><dt>Antigüedad</dt><dd class="warning">La previsión está marcada como antigua.</dd></div> }
               </dl>
             </section>
           </div>
@@ -209,14 +221,15 @@
             @if (data.forecast?.hourly_points?.length) {
               <div class="chart-wrap"><canvas #forecastChart aria-label="Gráfico de previsión horaria de temperatura"></canvas></div>
               <p class="next-forecast" data-testid="forecast-next-run">
-                Próxima consulta automática a AEMET: {{ data.forecast_next_run_at ? dateTime(data.forecast_next_run_at) : 'no programada' }}
+                {{ forecastNextText(data.forecast_next_run_kind) }}: {{ data.forecast_next_run_at ? dateTime(data.forecast_next_run_at) : 'no programada' }}
               </p>
             } @else {
               <p class="empty" data-testid="forecast-empty">No hay datos de previsión horaria disponibles.</p>
               <p class="next-forecast" data-testid="forecast-next-run">
-                Próxima consulta automática a AEMET: {{ data.forecast_next_run_at ? dateTime(data.forecast_next_run_at) : 'no programada' }}
+                {{ forecastNextText(data.forecast_next_run_kind) }}: {{ data.forecast_next_run_at ? dateTime(data.forecast_next_run_at) : 'no programada' }}
               </p>
             }
+            @if (data.forecast_last_error) { <p class="warning" data-testid="forecast-error">Último error del proveedor: {{ data.forecast_last_error }}</p> }
           </section>
         </div>
       </mat-tab>

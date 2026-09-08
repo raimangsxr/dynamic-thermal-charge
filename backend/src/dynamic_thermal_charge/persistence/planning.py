@@ -27,6 +27,7 @@ from .schema import (
     automatic_plan,
     automatic_plan_slot,
     charge_planning_site,
+    forecast,
     heater_telemetry,
     plan_audit,
     preview_job,
@@ -413,10 +414,26 @@ class SqlPlanningRepository:
                 ))
         return expected_revision + 1
 
-    def save_plan(self, plan: AutomaticPlan, *, configuration_revision: int, constraints_revision: int, reason: str, active: bool) -> int:
+    def save_plan(
+        self,
+        plan: AutomaticPlan,
+        *,
+        configuration_revision: int,
+        constraints_revision: int,
+        reason: str,
+        active: bool,
+        forecast_ref: ForecastRef | None = None,
+    ) -> int:
         now = datetime.now(timezone.utc)
         active = active and plan.status != "INVALID"
-        stored_status = {"FEASIBLE": "feasible", "DEGRADED": "deficit", "INVALID": "preview"}.get(plan.status, plan.status)
+        # New rows use the canonical domain codes.  ``active_plan`` still
+        # accepts the historical lower-case values so old installations remain
+        # readable after an upgrade.
+        stored_status = {
+            "FEASIBLE": "FEASIBLE",
+            "DEGRADED": "DEGRADED",
+            "INVALID": "INVALID",
+        }.get(plan.status, plan.status)
         violations = [_json_ready(item.__dict__) for item in plan.violations]
         inputs = {
             "input_token": plan.input_token,
@@ -427,7 +444,17 @@ class SqlPlanningRepository:
         with transaction(self._application, self._application_location) as connection:
             if active or plan.status == "INVALID":
                 connection.execute(update(automatic_plan).where((automatic_plan.c.installation_id == self._installation_id) & automatic_plan.c.active.is_(True)).values(active=False))
-            plan_id = int(connection.execute(insert(automatic_plan).values(installation_id=self._installation_id, configuration_revision=configuration_revision, constraints_revision=constraints_revision, horizon_start=to_utc(plan.horizon_start), horizon_end=to_utc(plan.horizon_end), slot_minutes=plan.slot_minutes, status=stored_status, reason=reason, input_token=plan.input_token, score_json=json.dumps(plan.score), deficits_json=json.dumps(violations), inputs_json=json.dumps(inputs), active=active, created_at=to_utc(now))).inserted_primary_key[0])
+            forecast_id = (
+                forecast_ref.id
+                if forecast_ref is not None
+                else connection.execute(
+                    select(forecast.c.id)
+                    .where(forecast.c.installation_id == self._installation_id)
+                    .order_by(forecast.c.retrieved_at.desc(), forecast.c.id.desc())
+                    .limit(1)
+                ).scalar()
+            )
+            plan_id = int(connection.execute(insert(automatic_plan).values(installation_id=self._installation_id, configuration_revision=configuration_revision, constraints_revision=constraints_revision, forecast_id=forecast_id, horizon_start=to_utc(plan.horizon_start), horizon_end=to_utc(plan.horizon_end), slot_minutes=plan.slot_minutes, status=stored_status, reason=reason, input_token=plan.input_token, score_json=json.dumps(plan.score), deficits_json=json.dumps(violations), inputs_json=json.dumps(inputs), active=active, created_at=to_utc(now))).inserted_primary_key[0])
             for slot in plan.slots:
                 connection.execute(insert(automatic_plan_slot).values(
                     plan_id=plan_id,
@@ -645,15 +672,84 @@ class SqlPlanningRepository:
         return changed == 1
 
     def active_plan(self) -> dict[str, Any] | None:
+        return self._plan_by_condition(automatic_plan.c.active.is_(True))
+
+    def latest_plan(self) -> dict[str, Any] | None:
+        """Return the newest automatic plan, including an invalid one.
+
+        An invalid recalculation deliberately clears the previous active plan.
+        The operator projections still need to explain that safe state instead
+        of falling back silently to an expired legacy plan.
+        """
+        return self._plan_by_condition(None)
+
+    def _plan_by_condition(self, condition) -> dict[str, Any] | None:
         with store_errors(self._application_location):
             with self._application.connect() as connection:
-                row = connection.execute(select(automatic_plan).where((automatic_plan.c.installation_id == self._installation_id) & automatic_plan.c.active.is_(True)).order_by(automatic_plan.c.created_at.desc())).mappings().first()
+                query = select(automatic_plan).where(
+                    automatic_plan.c.installation_id == self._installation_id
+                )
+                if condition is not None:
+                    query = query.where(condition)
+                row = connection.execute(
+                    query.order_by(
+                        automatic_plan.c.created_at.desc(),
+                        automatic_plan.c.id.desc(),
+                    )
+                ).mappings().first()
                 if row is None:
                     return None
                 slots = connection.execute(select(automatic_plan_slot).where(automatic_plan_slot.c.plan_id == row["id"]).order_by(automatic_plan_slot.c.slot_start)).mappings().all()
         inputs = json.loads(row["inputs_json"])
-        status = {"feasible": "FEASIBLE", "deficit": "DEGRADED", "best_effort": "DEGRADED", "preview": "INVALID"}.get(row["status"], row["status"])
-        return {"id": int(row["id"]), "horizon_start": from_utc(row["horizon_start"]), "horizon_end": from_utc(row["horizon_end"]), "slot_minutes": int(row["slot_minutes"]), "status": status, "reason": row["reason"], "input_token": row["input_token"], "created_at": from_utc(row["created_at"]), "deficits": json.loads(row["deficits_json"]), "violations": json.loads(row["deficits_json"]), "demand": inputs.get("demand", []), "explanations": inputs.get("explanations", []), "slots": [{"start": from_utc(item["slot_start"]), "end": from_utc(item["slot_end"]), "heater_ids": json.loads(item["heater_ids_json"]), "power_w": int(item["power_w"]), "stored_charge_percent": json.loads(item["stored_charge_json"]), "required_charge_percent": json.loads(item["required_charge_json"]), "initial_soc_percent": json.loads(item["initial_soc_json"]), "demand_kwh": json.loads(item["demand_json"]), "heater_power_w": json.loads(item["heater_power_json"]), "outdoor_temperature_c": item["outdoor_temperature_c"], "stored_energy_kwh": json.loads(item.get("stored_energy_json", "{}")), "indoor_temperature_c": json.loads(item.get("indoor_temperature_json", "{}")), "target_temperature_c": json.loads(item.get("target_temperature_json", "{}")), "heat_delivered_kwh": json.loads(item.get("heat_delivered_json", "{}")), "thermal_loss_kwh": json.loads(item.get("thermal_loss_json", "{}")), "temperature_shortfall_c": json.loads(item.get("temperature_shortfall_json", "{}")), "charge_energy_kwh": json.loads(item.get("charge_energy_json", "{}"))} for item in slots]}
+        status = {
+            "FEASIBLE": "FEASIBLE",
+            "DEGRADED": "DEGRADED",
+            "INVALID": "INVALID",
+            "feasible": "FEASIBLE",
+            "deficit": "DEGRADED",
+            "best_effort": "DEGRADED",
+            "preview": "INVALID",
+        }.get(row["status"], row["status"])
+        return {
+            "id": int(row["id"]),
+            "configuration_revision": int(row["configuration_revision"]),
+            "constraints_revision": int(row["constraints_revision"]),
+            "forecast_id": None if row["forecast_id"] is None else int(row["forecast_id"]),
+            "horizon_start": from_utc(row["horizon_start"]),
+            "horizon_end": from_utc(row["horizon_end"]),
+            "slot_minutes": int(row["slot_minutes"]),
+            "status": status,
+            "reason": row["reason"],
+            "active": bool(row["active"]),
+            "input_token": row["input_token"],
+            "created_at": from_utc(row["created_at"]),
+            "deficits": json.loads(row["deficits_json"]),
+            "violations": json.loads(row["deficits_json"]),
+            "demand": inputs.get("demand", []),
+            "explanations": inputs.get("explanations", []),
+            "slots": [
+                {
+                    "start": from_utc(item["slot_start"]),
+                    "end": from_utc(item["slot_end"]),
+                    "heater_ids": json.loads(item["heater_ids_json"]),
+                    "power_w": int(item["power_w"]),
+                    "stored_charge_percent": json.loads(item["stored_charge_json"]),
+                    "required_charge_percent": json.loads(item["required_charge_json"]),
+                    "initial_soc_percent": json.loads(item["initial_soc_json"]),
+                    "demand_kwh": json.loads(item["demand_json"]),
+                    "heater_power_w": json.loads(item["heater_power_json"]),
+                    "outdoor_temperature_c": item["outdoor_temperature_c"],
+                    "stored_energy_kwh": json.loads(item.get("stored_energy_json", "{}")),
+                    "indoor_temperature_c": json.loads(item.get("indoor_temperature_json", "{}")),
+                    "target_temperature_c": json.loads(item.get("target_temperature_json", "{}")),
+                    "heat_delivered_kwh": json.loads(item.get("heat_delivered_json", "{}")),
+                    "thermal_loss_kwh": json.loads(item.get("thermal_loss_json", "{}")),
+                    "temperature_shortfall_c": json.loads(item.get("temperature_shortfall_json", "{}")),
+                    "charge_energy_kwh": json.loads(item.get("charge_energy_json", "{}")),
+                }
+                for item in slots
+            ],
+        }
 
     def latest_forecast(
         self, at: datetime | None = None
@@ -782,6 +878,8 @@ class SqlPlanningRepository:
         return {
             "local_date": row["local_date"],
             "scheduled_at": from_utc(row["scheduled_at"]),
+            "attempt": int(row["attempt"]),
+            "next_retry_at": from_utc(row["next_retry_at"]),
             "last_attempt_at": from_utc(row["last_attempt_at"]),
             "last_result": row["last_result"],
             "last_error": row["last_error"],

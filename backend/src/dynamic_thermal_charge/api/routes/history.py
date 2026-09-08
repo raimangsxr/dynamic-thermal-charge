@@ -34,7 +34,7 @@ router = APIRouter()
 PAGE_DESCRIPTION = (
     f"Paged, newest first. Default page size {DEFAULT_PAGE_SIZE}, maximum "
     f"{MAX_PAGE_SIZE}: no request ever returns the whole history. `next_cursor` "
-    "is opaque and encodes the (instant, id) pair of the last item, so an insert "
+    "is opaque and encodes the (instant, source, id) tuple of the last item, so an insert "
     "between two pages cannot produce a repeated or skipped item."
 )
 
@@ -148,6 +148,7 @@ def get_transitions(
         limit_applied=page.limit_applied,
         has_more=page.has_more,
         next_cursor=page.next_cursor,
+        availability="available",
     )
 
 

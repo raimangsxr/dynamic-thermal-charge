@@ -5,7 +5,7 @@
       <h1>Estado</h1>
       <p class="intro">Comprueba de un vistazo si la instalación está respondiendo, qué acumuladores están activos y qué información puede confirmarse ahora mismo.</p>
       @if (snapshot(); as data) {
-        <p class="observed">Última lectura: {{ instant(data.observed_at) }}</p>
+        <p class="observed">Última lectura: {{ instant(data.observed_at) }} · horas de instalación: {{ data.timezone || 'Europe/Madrid' }}</p>
       }
     </div>
     <button mat-stroked-button type="button" (click)="refresh()" [disabled]="refreshing()" aria-label="Volver a leer el estado de la instalación" data-testid="refresh-status">
@@ -68,10 +68,14 @@
         <strong class="summary-value" [class.warning-text]="unmet().length > 0">{{ planStatus(data.plan_status) }}</strong>
         @if (unmet().length > 0) {
           <p>{{ unmet().length }} acumulador(es) con déficit</p>
+        } @else if (data.deficits?.length) {
+          <p class="warning-text">{{ data.deficits.length }} aviso(s) de planificación</p>
         } @else if (data.plan) {
           <p>Sin déficit detectado</p>
+        } @else if (data.plan_status === 'INVALID' || data.plan_status === 'invalid') {
+          <p class="warning-text">Plan no válido; salidas automáticas apagadas</p>
         } @else {
-          <p>No hay plan en curso</p>
+          <p>{{ absenceText(data.absence_reason) }}</p>
         }
       </article>
 
@@ -107,7 +111,13 @@
 
     @if (unmet().length > 0) {
       <div class="banner warn" role="status" data-testid="unmet">
-        <div class="banner-content"><mat-icon aria-hidden="true">warning</mat-icon><div><strong>Carga solicitada sin atender</strong><ul>@for (allocation of unmet(); track allocation.heater_id) { <li>{{ allocation.heater_id }}: faltan {{ hours(allocation.unmet_minutes) }} h de {{ hours(allocation.requested_minutes) }} h solicitadas</li> }</ul><p>El plan no cabe en la ventana o en el límite de potencia.</p></div></div>
+        <div class="banner-content"><mat-icon aria-hidden="true">warning</mat-icon><div><strong>Carga solicitada sin atender</strong><ul>@for (allocation of unmet(); track allocation.heater_id) { <li>{{ heaterText(allocation.heater_id) }}: faltan {{ hours(allocation.unmet_minutes) }} h de {{ hours(allocation.requested_minutes) }} h solicitadas</li> }</ul><p>El plan no cabe en la ventana o en el límite de potencia.</p></div></div>
+      </div>
+    }
+
+    @if (data.deficits?.length) {
+      <div class="banner warn" role="status" data-testid="plan-deficits">
+        <div class="banner-content"><mat-icon aria-hidden="true">warning</mat-icon><div><strong>Avisos de planificación</strong><ul>@for (deficit of data.deficits; track $index) { <li>{{ deficitText(deficit) }}</li> }</ul></div></div>
       </div>
     }
 
@@ -118,12 +128,15 @@
       </div>
       @if (data.plan; as plan) {
         <dl class="summary-list" data-testid="plan">
-          <div><dt>Ventana</dt><dd>{{ instant(plan.window_start) }} — {{ instant(plan.window_end) }}</dd></div>
-          <div><dt>Intervalos</dt><dd>{{ plan.slot_minutes }} minutos</dd></div>
+          <div><dt>Ventana visible</dt><dd>{{ instant(plan.window_start) }} — {{ instant(plan.window_end) }}</dd></div>
+          @if (data.horizon_start && data.horizon_end) { <div><dt>Horizonte automático</dt><dd>{{ instant(data.horizon_start) }} — {{ instant(data.horizon_end) }}</dd></div> }
+          <div><dt>Intervalos</dt><dd>intervalos de {{ plan.slot_minutes }} minutos</dd></div>
           <div><dt>Configuración</dt><dd>Revisión {{ plan.installation_revision }}</dd></div>
+          <div><dt>Zona horaria</dt><dd>{{ data.timezone || 'Europe/Madrid' }}</dd></div>
         </dl>
       } @else {
-        <p class="empty" data-testid="no-plan">No hay ningún plan en curso ahora mismo.</p>
+        <p class="empty" data-testid="no-plan">{{ absenceText(data.absence_reason) }}</p>
+        @if (data.plan_status === 'INVALID' || data.absence_reason === 'invalid_automatic_plan') { <p class="warning-text" data-testid="invalid-plan">Las salidas automáticas permanecen apagadas porque el plan no es válido.</p> }
       }
     </section>
 
@@ -140,7 +153,7 @@
             <tbody>
               @for (item of data.telemetry; track item.heater_id) {
                 <tr [class.stale]="item.state === 'telemetry_stale'">
-                  <th scope="row">{{ item.heater_id }}</th>
+                  <th scope="row">{{ heaterText(item.heater_id) }}</th>
                   <td>{{ temperature(item.indoor_temperature_c) }}</td>
                   <td>{{ item.stored_soc_percent === null ? 'sin dato' : item.stored_soc_percent + ' %' }}</td>
                   <td>{{ item.stored_energy_kwh === null ? 'sin dato' : item.stored_energy_kwh.toFixed(2) + ' kWh' }}</td>
@@ -160,11 +173,16 @@
       @if (data.forecast; as forecast) {
         <div class="forecast-summary" data-testid="forecast">
           <div class="forecast-icon" aria-hidden="true"><mat-icon>cloud</mat-icon></div>
-          <div><strong>{{ forecast.date }}</strong><p>Temperatura media: {{ temperature(forecast.average_temperature_c) }}</p><p class="muted">@switch (forecast.source) { @case ('aemet') { Origen: proveedor real } @case ('fallback') { Origen: valor de reserva } @default { Origen: simulado } }@if (forecast.municipality) { · {{ forecast.municipality }} }</p></div>
+          <div><strong>{{ forecast.date }}</strong><p>Temperatura media: {{ temperature(forecast.average_temperature_c) }}</p><p class="muted">Origen: {{ sourceText(forecast.source) }}@if (forecast.municipality) { · {{ forecast.municipality }} }</p>
+            @if (forecast.source === 'fallback') { <p class="warning-text">Es un valor de reserva y no una previsión actual del proveedor.</p> }
+            <dl class="summary-list summary-list-compact"><div><dt>Estado de consulta</dt><dd>{{ forecastStatusText(data.forecast_status) }}</dd></div><div><dt>{{ forecastNextText(data.forecast_next_run_kind) }}</dt><dd>{{ instant(data.forecast_next_run_at) }}</dd></div></dl>
+          </div>
         </div>
       } @else {
-        <p class="empty">Sin previsión asociada.</p>
+        <p class="empty">Sin previsión utilizable.</p>
       }
+      @if (data.forecast_last_error) { <p class="warning-text" data-testid="forecast-error">Último error del proveedor: {{ data.forecast_last_error }}</p> }
+      @if (data.forecast_stale) { <p class="warning-text">La previsión disponible está marcada como antigua.</p> }
     </section>
   }
 </main>

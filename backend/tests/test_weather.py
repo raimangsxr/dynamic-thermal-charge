@@ -1,5 +1,7 @@
 from datetime import date, datetime, timezone
+import io
 import logging
+from urllib.error import HTTPError
 
 import pytest
 
@@ -12,6 +14,7 @@ from dynamic_thermal_charge.weather import (
     AemetWeatherProvider,
     HourlyForecastPoint,
     WeatherProviderError,
+    _http_get_json,
     _decode_json,
     build_weather_provider,
     future_forecast_points,
@@ -293,3 +296,24 @@ def test_prefers_utf_8_when_aemet_declares_legacy_charset() -> None:
 def test_rejects_payload_that_is_not_json() -> None:
     with pytest.raises(WeatherProviderError, match="supported encoding"):
         _decode_json(b"\xff\x00not-json", "utf-8")
+
+
+def test_http_429_is_preserved_as_a_provider_error(monkeypatch) -> None:
+    response_body = io.BytesIO(b"too many requests")
+    error = HTTPError(
+        "https://data.example/forecast.json",
+        429,
+        "Too Many Requests",
+        hdrs=None,
+        fp=response_body,
+    )
+
+    def failing_open(*_args, **_kwargs):
+        raise error
+
+    monkeypatch.setattr("dynamic_thermal_charge.weather.urlopen", failing_open)
+
+    with pytest.raises(WeatherProviderError, match=r"HTTP 429.*too many requests") as raised:
+        _http_get_json("https://data.example/forecast.json", {}, 5)
+    assert raised.value.status_code == 429
+    assert response_body.closed

@@ -130,6 +130,23 @@ describe('History', () => {
     expect(rows[0].textContent).toContain('2026');
   });
 
+  it('keeps automatic and legacy plan rows distinct and localizes their meaning', () => {
+    const legacy = plansPage().items[0];
+    flushPlans(plansPage({
+      items: [
+        { ...legacy, source: 'automatic', status: 'FEASIBLE', reason: 'activated', active: true },
+        { ...legacy, source: 'legacy', status: null, reason: null, active: null },
+      ],
+    }));
+    const rows = el().querySelectorAll('[data-table="plans"] tbody tr');
+    expect(rows).toHaveLength(2);
+    expect(rows[0].textContent).toContain('plan automático');
+    expect(rows[0].textContent).toContain('Cumplido');
+    expect(rows[0].textContent).toContain('Plan activado');
+    expect(rows[0].textContent).toContain('intervalos de 30 minutos');
+    expect(rows[1].textContent).toContain('histórico compatible');
+  });
+
   it('reports the page size and that there is nothing more', () => {
     flushPlans();
     expect(el().textContent).toContain('máximo de 50');
@@ -217,6 +234,16 @@ describe('History', () => {
       );
     expect(testId('gone')).not.toBeNull();
     expect(el().textContent).toContain('ya no está en la configuración');
+  });
+
+  it('distinguishes unavailable transition data from an empty event range', () => {
+    flushPlans();
+    fixture.componentInstance.select('transitions');
+    backend
+      .expectOne((candidate) => candidate.url === '/api/v1/history/transitions')
+      .flush({ ...transitionsPage([]), availability: 'unavailable' });
+    expect(testId('empty')?.textContent).toContain('no están disponibles');
+    expect(testId('empty')?.textContent).not.toContain('No hay transiciones');
   });
 
   it('does not flag a heater that is still configured', () => {

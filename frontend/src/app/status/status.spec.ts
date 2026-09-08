@@ -166,6 +166,31 @@ describe('Status', () => {
     expect(testId(element, 'forecast')?.textContent).toContain('valor de reserva');
   });
 
+  it('localizes automatic status and deficits while keeping heater names friendly', () => {
+    const element = load({
+      ...statusDto(),
+      plan_status: 'degraded',
+      deficits: [{
+        heater_id: 'salon',
+        requirement: 'temperature_comfort',
+        achievable_value: 18.5,
+        shortfall: 2.5,
+        at: '2026-01-16T01:00:00Z',
+        reason: 'insufficient_capacity_or_power',
+        target_temperature_c: 21,
+        projected_temperature_c: 18.5,
+        shortfall_c: 2.5,
+        stored_energy_kwh: 10,
+        stored_soc_percent: 50,
+      }],
+    });
+    expect(testId(element, 'plan-summary')?.textContent).toContain('Degradado');
+    const deficits = testId(element, 'plan-deficits');
+    expect(deficits?.textContent).toContain('Salón');
+    expect(deficits?.textContent).toContain('Objetivo térmico');
+    expect(deficits?.textContent).not.toContain('insufficient_capacity_or_power');
+  });
+
   /* ------------------------------------------------------------ not current */
 
   it.each(['stale', 'never_seen'] as Liveness[])(

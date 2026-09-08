@@ -118,9 +118,12 @@ describe('Config', () => {
     return fixture.nativeElement as HTMLElement;
   }
 
-  function loadUnified(dto: ConfigDto = configDto()): HTMLElement {
+  function loadUnified(
+    dto: ConfigDto = configDto(),
+    system: SystemConfigurationDto = systemConfigurationDto(),
+  ): HTMLElement {
     const element = load(dto);
-    backend.expectOne('/api/v1/system/configuration').flush(systemConfigurationDto());
+    backend.expectOne('/api/v1/system/configuration').flush(system);
     backend.expectOne('/api/v1/system/topology').flush(topologyDto);
     backend.expectOne('/api/v1/planning/config').flush(planningConfigDto());
     fixture.detectChanges();
@@ -166,6 +169,30 @@ describe('Config', () => {
     fixture.detectChanges();
     expect(element.querySelector('#operations-controller_poll_seconds')).not.toBeNull();
     expect(element.querySelectorAll('#operations-retention_days')).toHaveLength(1);
+  });
+
+  it('shows the installation timezone and the effective global output driver', () => {
+    const system = systemConfigurationDto({
+      sections: {
+        ...systemConfigurationDto().sections,
+        output: {
+          driver: 'simulated',
+          configured_driver: 'simulated',
+          effective_driver: 'simulated',
+          effective_driver_reason: 'El driver global simulado prevalece sobre las salidas GPIO configuradas por acumulador.',
+          overridden_gpio_heaters: ['Salón'],
+        },
+      },
+    });
+    const element = loadUnified(configDto(), system);
+    expect(element.textContent).toContain('horas de instalación: Europe/Madrid');
+    fixture.componentInstance.chooseArea('service');
+    fixture.componentInstance.chooseService('output');
+    fixture.detectChanges();
+    expect(element.querySelector('.output-note')?.textContent).toContain('Driver configurado: Simulado');
+    expect(element.querySelector('.output-note')?.textContent).toContain('driver efectivo: Simulado');
+    expect(element.querySelector('.output-note')?.textContent).toContain('prevalece la simulación global');
+    expect(element.querySelector('.output-note')?.textContent).toContain('Salón');
   });
 
   it('keeps a replaced secret out of the DOM after saving from the merged page', () => {

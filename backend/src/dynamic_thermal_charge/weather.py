@@ -98,6 +98,10 @@ class SimulatedWeatherProvider:
 class WeatherProviderError(RuntimeError):
     """A weather forecast could not be obtained or interpreted."""
 
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
 
 @dataclass(frozen=True)
 class ForecastCycleState:
@@ -186,7 +190,15 @@ class AemetWeatherProvider:
                 if isinstance(envelope, dict)
                 else "invalid response"
             )
-            raise WeatherProviderError(f"AEMET request failed: {description}")
+            status_code = None
+            if isinstance(envelope, dict):
+                try:
+                    status_code = int(envelope.get("estado"))
+                except (TypeError, ValueError):
+                    status_code = None
+            raise WeatherProviderError(
+                f"AEMET request failed: {description}", status_code=status_code
+            )
         data_url = envelope.get("datos")
         if not isinstance(data_url, str) or not data_url.startswith("https://"):
             raise WeatherProviderError("AEMET response does not contain a secure data URL")
@@ -448,7 +460,20 @@ def _http_get_json(
             body = response.read()
             charset = response.headers.get_content_charset()
             return _decode_json(body, charset)
-    except (HTTPError, URLError, TimeoutError) as exc:
+    except HTTPError as exc:
+        try:
+            detail = "too many requests" if exc.code == 429 else str(exc.reason or exc)
+            status_code = exc.code
+        finally:
+            # HTTPError also owns the response's temporary-file wrapper.  It is
+            # not enough to translate the exception: Python 3.14 reports the
+            # wrapper's implicit cleanup as an unraisable ResourceWarning.
+            exc.close()
+        raise WeatherProviderError(
+            f"weather HTTP request failed with HTTP {exc.code}: {detail}",
+            status_code=status_code,
+        ) from exc
+    except (URLError, TimeoutError) as exc:
         raise WeatherProviderError(f"weather HTTP request failed: {exc}") from exc
 
 

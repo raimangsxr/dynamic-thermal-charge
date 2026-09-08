@@ -19,6 +19,7 @@ from ...persistence.bootstrap import Store
 from ...persistence.history import SqlStatusReader
 from ..dependencies import controller_view, usable_store
 from ..liveness import ControllerView
+from ..read_model import automatic_window, forecast_cycle_context, real_at_or_after, real_before
 from ..schemas import (
     READ_RESPONSES,
     AllocationSummary,
@@ -66,6 +67,10 @@ def get_status(
         store.repository.installation_id(),
         store.location,
     )
+    planning_site = store.planning.site()
+    timezone_name = config.schedule.timezone if config.schedule is not None else "UTC"
+    cycle_status = forecast_cycle_context(store.planning)
+    latest_forecast = reader.latest_forecast(observed_at)
 
     last_states = reader.last_output_states()
     current = controller.state_is_current
@@ -93,7 +98,6 @@ def get_status(
         # Automatic planning owns the canonical site power limit. The legacy
         # installation column remains for compatibility, but must not make the
         # status panel disagree with the plan when both values differ.
-        planning_site = store.planning.site()
         limit_w = int(planning_site.get("contracted_power_w", config.site.max_total_power_w))
         power = PowerSnapshot(
             instant_w=instant_w,
@@ -103,25 +107,89 @@ def get_status(
 
     plan = forecast = None
     allocations: list[AllocationSummary] = []
-    snapshot = reader.plan_in_progress(observed_at)
-    if snapshot is not None:
-        grouped: dict[tuple[datetime, datetime], list[str]] = {}
-        for slot in snapshot["slots"]:
-            grouped.setdefault((slot["slot_start"], slot["slot_end"]), []).append(
-                slot["heater_id"]
-            )
-        plan = PlanSummary(
-            **snapshot["plan"],
-            slots=[
-                PlanSlotView(start=start, end=end, heater_ids=sorted(ids))
-                for (start, end), ids in sorted(grouped.items())
-            ],
+    horizon_start = horizon_end = None
+    absence_reason = None
+    active_automatic = store.planning.active_plan()
+    latest_automatic = (
+        store.planning.latest_plan()
+        if hasattr(store.planning, "latest_plan")
+        else None
+    )
+    canonical_plan = active_automatic
+    if canonical_plan is None and latest_automatic is not None and latest_automatic["status"] == "INVALID":
+        # An invalid recalculation intentionally removes the previous active
+        # plan.  Keep that safe outcome visible instead of reviving a legacy
+        # plan which is no longer executable.
+        canonical_plan = latest_automatic
+        absence_reason = "invalid_automatic_plan"
+
+    if canonical_plan is not None:
+        horizon_start = canonical_plan["horizon_start"]
+        horizon_end = canonical_plan["horizon_end"]
+        window_start, window_end = automatic_window(
+            canonical_plan,
+            int(planning_site["planning_window_hours"]),
+            timezone_name,
         )
-        if snapshot["forecast"] is not None:
-            forecast = ForecastSummary(**snapshot["forecast"])
-        allocations = [
-            AllocationSummary(**allocation) for allocation in snapshot["allocations"]
-        ]
+        if canonical_plan["status"] == "INVALID":
+            plan = None
+        elif real_at_or_after(observed_at, window_start) and real_before(observed_at, window_end):
+            grouped: dict[tuple[datetime, datetime], list[str]] = {}
+            for slot in canonical_plan["slots"]:
+                if real_before(slot["start"], window_end):
+                    grouped.setdefault((slot["start"], slot["end"]), []).extend(
+                        slot["heater_ids"]
+                    )
+            plan = PlanSummary(
+                window_start=window_start,
+                window_end=window_end,
+                slot_minutes=canonical_plan["slot_minutes"],
+                installation_revision=canonical_plan["configuration_revision"],
+                created_at=canonical_plan["created_at"],
+                slots=[
+                    PlanSlotView(start=start, end=end, heater_ids=sorted(set(ids)))
+                    for (start, end), ids in sorted(grouped.items())
+                ],
+            )
+        else:
+            absence_reason = absence_reason or "outside_visible_window"
+        if latest_forecast is not None:
+            forecast = ForecastSummary(**latest_forecast)
+    elif latest_automatic is None:
+        # Compatibility path for installations that have not produced an
+        # automatic plan yet.  Once one exists, the status panel never resumes
+        # reading the legacy plan as its canonical live projection.
+        snapshot = reader.plan_in_progress(observed_at)
+        if snapshot is not None:
+            grouped = {}
+            for slot in snapshot["slots"]:
+                grouped.setdefault((slot["slot_start"], slot["slot_end"]), []).append(
+                    slot["heater_id"]
+                )
+            plan = PlanSummary(
+                **snapshot["plan"],
+                slots=[
+                    PlanSlotView(start=start, end=end, heater_ids=sorted(ids))
+                    for (start, end), ids in sorted(grouped.items())
+                ],
+            )
+            horizon_start = snapshot["plan"]["window_start"]
+            horizon_end = snapshot["plan"]["window_end"]
+            forecast_value = latest_forecast or snapshot["forecast"]
+            if forecast_value is not None:
+                forecast = ForecastSummary(**forecast_value)
+            allocations = [
+                AllocationSummary(**allocation)
+                for allocation in snapshot["allocations"]
+            ]
+        elif latest_forecast is not None:
+            forecast = ForecastSummary(**latest_forecast)
+    elif latest_automatic is not None:
+        # An automatic record exists but is not active.  Keep the absence
+        # explicit instead of presenting an unrelated legacy plan as current.
+        absence_reason = "no_active_automatic_plan"
+        if latest_forecast is not None:
+            forecast = ForecastSummary(**latest_forecast)
 
     telemetry_views = []
     telemetry_snapshot = store.planning.telemetry()
@@ -145,13 +213,13 @@ def get_status(
                 if value.stored_soc_percent is None
                 else value.stored_soc_percent / 100 * heater.capacity_kwh
             ),
-            state="telemetry_stale" if missing or oldest is None or oldest > 900 else "ready",
+            state="telemetry_stale" if missing or oldest is None or oldest > config.site.indoor_max_age_minutes * 60 or any(age < 0 for age in ages) else "ready",
             missing_fields=missing,
             oldest_age_seconds=oldest,
         ))
-    active_automatic = store.planning.active_plan()
     return StatusResponse(
         observed_at=observed_at,
+        timezone=timezone_name,
         controller=ControllerHealth(
             liveness=controller.liveness.value,
             state_is_current=current,
@@ -173,8 +241,17 @@ def get_status(
         forecast=forecast,
         allocations=allocations,
         telemetry=telemetry_views,
-        plan_status=None if active_automatic is None else active_automatic["status"],
-        deficits=[] if active_automatic is None else [PlanningDeficitView(**item) for item in active_automatic["deficits"]],
+        plan_status=None if canonical_plan is None else canonical_plan["status"],
+        deficits=[] if canonical_plan is None else [PlanningDeficitView(**item) for item in canonical_plan["deficits"]],
+        horizon_start=horizon_start,
+        horizon_end=horizon_end,
+        absence_reason=absence_reason,
+        forecast_status=cycle_status.get("forecast_status"),
+        forecast_last_attempt_at=cycle_status.get("forecast_last_attempt_at"),
+        forecast_last_error=cycle_status.get("forecast_last_error"),
+        forecast_next_run_at=cycle_status.get("forecast_next_run_at"),
+        forecast_next_run_kind=cycle_status.get("forecast_next_run_kind"),
+        forecast_stale=cycle_status.get("forecast_stale"),
     )
 
 

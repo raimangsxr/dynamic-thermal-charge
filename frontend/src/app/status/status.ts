@@ -22,7 +22,7 @@ import {
 } from '@angular/core';
 
 import { Api } from '../core/api';
-import type { ApiErrorDto, StatusDto } from '../core/api.types';
+import type { ApiErrorDto, PlanningDeficitDto, StatusDto } from '../core/api.types';
 import { type Explained, UNREACHABLE, explain } from '../core/errors';
 import { outputStateOf } from '../core/output-state';
 import { Poller } from '../core/poll';
@@ -30,6 +30,14 @@ import { OutputIndicator } from '../shared/output-indicator/output-indicator';
 import { formatAge, formatInstant } from '../shared/age/age';
 import { ControllerHealth } from './controller-health/controller-health';
 import { formatTemperature } from '../shared/temperature/temperature';
+import {
+  forecastNextRunLabel,
+  forecastSourceLabel,
+  forecastStatusLabel,
+  planReasonLabel,
+  planStatusLabel,
+  requirementLabel,
+} from '../shared/presentation/presentation';
 
 @Component({
   selector: 'dtc-status',
@@ -76,12 +84,7 @@ export class Status {
   readonly telemetryTotal = computed(() => this.snapshot()?.telemetry?.length ?? 0);
 
   planStatus(status: string | null | undefined): string {
-    switch (status) {
-      case 'feasible': return 'Cumplido';
-      case 'deficit': return 'Con déficit';
-      case 'best_effort': return 'Mejor esfuerzo';
-      default: return status ?? 'Sin evaluación';
-    }
+    return planStatusLabel(status);
   }
 
   private readonly poller = new Poller(() => this.refresh());
@@ -130,8 +133,43 @@ export class Status {
     return formatAge(seconds);
   }
 
-  instant(iso: string | null): string {
-    return formatInstant(iso);
+  instant(iso: string | null | undefined): string {
+    return formatInstant(iso, this.snapshot()?.timezone ?? 'Europe/Madrid');
+  }
+
+  heaterText(heaterId: string | null | undefined): string {
+    if (!heaterId) return 'Instalación';
+    return this.snapshot()?.heaters.find((heater) => heater.id === heaterId)?.name ?? heaterId;
+  }
+
+  sourceText(source: string | null | undefined): string {
+    return forecastSourceLabel(source);
+  }
+
+  forecastStatusText(status: string | null | undefined): string {
+    return forecastStatusLabel(status);
+  }
+
+  forecastNextText(kind: string | null | undefined): string {
+    return forecastNextRunLabel(kind);
+  }
+
+  absenceText(reason: string | null | undefined): string {
+    switch (reason) {
+      case 'outside_visible_window':
+        return 'Hay un plan automático dentro del horizonte, pero ahora está fuera de su ventana visible.';
+      case 'invalid_automatic_plan':
+        return 'El plan automático no es válido; las salidas permanecen apagadas hasta corregirlo.';
+      default:
+        return 'No hay ningún plan automático activo para este momento.';
+    }
+  }
+
+  deficitText(item: PlanningDeficitDto): string {
+    const heater = this.heaterText(item.heater_id);
+    const requirement = requirementLabel(item.requirement);
+    const reason = planReasonLabel(item.reason);
+    return `${heater}: ${requirement} · ${reason}`;
   }
 
   private describe(error: unknown): Explained {

@@ -4,7 +4,7 @@
       <p class="eyebrow">Administración</p>
       <h1>Configuración</h1>
       <p class="intro">Todo lo necesario para poner en marcha la instalación y mantener el servicio, ordenado por tarea.</p>
-      @if (config(); as data) { <p class="revisions">Instalación rev. {{ data.config_revision }} · esquema {{ data.schema_revision }}@if (configuration(); as system) { · sistema rev. {{ system.revision }} }</p> }
+      @if (config(); as data) { <p class="revisions">Instalación rev. {{ data.config_revision }} · esquema {{ data.schema_revision }} · horas de instalación: {{ installationTimezone() }}@if (configuration(); as system) { · sistema rev. {{ system.revision }} }</p> }
     </div>
     <button mat-stroked-button type="button" (click)="load()" [disabled]="loading()" aria-label="Volver a leer la configuración" data-testid="reload-config">
       <mat-icon aria-hidden="true">refresh</mat-icon> {{ loading() ? 'Cargando…' : 'Volver a leer' }}
@@ -218,7 +218,7 @@
         <div class="form-actions"><button mat-flat-button color="primary" type="submit" [disabled]="!systemHasChanges(activeIntegrationSection()) || systemSaving() || !writable()">{{ systemSaving() ? 'Guardando…' : 'Guardar integración' }}</button></div>
       </form>
       @if (activeIntegrationSection() === 'weather') {
-        <section class="status-card" aria-labelledby="weather-status-title"><div><h3 id="weather-status-title">Estado de la previsión</h3><p>Última consulta: {{ systemValue('weather', 'forecast_last_attempt_at') || 'sin consultas' }} · resultado: {{ systemValue('weather', 'forecast_status') || 'pendiente' }}</p><p>Próxima consulta automática: {{ systemValue('weather', 'forecast_next_run_at') || 'no programada' }}</p></div><button mat-stroked-button type="button" (click)="refreshWeather()" [disabled]="weatherRefreshLoading() || !writable() || systemValue('weather', 'provider') !== 'aemet'">{{ weatherRefreshLoading() ? 'Consultando AEMET…' : 'Consultar AEMET ahora' }}</button>@if (systemValue('weather', 'forecast_last_error')) { <p class="field-error" role="alert">{{ systemValue('weather', 'forecast_last_error') }}</p> }@if (weatherRefreshMessage()) { <p class="saved" role="status">{{ weatherRefreshMessage() }}</p> }@if (weatherRefreshError()) { <p class="field-error" role="alert">{{ weatherRefreshError() }}</p> }</section>
+        <section class="status-card" aria-labelledby="weather-status-title"><div><h3 id="weather-status-title">Estado de la previsión</h3><p>Última consulta: {{ dateTime(systemValue('weather', 'forecast_last_attempt_at')) }} · resultado: {{ weatherStatusText(systemValue('weather', 'forecast_status')) }}</p><p>{{ weatherNextText(systemValue('weather', 'forecast_next_run_kind')) }}: {{ dateTime(systemValue('weather', 'forecast_next_run_at')) }}</p><p class="field-hint">La consulta diaria usa la hora local de AEMET configurada; los errores programan un reintento separado.</p></div><button mat-stroked-button type="button" (click)="refreshWeather()" [disabled]="weatherRefreshLoading() || !writable() || systemValue('weather', 'provider') !== 'aemet'">{{ weatherRefreshLoading() ? 'Consultando AEMET…' : 'Consultar AEMET ahora' }}</button>@if (systemValue('weather', 'forecast_last_error')) { <p class="field-error" role="alert">Último error del proveedor: {{ systemValue('weather', 'forecast_last_error') }}</p> }@if (weatherRefreshMessage()) { <p class="saved" role="status">{{ weatherRefreshMessage() }}</p> }@if (weatherRefreshError()) { <p class="field-error" role="alert">{{ weatherRefreshError() }}</p> }</section>
       }
     </section>
   }
@@ -246,7 +246,7 @@
           </div></div>
         }
         @if (activeServiceSection() === 'output') {
-          <div class="info-note output-note"><mat-icon aria-hidden="true">tune</mat-icon><p><strong>Dos niveles distintos:</strong> este modo global define el driver disponible para el controlador; la asignación física de cada acumulador (GPIO, pin y nivel activo) se configura en Acumuladores.</p></div>
+          <div class="info-note output-note"><mat-icon aria-hidden="true">tune</mat-icon><div><p><strong>Driver configurado:</strong> {{ configuredOutputDriver() }} · <strong>driver efectivo:</strong> {{ effectiveOutputDriver() }}</p><p>{{ effectiveOutputReason() }}</p>@if (overriddenGpioHeaters().length) { <p>GPIO configurado, pero prevalece la simulación global para: {{ overriddenGpioHeaters().join(', ') }}.</p> }<p>La asignación física de cada acumulador (GPIO, pin y nivel activo) se configura en Acumuladores.</p></div></div>
         }
         @if (secrets(activeServiceSection()).length) {
           <div class="secret-group"><h3>Secretos</h3><p class="group-description">Los valores guardados nunca vuelven al navegador.</p>
