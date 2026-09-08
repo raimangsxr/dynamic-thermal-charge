@@ -90,6 +90,7 @@ class StorageContext:
         self._lock = threading.RLock()
         self._mode = TopologyMode.NORMAL
         self._last_reconciled_at = None
+        self._closed = False
 
     @classmethod
     def initialise(
@@ -183,6 +184,8 @@ class StorageContext:
                 generation.references -= 1
                 if generation.retired and generation.references == 0:
                     generation.close()
+                    if self._closed:
+                        self._close_local_repositories()
 
     def activate_prepared(
         self,
@@ -191,14 +194,20 @@ class StorageContext:
         *,
         expected_locator_revision: int,
     ) -> int:
-        require_active_schemas(engines.configuration, engines.application)
-        prepared = _build_generation(locator, engines, self.fallback)
-        # Prove both repositories can be read before committing the locator.
-        prepared.system_configuration.current()
-        prepared.configuration.current()
-        new_revision = self.bootstrap.compare_and_swap_locator(
-            expected_locator_revision, locator
-        )
+        try:
+            require_active_schemas(engines.configuration, engines.application)
+            prepared = _build_generation(locator, engines, self.fallback)
+            # Prove both repositories can be read before committing the locator.
+            prepared.system_configuration.current()
+            prepared.configuration.current()
+            new_revision = self.bootstrap.compare_and_swap_locator(
+                expected_locator_revision, locator
+            )
+        except Exception:
+            engines.configuration.dispose()
+            if engines.application is not engines.configuration:
+                engines.application.dispose()
+            raise
         with self._lock:
             previous = self._generation
             self._generation = prepared
@@ -211,8 +220,14 @@ class StorageContext:
         with self._lock:
             current = self._generation
             current.retired = True
+            self._closed = True
             if current.references == 0:
                 current.close()
+                self._close_local_repositories()
+
+    def _close_local_repositories(self) -> None:
+        self.bootstrap.close()
+        self.fallback.close()
 
     def enter_fallback(self, error: BaseException) -> None:
         if classify_storage_failure(error) is not StorageFailureKind.UNAVAILABLE:
