@@ -6,7 +6,6 @@ from homeassistant.components.button import ButtonEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
 from .coordinator import DynamicThermalChargeCoordinator
 from .entity import DynamicThermalChargeEntity, controller_entity_unique_id
 
@@ -30,5 +29,5 @@ async def async_setup_entry(
     entry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    coordinator: DynamicThermalChargeCoordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator: DynamicThermalChargeCoordinator = entry.runtime_data.coordinator
     async_add_entities([RecalculateButton(coordinator)])

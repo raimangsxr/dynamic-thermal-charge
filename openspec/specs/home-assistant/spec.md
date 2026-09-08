@@ -29,7 +29,7 @@ El backend debe persistir el control automático, el modo `AUTO/OFF` de cada acu
 
 ### Requirement: ConfigEntry y dispositivos estables
 
-La integración debe configurar host, puerto y token mediante ConfigFlow, validar conectividad, rechazar instalaciones duplicadas por UUID estable y soportar reautenticación/reconfiguración. Debe crear un dispositivo Controller y uno por acumulador, enlazados con `via_device`, conservando sus registros al renombrar y reconciliando altas/bajas tras snapshots autoritativos exitosos.
+La integración debe configurar protocolo (`http` o `https`), host, puerto y token mediante ConfigFlow, validar conectividad, rechazar instalaciones duplicadas por UUID estable y soportar reautenticación/reconfiguración. HTTPS debe validar la cadena y el nombre del certificado. Debe crear un dispositivo Controller y uno por acumulador, enlazados con `via_device_id`, conservando sus registros al renombrar y reconciliando altas/bajas tras snapshots autoritativos exitosos. Las entradas antiguas sin protocolo se migran explícitamente a HTTP sin cambiar su identidad.
 
 #### Scenario: Inventario dinámico
 
@@ -38,7 +38,7 @@ La integración debe configurar host, puerto y token mediante ConfigFlow, valida
 
 ### Requirement: Entidades y disponibilidad coordinadas
 
-El Controller debe exponer estado, control automático, recálculo, potencia total y calendario. Cada acumulador debe exponer Climate `AUTO/OFF`, temperatura, SOC sin clase battery, charging, potencia, trampilla opcional, próxima carga y próximo SOC objetivo. Las lecturas deben usar I/O asíncrono, polling compartido de 30 segundos y actualización inmediata tras órdenes.
+El Controller debe exponer estado enum (`running`, `idle`, `degraded`, `error`), control automático, recálculo, potencia total y calendario. Cada acumulador debe exponer Climate `AUTO/OFF`, temperatura, SOC sin clase battery, charging, potencia, trampilla opcional, próxima carga y próximo SOC objetivo. El coordinador y el cliente pertenecen a `ConfigEntry.runtime_data`; las lecturas deben usar I/O asíncrono, polling compartido de 30 segundos y actualización inmediata tras órdenes.
 
 #### Scenario: Fallo y recuperación
 
@@ -47,9 +47,13 @@ El Controller debe exponer estado, control automático, recálculo, potencia tot
 
 ### Requirement: Calendario de planificación
 
-El calendario global debe fusionar intervalos contiguos del mismo acumulador, ordenar los eventos y exponer fechas con zona horaria y el resumen de evolución SOC/energía cuando exista.
+El calendario global debe fusionar intervalos contiguos del mismo acumulador, ordenar los eventos, devolver el activo o el siguiente futuro y exponer fechas con zona horaria y el resumen de evolución SOC/energía cuando exista.
 
 #### Scenario: Slots contiguos
 
 - **WHEN** el plan contiene slots adyacentes del mismo acumulador
 - **THEN** el calendario publica un único evento con el intervalo fusionado y su resumen térmico
+
+### Requirement: Fallos de transporte y contrato
+
+Un fallo de conexión, autenticación, TLS o una respuesta incompatible debe marcar la entrada o sus entidades con el estado de error/no disponibilidad apropiado, sin mostrar una lectura antigua como actual ni revelar credenciales en diagnósticos o logs.

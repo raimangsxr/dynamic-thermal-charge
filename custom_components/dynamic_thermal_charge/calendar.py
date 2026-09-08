@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.components.calendar import CalendarEntity, CalendarEvent
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN
 from .coordinator import DynamicThermalChargeCoordinator
 from .entity import DynamicThermalChargeEntity, controller_entity_unique_id
 
@@ -27,9 +26,12 @@ class GlobalChargeCalendar(DynamicThermalChargeEntity, CalendarEntity):
         snapshot = self._snapshot
         if snapshot is None:
             return None
-        now = dt_util.utcnow()
-        events = _events(snapshot, now, now.replace(year=now.year + 1))
-        return next((item for item in events if item.start <= now < item.end), None)
+        now = dt_util.as_utc(dt_util.utcnow())
+        events = _events(snapshot, now, now + timedelta(days=366))
+        active = next((item for item in events if item.start <= now < item.end), None)
+        if active is not None:
+            return active
+        return next((item for item in events if item.start >= now), None)
 
     async def async_get_events(
         self,
@@ -44,7 +46,7 @@ class GlobalChargeCalendar(DynamicThermalChargeEntity, CalendarEntity):
 
 
 async def async_setup_entry(hass: HomeAssistant, entry, async_add_entities) -> None:
-    coordinator: DynamicThermalChargeCoordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator: DynamicThermalChargeCoordinator = entry.runtime_data.coordinator
     async_add_entities([GlobalChargeCalendar(coordinator)])
 
 
@@ -54,14 +56,21 @@ def _events(
     end_date: datetime,
 ) -> list[CalendarEvent]:
     plan = snapshot.get("plan")
-    if not plan:
+    if not isinstance(plan, dict) or not plan:
+        return []
+    start_date = _as_utc(start_date)
+    end_date = _as_utc(end_date)
+    if end_date <= start_date:
         return []
     names = {
         str(item["id"]): str(item.get("name", item["id"]))
         for item in snapshot.get("accumulators", ())
+        if isinstance(item, dict) and item.get("id") is not None
     }
     grouped: dict[str, list[dict[str, Any]]] = {}
     for interval in plan.get("intervals", ()):
+        if not isinstance(interval, dict) or interval.get("accumulator_id") is None:
+            continue
         start = _parse(interval.get("start"))
         end = _parse(interval.get("end"))
         if start is None or end is None or end <= start:
@@ -98,7 +107,10 @@ def _events(
                     end=interval["end"],
                     summary=names.get(accumulator_id, accumulator_id),
                     description=description,
-                    uid=f"{snapshot['installation']['id']}:{accumulator_id}:{position}:{interval['start'].isoformat()}",
+                    uid=(
+                        f"{snapshot.get('installation', {}).get('id', 'dynamic-thermal-charge')}"
+                        f":{accumulator_id}:{position}:{interval['start'].isoformat()}"
+                    ),
                 )
             )
     return sorted(events, key=lambda event: (event.start, event.end, event.summary))
@@ -106,8 +118,18 @@ def _events(
 
 def _parse(value: Any) -> datetime | None:
     if isinstance(value, datetime):
-        return value
-    return None if value is None else dt_util.parse_datetime(str(value))
+        return dt_util.as_utc(value)
+    if value is None:
+        return None
+    try:
+        parsed = dt_util.parse_datetime(str(value))
+    except ValueError:
+        return None
+    return None if parsed is None else dt_util.as_utc(parsed)
+
+
+def _as_utc(value: datetime) -> datetime:
+    return dt_util.as_utc(value)
 
 
 def _sum(left: Any, right: Any) -> float | None:

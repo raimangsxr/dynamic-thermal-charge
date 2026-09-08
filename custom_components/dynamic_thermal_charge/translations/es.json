@@ -4,7 +4,7 @@
       "user": {
         "title": "Conectar Dynamic Thermal Charge",
         "description": "Introduce el host, puerto y token Bearer del backend local.",
-        "data": {"host": "Host", "port": "Puerto", "token": "Token"}
+        "data": {"protocol": "Protocolo", "host": "Host", "port": "Puerto", "token": "Token"}
       },
       "reauth_confirm": {
         "title": "Reautenticar Dynamic Thermal Charge",
@@ -14,7 +14,7 @@
       "reconfigure": {
         "title": "Reconfigurar Dynamic Thermal Charge",
         "description": "Cambia la conexión sin cambiar la identidad de la instalación.",
-        "data": {"host": "Host", "port": "Puerto", "token": "Token"}
+        "data": {"protocol": "Protocolo", "host": "Host", "port": "Puerto", "token": "Token"}
       }
     },
     "error": {
@@ -24,8 +24,11 @@
     },
     "abort": {
       "already_configured": "Esta instalación ya está configurada",
+      "different_installation": "El endpoint pertenece a otra instalación",
       "reauth_success": "Reautenticación correcta",
       "reconfigure_success": "Reconfiguración correcta",
+      "reauth_successful": "Reautenticación correcta",
+      "reconfigure_successful": "Reconfiguración correcta",
       "unknown_entry": "La entrada de configuración ya no existe"
     }
   },

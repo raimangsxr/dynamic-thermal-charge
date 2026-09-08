@@ -9,7 +9,6 @@ from homeassistant.components.binary_sensor import (
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
 from .coordinator import DynamicThermalChargeCoordinator
 from .entity import DynamicThermalChargeEntity, accumulator_entity_unique_id
 
@@ -35,7 +34,7 @@ async def async_setup_entry(
     entry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    coordinator: DynamicThermalChargeCoordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator: DynamicThermalChargeCoordinator = entry.runtime_data.coordinator
     await coordinator.async_register_dynamic_platform(
         "binary_sensor",
         lambda accumulator_id: [

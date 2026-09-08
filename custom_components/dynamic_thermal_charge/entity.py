@@ -12,6 +12,7 @@ from .coordinator import (
     DynamicThermalChargeCoordinator,
     accumulator_from_snapshot,
     accumulator_unique_id,
+    controller_device_id,
     controller_unique_id,
     installation_id,
 )
@@ -47,7 +48,7 @@ class DynamicThermalChargeEntity(CoordinatorEntity[DynamicThermalChargeCoordinat
             name=str(accumulator.get("name", accumulator_id)),
             manufacturer=MANUFACTURER,
             model="Accumulator",
-            via_device=(DOMAIN, installation_id(self.coordinator)),
+            via_device_id=controller_device_id(self.coordinator),
         )
 
     @property

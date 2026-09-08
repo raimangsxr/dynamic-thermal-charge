@@ -1,7 +1,7 @@
 # Dynamic Thermal Charge
 
-Controlador de acumuladores térmicos con API, MQTT y panel web. La única
-instalación soportada es Docker Compose.
+Controlador de acumuladores térmicos con API, MQTT, panel web e integración
+nativa para Home Assistant.
 
 ## Estructura
 
@@ -32,14 +32,40 @@ dispositivo.
 
 ## Integración con Home Assistant
 
-La integración nativa está en `custom_components/dynamic_thermal_charge`. Para
-una instalación manual, copia ese directorio a
-`/config/custom_components/dynamic_thermal_charge` en Home Assistant y reinicia
-Home Assistant. En `Ajustes → Dispositivos y servicios → Añadir integración`,
-introduce el host y puerto accesibles desde Home Assistant y el mismo token
-Bearer configurado en `DTC_API_TOKEN` (el puerto habitual del backend es
-`8080`). El backend debe ser accesible desde la red de Home Assistant; la
-integración no usa la API del panel web.
+La integración nativa soporta Home Assistant Core **2026.9.1**. La instalación
+manual requiere esa versión de Home Assistant, acceso de red al backend y el
+token Bearer configurado en `DTC_API_TOKEN` (el puerto habitual es `8080`). El
+backend debe ser accesible desde la red de Home Assistant; la integración no
+usa la API del panel web.
+
+Para instalarla:
+
+1. Descarga el árbol de esta versión y copia exactamente
+   `custom_components/dynamic_thermal_charge` a
+   `/config/custom_components/dynamic_thermal_charge` (o usa el editor de
+   archivos de Home Assistant).
+2. Reinicia Home Assistant y espera a que termine el arranque.
+3. En `Ajustes → Dispositivos y servicios → Añadir integración`, busca
+   `Dynamic Thermal Charge`, selecciona `http` para una red local o `https`
+   para un endpoint TLS, e introduce host, puerto y token por separado.
+
+En HTTPS se valida siempre la cadena de confianza y el nombre del certificado;
+no hay una opción para desactivar esa comprobación. Un certificado autofirmado
+o cuyo nombre no coincida se rechaza. Las entradas creadas por versiones
+anteriores que no guardaban protocolo se migran automáticamente a HTTP,
+conservando su UUID, dispositivos y entidades.
+
+Comprobación básica: abre el dispositivo controlador y confirma que el sensor
+`State` tiene uno de `running`, `idle`, `degraded` o `error`; después revisa que
+el calendario y el sensor de un acumulador muestren datos. Si no hay conexión o
+autenticación, las entidades aparecen como no disponibles y no muestran una
+lectura antigua como actual.
+
+Para actualizar, sustituye el directorio por el de la nueva versión, conserva
+la entrada de configuración y reinicia Home Assistant. Para desinstalar,
+elimina la integración desde `Ajustes → Dispositivos y servicios`, borra
+`/config/custom_components/dynamic_thermal_charge` y reinicia; los datos del
+backend no se borran.
 
 El backend sigue siendo la autoridad: Home Assistant solo lee snapshots y
 envía comandos autenticados con revisión optimista. La integración consulta un
