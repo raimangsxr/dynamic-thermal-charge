@@ -52,7 +52,7 @@ dev = [
     "paho-mqtt>=2.1,<3",
     # Fixed separately from the runtime dependencies: this is the compatibility
     # target for the native Home Assistant integration and its socket-free tests.
-    "homeassistant==2025.1.4",
+    "homeassistant==2026.9.1",
 ]
 gpio = ["gpiozero>=2.0.1,<3", "lgpio>=0.2.2.0"]
 
@@ -79,9 +79,12 @@ filterwarnings = [
     # visible with recent anyio, which is why it appears in a fresh environment
     # and not necessarily in an older one.
     "ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning",
-    # Home Assistant 2025.1 imports pyOpenSSL's deprecated CSR type while
+    # Home Assistant imports pyOpenSSL's deprecated CSR type while
     # warnings are errors in this project; this is third-party startup noise.
     "ignore:.*support in pyOpenSSL is deprecated.*:DeprecationWarning",
+    # Home Assistant 2026.9 imports aiogithubapi/backoff, which still probes
+    # asyncio.iscoroutinefunction on Python 3.14 during component startup.
+    "ignore:'asyncio\\.iscoroutinefunction' is deprecated.*:DeprecationWarning",
     "ignore:Inheritance class .* from web.Application is discouraged:DeprecationWarning",
 ]
 

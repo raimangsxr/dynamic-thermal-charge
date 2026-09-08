@@ -62,6 +62,10 @@ class BootstrapRepository:
         upgrade_bootstrap_schema(self.engine)
         _protect_file(paths.bootstrap)
 
+    def close(self) -> None:
+        """Release the local engine and its pooled SQLite connections."""
+        self.engine.dispose()
+
     def initialise(self) -> BootstrapInitResult:
         now = _aware(self._clock())
         token = secrets.token_urlsafe(32)

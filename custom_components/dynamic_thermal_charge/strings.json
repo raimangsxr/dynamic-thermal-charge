@@ -5,6 +5,7 @@
         "title": "Connect Dynamic Thermal Charge",
         "description": "Enter the host, port and bearer token of the local backend.",
         "data": {
+          "protocol": "Protocol",
           "host": "Host",
           "port": "Port",
           "token": "Token"
@@ -21,6 +22,7 @@
         "title": "Reconfigure Dynamic Thermal Charge",
         "description": "Change the backend connection without changing the installation identity.",
         "data": {
+          "protocol": "Protocol",
           "host": "Host",
           "port": "Port",
           "token": "Token"
@@ -34,8 +36,11 @@
     },
     "abort": {
       "already_configured": "This installation is already configured",
+      "different_installation": "The endpoint belongs to a different installation",
       "reauth_success": "Re-authentication succeeded",
       "reconfigure_success": "Reconfiguration succeeded",
+      "reauth_successful": "Re-authentication succeeded",
+      "reconfigure_successful": "Reconfiguration succeeded",
       "unknown_entry": "The configuration entry no longer exists"
     }
   },

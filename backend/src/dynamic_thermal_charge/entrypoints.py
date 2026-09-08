@@ -129,18 +129,19 @@ def _dev_postgres_locator():
 
 def check_configuration() -> None:
     """Validate that the persisted storage and configuration can be opened."""
+    store = _configured_store()
     try:
-        store = _configured_store()
         store.repository.current()
         system = store.system_configuration.current()
+        from .logging_config import configure_logging
+
+        configure_logging(system.configuration.logging.level)
+        logger.debug("Controller healthcheck passed")
     except Exception as exc:
         logger.error("Controller healthcheck failed: %s", exc)
         raise
-
-    from .logging_config import configure_logging
-
-    configure_logging(system.configuration.logging.level)
-    logger.debug("Controller healthcheck passed")
+    finally:
+        store.close()
 
 
 def run_controller() -> None:
@@ -191,13 +192,16 @@ def run_api(
         store.context.publish_process_revision("api")
     app = create_app(settings, store_factory=lambda: store)
     logger.info("Serving the HTTP API on %s:%d", host, port)
-    uvicorn.run(
-        app,
-        host=host,
-        port=port,
-        log_level=system.logging.level.lower(),
-        log_config=uvicorn_log_config(),
-    )
+    try:
+        uvicorn.run(
+            app,
+            host=host,
+            port=port,
+            log_level=system.logging.level.lower(),
+            log_config=uvicorn_log_config(),
+        )
+    finally:
+        store.close()
 
 
 def run_mqtt() -> None:

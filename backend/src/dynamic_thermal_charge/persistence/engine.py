@@ -12,6 +12,7 @@ import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
+import weakref
 
 from sqlalchemy import Connection, create_engine, event, text
 from sqlalchemy.engine import Engine
@@ -72,6 +73,12 @@ def build_engine(
             f"{_reason(exc)}"
         ) from exc
     if location.backend == SQLITE_BACKEND:
+        # SQLAlchemy's pooled SQLite connections used to be silently closed
+        # when an unreferenced Engine was collected. Python 3.14 reports those
+        # database handles as ResourceWarnings instead. Keep the pool's own
+        # finalizer alive with the Engine so an abandoned compatibility/
+        # one-shot store still releases its connections at collection time.
+        weakref.finalize(engine, engine.pool.dispose)
         _register_sqlite_pragmas(engine)
     logger.info("Configuration store: %s", location.description.describe())
     return engine

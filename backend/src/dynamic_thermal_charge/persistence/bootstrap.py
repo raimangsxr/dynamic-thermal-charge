@@ -39,6 +39,18 @@ class Store:
     system_configuration: object | None = None
     applied_revisions: object | None = None
 
+    def close(self) -> None:
+        """Release all engines owned by this store.
+
+        Context-backed stores own the bootstrap, fallback and canonical
+        engines through their :class:`StorageContext`; legacy stores own the
+        single compatibility engine directly.
+        """
+        if self.context is not None:
+            self.context.close()
+            return
+        self.engine.dispose()
+
     @property
     def planning(self):
         from .planning import SqlPlanningRepository

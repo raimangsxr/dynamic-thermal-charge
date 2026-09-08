@@ -52,7 +52,18 @@ def store_env(store_paths) -> StorePaths:
 def store(store_paths):
     from dynamic_thermal_charge.persistence.bootstrap import initialise_at
 
-    return initialise_at(store_paths, allow_seed=False)[0]
+    store = initialise_at(store_paths, allow_seed=False)[0]
+    try:
+        yield store
+    finally:
+        # Python 3.14 reports pooled sqlite connections that are left to
+        # garbage collection.  Keep every fixture-owned storage generation
+        # within an explicit lifetime so those warnings cannot leak into the
+        # next test (where pytest treats warnings as errors).
+        if store.context is not None:
+            store.context.close()
+        else:
+            store.engine.dispose()
 
 
 @pytest.fixture

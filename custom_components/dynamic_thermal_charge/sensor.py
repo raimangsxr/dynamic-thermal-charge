@@ -15,7 +15,6 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN
 from .coordinator import DynamicThermalChargeCoordinator
 from .entity import (
     DynamicThermalChargeEntity,
@@ -25,6 +24,7 @@ from .entity import (
 
 
 class ControllerStateSensor(DynamicThermalChargeEntity, SensorEntity):
+    _attr_device_class = SensorDeviceClass.ENUM
     _attr_options: ClassVar[list[str]] = ["running", "idle", "degraded", "error"]
     _attr_translation_key = "controller_state"
 
@@ -36,7 +36,8 @@ class ControllerStateSensor(DynamicThermalChargeEntity, SensorEntity):
     @property
     def native_value(self) -> str | None:
         snapshot = self._snapshot
-        return None if snapshot is None else snapshot.get("health")
+        value = None if snapshot is None else snapshot.get("health")
+        return value if value in self._attr_options else None
 
 
 class TotalPowerSensor(DynamicThermalChargeEntity, SensorEntity):
@@ -139,7 +140,7 @@ async def async_setup_entry(
     entry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    coordinator: DynamicThermalChargeCoordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator: DynamicThermalChargeCoordinator = entry.runtime_data.coordinator
     async_add_entities([
         ControllerStateSensor(coordinator),
         TotalPowerSensor(coordinator),

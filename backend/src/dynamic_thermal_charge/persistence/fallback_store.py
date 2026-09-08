@@ -50,6 +50,10 @@ class FallbackRepository:
         upgrade_fallback_schema(self.engine)
         _protect_file(paths.fallback)
 
+    def close(self) -> None:
+        """Release the local engine and its pooled SQLite connections."""
+        self.engine.dispose()
+
     def replace_snapshot(
         self,
         *,
