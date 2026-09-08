@@ -17,7 +17,8 @@ jobs:
         with:
           ref: ${{ github.event.release.tag_name }}
       - uses: actions/setup-python@v6
-        with: { python-version: '3.12' }
+        # Home Assistant 2026.9.1 requires Python >=3.14.2.
+        with: { python-version: '3.14' }
       - uses: actions/setup-node@v6
         with: { node-version: '24', cache: npm, cache-dependency-path: frontend/package-lock.json }
       - name: Install dependencies

@@ -12,6 +12,11 @@ nativa para Home Assistant.
 
 ## Desarrollo
 
+El entorno que ejecuta `make setup` y `make check` debe usar Python **3.14.2 o
+posterior**, porque la integración nativa se prueba con Home Assistant Core
+2026.9.1. El backend de producción mantiene `>=3.12`; esta diferencia solo
+afecta a la puerta de calidad y a las pruebas de la integración.
+
 ```sh
 make setup   # entorno de backend en backend/.venv y dependencias del panel
 make test    # pruebas de backend y de frontend
