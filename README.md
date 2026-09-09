@@ -198,6 +198,32 @@ las entidades con la misma disponibilidad en un único mensaje por dispositivo;
 las entidades que requieren además `state_available` mantienen su disponibilidad
 individual.
 
+### Topics MQTT de lectura y escritura
+
+El prefijo MQTT de la instalación es `<prefijo>/installation` (por defecto,
+`dtc/installation`). El controlador usa estos topics:
+
+| Dirección | Topic | Payload | Retenido |
+| --- | --- | --- | --- |
+| Lee | `<prefijo>/installation/heater/<id>/telemetry` | JSON de telemetría, si coincide con el `telemetry_topic` configurado | No aplica |
+| Lee | `<prefijo>/installation/heater/<id>/set/enabled` | `ON` o `OFF` | No aplica |
+| Escribe | `<prefijo>/installation/availability` | `online` u `offline` | Sí |
+| Escribe | `<prefijo>/installation/state_available` | `online` u `offline` | Sí |
+| Escribe | `<prefijo>/installation/state` | Estado JSON de la instalación | Sí |
+| Escribe | `<prefijo>/installation/heater/<id>/state` | Estado JSON del acumulador | Sí |
+
+El topic de telemetría de cada acumulador se configura en el panel. Su payload
+es un objeto JSON con las claves numéricas opcionales
+`indoor_temperature_c`, `stored_soc_percent` y `damper_position_percent`.
+También puede usarse el topic de simulación predeterminado
+`<prefijo-de-simulación>/<id>/telemetry` cuando la simulación está activa.
+
+El descubrimiento de Home Assistant se publica en
+`<discovery_prefix>/device/<id-dispositivo>/config` para los dispositivos
+agrupados. Las entidades que necesitan una disponibilidad adicional conservan
+su discovery individual en `<discovery_prefix>/<componente>/<unique_id>/config`.
+Estos topics los publica el controlador y no requieren suscripción externa.
+
 Si una salida rechaza una conmutación, el controlador degrada únicamente esa
 salida: aplica el resto de las transiciones del ciclo, la reintenta en cada
 sondeo y no persiste ninguna exclusión. Una salida cuyo apagado falla se sigue
