@@ -44,16 +44,33 @@ h3 { margin: 0; color: var(--ink); font-size: 1rem; }
 .target-empty-state > mat-icon { flex: 0 0 auto; color: var(--primary); }
 .target-empty-state h4 { margin: 0; color: var(--ink); font-size: 1rem; }
 .target-empty-state p { margin: .35rem 0 .8rem; line-height: 1.45; }
-.target-card-list { display: grid; gap: 1rem; margin-top: 1rem; }
-.constraint-card { display: block; min-width: 0; padding: 1rem 1.1rem; border: 1px solid var(--border); border-radius: .75rem; background: #fbfcfe; box-shadow: 0 2px 8px #1720330a; }
-.target-card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; min-width: 0; padding-bottom: .85rem; border-bottom: 1px solid var(--border); }
-.target-card-header > div { min-width: 0; }
+.target-master-detail { display: grid; grid-template-columns: minmax(14rem, .34fr) minmax(0, .66fr); align-items: start; gap: 1rem; margin-top: 1rem; }
+.target-list-panel, .target-detail-panel { min-width: 0; margin: 0; padding: 1rem; border: 1px solid var(--border); border-radius: .75rem; background: #fbfcfe; box-shadow: none; }
+.target-detail-panel { background: var(--surface); }
+.target-list-header { display: flex; align-items: flex-start; justify-content: space-between; gap: .75rem; padding-bottom: .75rem; border-bottom: 1px solid var(--border); }
+.target-list-header h4 { margin: 0; color: var(--ink); font-size: 1rem; }
+.target-list-header .field-help { margin-top: .25rem; }
+.target-list-count { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; min-width: 1.7rem; min-height: 1.7rem; padding: .15rem .45rem; border-radius: 999px; background: #e8f0ff; color: var(--primary); font-size: .82rem; font-weight: 750; }
+.target-list { display: grid; gap: .45rem; margin-top: .75rem; }
+.target-list > [role='listitem'] { min-width: 0; }
+.target-list-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .25rem .6rem; width: 100%; min-width: 0; padding: .7rem .75rem; border: 1px solid var(--border); border-radius: .6rem; background: var(--surface); color: var(--ink); cursor: pointer; text-align: left; font: inherit; }
+.target-list-item:hover { border-color: var(--primary); }
+.target-list-item-selected { border-color: var(--primary); background: #e8f0ff; box-shadow: 0 0 0 1px #0756af22; }
+.target-list-item-main { display: grid; gap: .15rem; min-width: 0; }
+.target-list-item-main strong { overflow-wrap: anywhere; line-height: 1.3; }
+.target-list-item-main span, .target-list-item-time { color: var(--muted); font-size: .82rem; line-height: 1.35; overflow-wrap: anywhere; }
+.target-list-item-time { grid-column: 1; }
+.target-list-item .target-state { grid-column: 2; grid-row: 1 / span 2; align-self: start; font-size: .72rem; }
+.target-list-add { width: 100%; margin-top: .75rem; }
+.target-detail-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; min-width: 0; padding-bottom: .85rem; border-bottom: 1px solid var(--border); }
+.target-detail-header > div { min-width: 0; }
 .target-card-kicker { margin: 0 0 .2rem; color: var(--primary); font-size: .74rem; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
-.target-card-header h4 { margin: 0; color: var(--ink); font-size: 1.1rem; line-height: 1.3; overflow-wrap: anywhere; }
+.target-detail-header h4 { margin: 0; color: var(--ink); font-size: 1.1rem; line-height: 1.3; overflow-wrap: anywhere; }
 .target-card-summary { margin: .35rem 0 0; color: var(--muted); font-size: .9rem; line-height: 1.4; overflow-wrap: anywhere; }
 .target-state { display: inline-flex; flex: 0 0 auto; align-items: center; padding: .3rem .6rem; border-radius: 999px; background: #edf0f2; color: var(--muted); font-size: .8rem; font-weight: 700; }
 .target-state-enabled { background: #e7f4eb; color: #176b35; }
-.target-card-content { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; margin-top: 1rem; }
+.target-detail-hint { margin: .75rem 0 0; color: var(--muted); font-size: .84rem; line-height: 1.45; }
+.target-detail-content { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; margin-top: 1rem; }
 .target-block { min-width: 0; margin: 0; padding: .9rem; border: 1px solid var(--border); border-radius: .65rem; background: var(--surface); box-shadow: none; }
 .target-block h5 { margin: 0; color: var(--ink); font-size: .96rem; }
 .target-fields { display: grid; gap: .75rem; margin-top: .75rem; }
@@ -81,9 +98,9 @@ h3 { margin: 0; color: var(--ink); font-size: 1rem; }
 .selected-days-summary { margin: .7rem 0 0; color: var(--muted); font-size: .84rem; line-height: 1.4; overflow-wrap: anywhere; }
 .target-status-block { grid-column: 1 / -1; }
 .target-status-block .field-help { max-width: 50rem; }
-.target-card-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: .6rem; margin-top: 1rem; padding-top: .9rem; border-top: 1px solid var(--border); }
-.target-card-actions button { display: inline-flex; align-items: center; gap: .35rem; }
-.target-card-actions mat-icon { width: 1.1rem; height: 1.1rem; font-size: 1.1rem; }
+.target-detail-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: .6rem; margin-top: 1rem; padding-top: .9rem; border-top: 1px solid var(--border); }
+.target-detail-actions button { display: inline-flex; align-items: center; gap: .35rem; }
+.target-detail-actions mat-icon { width: 1.1rem; height: 1.1rem; font-size: 1.1rem; }
 .preview-reasons { margin: .5rem 0 0; padding-left: 1.2rem; color: var(--danger); }
 .planning-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: .75rem; margin-top: 1.25rem; padding-top: 1rem; border-top: 2px solid var(--border); }
 .planning-actions button:disabled { opacity: .5; cursor: not-allowed; }
@@ -133,6 +150,11 @@ th, td { padding: .65rem .75rem; border-bottom: 1px solid var(--border); text-al
   .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
+@media (max-width: 56rem) {
+  .target-master-detail { grid-template-columns: minmax(0, 1fr); }
+  .target-detail-content { grid-template-columns: minmax(0, 1fr); }
+}
+
 @media (max-width: 48rem) {
   .planning { width: min(100% - 1rem, 78rem); padding-top: 1rem; }
   .page-header { flex-direction: column; }
@@ -144,8 +166,9 @@ th, td { padding: .65rem .75rem; border-bottom: 1px solid var(--border); text-al
   .banner { flex-direction: column; }
   .banner > button { align-self: flex-start; }
   .chart-wrap { height: 13rem; }
-  .target-card-content { grid-template-columns: minmax(0, 1fr); }
-  .target-card-actions, .planning-actions { justify-content: flex-start; }
+  .target-detail-header { flex-direction: column; }
+  .target-detail-header .target-state { align-self: flex-start; }
+  .target-detail-actions, .planning-actions { justify-content: flex-start; }
   .checks { grid-template-columns: 1fr; }
 }
 
@@ -154,7 +177,6 @@ th, td { padding: .65rem .75rem; border-bottom: 1px solid var(--border); text-al
   .summary-card { min-height: auto; }
   .summary-list div { grid-template-columns: 1fr; gap: .1rem; }
   .card-header { flex-direction: column; }
-  .target-card-header { flex-direction: column; }
   .target-state { align-self: flex-start; }
   .target-values-fields, .target-time-fields { grid-template-columns: minmax(0, 1fr); }
 }

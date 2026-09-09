@@ -1,5 +1,5 @@
 import { HttpErrorResponse } from '@angular/common/http';
-import { AfterViewInit, Component, ElementRef, Injector, OnDestroy, ViewChild, afterNextRender, inject, signal } from '@angular/core';
+import { AfterViewInit, Component, ElementRef, Injector, OnDestroy, ViewChild, afterNextRender, computed, inject, signal } from '@angular/core';
 import { MAT_DIALOG_DATA, MatDialog, MatDialogModule } from '@angular/material/dialog';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
@@ -467,6 +467,14 @@ export class Planning implements AfterViewInit, OnDestroy {
   readonly activationInFlight = signal(false);
   readonly previewJob = signal<PlanningPreviewJobDto | null>(null);
   readonly selectedTab = signal(0);
+  readonly selectedTargetIndex = signal<number | null>(null);
+  readonly selectedTarget = computed<TemperatureTargetDraft | null>(() => {
+    const targets = this.draftTargets();
+    if (!targets.length) return null;
+    const requestedIndex = this.selectedTargetIndex();
+    const index = requestedIndex === null ? 0 : Math.min(Math.max(requestedIndex, 0), targets.length - 1);
+    return targets[index] ?? null;
+  });
 
   @ViewChild('temperatureChart') private temperatureCanvas?: ElementRef<HTMLCanvasElement>;
   @ViewChild('forecastChart') private forecastCanvas?: ElementRef<HTMLCanvasElement>;
@@ -504,7 +512,9 @@ export class Planning implements AfterViewInit, OnDestroy {
     this.api.planning().subscribe({
       next: (planning) => {
         this.snapshot.set(planning);
-        this.draftTargets.set(this.draftTargetsFrom(planning));
+        const targets = this.draftTargetsFrom(planning);
+        this.draftTargets.set(targets);
+        this.selectedTargetIndex.set(targets.length ? 0 : null);
         this.failure.set(null);
         this.loading.set(false);
         if (restorePreview && planning.preview_job) this.acceptPreviewJob(planning.preview_job);
@@ -522,16 +532,45 @@ export class Planning implements AfterViewInit, OnDestroy {
     return (planning.temperature_targets ?? []).map((item) => ({ heater_id: item.heater_id, target_temperature_c: item.target_temperature_c, start_time: item.start_time, end_time: item.end_time, weekdays: [...item.weekdays], enabled: item.enabled }));
   }
 
-  addTarget(heaterId = ''): void { this.draftTargets.update((items) => [...items, { heater_id: heaterId || this.snapshot()?.heaters[0]?.id || '', target_temperature_c: 21, start_time: '07:00', end_time: '09:00', weekdays: [0, 1, 2, 3, 4, 5, 6], enabled: true }]); }
-  duplicateTarget(index: number): void {
-    this.draftTargets.update((items) => {
-      const source = items[index];
-      if (!source) return items;
-      const copy = { ...source, weekdays: [...source.weekdays] };
-      return [...items.slice(0, index + 1), copy, ...items.slice(index + 1)];
-    });
+  addTarget(heaterId = ''): void {
+    const index = this.draftTargets().length;
+    this.draftTargets.update((items) => [...items, { heater_id: heaterId || this.snapshot()?.heaters[0]?.id || '', target_temperature_c: 21, start_time: '07:00', end_time: '09:00', weekdays: [0, 1, 2, 3, 4, 5, 6], enabled: true }]);
+    this.selectedTargetIndex.set(index);
   }
-  removeTarget(index: number): void { this.draftTargets.update((items) => items.filter((_item, itemIndex) => itemIndex !== index)); }
+  duplicateTarget(index: number): void {
+    const source = this.draftTargets()[index];
+    if (!source) return;
+    const copy = { ...source, weekdays: [...source.weekdays] };
+    this.draftTargets.update((items) => [...items.slice(0, index + 1), copy, ...items.slice(index + 1)]);
+    this.selectedTargetIndex.set(index + 1);
+  }
+  selectTarget(index: number): void {
+    if (index < 0 || index >= this.draftTargets().length) return;
+    this.selectedTargetIndex.set(index);
+  }
+  selectedTargetPosition(): number | null {
+    const targets = this.draftTargets();
+    if (!targets.length) return null;
+    const requestedIndex = this.selectedTargetIndex();
+    return requestedIndex === null ? 0 : Math.min(Math.max(requestedIndex, 0), targets.length - 1);
+  }
+  isTargetSelected(index: number): boolean {
+    return this.selectedTargetPosition() === index;
+  }
+  removeTarget(index: number): void {
+    const targets = this.draftTargets();
+    if (!targets[index]) return;
+    const selectedIndex = this.selectedTargetPosition();
+    const nextTargets = targets.filter((_item, itemIndex) => itemIndex !== index);
+    this.draftTargets.set(nextTargets);
+    if (!nextTargets.length) {
+      this.selectedTargetIndex.set(null);
+    } else if (selectedIndex === index) {
+      this.selectedTargetIndex.set(Math.min(index, nextTargets.length - 1));
+    } else if (selectedIndex !== null && selectedIndex > index) {
+      this.selectedTargetIndex.set(selectedIndex - 1);
+    }
+  }
   editTarget(index: number, field: keyof TemperatureTargetDraft, value: unknown): void {
     this.draftTargets.update((items) => items.map((item, itemIndex) => itemIndex === index ? { ...item, [field]: field === 'target_temperature_c' ? Number(value) : value } as TemperatureTargetDraft : item));
   }
@@ -634,6 +673,7 @@ export class Planning implements AfterViewInit, OnDestroy {
     const planning = this.snapshot();
     if (!planning) return;
     this.draftTargets.set(this.draftTargetsFrom(planning));
+    this.selectedTargetIndex.set(this.draftTargets().length ? Math.min(this.selectedTargetPosition() ?? 0, this.draftTargets().length - 1) : null);
     this.clearPreviewState();
     this.actionError.set('');
     this.actionMessage.set('Cambios descartados. Se han restaurado las consignas guardadas.');

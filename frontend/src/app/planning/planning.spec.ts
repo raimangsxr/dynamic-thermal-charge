@@ -225,7 +225,8 @@ describe('Planning', () => {
     fixture.componentInstance.addTarget('salon');
     fixture.detectChanges();
     expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="new-planning-tab"]')).not.toBeNull();
-    expect((fixture.nativeElement as HTMLElement).querySelectorAll('.constraint-row')).toHaveLength(2);
+    expect((fixture.nativeElement as HTMLElement).querySelectorAll('[data-testid="target-list-item"]')).toHaveLength(2);
+    expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="target-detail-form"]')).not.toBeNull();
     expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="preview-visualization"]')).not.toBeNull();
 
     await selectPlanningTab(fixture, 0);
@@ -234,11 +235,11 @@ describe('Planning', () => {
     expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="preview-visualization"]')).toBeNull();
 
     await selectPlanningTab(fixture, 1);
-    expect((fixture.nativeElement as HTMLElement).querySelectorAll('.constraint-row')).toHaveLength(2);
+    expect((fixture.nativeElement as HTMLElement).querySelectorAll('[data-testid="target-list-item"]')).toHaveLength(2);
     expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="preview-visualization"]')).not.toBeNull();
   });
 
-  it('shows a clear empty state and creates a complete target card', async () => {
+  it('shows a clear empty state and creates a complete master-detail editor', async () => {
     backend.expectOne('/api/v1/planning').flush({ ...PLANNING, temperature_targets: [] });
     await fixture.whenStable();
     fixture.detectChanges();
@@ -246,23 +247,24 @@ describe('Planning', () => {
 
     const element = fixture.nativeElement as HTMLElement;
     expect(element.querySelector('[data-testid="targets-empty"]')?.textContent).toContain('Aún no hay consignas semanales');
-    expect(element.querySelectorAll('[data-testid="target-card"]')).toHaveLength(0);
+    expect(element.querySelector('[data-testid="target-master-detail"]')).toBeNull();
     expect(element.querySelector('[data-testid="add-target-button"]')?.textContent).toContain('Añadir primera consigna');
 
     element.querySelector<HTMLButtonElement>('[data-testid="add-target-button"]')?.click();
     fixture.detectChanges();
 
-    const card = element.querySelector('[data-testid="target-card"]');
-    expect(card).not.toBeNull();
+    const detail = element.querySelector('[data-testid="target-detail-panel"]');
+    expect(detail).not.toBeNull();
     expect(element.querySelector('[data-testid="targets-empty"]')).toBeNull();
-    expect(card?.textContent).toContain('Salón');
-    expect(card?.textContent).toContain('21.0 °C');
-    expect(card?.querySelector('[data-testid="duplicate-target-button"]')).not.toBeNull();
-    expect(card?.querySelector('[data-testid="remove-target-button"]')).not.toBeNull();
+    expect(element.querySelectorAll('[data-testid="target-list-item"]')).toHaveLength(1);
+    expect(detail?.textContent).toContain('Salón');
+    expect(detail?.textContent).toContain('21.0 °C');
+    expect(detail?.querySelector('[data-testid="duplicate-target-button"]')).not.toBeNull();
+    expect(detail?.querySelector('[data-testid="remove-target-button"]')).not.toBeNull();
     expect(element.querySelector('[data-testid="planning-actions"]')).not.toBeNull();
   });
 
-  it('renders readable card summaries, full weekday labels and grouped accessible actions', async () => {
+  it('renders readable list summaries, full weekday labels and grouped accessible actions', async () => {
     backend.expectOne('/api/v1/planning').flush({
       ...PLANNING,
       temperature_targets: [{ id: 1, heater_id: 'salon', target_temperature_c: 20.5, start_time: '22:00', end_time: '02:00', weekdays: [0, 2, 6], enabled: false }],
@@ -272,17 +274,63 @@ describe('Planning', () => {
     await selectPlanningTab(fixture, 1);
 
     const element = fixture.nativeElement as HTMLElement;
-    const card = element.querySelector('[data-testid="target-card"]');
-    expect(card?.textContent).toContain('Salón · 20.5 °C');
-    expect(card?.textContent).toContain('Lunes, Miércoles, Domingo');
-    expect(card?.textContent).toContain('22:00–02:00');
-    expect(card?.textContent).toContain('Cruza medianoche');
-    expect(card?.getAttribute('data-state')).toBe('disabled');
-    expect(Array.from(card?.querySelectorAll<HTMLInputElement>('[data-testid="target-day-toggle"]') ?? []).map((input) => input.getAttribute('aria-label'))).toEqual([
+    const listItem = element.querySelector('[data-testid="target-list-item"]');
+    const detail = element.querySelector('[data-testid="target-detail-panel"]');
+    expect(listItem?.textContent).toContain('Salón · 20.5 °C');
+    expect(listItem?.textContent).toContain('Lunes, Miércoles, Domingo');
+    expect(listItem?.textContent).toContain('22:00–02:00');
+    expect(detail?.textContent).toContain('Cruza medianoche');
+    expect(listItem?.getAttribute('data-state')).toBe('disabled');
+    expect(listItem?.querySelector('.target-state')?.textContent).toContain('Inactiva');
+    expect(Array.from(detail?.querySelectorAll<HTMLInputElement>('[data-testid="target-day-toggle"]') ?? []).map((input) => input.getAttribute('aria-label'))).toEqual([
       'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo',
     ]);
-    expect(card?.querySelector<HTMLButtonElement>('[data-testid="duplicate-target-button"]')?.getAttribute('aria-label')).toBe('Duplicar consigna 1');
-    expect(card?.querySelector<HTMLButtonElement>('[data-testid="remove-target-button"]')?.getAttribute('aria-label')).toBe('Quitar consigna 1');
+    expect(detail?.querySelector<HTMLButtonElement>('[data-testid="duplicate-target-button"]')?.getAttribute('aria-label')).toBe('Duplicar consigna 1');
+    expect(detail?.querySelector<HTMLButtonElement>('[data-testid="remove-target-button"]')?.getAttribute('aria-label')).toBe('Quitar consigna 1');
+  });
+
+  it('changes the selected detail without recalculating and keeps selection deterministic', async () => {
+    backend.expectOne('/api/v1/planning').flush({
+      ...TWO_HEATER_PLANNING,
+      temperature_targets: [
+        ...(TWO_HEATER_PLANNING.temperature_targets ?? []),
+        { id: 2, heater_id: 'cocina', target_temperature_c: 19, start_time: '10:00', end_time: '12:00', weekdays: [0, 2, 4], enabled: true },
+      ],
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+    await selectPlanningTab(fixture, 1);
+
+    const element = fixture.nativeElement as HTMLElement;
+    const listItems = element.querySelectorAll<HTMLButtonElement>('[data-testid="target-list-item"]');
+    expect(fixture.componentInstance.selectedTargetPosition()).toBe(0);
+    listItems[1]?.click();
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.selectedTargetPosition()).toBe(1);
+    expect(element.querySelector('[data-testid="target-detail-panel"]')?.textContent).toContain('Cocina');
+    expect(fixture.componentInstance.preview()).toBeNull();
+    expect(fixture.componentInstance.previewJob()).toBeNull();
+    expect(element.querySelectorAll('[data-testid="target-list-item"]')[1]?.getAttribute('aria-pressed')).toBe('true');
+
+    fixture.componentInstance.editTarget(1, 'target_temperature_c', 18.5);
+    fixture.detectChanges();
+    expect(element.querySelectorAll('[data-testid="target-list-item"]')[1]?.textContent).toContain('18.5 °C');
+    fixture.componentInstance.selectTarget(0);
+    fixture.componentInstance.selectTarget(1);
+    fixture.detectChanges();
+    expect(element.querySelector('[data-testid="target-detail-panel"]')?.textContent).toContain('18.5 °C');
+
+    fixture.componentInstance.duplicateTarget(1);
+    expect(fixture.componentInstance.selectedTargetPosition()).toBe(2);
+    fixture.componentInstance.removeTarget(2);
+    expect(fixture.componentInstance.selectedTargetPosition()).toBe(1);
+    fixture.componentInstance.removeTarget(0);
+    expect(fixture.componentInstance.selectedTargetPosition()).toBe(0);
+    fixture.componentInstance.removeTarget(0);
+    expect(fixture.componentInstance.selectedTargetPosition()).toBeNull();
+    fixture.detectChanges();
+    expect(element.querySelector('[data-testid="targets-empty"]')).not.toBeNull();
   });
 
   it('represents midnight explicitly and preserves the API value when toggled', async () => {
@@ -319,6 +367,7 @@ describe('Planning', () => {
 
     fixture.componentInstance.duplicateTarget(0);
     expect(fixture.componentInstance.draftTargets()).toEqual([target, target]);
+    expect(fixture.componentInstance.selectedTargetPosition()).toBe(1);
 
     fixture.componentInstance.editTarget(1, 'start_time', '23:00');
     fixture.componentInstance.toggleDay(1, 0);

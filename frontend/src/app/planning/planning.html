@@ -118,9 +118,6 @@
                 <h3 id="targets-title">Consignas semanales de temperatura</h3>
                 <p class="hint">Define la temperatura objetivo, el intervalo horario local y los días. El inicio se incluye y el fin se excluye; los intervalos pueden cruzar medianoche.</p>
               </div>
-              @if (draftTargets().length) {
-                <button mat-flat-button color="primary" class="add-target-button" type="button" (click)="addTarget()" data-testid="add-target-button"><mat-icon aria-hidden="true">add</mat-icon> Añadir consigna</button>
-              }
             </div>
 
             @if (!draftTargets().length) {
@@ -133,19 +130,46 @@
                 </div>
               </div>
             } @else {
-              <div class="target-card-list" data-testid="target-card-list">
-                @for (target of draftTargets(); track $index; let index = $index) {
-                  <article class="constraint-card constraint-row" data-testid="target-card" [attr.data-target-index]="index" [attr.data-state]="isTargetEnabled(target) ? 'enabled' : 'disabled'" [attr.aria-labelledby]="'target-card-title-' + index">
-                    <header class="target-card-header">
+              <div class="target-master-detail" data-testid="target-master-detail">
+                <section class="target-list-panel" aria-labelledby="target-list-title" data-testid="target-list-panel">
+                  <div class="target-list-header">
+                    <div>
+                      <h4 id="target-list-title">Consignas</h4>
+                      <p class="field-help">Selecciona una para editarla.</p>
+                    </div>
+                    <span class="target-list-count" aria-label="Número de consignas">{{ draftTargets().length }}</span>
+                  </div>
+                  <div class="target-list" role="list" data-testid="target-list">
+                    @for (target of draftTargets(); track $index; let index = $index) {
+                      <div role="listitem">
+                        <button class="target-list-item" [class.target-list-item-selected]="isTargetSelected(index)" type="button" (click)="selectTarget(index)" [attr.aria-pressed]="isTargetSelected(index)" [attr.aria-label]="'Seleccionar consigna ' + (index + 1) + ': ' + heaterText(target.heater_id) + ', ' + formatTemperature(target.target_temperature_c) + ' grados, ' + targetDaysSummary(target) + ', ' + targetTimeSummary(target)" [attr.data-target-index]="index" [attr.data-state]="isTargetEnabled(target) ? 'enabled' : 'disabled'" data-testid="target-list-item">
+                          <span class="target-list-item-main">
+                            <strong>{{ heaterText(target.heater_id) }} · {{ formatTemperature(target.target_temperature_c) }} °C</strong>
+                            <span>{{ targetDaysSummary(target) }}</span>
+                          </span>
+                          <span class="target-list-item-time">{{ targetTimeSummary(target) }}</span>
+                          <span class="target-state" [class.target-state-enabled]="isTargetEnabled(target)">{{ isTargetEnabled(target) ? 'Activa' : 'Inactiva' }}</span>
+                        </button>
+                      </div>
+                    }
+                  </div>
+                  <button mat-stroked-button class="add-target-button target-list-add" type="button" (click)="addTarget()" data-testid="add-target-button"><mat-icon aria-hidden="true">add</mat-icon> Añadir consigna</button>
+                </section>
+
+                <section class="target-detail-panel" aria-labelledby="target-detail-title" [attr.data-target-index]="selectedTargetPosition()" data-testid="target-detail-panel">
+                  @if (selectedTarget(); as target) {
+                    @let index = selectedTargetPosition() ?? 0;
+                    <header class="target-detail-header" aria-live="polite">
                       <div>
-                        <p class="target-card-kicker">Consigna {{ index + 1 }}</p>
-                        <h4 [id]="'target-card-title-' + index">{{ heaterText(target.heater_id) }} · {{ formatTemperature(target.target_temperature_c) }} °C</h4>
+                        <p class="target-card-kicker">Detalle de consigna {{ index + 1 }}</p>
+                        <h4 id="target-detail-title">{{ heaterText(target.heater_id) }} · {{ formatTemperature(target.target_temperature_c) }} °C</h4>
                         <p class="target-card-summary">{{ targetDaysSummary(target) }} · {{ targetTimeSummary(target) }}</p>
                       </div>
                       <span class="target-state" [class.target-state-enabled]="isTargetEnabled(target)">{{ isTargetEnabled(target) ? 'Activa' : 'Inactiva' }}</span>
                     </header>
+                    <p class="target-detail-hint">Los cambios se aplican al borrador. Usa «Recalcular vista previa» para comprobarlos.</p>
 
-                    <div class="target-card-content">
+                    <div class="target-detail-content" data-testid="target-detail-form">
                       <section class="target-block" [attr.aria-labelledby]="'target-values-title-' + index">
                         <h5 [id]="'target-values-title-' + index">Acumulador y temperatura</h5>
                         <div class="target-fields target-values-fields">
@@ -207,12 +231,14 @@
                       </section>
                     </div>
 
-                    <footer class="target-card-actions">
+                    <footer class="target-detail-actions">
                       <button mat-stroked-button type="button" (click)="duplicateTarget(index)" [attr.aria-label]="'Duplicar consigna ' + (index + 1)" data-testid="duplicate-target-button"><mat-icon aria-hidden="true">content_copy</mat-icon><span>Duplicar</span></button>
                       <button mat-stroked-button type="button" (click)="removeTarget(index)" [attr.aria-label]="'Quitar consigna ' + (index + 1)" data-testid="remove-target-button"><mat-icon aria-hidden="true">delete_outline</mat-icon><span>Quitar</span></button>
                     </footer>
-                  </article>
-                }
+                  } @else {
+                    <p class="empty">Selecciona una consigna para ver sus detalles.</p>
+                  }
+                </section>
               </div>
             }
 
