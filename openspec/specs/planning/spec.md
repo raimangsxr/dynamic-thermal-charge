@@ -14,7 +14,10 @@ capacidad. Para un intervalo de `dt` horas, el intercambio firmado del recinto
 es `K_room * (T_inside - T_outside) * dt` y la temperatura siguiente cumple
 `T_next = T_inside + (E_heater - E_loss) / C_room`. La energía almacenada debe
 permanecer entre cero y la capacidad, y la carga nominal solo se suma cuando el
-acumulador está encendido.
+acumulador está encendido. El calor entregado por el acumulador en cada
+intervalo no puede superar `potencia nominal × duración real del intervalo` ni
+la energía disponible después de sumar la carga de ese intervalo; este límite
+se aplica también cuando carga y descarga coinciden.
 
 Cuando una consigna está activa en un slot, la temperatura objetivo es una
 invariante en sus dos bordes: se evalúan tanto `T_inside` al inicio como
@@ -27,6 +30,14 @@ precalentar, pero un déficit en cualquiera de esos bordes conserva el plan como
 - **WHEN** la temperatura exterior supera la interior durante un intervalo
 - **THEN** el intercambio térmico es negativo, aumenta la temperatura
   proyectada y se conserva el balance energético firmado
+
+#### Scenario: Descarga limitada por potencia nominal
+
+- **WHEN** una consigna requiere más calor que el que la potencia nominal puede
+  entregar durante un intervalo
+- **THEN** el modelo y el optimizador entregan como máximo esa potencia por la
+  duración real del intervalo, conservan la energía almacenada no negativa y
+  registran el déficit térmico como `DEGRADED`
 
 ### Requirement: Consignas semanales y fuente del objetivo
 

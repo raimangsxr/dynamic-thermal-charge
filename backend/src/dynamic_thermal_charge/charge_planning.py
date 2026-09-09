@@ -1017,6 +1017,11 @@ def _room_telemetry_fresh(
     )
 
 
+def _heat_delivery_limit_kwh(heater: Heater, slot_minutes: int) -> float:
+    """Return the physical heat delivery limit for one real-time slot."""
+    return heater.charge_power_kw * slot_minutes / 60
+
+
 def room_energy_step(
     heater: Heater,
     *,
@@ -1064,7 +1069,7 @@ def room_energy_step(
     heat = required_heat if heat_delivered_kwh is None else float(heat_delivered_kwh)
     if not math.isfinite(heat) or heat < 0:
         raise ValueError("heat_delivered_kwh must be finite and non-negative")
-    heat = min(heat, available)
+    heat = min(heat, available, _heat_delivery_limit_kwh(heater, slot_minutes))
     stored_next = max(0.0, min(heater.capacity_kwh, available - heat))
     indoor_next = indoor_temperature_c + (heat - thermal_loss) / capacity
     return RoomEnergyInterval(
@@ -1330,6 +1335,9 @@ def _solve_room_energy(
             loss_factor = heater.room_heat_loss_kw_per_c * slot_hours
             capacity = heater.room_thermal_capacity_kwh_per_c
             model += heat[(heater.id, index)] <= stored[(heater.id, index)] + charge[(heater.id, index)]
+            model += heat[(heater.id, index)] <= _heat_delivery_limit_kwh(
+                heater, request.slot_minutes
+            )
             model += stored[(heater.id, index + 1)] == stored[(heater.id, index)] + charge[(heater.id, index)] - heat[(heater.id, index)]
             # E_loss = K_room * (T_inside - T_outside) * dt, substituted into
             # the affine temperature balance below.  This retains the sign:
