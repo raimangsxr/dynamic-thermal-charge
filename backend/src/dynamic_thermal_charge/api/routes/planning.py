@@ -619,6 +619,7 @@ def _automatic_planning_response(
                 temperature_shortfall_start_c_by_heater=item.get("temperature_shortfall_start_c", {}),
                 temperature_shortfall_c_by_heater=item.get("temperature_shortfall_c", {}),
                 charge_energy_kwh_by_heater=item.get("charge_energy_kwh", {}),
+                heat_delivery_limit_kwh_by_heater=item.get("heat_delivery_limit_kwh", {}),
             )
             for item in automatic_slots
             if real_before(item["start"], window_end)
@@ -945,6 +946,7 @@ def _automatic_plan_from_preview_payload(payload: dict[str, Any]) -> AutomaticPl
             _preview_float_map(item.get("stored_energy_next_kwh")),
             _preview_float_map(item.get("indoor_temperature_next_c")),
             _preview_float_map(item.get("temperature_shortfall_start_c")),
+            _preview_float_map(item.get("heat_delivery_limit_kwh")),
         )
         for item in _preview_dict_list(payload.get("slots"))
     )
@@ -996,6 +998,7 @@ def _automatic_plan_from_preview_payload(payload: dict[str, Any]) -> AutomaticPl
                 float(item["thermal_loss_kwh"]),
                 float(item["temperature_shortfall_c"]),
                 float(item.get("temperature_shortfall_start_c", 0.0)),
+                float(item.get("heat_delivery_limit_kwh", 0.0)),
             )
             for item in demand_items
         )
@@ -1257,6 +1260,7 @@ def _preview_response(
                 "temperature_shortfall_start_c": item.temperature_shortfall_start_c or {},
                 "temperature_shortfall_c": item.temperature_shortfall_c or {},
                 "charge_energy_kwh": item.charge_energy_kwh or {},
+                "heat_delivery_limit_kwh": item.heat_delivery_limit_kwh or {},
             }
             for item in plan.slots
         ],
@@ -1384,6 +1388,7 @@ def _ordered_plan_slots(slots: list[PlanningSlotView]) -> list[dict]:
             "temperature_shortfall_start_c": slot.temperature_shortfall_start_c_by_heater,
             "temperature_shortfall_c": slot.temperature_shortfall_c_by_heater,
             "charge_energy_kwh": slot.charge_energy_kwh_by_heater,
+            "heat_delivery_limit_kwh": slot.heat_delivery_limit_kwh_by_heater,
         }
         for slot in slots
     ]
@@ -1486,6 +1491,10 @@ def _build_timeline(
             str(key): float(value)
             for key, value in (source_slot.get("charge_energy_kwh", {}) or {}).items()
         }
+        heat_limit_projection = {
+            str(key): float(value)
+            for key, value in (source_slot.get("heat_delivery_limit_kwh", {}) or {}).items()
+        }
 
         timeline.append(
             PlanningTimelineSlotView(
@@ -1508,6 +1517,7 @@ def _build_timeline(
                 temperature_shortfall_start_c_by_heater={heater_id: round(value, 6) for heater_id, value in shortfall_start_projection.items()},
                 temperature_shortfall_c_by_heater={heater_id: round(value, 6) for heater_id, value in shortfall_projection.items()},
                 charge_energy_kwh_by_heater={heater_id: round(value, 6) for heater_id, value in charge_projection.items()},
+                heat_delivery_limit_kwh_by_heater={heater_id: round(value, 6) for heater_id, value in heat_limit_projection.items()},
             )
         )
         cursor = end

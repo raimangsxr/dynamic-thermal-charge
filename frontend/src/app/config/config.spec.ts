@@ -39,6 +39,8 @@ function configDto(overrides: Partial<ConfigDto> = {}): ConfigDto {
         model: 'ADS-2812',
         power_kw: 2.8,
         full_charge_hours: 8,
+        full_discharge_hours: 10,
+        static_emission_percent: 20,
         room_thermal_capacity_kwh_per_c: 2.5,
         room_heat_loss_kw_per_c: 0.12,
         priority: 90,
@@ -537,6 +539,19 @@ describe('Config', () => {
     expect(fixture.componentInstance.heaterForm()).toBeNull();
   });
 
+  it('rejects discharge figures outside their physical range', () => {
+    load();
+    fixture.componentInstance.openEditHeater(fixture.componentInstance.config()!.heaters[0]);
+    fixture.componentInstance.updateHeaterForm('full_discharge_hours', '0');
+    fixture.componentInstance.saveHeater();
+    expect(fixture.componentInstance.heaterFormError()).toContain('descarga nominal');
+
+    fixture.componentInstance.updateHeaterForm('full_discharge_hours', '10');
+    fixture.componentInstance.updateHeaterForm('static_emission_percent', '120');
+    fixture.componentInstance.saveHeater();
+    expect(fixture.componentInstance.heaterFormError()).toContain('emisión residual');
+  });
+
   it('edits an accumulator and advances the revision returned by each field write', () => {
     load();
     fixture.componentInstance.openEditHeater(fixture.componentInstance.config()!.heaters[0]);
@@ -544,7 +559,7 @@ describe('Config', () => {
     fixture.componentInstance.saveHeater();
     const request = backend.expectOne('/api/v1/config/heaters/salon');
     expect(request.request.method).toBe('PUT');
-    expect(request.request.body).toMatchObject({ revision: 3, room_heat_loss_kw_per_c: 0.2, power_kw: 2.8, full_charge_hours: 8 });
+    expect(request.request.body).toMatchObject({ revision: 3, room_heat_loss_kw_per_c: 0.2, power_kw: 2.8, full_charge_hours: 8, full_discharge_hours: 10, static_emission_percent: 20 });
     request.flush(change({ entity: 'heater', entity_key: 'salon', field: null, revision_after: 4 }));
     backend.expectOne('/api/v1/config').flush(configDto({ config_revision: 4 }));
     expect(fixture.componentInstance.heaterForm()).toBeNull();

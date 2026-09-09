@@ -165,6 +165,9 @@ class AutomaticPlanSlot:
     stored_energy_next_kwh: dict[str, float] | None = None
     indoor_temperature_next_c: dict[str, float] | None = None
     temperature_shortfall_start_c: dict[str, float] | None = None
+    # Emission capability applied to the slot, so a comfort deficit caused by a
+    # low state of charge is distinguishable from one caused by empty storage.
+    heat_delivery_limit_kwh: dict[str, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -907,6 +910,7 @@ class RoomEnergyInterval:
     thermal_loss_kwh: float
     temperature_shortfall_c: float
     temperature_shortfall_start_c: float = 0.0
+    heat_delivery_limit_kwh: float = 0.0
 
     @property
     def demand_kwh(self) -> float:
@@ -1017,9 +1021,21 @@ def _room_telemetry_fresh(
     )
 
 
-def _heat_delivery_limit_kwh(heater: Heater, slot_minutes: int) -> float:
-    """Return the physical heat delivery limit for one real-time slot."""
-    return heater.charge_power_kw * slot_minutes / 60
+def _heat_delivery_limit_kwh(
+    heater: Heater, slot_minutes: int, stored_energy_kwh: float
+) -> float:
+    """Return the emission limit for one slot at a given state of charge.
+
+    A storage heater emits less as its core cools, so the capability decays
+    with the state of charge from ``emission_power_kw`` down to the residual
+    ``static_emission_power_kw``.  The state of charge is the one at the slot
+    start, before its own charge: conservative, and affine in the stored energy
+    so the optimiser keeps the same limit as a linear constraint.
+    """
+    floor_kw = heater.static_emission_power_kw
+    span_kw = heater.emission_power_kw - floor_kw
+    state_of_charge = stored_energy_kwh / heater.capacity_kwh
+    return (floor_kw + span_kw * state_of_charge) * slot_minutes / 60
 
 
 def room_energy_step(
@@ -1069,7 +1085,10 @@ def room_energy_step(
     heat = required_heat if heat_delivered_kwh is None else float(heat_delivered_kwh)
     if not math.isfinite(heat) or heat < 0:
         raise ValueError("heat_delivered_kwh must be finite and non-negative")
-    heat = min(heat, available, _heat_delivery_limit_kwh(heater, slot_minutes))
+    delivery_limit = _heat_delivery_limit_kwh(
+        heater, slot_minutes, stored_energy_kwh
+    )
+    heat = min(heat, available, delivery_limit)
     stored_next = max(0.0, min(heater.capacity_kwh, available - heat))
     indoor_next = indoor_temperature_c + (heat - thermal_loss) / capacity
     return RoomEnergyInterval(
@@ -1099,6 +1118,7 @@ def room_energy_step(
             if target_temperature_c is None
             else float(max(0.0, target_temperature_c - indoor_temperature_c))
         ),
+        heat_delivery_limit_kwh=float(delivery_limit),
     )
 
 
@@ -1327,17 +1347,41 @@ def _solve_room_energy(
         targets = _room_targets(request, heater)
         for index, start in enumerate(starts):
             outdoor = _weather_at(start, request.forecast)
-            target = active_temperature_target(targets, start, request.timezone_name)
             if outdoor is None:
                 raise ValueError(f"missing forecast at {start.isoformat()}")
             outdoor_values[(heater.id, index)] = outdoor
-            target_values[(heater.id, index)] = target
+            target_values[(heater.id, index)] = active_temperature_target(
+                targets, start, request.timezone_name
+            )
+        # The discharge system only emits on demand, so a slot with no target
+        # ahead of it never delivers heat.  A slot inside a gap that precedes a
+        # target may still emit, which is what lets the plan preheat towards
+        # the starting edge of that target.
+        emission_allowed: list[bool] = []
+        target_ahead = False
+        for index in reversed(range(len(starts))):
+            target_ahead = target_ahead or target_values[(heater.id, index)] is not None
+            emission_allowed.append(target_ahead)
+        emission_allowed.reverse()
+        emission_floor_kwh = heater.static_emission_power_kw * slot_hours
+        emission_span_kwh = (
+            heater.emission_power_kw - heater.static_emission_power_kw
+        ) * slot_hours
+        for index in range(len(starts)):
+            outdoor = outdoor_values[(heater.id, index)]
+            target = target_values[(heater.id, index)]
             loss_factor = heater.room_heat_loss_kw_per_c * slot_hours
             capacity = heater.room_thermal_capacity_kwh_per_c
             model += heat[(heater.id, index)] <= stored[(heater.id, index)] + charge[(heater.id, index)]
-            model += heat[(heater.id, index)] <= _heat_delivery_limit_kwh(
-                heater, request.slot_minutes
+            # Emission capability decays with the state of charge, so a poorly
+            # charged accumulator can no longer reach the target however much
+            # time it is given.  Affine in ``stored``, so no binary is needed.
+            model += heat[(heater.id, index)] <= (
+                emission_floor_kwh
+                + emission_span_kwh * stored[(heater.id, index)] / heater.capacity_kwh
             )
+            if not emission_allowed[index]:
+                model += heat[(heater.id, index)] == 0
             model += stored[(heater.id, index + 1)] == stored[(heater.id, index)] + charge[(heater.id, index)] - heat[(heater.id, index)]
             # E_loss = K_room * (T_inside - T_outside) * dt, substituted into
             # the affine temperature balance below.  This retains the sign:
@@ -1459,6 +1503,7 @@ def _solve_room_energy(
         interval_target: dict[str, float] = {}
         interval_start_shortfall: dict[str, float] = {}
         interval_shortfall: dict[str, float] = {}
+        interval_heat_limit: dict[str, float] = {}
         initial_soc: dict[str, float] = {}
         demand: dict[str, float] = {}
         power_by_heater: dict[str, int] = {}
@@ -1475,6 +1520,9 @@ def _solve_room_energy(
             outdoor = outdoor_values[(heater.id, index)]
             loss_value = heater.room_heat_loss_kw_per_c * (indoor_value - outdoor) * slot_hours
             charge_value = heater.charge_power_kw * slot_hours * on_value
+            limit_value = _heat_delivery_limit_kwh(
+                heater, request.slot_minutes, stored_value
+            )
             start_short_value = 0.0 if target is None else max(0.0, target - indoor_value)
             short_value = 0.0 if target is None else max(0.0, target - next_indoor_value)
             if target is not None and start_short_value > 1e-6:
@@ -1512,6 +1560,7 @@ def _solve_room_energy(
             interval_charge[heater.id] = round(charge_value, 9)
             interval_start_shortfall[heater.id] = round(start_short_value, 9)
             interval_shortfall[heater.id] = round(short_value, 9)
+            interval_heat_limit[heater.id] = round(limit_value, 9)
             initial_soc[heater.id] = round(stored_value / heater.capacity_kwh * 100, 6)
             demand[heater.id] = round(heat_value, 9)
             power_by_heater[heater.id] = heater.power_w if on_value > 0.5 else 0
@@ -1533,6 +1582,7 @@ def _solve_room_energy(
                     loss_value,
                     short_value,
                     start_short_value,
+                    limit_value,
                 )
             )
         plan_slots.append(
@@ -1557,6 +1607,7 @@ def _solve_room_energy(
                 interval_next_stored,
                 interval_next_indoor,
                 interval_start_shortfall,
+                interval_heat_limit,
             )
         )
     by_heater = {heater.id: [item for item in room_intervals if item.heater_id == heater.id] for heater in heaters}

@@ -180,6 +180,8 @@ heater = Table(
     Column("model", String(120), nullable=True),
     Column("power_w", Integer, nullable=False),
     Column("full_charge_minutes", Integer, nullable=False),
+    Column("full_discharge_minutes", Integer, nullable=False, server_default="600"),
+    Column("static_emission_percent", Float, nullable=False, server_default="20.0"),
     Column("priority", Integer, nullable=False, server_default="0"),
     Column("enabled", Boolean, nullable=False, server_default="1"),
     Column("telemetry_topic", String(512), nullable=True),
@@ -188,6 +190,11 @@ heater = Table(
     UniqueConstraint("installation_id", "position", name="uq_heater_position"),
     CheckConstraint("power_w > 0", name="ck_heater_power"),
     CheckConstraint("full_charge_minutes > 0", name="ck_heater_full_charge"),
+    CheckConstraint("full_discharge_minutes > 0", name="ck_heater_full_discharge"),
+    CheckConstraint(
+        "static_emission_percent >= 0 AND static_emission_percent <= 100",
+        name="ck_heater_static_emission",
+    ),
 )
 
 output_config = Table(
@@ -432,6 +439,7 @@ automatic_plan_slot = Table(
     Column("thermal_loss_json", Text, nullable=False, server_default="{}"),
     Column("temperature_shortfall_json", Text, nullable=False, server_default="{}"),
     Column("charge_energy_json", Text, nullable=False, server_default="{}"),
+    Column("heat_limit_json", Text, nullable=False, server_default="{}"),
     UniqueConstraint("plan_id", "slot_start", name="uq_automatic_plan_slot"),
 )
 
@@ -887,6 +895,14 @@ CONSTRAINT_FIELDS: dict[str, tuple[str, str]] = {
     "ck_heater_full_charge": (
         "full_charge_hours",
         "the full charge time must be positive",
+    ),
+    "ck_heater_full_discharge": (
+        "full_discharge_hours",
+        "the full discharge time must be positive",
+    ),
+    "ck_heater_static_emission": (
+        "static_emission_percent",
+        "static_emission_percent must be between 0 and 100",
     ),
     "uq_heater_domain_id": ("heater_id", "heater ids must be unique per installation"),
     "uq_heater_position": ("position", "heater positions must be unique"),

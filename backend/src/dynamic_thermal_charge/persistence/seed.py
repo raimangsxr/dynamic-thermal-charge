@@ -51,6 +51,8 @@ def example_installation() -> AppConfig:
                 model="ADS-2812",
                 power_w=2800,
                 full_charge_minutes=480,
+                full_discharge_minutes=600,
+                static_emission_percent=20.0,
                 priority=90,
                 thermal=ThermalProfile(
                     room_thermal_capacity_kwh_per_c=2.5,
@@ -65,6 +67,8 @@ def example_installation() -> AppConfig:
                 model="ADS-2412",
                 power_w=2400,
                 full_charge_minutes=480,
+                full_discharge_minutes=600,
+                static_emission_percent=20.0,
                 priority=50,
                 thermal=ThermalProfile(
                     room_thermal_capacity_kwh_per_c=2.5,
@@ -79,6 +83,8 @@ def example_installation() -> AppConfig:
                 model="ADS-2412",
                 power_w=2400,
                 full_charge_minutes=480,
+                full_discharge_minutes=600,
+                static_emission_percent=20.0,
                 priority=100,
                 thermal=ThermalProfile(
                     room_thermal_capacity_kwh_per_c=2.5,
@@ -93,6 +99,8 @@ def example_installation() -> AppConfig:
                 model="ADS-2412",
                 power_w=2400,
                 full_charge_minutes=480,
+                full_discharge_minutes=600,
+                static_emission_percent=20.0,
                 priority=40,
                 thermal=ThermalProfile(
                     room_thermal_capacity_kwh_per_c=2.5,

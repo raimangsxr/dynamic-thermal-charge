@@ -217,6 +217,11 @@ class Heater:
     reserve_percent: float = 0.0
     demand_factor: float = 1.0
     temperature_targets: tuple[TemperatureTarget, ...] = ()
+    # Manufacturer discharge figures.  The accumulator emits less as its core
+    # cools, so the capability decays with the state of charge from
+    # ``emission_power_kw`` down to ``static_emission_power_kw``.
+    full_discharge_minutes: int = 600
+    static_emission_percent: float = 20.0
 
     def __post_init__(self) -> None:
         if not self.id:
@@ -225,6 +230,17 @@ class Heater:
             raise ValueError(f"heater {self.id}: power must be positive")
         if self.full_charge_minutes <= 0:
             raise ValueError(f"heater {self.id}: full charge time must be positive")
+        if self.full_discharge_minutes <= 0:
+            raise ValueError(
+                f"heater {self.id}: full discharge time must be positive"
+            )
+        if (
+            not math.isfinite(self.static_emission_percent)
+            or not 0 <= self.static_emission_percent <= 100
+        ):
+            raise ValueError(
+                f"heater {self.id}: static_emission_percent must be between 0 and 100"
+            )
         if not 0 <= self.target_charge <= 1:
             raise ValueError(f"heater {self.id}: target_charge must be between 0 and 1")
         if self.telemetry_topic is not None:
@@ -279,6 +295,25 @@ class Heater:
     @property
     def capacity_kwh(self) -> float:
         return self.charge_power_kw * self.full_charge_time_hours
+
+    @property
+    def full_discharge_time_hours(self) -> float:
+        return self.full_discharge_minutes / 60
+
+    @property
+    def emission_power_kw(self) -> float:
+        """Heat the accumulator can emit to the room at full charge.
+
+        Derived from the manufacturer figures the way the storage capacity is:
+        the whole store emptied over the nominal discharge time.  It is not the
+        electrical charge power, which drives the resistive elements.
+        """
+        return self.capacity_kwh / self.full_discharge_time_hours
+
+    @property
+    def static_emission_power_kw(self) -> float:
+        """Residual emission capability as the store approaches empty."""
+        return self.emission_power_kw * self.static_emission_percent / 100
 
     @property
     def requested_charge_minutes(self) -> int:

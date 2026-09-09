@@ -269,7 +269,24 @@ pérdida firmada se calcula como `K × (temperatura interior − temperatura ext
 del almacén sigue siendo `potencia nominal × horas de carga completa`, y el SOC
 recibido se convierte a kWh solo para inicializar esa energía. El plan muestra
 por intervalo SOC, energía almacenada, temperatura interior, objetivo, calor
-entregado, intercambio térmico y déficit de temperatura.
+entregado, límite de emisión aplicado, intercambio térmico y déficit de
+temperatura.
+
+La capacidad de emisión de un acumulador decae con su estado de carga, porque su
+núcleo se enfría a medida que se descarga. `full_discharge_hours` son las horas
+de descarga nominal del fabricante y fijan la potencia máxima de emisión como
+`capacidad kWh / horas de descarga`; `static_emission_percent` es la emisión que
+conserva con la carga agotada, en porcentaje de esa máxima. El calor que puede
+entregar un intervalo es
+`(P_residual + (P_emisión − P_residual) × SOC) × horas del intervalo`, con el SOC
+del borde inicial. Por eso un acumulador al 20% difícilmente sube la temperatura
+de la estancia y puede no alcanzar la consigna aunque le quede energía: el plan
+lo refleja como déficit y queda `DEGRADED` en vez de proyectar la emisión de un
+acumulador lleno. La emisión residual es una capacidad, no una emisión forzada:
+un acumulador vacío entrega cero. Fuera de las ventanas de consigna el calor
+entregado es cero cuando ya no queda ninguna consigna por delante en el
+horizonte; en los intervalos anteriores a una consigna la emisión sigue
+permitida para poder precalentar.
 
 Una consigna activa debe cumplirse en los dos bordes de cada slot: la temperatura
 interior proyectada al comenzar y al terminar el intervalo debe alcanzar el

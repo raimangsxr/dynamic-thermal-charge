@@ -73,6 +73,8 @@ const CONFIG: ConfigDto = {
       model: null,
       power_kw: 2.8,
       full_charge_hours: 8,
+      full_discharge_hours: 10,
+      static_emission_percent: 20,
       room_thermal_capacity_kwh_per_c: 2.5,
       room_heat_loss_kw_per_c: 0.12,
       priority: 90,

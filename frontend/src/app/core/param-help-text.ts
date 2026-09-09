@@ -28,6 +28,10 @@ const HEATER: Record<string, string> = {
     'Potencia nominal del resistivo (kW). El optimizador usa este valor para calcular cuánta energía puede cargar en cada intervalo.',
   full_charge_hours:
     'Horas necesarias a potencia plena para llenar el acumulador. Define la capacidad energética (kWh) junto con la potencia.',
+  full_discharge_hours:
+    'Horas de descarga nominal del fabricante. La emisión máxima es la capacidad dividida por estas horas, y decae con el estado de carga.',
+  static_emission_percent:
+    'Emisión que el acumulador conserva con la carga agotada, en porcentaje de la máxima. Fija el suelo de la curva de emisión.',
   room_thermal_capacity_kwh_per_c:
     'Capacidad térmica efectiva de la sala (kWh/°C). El balance usa esta constante para convertir calor neto en variación de temperatura.',
   room_heat_loss_kw_per_c:

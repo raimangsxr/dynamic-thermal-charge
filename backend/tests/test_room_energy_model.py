@@ -87,7 +87,7 @@ def test_accumulator_capacity_is_nominal_power_times_full_charge_hours():
     assert heater.capacity_kwh * 0.5 == pytest.approx(11.2)
 
 
-def test_room_energy_step_limits_discharge_to_nominal_power_per_slot():
+def test_room_energy_step_limits_discharge_to_emission_capability():
     heater = _heater(power_w=2400, full_charge_minutes=480)
     initial_energy = heater.capacity_kwh * 0.507
 
@@ -102,9 +102,57 @@ def test_room_energy_step_limits_discharge_to_nominal_power_per_slot():
         heat_delivered_kwh=6.7584,
     )
 
-    assert interval.heat_delivered_kwh == pytest.approx(1.2)
-    assert interval.stored_energy_next_kwh == pytest.approx(8.5344)
-    assert interval.stored_soc_next_percent == pytest.approx(44.45)
+    # 19.2 kWh over 10 h is 1.92 kW at full charge, with a 20% residual floor:
+    # 0.384 + (1.92 - 0.384) * 0.507 = 1.162752 kW, so 0.581376 kWh in 30 min.
+    assert interval.heat_delivered_kwh == pytest.approx(0.581376)
+    assert interval.heat_delivery_limit_kwh == pytest.approx(0.581376)
+    assert interval.stored_energy_next_kwh == pytest.approx(9.153024)
+
+
+def test_emission_capability_decays_with_the_state_of_charge():
+    heater = _heater(power_w=2400, full_charge_minutes=480)
+
+    assert heater.emission_power_kw == pytest.approx(1.92)
+    assert heater.static_emission_power_kw == pytest.approx(0.384)
+
+    limits = {}
+    for soc in (100.0, 20.0):
+        interval = room_energy_step(
+            heater,
+            start=START,
+            outdoor_temperature_c=20.0,
+            target_temperature_c=None,
+            indoor_temperature_c=20.0,
+            stored_energy_kwh=heater.capacity_kwh * soc / 100,
+            slot_minutes=30,
+            heat_delivered_kwh=heater.capacity_kwh,
+        )
+        limits[soc] = interval.heat_delivery_limit_kwh
+        assert interval.heat_delivered_kwh == pytest.approx(limits[soc])
+
+    assert limits[100.0] == pytest.approx(0.96)
+    assert limits[20.0] == pytest.approx(0.3456)
+
+
+def test_empty_accumulator_delivers_no_heat_despite_the_residual_floor():
+    heater = _heater(power_w=2400, full_charge_minutes=480)
+
+    interval = room_energy_step(
+        heater,
+        start=START,
+        outdoor_temperature_c=5.0,
+        target_temperature_c=21.0,
+        indoor_temperature_c=20.0,
+        stored_energy_kwh=0.0,
+        slot_minutes=30,
+    )
+
+    # The floor is a capability, not a forced emission: with nothing stored the
+    # accumulator delivers nothing and the deficit is preserved.
+    assert interval.heat_delivery_limit_kwh == pytest.approx(0.192)
+    assert interval.heat_delivered_kwh == pytest.approx(0.0)
+    assert interval.stored_energy_next_kwh == pytest.approx(0.0)
+    assert interval.temperature_shortfall_c > 0.0
 
 
 def test_room_energy_step_reproduces_signed_exchange_and_storage_balance():
@@ -195,9 +243,13 @@ def test_sufficient_storage_reaches_target_without_charging():
 
 
 def test_preheating_satisfies_the_start_and_end_of_a_later_target():
+    # An empty accumulator only has its residual emission capability, so one
+    # hour of charging can nudge the room by 0.448 kWh / 2.5 kWh/C = 0.179 C.
+    # The target is chosen inside that reach so the scenario stays about the
+    # boundary invariant and not about an impossible lift.
     heater = replace(
         _heater(),
-        temperature_targets=(TemperatureTarget(21.0, time(1, 0), time(2, 0)),),
+        temperature_targets=(TemperatureTarget(20.15, time(1, 0), time(2, 0)),),
     )
 
     result = RoomEnergyPlanner().build(
@@ -212,15 +264,24 @@ def test_preheating_satisfies_the_start_and_end_of_a_later_target():
     assert result.status == FEASIBLE
     assert result.demand[0].target_temperature_c is None
     assert result.demand[0].charge_energy_kwh > 0.0
-    assert result.demand[0].indoor_temperature_next_c >= 21.0 - 1e-6
-    assert result.demand[1].indoor_temperature_c >= 21.0 - 1e-6
-    assert result.demand[1].indoor_temperature_next_c >= 21.0 - 1e-6
+    assert result.demand[0].heat_delivered_kwh > 0.0
+    assert result.demand[0].indoor_temperature_next_c >= 20.15 - 1e-6
+    assert result.demand[1].indoor_temperature_c >= 20.15 - 1e-6
+    assert result.demand[1].indoor_temperature_next_c >= 20.15 - 1e-6
     assert not result.violations
 
 
 def test_horizon_start_deficit_uses_initial_temperature_and_boundary_time():
+    # A full accumulator emits 2.24 kW, which lifts this room by 0.896 C in an
+    # hour, so the target stays inside that reach: the deficit under test is the
+    # unavoidable one at the starting edge, not an emission limit.
+    heater = replace(
+        _heater(),
+        temperature_targets=(TemperatureTarget(20.5, time(0, 0)),),
+    )
     result = RoomEnergyPlanner().build(
         _request(
+            heaters=(heater,),
             outdoor=20.0,
             telemetry={"salon": _telemetry("salon", indoor=20.0, soc=100.0)},
         )
@@ -228,12 +289,12 @@ def test_horizon_start_deficit_uses_initial_temperature_and_boundary_time():
     interval = result.demand[0]
 
     assert result.status == DEGRADED
-    assert interval.temperature_shortfall_start_c == pytest.approx(1.0)
+    assert interval.temperature_shortfall_start_c == pytest.approx(0.5)
     assert interval.temperature_shortfall_c == pytest.approx(0.0)
     assert any(
         item.requirement == "temperature_comfort"
         and item.at == START
-        and item.shortfall == pytest.approx(1.0)
+        and item.shortfall == pytest.approx(0.5)
         for item in result.violations
     )
 
@@ -266,7 +327,7 @@ def test_room_energy_solver_limits_discharge_and_preserves_comfort_deficit():
     interval = result.demand[0]
 
     assert result.status == DEGRADED
-    assert interval.heat_delivered_kwh == pytest.approx(1.2)
+    assert interval.heat_delivered_kwh == pytest.approx(0.581376)
     assert interval.stored_energy_next_kwh >= 0.0
     assert interval.temperature_shortfall_c > 0.0
     assert any(
@@ -351,5 +412,57 @@ def test_estimator_projects_each_interval_from_indoor_temperature_and_soc():
     )
 
     assert intervals[0].stored_energy_kwh == pytest.approx(11.2)
-    assert intervals[0].heat_delivered_kwh == pytest.approx(2.8)
-    assert intervals[0].indoor_temperature_next_c == pytest.approx(20.4)
+    # At half charge the capability is 0.448 + 1.792 * 0.5 = 1.344 kW, below the
+    # 1.8 kW the envelope is losing, so the room cools despite full emission.
+    assert intervals[0].heat_delivery_limit_kwh == pytest.approx(1.344)
+    assert intervals[0].heat_delivered_kwh == pytest.approx(1.344)
+    assert intervals[0].indoor_temperature_next_c == pytest.approx(19.8176)
+
+
+def test_no_heat_is_delivered_when_no_target_remains_in_the_horizon():
+    # The discharge system only emits on demand: a target that ends before the
+    # horizon does leaves the trailing slots with nothing to reach.
+    heater = replace(
+        _heater(),
+        temperature_targets=(TemperatureTarget(20.5, time(0, 0), time(1, 0)),),
+    )
+
+    result = RoomEnergyPlanner().build(
+        _request(
+            heaters=(heater,),
+            outdoor=20.0,
+            horizon_hours=3,
+            telemetry={"salon": _telemetry("salon", indoor=20.5, soc=100.0)},
+        )
+    )
+
+    assert result.demand[0].target_temperature_c == pytest.approx(20.5)
+    assert result.demand[1].target_temperature_c is None
+    assert result.demand[2].target_temperature_c is None
+    assert result.demand[1].heat_delivered_kwh == pytest.approx(0.0)
+    assert result.demand[2].heat_delivered_kwh == pytest.approx(0.0)
+
+
+def test_emission_capability_bounds_the_plan_at_every_state_of_charge():
+    # A target this room cannot reach even at full charge stays DEGRADED, with
+    # the stored energy inside its physical bounds at both boundaries.
+    heater = replace(
+        _heater(),
+        temperature_targets=(TemperatureTarget(24.0, time(0, 0)),),
+    )
+
+    result = RoomEnergyPlanner().build(
+        _request(
+            heaters=(heater,),
+            outdoor=5.0,
+            horizon_hours=2,
+            telemetry={"salon": _telemetry("salon", indoor=20.0, soc=100.0)},
+        )
+    )
+
+    assert result.status == DEGRADED
+    for interval in result.demand:
+        assert interval.heat_delivered_kwh <= interval.heat_delivery_limit_kwh + 1e-9
+        assert 0.0 <= interval.stored_energy_kwh <= heater.capacity_kwh + 1e-9
+        assert 0.0 <= interval.stored_energy_next_kwh <= heater.capacity_kwh + 1e-9
+    assert any(item.requirement == "temperature_comfort" for item in result.violations)

@@ -82,6 +82,8 @@ export interface HeaterForm {
   model: string;
   power_kw: string;
   full_charge_hours: string;
+  full_discharge_hours: string;
+  static_emission_percent: string;
   room_thermal_capacity_kwh_per_c: string;
   room_heat_loss_kw_per_c: string;
   priority: string;
@@ -93,7 +95,8 @@ export interface HeaterForm {
 }
 
 const HEATER_EDIT_FIELDS = [
-  'name', 'model', 'power_kw', 'full_charge_hours', 'room_thermal_capacity_kwh_per_c', 'room_heat_loss_kw_per_c', 'priority',
+  'name', 'model', 'power_kw', 'full_charge_hours', 'full_discharge_hours', 'static_emission_percent',
+  'room_thermal_capacity_kwh_per_c', 'room_heat_loss_kw_per_c', 'priority',
   'enabled', 'telemetry_topic',
   'output_type', 'pin', 'active_high',
 ] as const;
@@ -137,6 +140,14 @@ const HEATER_FORM_FIELDS: readonly HeaterFormFieldMeta[] = [
   { key: 'power_kw', label: 'Potencia nominal (kW)', type: 'number', step: '0.1', required: true },
   { key: 'full_charge_hours', label: 'Carga completa (horas)', type: 'number', step: '0.1', required: true },
   {
+    key: 'full_discharge_hours', label: 'Descarga nominal (horas)', type: 'number', min: '0.1', step: '0.1', required: true,
+    hint: 'Horas de descarga del fabricante. Define la potencia de emisión junto con la capacidad.',
+  },
+  {
+    key: 'static_emission_percent', label: 'Emisión residual (%)', type: 'number', min: '0', max: '100', step: '1', required: true,
+    hint: 'Porcentaje de la emisión máxima que el acumulador conserva con la carga agotada.',
+  },
+  {
     key: 'room_thermal_capacity_kwh_per_c', label: 'Capacidad térmica de la sala (kWh/°C)', type: 'number', min: '0.0001', step: '0.1', required: true,
     hint: 'Energía necesaria para elevar un grado la temperatura interior.',
   },
@@ -159,7 +170,7 @@ const HEATER_FORM_FIELDS: readonly HeaterFormFieldMeta[] = [
 ];
 
 const HEATER_FORM_GROUPS = [
-  { title: 'Identificación y acumulador', fields: ['id', 'name', 'model', 'power_kw', 'full_charge_hours'] },
+  { title: 'Identificación y acumulador', fields: ['id', 'name', 'model', 'power_kw', 'full_charge_hours', 'full_discharge_hours', 'static_emission_percent'] },
   { title: 'Modelo térmico y prioridad', fields: ['room_thermal_capacity_kwh_per_c', 'room_heat_loss_kw_per_c', 'priority', 'enabled'] },
   { title: 'Salida y telemetría', fields: ['output', 'pin', 'active_high', 'telemetry_topic'] },
 ] as const;
@@ -571,14 +582,14 @@ export class Config {
     this.activeArea.set('heaters');
     this.heaterFormMode.set('add');
     this.heaterFormError.set('');
-    this.heaterForm.set({ id: '', name: '', model: '', power_kw: '1', full_charge_hours: '8', room_thermal_capacity_kwh_per_c: '2.5', room_heat_loss_kw_per_c: '0.12', priority: '0', enabled: true, telemetry_topic: '', output: 'simulated', pin: '', active_high: true });
+    this.heaterForm.set({ id: '', name: '', model: '', power_kw: '1', full_charge_hours: '8', full_discharge_hours: '10', static_emission_percent: '20', room_thermal_capacity_kwh_per_c: '2.5', room_heat_loss_kw_per_c: '0.12', priority: '0', enabled: true, telemetry_topic: '', output: 'simulated', pin: '', active_high: true });
   }
   openEditHeater(heater: ConfigDto['heaters'][number]): void {
     this.activeArea.set('heaters');
     this.heaterFormMode.set('edit');
     this.heaterFormError.set('');
     this.heaterForm.set({
-      id: heater.id, name: heater.name, model: heater.model ?? '', power_kw: String(heater.power_kw), full_charge_hours: String(heater.full_charge_hours), room_thermal_capacity_kwh_per_c: String(heater.room_thermal_capacity_kwh_per_c), room_heat_loss_kw_per_c: String(heater.room_heat_loss_kw_per_c), priority: String(heater.priority), enabled: heater.enabled, telemetry_topic: heater.telemetry_topic ?? '', output: heater.output.kind, pin: heater.output.pin === null ? '' : String(heater.output.pin), active_high: heater.output.active_high,
+      id: heater.id, name: heater.name, model: heater.model ?? '', power_kw: String(heater.power_kw), full_charge_hours: String(heater.full_charge_hours), full_discharge_hours: String(heater.full_discharge_hours), static_emission_percent: String(heater.static_emission_percent), room_thermal_capacity_kwh_per_c: String(heater.room_thermal_capacity_kwh_per_c), room_heat_loss_kw_per_c: String(heater.room_heat_loss_kw_per_c), priority: String(heater.priority), enabled: heater.enabled, telemetry_topic: heater.telemetry_topic ?? '', output: heater.output.kind, pin: heater.output.pin === null ? '' : String(heater.output.pin), active_high: heater.output.active_high,
     });
   }
   cancelHeaterForm(): void { this.heaterForm.set(null); this.heaterFormMode.set(null); this.heaterFormError.set(''); }
@@ -596,11 +607,19 @@ export class Config {
       this.heaterFormError.set('La capacidad térmica debe ser positiva y la pérdida térmica no negativa.');
       return;
     }
+    if (!this.validNumber(form.full_discharge_hours) || Number(form.full_discharge_hours) <= 0) {
+      this.heaterFormError.set('Indica unas horas de descarga nominal positivas.');
+      return;
+    }
+    if (!this.validNumber(form.static_emission_percent) || Number(form.static_emission_percent) < 0 || Number(form.static_emission_percent) > 100) {
+      this.heaterFormError.set('La emisión residual debe estar entre 0 y 100.');
+      return;
+    }
     this.heaterSaving.set(true);
     if (this.heaterFormMode() === 'add') {
       const payload: AddHeaterRequest = {
         revision: snapshot.config_revision, id: form.id.trim(), name: form.name.trim() || undefined, model: form.model.trim() || undefined,
-        power_kw: Number(form.power_kw), full_charge_hours: Number(form.full_charge_hours), room_thermal_capacity_kwh_per_c: Number(form.room_thermal_capacity_kwh_per_c), room_heat_loss_kw_per_c: Number(form.room_heat_loss_kw_per_c), priority: Number(form.priority), enabled: form.enabled,
+        power_kw: Number(form.power_kw), full_charge_hours: Number(form.full_charge_hours), full_discharge_hours: Number(form.full_discharge_hours), static_emission_percent: Number(form.static_emission_percent), room_thermal_capacity_kwh_per_c: Number(form.room_thermal_capacity_kwh_per_c), room_heat_loss_kw_per_c: Number(form.room_heat_loss_kw_per_c), priority: Number(form.priority), enabled: form.enabled,
         telemetry_topic: form.telemetry_topic.trim() || null, output: form.output, pin: form.pin.trim() ? Number(form.pin) : null, active_high: form.active_high,
         temperature_targets: [],
       };
@@ -688,7 +707,7 @@ export class Config {
     const revision = this.config()?.config_revision;
     if (!form || revision === undefined) return;
     const payload: UpdateHeaterRequest = {
-      revision, name: form.name.trim(), model: form.model.trim() || null, power_kw: Number(form.power_kw), full_charge_hours: Number(form.full_charge_hours), room_thermal_capacity_kwh_per_c: Number(form.room_thermal_capacity_kwh_per_c), room_heat_loss_kw_per_c: Number(form.room_heat_loss_kw_per_c), priority: Number(form.priority), enabled: form.enabled,
+      revision, name: form.name.trim(), model: form.model.trim() || null, power_kw: Number(form.power_kw), full_charge_hours: Number(form.full_charge_hours), full_discharge_hours: Number(form.full_discharge_hours), static_emission_percent: Number(form.static_emission_percent), room_thermal_capacity_kwh_per_c: Number(form.room_thermal_capacity_kwh_per_c), room_heat_loss_kw_per_c: Number(form.room_heat_loss_kw_per_c), priority: Number(form.priority), enabled: form.enabled,
       telemetry_topic: form.telemetry_topic.trim() || null, output: form.output, pin: form.pin.trim() ? Number(form.pin) : null, active_high: form.active_high,
     };
     this.heaterSaving.set(true);
