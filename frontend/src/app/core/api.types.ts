@@ -238,8 +238,7 @@ export interface HeaterDto {
   full_charge_hours: number;
   priority: number;
   enabled: boolean;
-  indoor_topic: string | null;
-  stored_soc_topic: string | null;
+  telemetry_topic: string | null;
   room_thermal_capacity_kwh_per_c: number;
   room_heat_loss_kw_per_c: number;
   temperature_targets: TemperatureTargetDto[];
@@ -286,8 +285,7 @@ export interface AddHeaterRequest {
   model?: string;
   priority?: number;
   enabled?: boolean;
-  indoor_topic?: string | null;
-  stored_soc_topic?: string | null;
+  telemetry_topic?: string | null;
   output?: 'simulated' | 'gpio';
   pin?: number | null;
   active_high?: boolean;
@@ -304,8 +302,7 @@ export interface UpdateHeaterRequest {
   full_charge_hours: number;
   priority: number;
   enabled: boolean;
-  indoor_topic: string | null;
-  stored_soc_topic: string | null;
+  telemetry_topic: string | null;
   output: 'simulated' | 'gpio';
   pin: number | null;
   active_high: boolean;

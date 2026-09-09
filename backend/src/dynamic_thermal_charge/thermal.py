@@ -36,7 +36,10 @@ def select_indoor_temperatures(
     temperatures: dict[str, float] = {}
     fallback: dict[str, str] = {}
     for heater in heaters:
-        if heater.indoor_topic is None:
+        if (
+            getattr(heater, "telemetry_topic", None) is None
+            and getattr(heater, "indoor_topic", None) is None
+        ):
             continue
         reading = readings.get(heater.id)
         if reading is None:

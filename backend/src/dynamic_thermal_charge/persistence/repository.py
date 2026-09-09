@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping
 
@@ -165,8 +164,7 @@ HEATER_FIELDS: dict[str, tuple[str, str, Callable[[str, str], Any]]] = {
     "full_charge_minutes": ("heater", "full_charge_minutes", _parse_int),
     "priority": ("heater", "priority", _parse_int),
     "enabled": ("heater", "enabled", _parse_bool),
-    "indoor_topic": ("heater", "indoor_topic", _parse_optional_str),
-    "stored_soc_topic": ("charge", "stored_soc_topic", _parse_optional_str),
+    "telemetry_topic": ("heater", "telemetry_topic", _parse_optional_str),
     "room_thermal_capacity_kwh_per_c": (
         "thermal", "room_thermal_capacity_kwh_per_c", _parse_float
     ),
@@ -251,27 +249,6 @@ class SqlConfigRepository:
             combined,
             temperature_targets=target_rows,
         )
-        charge_rows = {}
-        if inspect(connection).has_table(heater_charge_config.name):
-            charge_rows = {
-                str(row["heater_id"]): row
-                for row in connection.execute(
-                    select(heater_charge_config).where(
-                        heater_charge_config.c.installation_id == installation_id
-                    )
-                ).mappings().all()
-            }
-        if charge_rows:
-            config = replace(
-                config,
-                heaters=tuple(
-                    replace(
-                        item,
-                        stored_soc_topic=charge_rows.get(item.id, {}).get("stored_soc_topic"),
-                    ) if item.id in charge_rows else item
-                    for item in config.heaters
-                ),
-            )
         return config, int(installation_row["revision"])
 
     def installation_id(self) -> int:
@@ -385,7 +362,6 @@ class SqlConfigRepository:
                         {
                             "installation_id": installation_id,
                             "heater_id": heater.id,
-                            "stored_soc_topic": heater.stored_soc_topic,
                             "control_mode": "AUTO",
                             "damper_topic": None,
                         },
@@ -678,16 +654,13 @@ class SqlConfigRepository:
                 })
             )
             if inspect(connection).has_table(heater_charge_config.name):
-                charge_values = {"stored_soc_topic": heater.stored_soc_topic}
-                charge_updated = connection.execute(
-                    update(heater_charge_config)
-                    .where(
+                charge_exists = connection.execute(
+                    select(heater_charge_config.c.heater_id).where(
                         (heater_charge_config.c.installation_id == installation_id)
                         & (heater_charge_config.c.heater_id == heater.id)
                     )
-                    .values(**charge_values)
-                )
-                if charge_updated.rowcount != 1:
+                ).first()
+                if charge_exists is None:
                     connection.execute(
                         insert(heater_charge_config).values(
                             **self._compatible_params(
@@ -696,7 +669,6 @@ class SqlConfigRepository:
                                 {
                                     "installation_id": installation_id,
                                     "heater_id": heater.id,
-                                    **charge_values,
                                 },
                             )
                         )

@@ -18,6 +18,12 @@ def test_home_assistant_ids_ignore_visible_name_prefix_pk_and_order():
     assert first.unique_id("salon", "output") == (
         "dynamic_thermal_charge_installation_salon_output"
     )
+    assert first.device_discovery_topic() == (
+        "homeassistant/device/dynamic_thermal_charge_installation/config"
+    )
+    assert first.device_discovery_topic("salon") == (
+        "homeassistant/device/dynamic_thermal_charge_installation_salon/config"
+    )
 
 
 def test_domain_ids_are_sanitized_deterministically():

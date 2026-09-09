@@ -245,16 +245,8 @@ class StoreSnapshotReader:
         result: list[str] = []
         for heater in self._config.heaters:
             result.append(topics.command(heater.id, "enabled"))
-            damper_topic = self._charge_config_provider().get(heater.id, {}).get("damper_topic")
-            result.extend(
-                topic
-                for topic in (
-                    heater.indoor_topic,
-                    heater.stored_soc_topic,
-                    damper_topic,
-                )
-                if topic is not None
-            )
+            if heater.telemetry_topic is not None:
+                result.append(heater.telemetry_topic)
         return tuple(result)
 
     @staticmethod

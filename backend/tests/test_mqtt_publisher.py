@@ -299,11 +299,14 @@ def test_periodic_cycles_skip_publication_until_connection_is_accepted(mqtt_clie
     assert refreshes == [True]
 
 
-def test_declared_command_and_indoor_topics_are_subscribed_after_discovery(mqtt_client):
+def test_declared_command_and_grouped_telemetry_topics_are_subscribed_after_discovery(mqtt_client):
     config = replace(
         example_installation(),
         heaters=(
-            replace(example_installation().heaters[0], indoor_topic="ha/salon/temp"),
+            replace(
+                example_installation().heaters[0],
+                telemetry_topic="ha/salon/telemetry",
+            ),
         ),
     )
     topics = TopicLayout()
@@ -314,8 +317,7 @@ def test_declared_command_and_indoor_topics_are_subscribed_after_discovery(mqtt_
         discovery=lambda: discovery_entities(config, "Casa", topics),
         subscriptions=lambda: (
             topics.command("salon", "enabled"),
-            "ha/salon/temp",
-            "dtc/salon/soc",
+            "ha/salon/telemetry",
         ),
     )
     service = MqttService(
@@ -336,8 +338,7 @@ def test_declared_command_and_indoor_topics_are_subscribed_after_discovery(mqtt_
     assert first_subscribe > last_discovery
     assert set(mqtt_client.subscriptions) == {
         topics.command("salon", "enabled"),
-        "ha/salon/temp",
-        "dtc/salon/soc",
+        "ha/salon/telemetry",
     }
 
     subscribe_count = len(

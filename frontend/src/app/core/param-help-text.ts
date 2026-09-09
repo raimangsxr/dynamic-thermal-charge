@@ -41,10 +41,8 @@ const HEATER: Record<string, string> = {
   pin: 'Número de pin GPIO que controla el relé de este acumulador.',
   active_high:
     'Nivel lógico que energiza el relé: alto (3,3 V) o bajo (0 V). Debe coincidir con el cableado.',
-  indoor_topic:
-    'Tópico MQTT de temperatura interior. Si está vacío, se usa el prefijo global y el identificador del acumulador.',
-  stored_soc_topic:
-    'Tópico MQTT del estado de carga almacenada (%). La planificación automática lo usa como SOC inicial.',
+  telemetry_topic:
+    'Tópico MQTT que recibe un objeto JSON con las claves indoor_temperature_c, stored_soc_percent y damper_position_percent. Las claves son opcionales: una lectura ausente conserva su último valor. Si está vacío, la simulación usa <prefijo>/<id>/telemetry.',
 };
 
 const SYSTEM: Record<string, Record<string, string>> = {

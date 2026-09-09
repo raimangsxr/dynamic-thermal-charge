@@ -19,7 +19,7 @@ from .topology import BootstrapCorruptError, BootstrapIncompatibleError
 from . import SchemaStatus, SchemaVersionError
 
 
-CONFIGURATION_SCHEMA_REVISION = 10
+CONFIGURATION_SCHEMA_REVISION = 11
 APPLICATION_SCHEMA_REVISION = 6
 POSTGRES_CONFIGURATION_SCHEMA = "dtc_config"
 POSTGRES_APPLICATION_SCHEMA = "dtc_app"
@@ -483,10 +483,62 @@ def _upgrade_configuration_schema(engine: Engine, revision: int, expected: int) 
                 text("CREATE UNIQUE INDEX IF NOT EXISTS uq_installation_uuid ON installation (installation_uuid)")
             )
         revision = 10
+    if revision == 10 and expected >= 11:
+        heater_columns = {
+            column["name"] for column in inspect(engine).get_columns("heater")
+        }
+        charge_columns = {
+            column["name"]
+            for column in inspect(engine).get_columns("heater_charge_config")
+        }
+        with engine.begin() as connection:
+            if "telemetry_topic" not in heater_columns:
+                connection.execute(
+                    text("ALTER TABLE heater ADD COLUMN telemetry_topic VARCHAR(512)")
+                )
+            if "indoor_topic" in heater_columns:
+                rows = connection.execute(
+                    text(
+                        "SELECT h.id, h.indoor_topic, c.stored_soc_topic "
+                        "FROM heater h LEFT JOIN heater_charge_config c "
+                        "ON c.installation_id = h.installation_id "
+                        "AND c.heater_id = h.heater_id"
+                    )
+                    if "stored_soc_topic" in charge_columns
+                    else text(
+                        "SELECT h.id, h.indoor_topic, NULL AS stored_soc_topic "
+                        "FROM heater h"
+                    )
+                ).all()
+                for heater_id, indoor_topic, stored_soc_topic in rows:
+                    indoor = _normalise_topic(indoor_topic)
+                    stored_soc = _normalise_topic(stored_soc_topic)
+                    merged = (
+                        None
+                        if indoor and stored_soc and indoor != stored_soc
+                        else indoor or stored_soc
+                    )
+                    connection.execute(
+                        text(
+                            "UPDATE heater SET telemetry_topic = :topic "
+                            "WHERE id = :id AND telemetry_topic IS NULL"
+                        ),
+                        {"topic": merged, "id": heater_id},
+                    )
+        _drop_columns(engine, "heater", {"indoor_topic"})
+        _drop_columns(engine, "heater_charge_config", {"stored_soc_topic"})
+        revision = 11
     if revision != expected:
         raise BootstrapIncompatibleError(
             f"configuration schema revision {revision} has no registered upgrade path to {expected}"
         )
+
+
+def _normalise_topic(value: object) -> str | None:
+    if value is None:
+        return None
+    topic = str(value).strip()
+    return topic or None
 
 
 def _drop_columns(engine, table_name: str, columns: set[str]) -> None:

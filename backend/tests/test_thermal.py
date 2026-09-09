@@ -91,11 +91,11 @@ def test_falls_back_to_static_target_without_thermal_profile() -> None:
 def test_selects_only_configured_fresh_plausible_readings_at_explicit_time():
     at = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
     heaters = (
-        replace(thermal_heater(), id="fresh", indoor_topic="ha/fresh"),
-        replace(thermal_heater(), id="edge", indoor_topic="ha/edge"),
-        replace(thermal_heater(), id="old", indoor_topic="ha/old"),
-        replace(thermal_heater(), id="absurd", indoor_topic="ha/absurd"),
-        replace(thermal_heater(), id="missing", indoor_topic="ha/missing"),
+        replace(thermal_heater(), id="fresh", telemetry_topic="ha/fresh"),
+        replace(thermal_heater(), id="edge", telemetry_topic="ha/edge"),
+        replace(thermal_heater(), id="old", telemetry_topic="ha/old"),
+        replace(thermal_heater(), id="absurd", telemetry_topic="ha/absurd"),
+        replace(thermal_heater(), id="missing", telemetry_topic="ha/missing"),
     )
     readings = {
         "fresh": IndoorReading("fresh", 19, at - timedelta(minutes=1)),

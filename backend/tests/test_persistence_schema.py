@@ -187,7 +187,7 @@ def test_indoor_reading_uses_the_integer_heater_identity_without_cross_store_fk(
 
 
 def test_indoor_configuration_columns_have_compatible_defaults():
-    assert heater_table.c.indoor_topic.nullable
+    assert heater_table.c.telemetry_topic.nullable
     assert installation_table.c.indoor_max_age_minutes.server_default.arg == "30"
     assert installation_table.c.indoor_min_plausible_c.server_default.arg == "-20"
     assert installation_table.c.indoor_max_plausible_c.server_default.arg == "50"

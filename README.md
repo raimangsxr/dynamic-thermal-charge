@@ -187,6 +187,17 @@ fijos anteriores. La simulación explícita de acumuladores
 (`mqtt_simulation_enabled`) sí bloquea el arranque GPIO y se registra como un
 error crítico.
 
+Cada acumulador puede configurar un único `telemetry_topic` MQTT. El payload es
+un objeto JSON con las claves numéricas opcionales
+`indoor_temperature_c`, `stored_soc_percent` y `damper_position_percent`; una
+clave ausente conserva su último valor válido y una clave inválida solo
+invalida ese campo. La telemetría agrupada no se retiene. Con la simulación
+activa, el topic predeterminado es `<prefijo>/<id>/telemetry`, salvo que el
+acumulador tenga uno configurado. El descubrimiento de Home Assistant agrupa
+las entidades con la misma disponibilidad en un único mensaje por dispositivo;
+las entidades que requieren además `state_available` mantienen su disponibilidad
+individual.
+
 Si una salida rechaza una conmutación, el controlador degrada únicamente esa
 salida: aplica el resto de las transiciones del ciclo, la reintenta en cada
 sondeo y no persiste ninguna exclusión. Una salida cuyo apagado falla se sigue

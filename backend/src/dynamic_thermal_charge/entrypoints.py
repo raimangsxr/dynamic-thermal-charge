@@ -210,7 +210,7 @@ def run_mqtt() -> None:
     from .logging_config import configure_logging
     from .mqtt.client import PahoMqttClient
     from .mqtt.commands import CommandProcessor
-    from .mqtt.indoor import ChargeTelemetryMessageProcessor, IndoorMessageProcessor
+    from .mqtt.indoor import ChargeTelemetryMessageProcessor
     from .mqtt.publisher import MqttPublisher, StoreSnapshotReader
     from .mqtt.service import MqttService, MqttSupervisor
     from .mqtt.settings import settings_from_repository
@@ -267,22 +267,14 @@ def run_mqtt() -> None:
             subscriptions=all_subscriptions,
         )
         commands = CommandProcessor(store.repository, topics, republish=publisher.republish_heater)
-        indoor = IndoorMessageProcessor(
-            store.repository,
-            store.indoor_readings,
-            clock=lambda: datetime.now(timezone.utc),
-        )
         charge_telemetry = ChargeTelemetryMessageProcessor(
             store.repository,
             store.planning,
+            readings=store.indoor_readings,
             clock=lambda: datetime.now(timezone.utc),
         )
 
         def handle_telemetry(message):
-            # Preserve the legacy indoor-temperature path while accepting the
-            # new three-topic contract. Each processor ignores topics it does
-            # not own.
-            indoor.handle(message)
             charge_telemetry.handle(message)
 
         return MqttService(

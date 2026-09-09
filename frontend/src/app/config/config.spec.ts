@@ -43,8 +43,7 @@ function configDto(overrides: Partial<ConfigDto> = {}): ConfigDto {
         room_heat_loss_kw_per_c: 0.12,
         priority: 90,
         enabled: true,
-        indoor_topic: null,
-        stored_soc_topic: null,
+        telemetry_topic: null,
         temperature_targets: [{ id: 1, heater_id: 'salon', target_temperature_c: 21, start_time: '00:00', end_time: '24:00', weekdays: [0, 1, 2, 3, 4, 5, 6], enabled: true }],
         output: { kind: 'gpio', pin: 17, active_high: false },
       },
@@ -307,11 +306,11 @@ describe('Config', () => {
     backend.expectOne('/api/v1/config').flush(configDto());
   });
 
-  it('renders all indoor policy fields and the per-heater topic', () => {
+  it('renders all indoor policy fields and the grouped telemetry topic', () => {
     const element = load(
       configDto({
         heaters: [
-          { ...configDto().heaters[0], indoor_topic: 'ha/salon/temp' },
+          { ...configDto().heaters[0], telemetry_topic: 'ha/salon/telemetry' },
         ],
       }),
     );
@@ -328,25 +327,25 @@ describe('Config', () => {
     fixture.detectChanges();
     fixture.componentInstance.openEditHeater(fixture.componentInstance.config()!.heaters[0]);
     fixture.detectChanges();
-    const topic = (fixture.nativeElement as HTMLElement).querySelector<HTMLInputElement>('[name="indoor_topic"]');
+    const topic = (fixture.nativeElement as HTMLElement).querySelector<HTMLInputElement>('[name="telemetry_topic"]');
     expect(topic).not.toBeNull();
     expect(
       fixture.componentInstance.heaterText(
         fixture.componentInstance.config()!.heaters[0],
-        'indoor_topic',
+        'telemetry_topic',
       ),
-    ).toBe('ha/salon/temp');
+    ).toBe('ha/salon/telemetry');
   });
 
-  it('sends an empty indoor topic and keeps it on rejection', () => {
-    load(configDto({ heaters: [{ ...configDto().heaters[0], indoor_topic: 'ha/old' }] }));
+  it('sends an empty telemetry topic and keeps it on rejection', () => {
+    load(configDto({ heaters: [{ ...configDto().heaters[0], telemetry_topic: 'ha/old' }] }));
     fixture.componentInstance.openEditHeater(fixture.componentInstance.config()!.heaters[0]);
-    fixture.componentInstance.updateHeaterForm('indoor_topic', '');
+    fixture.componentInstance.updateHeaterForm('telemetry_topic', '');
     fixture.componentInstance.saveHeater();
     const request = backend.expectOne('/api/v1/config/heaters/salon');
     expect(request.request.body).toMatchObject({
       revision: 3,
-      indoor_topic: null,
+      telemetry_topic: null,
     });
     const { body, options } = apiError('validation_failed', 'invalid topic', 422);
     request.flush(body, options);

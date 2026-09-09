@@ -58,8 +58,7 @@ def _heater_view(heater: Heater) -> HeaterResponse:
         full_charge_hours=heater.full_charge_minutes / 60,
         priority=heater.priority,
         enabled=heater.enabled,
-        indoor_topic=heater.indoor_topic,
-        stored_soc_topic=heater.stored_soc_topic,
+        telemetry_topic=heater.telemetry_topic,
         output=OutputView(
             kind=heater.output.kind,
             pin=heater.output.pin,
@@ -313,8 +312,7 @@ def update_heater(
             full_charge_minutes=round(payload.full_charge_hours * 60),
             priority=payload.priority,
             enabled=payload.enabled,
-            indoor_topic=payload.indoor_topic,
-            stored_soc_topic=payload.stored_soc_topic,
+            telemetry_topic=payload.telemetry_topic,
             output=OutputConfig(
                 kind=payload.output, pin=payload.pin, active_high=payload.active_high
             ),
@@ -356,8 +354,7 @@ def post_heater(
         full_charge_minutes=round(payload.full_charge_hours * 60),
         priority=payload.priority,
         enabled=payload.enabled,
-        indoor_topic=payload.indoor_topic,
-        stored_soc_topic=payload.stored_soc_topic,
+        telemetry_topic=payload.telemetry_topic,
         thermal=thermal,
         temperature_targets=_targets_for_heater(payload.id, payload.temperature_targets)
         or (TemperatureTarget(21.0, time(0, 0), time(0, 0)),),

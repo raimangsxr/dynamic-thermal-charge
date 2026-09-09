@@ -276,10 +276,10 @@ def heater_from_rows(
             thermal=thermal,
             temperature_targets=targets,
             output=output,
-            indoor_topic=(
+            telemetry_topic=(
                 None
-                if heater_row.get("indoor_topic") is None
-                else str(heater_row["indoor_topic"])
+                if heater_row.get("telemetry_topic") is None
+                else str(heater_row["telemetry_topic"])
             ),
         )
 
@@ -402,7 +402,7 @@ def heater_params(heater: Heater, installation_id: int, position: int) -> dict[s
         "full_charge_minutes": heater.full_charge_minutes,
         "priority": heater.priority,
         "enabled": heater.enabled,
-        "indoor_topic": heater.indoor_topic,
+        "telemetry_topic": heater.telemetry_topic,
         "position": position,
     }
 

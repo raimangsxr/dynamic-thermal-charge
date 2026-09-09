@@ -206,6 +206,9 @@ class Heater:
     thermal: ThermalProfile | None = None
     model: str | None = None
     enabled: bool = True
+    telemetry_topic: str | None = None
+    # Deprecated compatibility inputs. New persistence and API surfaces use
+    # ``telemetry_topic`` and no longer read these separate MQTT topics.
     indoor_topic: str | None = None
     temperature_topic: str | None = None
     target_temperature_topic: str | None = None
@@ -224,6 +227,9 @@ class Heater:
             raise ValueError(f"heater {self.id}: full charge time must be positive")
         if not 0 <= self.target_charge <= 1:
             raise ValueError(f"heater {self.id}: target_charge must be between 0 and 1")
+        if self.telemetry_topic is not None:
+            topic = self.telemetry_topic.strip()
+            object.__setattr__(self, "telemetry_topic", topic or None)
         if self.indoor_topic is not None:
             topic = self.indoor_topic.strip()
             object.__setattr__(self, "indoor_topic", topic or None)

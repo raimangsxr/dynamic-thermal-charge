@@ -37,7 +37,7 @@ def _patch_batch(client, values, revision=None):
 def test_the_whole_configuration_is_readable(client):
     body = _config(client)
     assert body["config_revision"] == 1
-    assert body["schema_revision"] == "0016_home_assistant_control"
+    assert body["schema_revision"] == "0017_group_mqtt_telemetry"
     assert "state_file" not in body
     assert body["max_total_power_kw"] == 5.2
     assert body["slot_minutes"] == 30
@@ -136,6 +136,8 @@ def test_a_new_domain_field_cannot_appear_in_the_api_unnoticed():
         "temperature_topic": None,
         "target_temperature_topic": None,
         "stored_charge_topic": None,
+        "indoor_topic": None,
+        "stored_soc_topic": None,
     }
     unaccounted = {
         name
@@ -206,8 +208,7 @@ def test_a_heater_can_be_replaced_in_one_revisioned_request(client):
             "full_charge_hours": 8,
             "priority": 99,
             "enabled": True,
-            "indoor_topic": "ha/salon/temp",
-            "stored_soc_topic": "dtc/salon/soc",
+            "telemetry_topic": "ha/salon/telemetry",
             "output": "gpio",
             "pin": 17,
             "active_high": False,
@@ -227,7 +228,7 @@ def test_a_heater_can_be_replaced_in_one_revisioned_request(client):
     assert response.json()["revision_after"] == revision + 1
     updated = client.get("/api/v1/config/heaters/salon", headers=AUTH).json()
     assert updated["name"] == "Salón renovado"
-    assert updated["stored_soc_topic"] == "dtc/salon/soc"
+    assert updated["telemetry_topic"] == "ha/salon/telemetry"
     assert updated["room_thermal_capacity_kwh_per_c"] == 3.1
     assert updated["room_heat_loss_kw_per_c"] == 0.2
     assert updated["temperature_targets"][0]["start_time"] == "07:00"
@@ -247,8 +248,7 @@ def test_overlapping_temperature_targets_are_rejected_without_partial_save(clien
             "full_charge_hours": before["heaters"][0]["full_charge_hours"],
             "priority": before["heaters"][0]["priority"],
             "enabled": True,
-            "indoor_topic": before["heaters"][0]["indoor_topic"],
-            "stored_soc_topic": before["heaters"][0]["stored_soc_topic"],
+            "telemetry_topic": before["heaters"][0]["telemetry_topic"],
             "output": before["heaters"][0]["output"]["kind"],
             "pin": before["heaters"][0]["output"]["pin"],
             "active_high": before["heaters"][0]["output"]["active_high"],
@@ -278,7 +278,7 @@ def test_overlapping_temperature_targets_are_rejected_without_partial_save(clien
     assert _config(client) == before
 
 
-def test_indoor_policy_and_topic_round_trip_with_empty_topic_as_null(client):
+def test_indoor_policy_and_telemetry_topic_round_trip_with_empty_topic_as_null(client):
     for field, value, expected in (
         ("indoor_max_age_minutes", "45", 45),
         ("indoor_min_plausible_c", "-15", -15.0),
@@ -286,12 +286,12 @@ def test_indoor_policy_and_topic_round_trip_with_empty_topic_as_null(client):
     ):
         assert _patch(client, field, value).status_code == 200
         assert _config(client)[field] == expected
-    assert _patch(client, "indoor_topic", "ha/salon/temp", heater="salon").status_code == 200
-    assert _config(client)["heaters"][0]["indoor_topic"] == "ha/salon/temp"
-    cleared = _patch(client, "indoor_topic", "", heater="salon")
+    assert _patch(client, "telemetry_topic", "ha/salon/telemetry", heater="salon").status_code == 200
+    assert _config(client)["heaters"][0]["telemetry_topic"] == "ha/salon/telemetry"
+    cleared = _patch(client, "telemetry_topic", "", heater="salon")
     assert cleared.status_code == 200
     assert cleared.json()["new_value"] is None
-    assert _config(client)["heaters"][0]["indoor_topic"] is None
+    assert _config(client)["heaters"][0]["telemetry_topic"] is None
 
 
 def test_retired_thermal_fields_are_rejected(client):
