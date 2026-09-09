@@ -159,6 +159,12 @@ class AutomaticPlanSlot:
     thermal_loss_kwh: dict[str, float] | None = None
     temperature_shortfall_c: dict[str, float] | None = None
     charge_energy_kwh: dict[str, float] | None = None
+    # Room-energy boundary values. The historical fields above remain
+    # readable for persisted plans; new room-energy plans expose the slot end
+    # explicitly in these maps.
+    stored_energy_next_kwh: dict[str, float] | None = None
+    indoor_temperature_next_c: dict[str, float] | None = None
+    temperature_shortfall_start_c: dict[str, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -642,6 +648,9 @@ def input_token(request: PlanningInput) -> str:
     }
     if room_energy:
         payload["room_energy_model"] = True
+        # A preview from the previous end-only model must not be reused for
+        # activation after the boundary semantics change.
+        payload["room_energy_model_version"] = "boundary_targets_v2"
         payload["room_coefficients"] = {
             heater.id: {
                 "capacity_kwh_per_c": heater.room_thermal_capacity_kwh_per_c,
@@ -897,6 +906,7 @@ class RoomEnergyInterval:
     heat_delivered_kwh: float
     thermal_loss_kwh: float
     temperature_shortfall_c: float
+    temperature_shortfall_start_c: float = 0.0
 
     @property
     def demand_kwh(self) -> float:
@@ -1078,6 +1088,11 @@ def room_energy_step(
             0.0
             if target_temperature_c is None
             else float(max(0.0, target_temperature_c - indoor_next))
+        ),
+        temperature_shortfall_start_c=(
+            0.0
+            if target_temperature_c is None
+            else float(max(0.0, target_temperature_c - indoor_temperature_c))
         ),
     )
 
@@ -1284,6 +1299,15 @@ def _solve_room_energy(
         for heater in heaters
         for index in range(len(starts))
     }
+    start_shortfall = {
+        (heater.id, index): pulp.LpVariable(
+            f"temperature_start_shortfall_{heater.id}_{index:03d}",
+            lowBound=0,
+            upBound=200,
+        )
+        for heater in heaters
+        for index in range(len(starts))
+    }
     charge = {
         (heater.id, index): heater.charge_power_kw * slot_hours * on[(heater.id, index)]
         for heater in heaters
@@ -1317,7 +1341,12 @@ def _solve_room_energy(
             )
             if target is None:
                 model += shortfall[(heater.id, index)] == 0
+                model += start_shortfall[(heater.id, index)] == 0
             else:
+                # A target is a boundary invariant, not merely an end-of-slot
+                # result. The start row makes the optimiser preheat in earlier
+                # untargeted slots when that is necessary.
+                model += start_shortfall[(heater.id, index)] >= target - indoor[(heater.id, index)]
                 model += shortfall[(heater.id, index)] >= target - indoor[(heater.id, index + 1)]
     for index in range(len(starts)):
         model += sum(heater.power_w * on[(heater.id, index)] for heater in heaters) <= limit_w
@@ -1336,7 +1365,8 @@ def _solve_room_energy(
     # make a higher-priority room dominate an equivalent lower-priority demand,
     # while charge, delivered heat, and ON/OFF order are tie-breakers.
     comfort_objective = sum(
-        max(1.0, float(heater.priority)) * shortfall[(heater.id, index)]
+        max(1.0, float(heater.priority))
+        * (shortfall[(heater.id, index)] + start_shortfall[(heater.id, index)])
         for heater in heaters
         for index in range(len(starts))
     )
@@ -1419,6 +1449,7 @@ def _solve_room_energy(
         interval_indoor: dict[str, float] = {}
         interval_next_indoor: dict[str, float] = {}
         interval_target: dict[str, float] = {}
+        interval_start_shortfall: dict[str, float] = {}
         interval_shortfall: dict[str, float] = {}
         initial_soc: dict[str, float] = {}
         demand: dict[str, float] = {}
@@ -1436,7 +1467,19 @@ def _solve_room_energy(
             outdoor = outdoor_values[(heater.id, index)]
             loss_value = heater.room_heat_loss_kw_per_c * (indoor_value - outdoor) * slot_hours
             charge_value = heater.charge_power_kw * slot_hours * on_value
+            start_short_value = 0.0 if target is None else max(0.0, target - indoor_value)
             short_value = 0.0 if target is None else max(0.0, target - next_indoor_value)
+            if target is not None and start_short_value > 1e-6:
+                violations.append(
+                    PlanningViolation(
+                        heater.id,
+                        "temperature_comfort",
+                        indoor_value,
+                        start_short_value,
+                        start,
+                        "insufficient_stored_energy_or_power",
+                    )
+                )
             if target is not None and short_value > 1e-6:
                 violations.append(
                     PlanningViolation(
@@ -1444,7 +1487,7 @@ def _solve_room_energy(
                         "temperature_comfort",
                         next_indoor_value,
                         short_value,
-                        start,
+                        boundaries[index + 1],
                         "insufficient_stored_energy_or_power",
                     )
                 )
@@ -1459,6 +1502,7 @@ def _solve_room_energy(
             interval_heat[heater.id] = round(heat_value, 9)
             interval_loss[heater.id] = round(loss_value, 9)
             interval_charge[heater.id] = round(charge_value, 9)
+            interval_start_shortfall[heater.id] = round(start_short_value, 9)
             interval_shortfall[heater.id] = round(short_value, 9)
             initial_soc[heater.id] = round(stored_value / heater.capacity_kwh * 100, 6)
             demand[heater.id] = round(heat_value, 9)
@@ -1480,6 +1524,7 @@ def _solve_room_energy(
                     heat_value,
                     loss_value,
                     short_value,
+                    start_short_value,
                 )
             )
         plan_slots.append(
@@ -1491,16 +1536,19 @@ def _solve_room_energy(
                 {key: round(value / _heater(heaters, key).capacity_kwh * 100, 6) for key, value in interval_next_stored.items()},
                 {key: 0.0 for key in interval_target},
                 outdoor_values[(heaters[0].id, index)] if heaters else None,
-                interval_next_indoor,
+                interval_indoor,
                 initial_soc,
                 demand,
                 power_by_heater,
-                interval_next_stored,
+                interval_stored,
                 interval_target,
                 interval_heat,
                 interval_loss,
                 interval_shortfall,
                 interval_charge,
+                interval_next_stored,
+                interval_next_indoor,
+                interval_start_shortfall,
             )
         )
     by_heater = {heater.id: [item for item in room_intervals if item.heater_id == heater.id] for heater in heaters}
@@ -1518,7 +1566,13 @@ def _solve_room_energy(
             by_heater[heater.id][-1].indoor_temperature_next_c if by_heater[heater.id] else float(request.telemetry[heater.id].indoor_temperature_c),
             sum(item.heat_delivered_kwh for item in by_heater[heater.id]),
             sum(item.thermal_loss_kwh for item in by_heater[heater.id]),
-            max((item.temperature_shortfall_c for item in by_heater[heater.id]), default=0.0),
+            max(
+                (
+                    max(item.temperature_shortfall_c, item.temperature_shortfall_start_c)
+                    for item in by_heater[heater.id]
+                ),
+                default=0.0,
+            ),
         )
         for heater in heaters
     )
@@ -1580,6 +1634,9 @@ def _invalid_room_plan(
                 {heater.id: 0.0 for heater in enabled},
                 {heater.id: max(0.0, target.get(heater.id, indoor[heater.id]) - indoor[heater.id]) for heater in enabled},
                 {heater.id: 0.0 for heater in enabled},
+                stored,
+                indoor,
+                {heater.id: max(0.0, target.get(heater.id, indoor[heater.id]) - indoor[heater.id]) for heater in enabled},
             )
         )
     horizon_end = advance_real(starts[-1], request.slot_minutes) if starts else advance_real(start, request.horizon_hours * 60)

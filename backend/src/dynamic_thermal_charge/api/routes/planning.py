@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
@@ -191,6 +191,7 @@ def get_planning(
             id=heater.id,
             name=heater.name,
             power_w=heater.power_w,
+            capacity_kwh=heater.capacity_kwh,
             priority=heater.priority,
             enabled=heater.enabled,
         )
@@ -588,6 +589,9 @@ def _automatic_planning_response(
     slot_delta = timedelta(minutes=automatic["slot_minutes"])
     horizon_start = automatic["horizon_start"]
     horizon_end = automatic["horizon_end"]
+    automatic_slots = _enrich_boundary_slots(
+        list(automatic["slots"]), automatic.get("demand", [])
+    )
     _window_start, window_end = automatic_window(
         automatic, planning_window_hours, timezone_name
     )
@@ -606,14 +610,17 @@ def _automatic_planning_response(
                 temperature_c=item["outdoor_temperature_c"],
                 temperature_interpolated=False,
                 stored_energy_kwh_by_heater=item.get("stored_energy_kwh", {}),
+                stored_energy_next_kwh_by_heater=item.get("stored_energy_next_kwh", {}),
                 indoor_temperature_c_by_heater=item.get("indoor_temperature_c", {}),
+                indoor_temperature_next_c_by_heater=item.get("indoor_temperature_next_c", {}),
                 target_temperature_c_by_heater=item.get("target_temperature_c", {}),
                 heat_delivered_kwh_by_heater=item.get("heat_delivered_kwh", {}),
                 thermal_loss_kwh_by_heater=item.get("thermal_loss_kwh", {}),
+                temperature_shortfall_start_c_by_heater=item.get("temperature_shortfall_start_c", {}),
                 temperature_shortfall_c_by_heater=item.get("temperature_shortfall_c", {}),
                 charge_energy_kwh_by_heater=item.get("charge_energy_kwh", {}),
             )
-            for item in automatic["slots"]
+            for item in automatic_slots
             if real_before(item["start"], window_end)
         ],
     )
@@ -642,7 +649,7 @@ def _automatic_planning_response(
         timeline=_build_timeline(
             config.heaters,
             power_by_id,
-            automatic["slots"],
+            automatic_slots,
             latest_forecast,
             horizon_start,
             horizon_end,
@@ -935,6 +942,9 @@ def _automatic_plan_from_preview_payload(payload: dict[str, Any]) -> AutomaticPl
             _preview_float_map(item.get("thermal_loss_kwh")),
             _preview_float_map(item.get("temperature_shortfall_c")),
             _preview_float_map(item.get("charge_energy_kwh")),
+            _preview_float_map(item.get("stored_energy_next_kwh")),
+            _preview_float_map(item.get("indoor_temperature_next_c")),
+            _preview_float_map(item.get("temperature_shortfall_start_c")),
         )
         for item in _preview_dict_list(payload.get("slots"))
     )
@@ -985,6 +995,7 @@ def _automatic_plan_from_preview_payload(payload: dict[str, Any]) -> AutomaticPl
                 float(item["heat_delivered_kwh"]),
                 float(item["thermal_loss_kwh"]),
                 float(item["temperature_shortfall_c"]),
+                float(item.get("temperature_shortfall_start_c", 0.0)),
             )
             for item in demand_items
         )
@@ -1059,6 +1070,97 @@ def _preview_int_map(value: Any) -> dict[str, int]:
     if not isinstance(value, dict):
         raise ValueError("preview integer map is invalid")
     return {str(key): int(item) for key, item in value.items()}
+
+
+def _projection_datetime(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _projection_key(value: Any) -> datetime | None:
+    parsed = _projection_datetime(value)
+    if parsed is None:
+        return None
+    return parsed.astimezone(timezone.utc) if parsed.tzinfo is not None else parsed
+
+
+def _room_boundary_projection(demand: Any) -> dict[tuple[datetime, str], dict[str, float | None]]:
+    """Index room-energy demand by slot start for API boundary projections."""
+    result: dict[tuple[datetime, str], dict[str, float | None]] = {}
+    if not isinstance(demand, (list, tuple)):
+        return result
+    for item in demand:
+        if isinstance(item, RoomEnergyInterval):
+            values = {
+                "stored_energy_kwh": item.stored_energy_kwh,
+                "stored_energy_next_kwh": item.stored_energy_next_kwh,
+                "indoor_temperature_c": item.indoor_temperature_c,
+                "indoor_temperature_next_c": item.indoor_temperature_next_c,
+                "target_temperature_c": item.target_temperature_c,
+                "temperature_shortfall_start_c": item.temperature_shortfall_start_c,
+                "temperature_shortfall_c": item.temperature_shortfall_c,
+            }
+            start = item.start
+            heater_id = item.heater_id
+        elif isinstance(item, dict) and "indoor_temperature_next_c" in item:
+            start = _projection_datetime(item.get("start"))
+            heater_id = str(item.get("heater_id", ""))
+            if start is None or not heater_id:
+                continue
+            values = {
+                "stored_energy_kwh": _preview_optional_float(item.get("stored_energy_kwh")),
+                "stored_energy_next_kwh": _preview_optional_float(item.get("stored_energy_next_kwh")),
+                "indoor_temperature_c": _preview_optional_float(item.get("indoor_temperature_c")),
+                "indoor_temperature_next_c": _preview_optional_float(item.get("indoor_temperature_next_c")),
+                "target_temperature_c": _preview_optional_float(item.get("target_temperature_c")),
+                "temperature_shortfall_start_c": _preview_optional_float(item.get("temperature_shortfall_start_c")) or 0.0,
+                "temperature_shortfall_c": _preview_optional_float(item.get("temperature_shortfall_c")) or 0.0,
+            }
+        else:
+            continue
+        key = _projection_key(start)
+        if key is not None:
+            result[(key, heater_id)] = values
+    return result
+
+
+def _enrich_boundary_slots(slots: list[dict[str, Any]], demand: Any) -> list[dict[str, Any]]:
+    """Attach start/end physical states without changing slot boundaries."""
+    projections = _room_boundary_projection(demand)
+    if not projections:
+        return slots
+    fields = (
+        "stored_energy_kwh",
+        "stored_energy_next_kwh",
+        "indoor_temperature_c",
+        "indoor_temperature_next_c",
+        "target_temperature_c",
+        "temperature_shortfall_start_c",
+        "temperature_shortfall_c",
+    )
+    enriched: list[dict[str, Any]] = []
+    for source in slots:
+        slot = dict(source)
+        start = _projection_key(slot.get("start"))
+        if start is not None:
+            maps = {field: dict(slot.get(field) or {}) for field in fields}
+            for (projection_start, heater_id), values in projections.items():
+                if projection_start != start:
+                    continue
+                for field in fields:
+                    value = values.get(field)
+                    if value is not None:
+                        maps[field][heater_id] = value
+            for field, values in maps.items():
+                slot[field] = values
+        enriched.append(slot)
+    return enriched
 
 
 def _preview_response(
@@ -1137,25 +1239,35 @@ def _preview_response(
             "heating_w": None if site is None else int(site["max_heating_power_w"]),
         },
     }
+    preview_slots = _enrich_boundary_slots(
+        [
+            {
+                "start": item.start,
+                "end": item.end,
+                "heater_ids": list(item.heater_ids),
+                "power_w": item.power_w,
+                "outdoor_temperature_c": item.outdoor_temperature_c,
+                "stored_energy_kwh": item.stored_energy_kwh or {},
+                "stored_energy_next_kwh": item.stored_energy_next_kwh or {},
+                "indoor_temperature_c": item.indoor_temperature_c or {},
+                "indoor_temperature_next_c": item.indoor_temperature_next_c or {},
+                "target_temperature_c": item.target_temperature_c or {},
+                "heat_delivered_kwh": item.heat_delivered_kwh or {},
+                "thermal_loss_kwh": item.thermal_loss_kwh or {},
+                "temperature_shortfall_start_c": item.temperature_shortfall_start_c or {},
+                "temperature_shortfall_c": item.temperature_shortfall_c or {},
+                "charge_energy_kwh": item.charge_energy_kwh or {},
+            }
+            for item in plan.slots
+        ],
+        plan.demand,
+    )
     return PlanningPreviewResponse(
         token=plan.input_token, status=plan.status, score=list(plan.score),
         window_start=plan.horizon_start, window_end=window_end,
         horizon_start=plan.horizon_start, horizon_end=plan.horizon_end,
         slot_minutes=plan.slot_minutes,
-        slots=[{
-            "start": item.start,
-            "end": item.end,
-            "heater_ids": list(item.heater_ids),
-            "power_w": item.power_w,
-            "outdoor_temperature_c": item.outdoor_temperature_c,
-            "stored_energy_kwh": item.stored_energy_kwh or {},
-            "indoor_temperature_c": item.indoor_temperature_c or {},
-            "target_temperature_c": item.target_temperature_c or {},
-            "heat_delivered_kwh": item.heat_delivered_kwh or {},
-            "thermal_loss_kwh": item.thermal_loss_kwh or {},
-            "temperature_shortfall_c": item.temperature_shortfall_c or {},
-            "charge_energy_kwh": item.charge_energy_kwh or {},
-        } for item in plan.slots],
+        slots=preview_slots,
         deficits=violations,
         violations=violations,
         explanations=[
@@ -1263,10 +1375,13 @@ def _ordered_plan_slots(slots: list[PlanningSlotView]) -> list[dict]:
             "temperature_c": slot.temperature_c,
             "temperature_interpolated": slot.temperature_interpolated,
             "stored_energy_kwh": slot.stored_energy_kwh_by_heater,
+            "stored_energy_next_kwh": slot.stored_energy_next_kwh_by_heater,
             "indoor_temperature_c": slot.indoor_temperature_c_by_heater,
+            "indoor_temperature_next_c": slot.indoor_temperature_next_c_by_heater,
             "target_temperature_c": slot.target_temperature_c_by_heater,
             "heat_delivered_kwh": slot.heat_delivered_kwh_by_heater,
             "thermal_loss_kwh": slot.thermal_loss_kwh_by_heater,
+            "temperature_shortfall_start_c": slot.temperature_shortfall_start_c_by_heater,
             "temperature_shortfall_c": slot.temperature_shortfall_c_by_heater,
             "charge_energy_kwh": slot.charge_energy_kwh_by_heater,
         }
@@ -1335,9 +1450,17 @@ def _build_timeline(
             slot_index, _temperature_for_interval(forecast, cursor, end)
         )
         stored_energy = {str(key): float(value) for key, value in (source_slot.get("stored_energy_kwh", {}) or {}).items()}
+        stored_energy_next = {
+            str(key): float(value)
+            for key, value in (source_slot.get("stored_energy_next_kwh", {}) or {}).items()
+        }
         indoor_projection = {
             str(key): float(value)
             for key, value in (source_slot.get("indoor_temperature_c", {}) or {}).items()
+        }
+        indoor_projection_next = {
+            str(key): float(value)
+            for key, value in (source_slot.get("indoor_temperature_next_c", {}) or {}).items()
         }
         target_projection = {
             str(key): float(value)
@@ -1350,6 +1473,10 @@ def _build_timeline(
         loss_projection = {
             str(key): float(value)
             for key, value in (source_slot.get("thermal_loss_kwh", {}) or {}).items()
+        }
+        shortfall_start_projection = {
+            str(key): float(value)
+            for key, value in (source_slot.get("temperature_shortfall_start_c", {}) or {}).items()
         }
         shortfall_projection = {
             str(key): float(value)
@@ -1372,10 +1499,13 @@ def _build_timeline(
                 temperature_c=temperature,
                 temperature_interpolated=interpolated,
                 stored_energy_kwh_by_heater={heater_id: round(value, 6) for heater_id, value in stored_energy.items()},
+                stored_energy_next_kwh_by_heater={heater_id: round(value, 6) for heater_id, value in stored_energy_next.items()},
                 indoor_temperature_c_by_heater={heater_id: round(value, 6) for heater_id, value in indoor_projection.items()},
+                indoor_temperature_next_c_by_heater={heater_id: round(value, 6) for heater_id, value in indoor_projection_next.items()},
                 target_temperature_c_by_heater={heater_id: round(value, 6) for heater_id, value in target_projection.items()},
                 heat_delivered_kwh_by_heater={heater_id: round(value, 6) for heater_id, value in heat_projection.items()},
                 thermal_loss_kwh_by_heater={heater_id: round(value, 6) for heater_id, value in loss_projection.items()},
+                temperature_shortfall_start_c_by_heater={heater_id: round(value, 6) for heater_id, value in shortfall_start_projection.items()},
                 temperature_shortfall_c_by_heater={heater_id: round(value, 6) for heater_id, value in shortfall_projection.items()},
                 charge_energy_kwh_by_heater={heater_id: round(value, 6) for heater_id, value in charge_projection.items()},
             )

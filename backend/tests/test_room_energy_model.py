@@ -136,7 +136,7 @@ def test_overlapping_temperature_targets_are_rejected_even_across_midnight():
         )
 
 
-def test_room_energy_gaps_have_no_temperature_target_or_comfort_deficit():
+def test_room_energy_target_end_is_enforced_but_the_gap_after_it_is_unconstrained():
     heater = replace(
         _heater(),
         temperature_targets=(TemperatureTarget(21.0, time(0, 0), time(1, 0)),),
@@ -151,15 +151,19 @@ def test_room_energy_gaps_have_no_temperature_target_or_comfort_deficit():
     )
     assert result.demand[1].target_temperature_c is None
     assert result.demand[1].temperature_shortfall_c == pytest.approx(0.0)
-    assert not any(
+    assert any(
         item.requirement == "temperature_comfort" and item.at == START + timedelta(hours=1)
+        for item in result.violations
+    )
+    assert not any(
+        item.requirement == "temperature_comfort" and item.at == START + timedelta(hours=2)
         for item in result.violations
     )
 
 
 def test_sufficient_storage_reaches_target_without_charging():
     result = RoomEnergyPlanner().build(
-        _request(telemetry={"salon": _telemetry("salon", indoor=20.0, soc=100.0)})
+        _request(telemetry={"salon": _telemetry("salon", indoor=21.0, soc=100.0)})
     )
     interval = result.demand[0]
 
@@ -167,6 +171,50 @@ def test_sufficient_storage_reaches_target_without_charging():
     assert interval.indoor_temperature_next_c == pytest.approx(21.0)
     assert interval.charge_energy_kwh == pytest.approx(0.0)
     assert interval.temperature_shortfall_c == pytest.approx(0.0)
+
+
+def test_preheating_satisfies_the_start_and_end_of_a_later_target():
+    heater = replace(
+        _heater(),
+        temperature_targets=(TemperatureTarget(21.0, time(1, 0), time(2, 0)),),
+    )
+
+    result = RoomEnergyPlanner().build(
+        _request(
+            heaters=(heater,),
+            outdoor=20.0,
+            horizon_hours=3,
+            telemetry={"salon": _telemetry("salon", indoor=20.0, soc=0.0)},
+        )
+    )
+
+    assert result.status == FEASIBLE
+    assert result.demand[0].target_temperature_c is None
+    assert result.demand[0].charge_energy_kwh > 0.0
+    assert result.demand[0].indoor_temperature_next_c >= 21.0 - 1e-6
+    assert result.demand[1].indoor_temperature_c >= 21.0 - 1e-6
+    assert result.demand[1].indoor_temperature_next_c >= 21.0 - 1e-6
+    assert not result.violations
+
+
+def test_horizon_start_deficit_uses_initial_temperature_and_boundary_time():
+    result = RoomEnergyPlanner().build(
+        _request(
+            outdoor=20.0,
+            telemetry={"salon": _telemetry("salon", indoor=20.0, soc=100.0)},
+        )
+    )
+    interval = result.demand[0]
+
+    assert result.status == DEGRADED
+    assert interval.temperature_shortfall_start_c == pytest.approx(1.0)
+    assert interval.temperature_shortfall_c == pytest.approx(0.0)
+    assert any(
+        item.requirement == "temperature_comfort"
+        and item.at == START
+        and item.shortfall == pytest.approx(1.0)
+        for item in result.violations
+    )
 
 
 def test_insufficient_storage_reports_shortfall_without_negative_energy():

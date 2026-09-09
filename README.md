@@ -234,6 +234,22 @@ recibido se convierte a kWh solo para inicializar esa energía. El plan muestra
 por intervalo SOC, energía almacenada, temperatura interior, objetivo, calor
 entregado, intercambio térmico y déficit de temperatura.
 
+Una consigna activa debe cumplirse en los dos bordes de cada slot: la temperatura
+interior proyectada al comenzar y al terminar el intervalo debe alcanzar el
+objetivo. El optimizador puede cargar y entregar calor en slots anteriores para
+precalentar; si el objetivo ya está activo al inicio del horizonte, la temperatura
+medida es su borde inicial y cualquier déficit inevitable se conserva como
+`DEGRADED` con la hora exacta y el déficit proyectado. El fin de una consigna es
+exclusivo, por lo que no se exige después de ese borde salvo que otra consigna
+esté activa.
+
+La interfaz etiqueta los valores térmicos y de energía con sus horas de inicio y
+fin reales. La potencia de cada acumulador y la agregada se dibuja como ocupación
+discreta del slot, sin rampas entre muestras. El gráfico de carga almacenada usa
+un porcentaje común de 0 a 100 respecto a la capacidad configurada de cada
+acumulador; el detalle conserva los kWh de inicio y fin para la auditoría física.
+El eje vertical de temperatura se ajusta al rango de los datos representados.
+
 Los valores iniciales recomendados son C = 2,5 kWh/°C y K = 0,12 kW/°C. No se
 configuran objetivos porcentuales, reservas ni factores de demanda. Si falta
 telemetría interior/SOC reciente, una consigna semanal, cobertura horaria o
