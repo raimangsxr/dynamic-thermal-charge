@@ -188,9 +188,9 @@ def test_planning_endpoint_excludes_past_forecast_hours(
     recorder.record_forecast(
         OutdoorForecast(
             date=now.date(),
-            average_temperature_c=10,
-            minimum_temperature_c=8,
-            maximum_temperature_c=12,
+            average_temperature_c=40,
+            minimum_temperature_c=40,
+            maximum_temperature_c=40,
             source="aemet",
             hourly_points=points,
         )
@@ -198,7 +198,11 @@ def test_planning_endpoint_excludes_past_forecast_hours(
     response = client.get("/api/v1/planning", headers=AUTH)
 
     assert response.status_code == 200
-    assert [point["temperature_c"] for point in response.json()["forecast"]["hourly_points"]] == [12, 8]
+    forecast = response.json()["forecast"]
+    assert [point["temperature_c"] for point in forecast["hourly_points"]] == [12, 8]
+    assert forecast["average_temperature_c"] == 10
+    assert forecast["minimum_temperature_c"] == 8
+    assert forecast["maximum_temperature_c"] == 12
 
 
 def test_planning_endpoint_prefers_automatic_plan_slot_minutes_over_legacy_plan(
