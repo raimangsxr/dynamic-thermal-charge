@@ -60,6 +60,7 @@ def _request(
     outdoor: float = 5.0,
     horizon_hours: int = 1,
     max_total_power_w: int = 5200,
+    slot_minutes: int = 60,
 ) -> PlanningInput:
     points = tuple(
         HourlyForecastPoint(START + timedelta(hours=offset), outdoor)
@@ -72,7 +73,7 @@ def _request(
         forecast=points,
         horizon_start=START,
         horizon_hours=horizon_hours,
-        slot_minutes=60,
+        slot_minutes=slot_minutes,
         max_total_power_w=max_total_power_w,
         temperature_targets={heater.id: heater.temperature_targets for heater in heaters},
         room_energy_model=True,
@@ -84,6 +85,26 @@ def test_accumulator_capacity_is_nominal_power_times_full_charge_hours():
 
     assert heater.capacity_kwh == pytest.approx(22.4)
     assert heater.capacity_kwh * 0.5 == pytest.approx(11.2)
+
+
+def test_room_energy_step_limits_discharge_to_nominal_power_per_slot():
+    heater = _heater(power_w=2400, full_charge_minutes=480)
+    initial_energy = heater.capacity_kwh * 0.507
+
+    interval = room_energy_step(
+        heater,
+        start=START,
+        outdoor_temperature_c=20.0,
+        target_temperature_c=None,
+        indoor_temperature_c=20.0,
+        stored_energy_kwh=initial_energy,
+        slot_minutes=30,
+        heat_delivered_kwh=6.7584,
+    )
+
+    assert interval.heat_delivered_kwh == pytest.approx(1.2)
+    assert interval.stored_energy_next_kwh == pytest.approx(8.5344)
+    assert interval.stored_soc_next_percent == pytest.approx(44.45)
 
 
 def test_room_energy_step_reproduces_signed_exchange_and_storage_balance():
@@ -229,6 +250,32 @@ def test_insufficient_storage_reports_shortfall_without_negative_energy():
     assert any(item.requirement == "temperature_comfort" for item in result.violations)
 
 
+def test_room_energy_solver_limits_discharge_and_preserves_comfort_deficit():
+    heater = replace(
+        _heater(power_w=2400, full_charge_minutes=480),
+        temperature_targets=(TemperatureTarget(22.70336, time(0, 0)),),
+    )
+    result = RoomEnergyPlanner().build(
+        _request(
+            heaters=(heater,),
+            outdoor=20.0,
+            slot_minutes=30,
+            telemetry={"salon": _telemetry("salon", indoor=20.0, soc=50.7)},
+        )
+    )
+    interval = result.demand[0]
+
+    assert result.status == DEGRADED
+    assert interval.heat_delivered_kwh == pytest.approx(1.2)
+    assert interval.stored_energy_next_kwh >= 0.0
+    assert interval.temperature_shortfall_c > 0.0
+    assert any(
+        item.requirement == "temperature_comfort"
+        and item.reason == "insufficient_stored_energy_or_power"
+        for item in result.violations
+    )
+
+
 def test_forecast_changes_exchange_but_soc_does_not_become_temperature():
     cold = RoomEnergyPlanner().build(_request(outdoor=0.0))
     warm = RoomEnergyPlanner().build(_request(outdoor=20.0))
@@ -304,4 +351,5 @@ def test_estimator_projects_each_interval_from_indoor_temperature_and_soc():
     )
 
     assert intervals[0].stored_energy_kwh == pytest.approx(11.2)
-    assert intervals[0].indoor_temperature_next_c == pytest.approx(21.0)
+    assert intervals[0].heat_delivered_kwh == pytest.approx(2.8)
+    assert intervals[0].indoor_temperature_next_c == pytest.approx(20.4)
