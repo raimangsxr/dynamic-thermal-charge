@@ -155,10 +155,13 @@ class PlanningSlotView(PlanSlotView):
     temperature_c: float | None = None
     temperature_interpolated: bool = False
     stored_energy_kwh_by_heater: dict[str, float] = Field(default_factory=dict)
+    stored_energy_next_kwh_by_heater: dict[str, float] = Field(default_factory=dict)
     indoor_temperature_c_by_heater: dict[str, float] = Field(default_factory=dict)
+    indoor_temperature_next_c_by_heater: dict[str, float] = Field(default_factory=dict)
     target_temperature_c_by_heater: dict[str, float] = Field(default_factory=dict)
     heat_delivered_kwh_by_heater: dict[str, float] = Field(default_factory=dict)
     thermal_loss_kwh_by_heater: dict[str, float] = Field(default_factory=dict)
+    temperature_shortfall_start_c_by_heater: dict[str, float] = Field(default_factory=dict)
     temperature_shortfall_c_by_heater: dict[str, float] = Field(default_factory=dict)
     charge_energy_kwh_by_heater: dict[str, float] = Field(default_factory=dict)
 
@@ -171,10 +174,13 @@ class PlanningTimelineSlotView(BaseModel):
     temperature_c: float | None = None
     temperature_interpolated: bool = False
     stored_energy_kwh_by_heater: dict[str, float] = Field(default_factory=dict)
+    stored_energy_next_kwh_by_heater: dict[str, float] = Field(default_factory=dict)
     indoor_temperature_c_by_heater: dict[str, float] = Field(default_factory=dict)
+    indoor_temperature_next_c_by_heater: dict[str, float] = Field(default_factory=dict)
     target_temperature_c_by_heater: dict[str, float] = Field(default_factory=dict)
     heat_delivered_kwh_by_heater: dict[str, float] = Field(default_factory=dict)
     thermal_loss_kwh_by_heater: dict[str, float] = Field(default_factory=dict)
+    temperature_shortfall_start_c_by_heater: dict[str, float] = Field(default_factory=dict)
     temperature_shortfall_c_by_heater: dict[str, float] = Field(default_factory=dict)
     charge_energy_kwh_by_heater: dict[str, float] = Field(default_factory=dict)
 
@@ -183,6 +189,7 @@ class PlanningHeaterView(BaseModel):
     id: str
     name: str
     power_w: int
+    capacity_kwh: float
     priority: int
     enabled: bool
 

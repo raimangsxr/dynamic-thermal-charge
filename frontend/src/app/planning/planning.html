@@ -92,8 +92,8 @@
             </section>
             <section class="visualization card" data-testid="cumulative-card" aria-labelledby="cumulative-title">
               <div class="card-header"><h2 id="cumulative-title">Energía almacenada por acumulador</h2><button mat-stroked-button type="button" (click)="openCumulativeChartDetails()" data-testid="cumulative-chart-detail-button">Ver detalle</button></div>
-              <p class="hint">Energía almacenada en kWh al cierre de cada intervalo.</p>
-              <div class="chart-wrap"><canvas #cumulativeChart aria-label="Gráfico de energía almacenada por acumulador"></canvas></div>
+              <p class="hint">Carga almacenada como porcentaje de la capacidad configurada; el detalle conserva los kWh de inicio y fin.</p>
+              <div class="chart-wrap"><canvas #cumulativeChart aria-label="Gráfico del porcentaje de energía almacenada por acumulador"></canvas></div>
             </section>
           } @else {
             <p class="empty" data-testid="planning-empty">No hay un plan actual ni próximo. No se muestran intervalos inventados.</p>

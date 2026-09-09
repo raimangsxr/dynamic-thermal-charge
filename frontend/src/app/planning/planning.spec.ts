@@ -36,17 +36,17 @@ const PLANNING: PlanningDto = {
     window_start: '2026-01-16T00:00:00Z', window_end: '2026-01-16T01:00:00Z',
     slot_minutes: 30, installation_revision: 4, created_at: '2026-01-15T20:00:00Z',
     slots: [
-      { start: '2026-01-16T00:00:00Z', end: '2026-01-16T00:30:00Z', heater_ids: ['salon'], total_power_w: 2800, temperature_c: 3, temperature_interpolated: false, stored_energy_kwh_by_heater: { salon: 10.9 }, indoor_temperature_c_by_heater: { salon: 18.5 }, target_temperature_c_by_heater: { salon: 21 }, heat_delivered_kwh_by_heater: { salon: 1.2 }, thermal_loss_kwh_by_heater: { salon: 0.4 }, temperature_shortfall_c_by_heater: { salon: 2.5 }, charge_energy_kwh_by_heater: { salon: 1.4 } },
-      { start: '2026-01-16T00:30:00Z', end: '2026-01-16T01:00:00Z', heater_ids: [], total_power_w: 0, temperature_c: null, temperature_interpolated: true, stored_energy_kwh_by_heater: { salon: 9.8 }, indoor_temperature_c_by_heater: { salon: 18.2 }, target_temperature_c_by_heater: { salon: 21 }, heat_delivered_kwh_by_heater: { salon: 0.3 }, thermal_loss_kwh_by_heater: { salon: 0.4 }, temperature_shortfall_c_by_heater: { salon: 2.8 }, charge_energy_kwh_by_heater: { salon: 0 } },
+      { start: '2026-01-16T00:00:00Z', end: '2026-01-16T00:30:00Z', heater_ids: ['salon'], total_power_w: 2800, temperature_c: 3, temperature_interpolated: false, stored_energy_kwh_by_heater: { salon: 10.9 }, stored_energy_next_kwh_by_heater: { salon: 10.5 }, indoor_temperature_c_by_heater: { salon: 18.5 }, indoor_temperature_next_c_by_heater: { salon: 18.9 }, target_temperature_c_by_heater: { salon: 21 }, heat_delivered_kwh_by_heater: { salon: 1.2 }, thermal_loss_kwh_by_heater: { salon: 0.4 }, temperature_shortfall_start_c_by_heater: { salon: 2.5 }, temperature_shortfall_c_by_heater: { salon: 2.1 }, charge_energy_kwh_by_heater: { salon: 1.4 } },
+      { start: '2026-01-16T00:30:00Z', end: '2026-01-16T01:00:00Z', heater_ids: [], total_power_w: 0, temperature_c: null, temperature_interpolated: true, stored_energy_kwh_by_heater: { salon: 10.5 }, stored_energy_next_kwh_by_heater: { salon: 9.8 }, indoor_temperature_c_by_heater: { salon: 18.9 }, indoor_temperature_next_c_by_heater: { salon: 18.2 }, target_temperature_c_by_heater: { salon: 21 }, heat_delivered_kwh_by_heater: { salon: 0.3 }, thermal_loss_kwh_by_heater: { salon: 0.4 }, temperature_shortfall_start_c_by_heater: { salon: 2.1 }, temperature_shortfall_c_by_heater: { salon: 2.8 }, charge_energy_kwh_by_heater: { salon: 0 } },
     ],
   },
   horizon_start: '2026-01-16T00:00:00Z', horizon_end: '2026-01-18T00:00:00Z',
   timeline: [
-    { start: '2026-01-16T00:00:00Z', end: '2026-01-16T00:30:00Z', heater_ids: ['salon'], total_power_w: 2800, temperature_c: 3, temperature_interpolated: false, stored_energy_kwh_by_heater: { salon: 10.9 }, indoor_temperature_c_by_heater: { salon: 18.5 }, target_temperature_c_by_heater: { salon: 21 }, heat_delivered_kwh_by_heater: { salon: 1.2 }, thermal_loss_kwh_by_heater: { salon: 0.4 }, temperature_shortfall_c_by_heater: { salon: 2.5 }, charge_energy_kwh_by_heater: { salon: 1.4 } },
-    { start: '2026-01-16T00:30:00Z', end: '2026-01-16T01:00:00Z', heater_ids: [], total_power_w: 0, temperature_c: 3.5, temperature_interpolated: false, stored_energy_kwh_by_heater: { salon: 9.8 }, indoor_temperature_c_by_heater: { salon: 18.2 }, target_temperature_c_by_heater: { salon: 21 }, heat_delivered_kwh_by_heater: { salon: 0.3 }, thermal_loss_kwh_by_heater: { salon: 0.4 }, temperature_shortfall_c_by_heater: { salon: 2.8 }, charge_energy_kwh_by_heater: { salon: 0 } },
+    { start: '2026-01-16T00:00:00Z', end: '2026-01-16T00:30:00Z', heater_ids: ['salon'], total_power_w: 2800, temperature_c: 3, temperature_interpolated: false, stored_energy_kwh_by_heater: { salon: 10.9 }, stored_energy_next_kwh_by_heater: { salon: 10.5 }, indoor_temperature_c_by_heater: { salon: 18.5 }, indoor_temperature_next_c_by_heater: { salon: 18.9 }, target_temperature_c_by_heater: { salon: 21 }, heat_delivered_kwh_by_heater: { salon: 1.2 }, thermal_loss_kwh_by_heater: { salon: 0.4 }, temperature_shortfall_start_c_by_heater: { salon: 2.5 }, temperature_shortfall_c_by_heater: { salon: 2.1 }, charge_energy_kwh_by_heater: { salon: 1.4 } },
+    { start: '2026-01-16T00:30:00Z', end: '2026-01-16T01:00:00Z', heater_ids: [], total_power_w: 0, temperature_c: 3.5, temperature_interpolated: false, stored_energy_kwh_by_heater: { salon: 10.5 }, stored_energy_next_kwh_by_heater: { salon: 9.8 }, indoor_temperature_c_by_heater: { salon: 18.9 }, indoor_temperature_next_c_by_heater: { salon: 18.2 }, target_temperature_c_by_heater: { salon: 21 }, heat_delivered_kwh_by_heater: { salon: 0.3 }, thermal_loss_kwh_by_heater: { salon: 0.4 }, temperature_shortfall_start_c_by_heater: { salon: 2.1 }, temperature_shortfall_c_by_heater: { salon: 2.8 }, charge_energy_kwh_by_heater: { salon: 0 } },
   ],
   allocations: [{ heater_id: 'salon', requested_minutes: 60, allocated_minutes: 30, unmet_minutes: 30 }],
-  heaters: [{ id: 'salon', name: 'Salón', power_w: 2800, priority: 90, enabled: true }],
+  heaters: [{ id: 'salon', name: 'Salón', power_w: 2800, capacity_kwh: 22.4, priority: 90, enabled: true }],
   absence_reason: null,
   forecast_status: 'success',
   forecast_last_attempt_at: '2026-01-16T01:00:00Z',
@@ -60,7 +60,7 @@ const TWO_HEATER_PLANNING: PlanningDto = {
   ...PLANNING,
   heaters: [
     ...PLANNING.heaters,
-    { id: 'cocina', name: 'Cocina', power_w: 1800, priority: 80, enabled: true },
+    { id: 'cocina', name: 'Cocina', power_w: 1800, capacity_kwh: 14.4, priority: 80, enabled: true },
   ],
 };
 
@@ -74,8 +74,8 @@ const PREVIEW: PlanningPreviewDto = {
   window_start: '2026-01-16T00:00:00Z', window_end: '2026-01-16T01:00:00Z',
   horizon_start: '2026-01-16T00:00:00Z', horizon_end: '2026-01-16T02:00:00Z', slot_minutes: 30,
   slots: [
-    { start: '2026-01-16T00:00:00Z', end: '2026-01-16T00:30:00Z', heater_ids: ['salon'], power_w: 2800, heater_power_w: { salon: 2800, cocina: 0 }, stored_energy_kwh: { salon: 10.9, cocina: 8.1 }, indoor_temperature_c: { salon: 18.5, cocina: 19 }, target_temperature_c: { salon: 21, cocina: 21 }, heat_delivered_kwh: { salon: 1.4, cocina: 0 }, thermal_loss_kwh: { salon: 0.4, cocina: 0.3 }, temperature_shortfall_c: { salon: 2.5, cocina: 2 }, charge_energy_kwh: { salon: 1.4, cocina: 0 } },
-    { start: '2026-01-16T00:30:00Z', end: '2026-01-16T01:00:00Z', heater_ids: ['cocina'], power_w: 1800, heater_power_w: { salon: 0, cocina: 1800 }, stored_energy_kwh: { salon: 10.5, cocina: 7.8 }, indoor_temperature_c: { salon: 18.3, cocina: 19.2 }, target_temperature_c: { salon: 21, cocina: 21 }, heat_delivered_kwh: { salon: 0, cocina: 0.9 }, thermal_loss_kwh: { salon: 0.4, cocina: 0.3 }, temperature_shortfall_c: { salon: 2.7, cocina: 1.8 }, charge_energy_kwh: { salon: 0, cocina: 0.9 } },
+    { start: '2026-01-16T00:00:00Z', end: '2026-01-16T00:30:00Z', heater_ids: ['salon'], power_w: 2800, heater_power_w: { salon: 2800, cocina: 0 }, stored_energy_kwh: { salon: 10.9, cocina: 8.1 }, stored_energy_next_kwh: { salon: 10.5, cocina: 8.1 }, indoor_temperature_c: { salon: 18.5, cocina: 19 }, indoor_temperature_next_c: { salon: 18.9, cocina: 19.1 }, target_temperature_c: { salon: 21, cocina: 21 }, heat_delivered_kwh: { salon: 1.4, cocina: 0 }, thermal_loss_kwh: { salon: 0.4, cocina: 0.3 }, temperature_shortfall_start_c: { salon: 2.5, cocina: 2 }, temperature_shortfall_c: { salon: 2.1, cocina: 1.9 }, charge_energy_kwh: { salon: 1.4, cocina: 0 } },
+    { start: '2026-01-16T00:30:00Z', end: '2026-01-16T01:00:00Z', heater_ids: ['cocina'], power_w: 1800, heater_power_w: { salon: 0, cocina: 1800 }, stored_energy_kwh: { salon: 10.5, cocina: 7.8 }, stored_energy_next_kwh: { salon: 10.5, cocina: 7.5 }, indoor_temperature_c: { salon: 18.3, cocina: 19.2 }, indoor_temperature_next_c: { salon: 18.1, cocina: 19 }, target_temperature_c: { salon: 21, cocina: 21 }, heat_delivered_kwh: { salon: 0, cocina: 0.9 }, thermal_loss_kwh: { salon: 0.4, cocina: 0.3 }, temperature_shortfall_start_c: { salon: 2.7, cocina: 1.8 }, temperature_shortfall_c: { salon: 2.9, cocina: 2 }, charge_energy_kwh: { salon: 0, cocina: 0.9 } },
     { start: '2026-01-16T01:00:00Z', end: '2026-01-16T01:30:00Z', heater_ids: [], power_w: 0, heater_power_w: { salon: 0, cocina: 0 }, stored_energy_kwh: { salon: 10.1, cocina: 7.5 }, indoor_temperature_c: { salon: 18.1, cocina: 19 }, target_temperature_c: { salon: 21, cocina: 21 }, heat_delivered_kwh: { salon: 0, cocina: 0 }, thermal_loss_kwh: { salon: 0.4, cocina: 0.3 }, temperature_shortfall_c: { salon: 2.9, cocina: 2 }, charge_energy_kwh: { salon: 0, cocina: 0 } },
   ],
   deficits: [{ heater_id: 'salon', requirement: 'temperature_comfort', achievable_value: 18.5, shortfall: 2.5, at: '2026-01-16T01:00:00Z', reason: 'insufficient_stored_energy_or_power', target_temperature_c: 21, projected_temperature_c: 18.5, shortfall_c: 2.5, stored_energy_kwh: 10.9, stored_soc_percent: 48.7 }],
@@ -158,10 +158,14 @@ describe('Planning', () => {
     expect(chartState.configs[1].data.labels).toEqual([
       fixture.componentInstance.dateTime(PLANNING.timeline[0].start),
       '',
+      '',
     ]);
     expect(chartState.configs[2].type).toBe('line');
     expect(chartState.configs[2].data.datasets[0].data?.[0]).toBe(2.8);
-    expect(chartState.configs[3].data.datasets[0].data).toEqual([10.9, 9.8]);
+    expect(chartState.configs[3].data.datasets[0].data).toHaveLength(3);
+    expect(chartState.configs[3].data.datasets[0].data?.[0] as number).toBeCloseTo(10.9 / 22.4 * 100);
+    expect(chartState.configs[3].data.datasets[0].data?.[1] as number).toBeCloseTo(10.5 / 22.4 * 100);
+    expect(chartState.configs[3].data.datasets[0].data?.[2] as number).toBeCloseTo(9.8 / 22.4 * 100);
 
     chartState.configs.length = 0;
     await selectPlanningTab(fixture, 2);
@@ -189,7 +193,9 @@ describe('Planning', () => {
     const element = fixture.nativeElement as HTMLElement;
     expect(fixture.componentInstance.previewWindowSlots(PREVIEW)).toHaveLength(2);
     expect(fixture.componentInstance.previewChartPoint(PREVIEW.slots[0], 'salon')).toMatchObject({
-      y: 2.8, power_w: 2800, stored_energy_kwh: 10.9, indoor_temperature_c: 18.5, target_temperature_c: 21, heat_delivered_kwh: 1.4,
+      y: 2.8, power_w: 2800, stored_energy_kwh: 10.9, stored_energy_next_kwh: 10.5,
+      indoor_temperature_c: 18.5, indoor_temperature_next_c: 18.9, target_temperature_c: 21,
+      temperature_shortfall_start_c: 2.5, heat_delivered_kwh: 1.4,
     });
     expect(element.querySelector('[data-testid="preview-visualization"]')).not.toBeNull();
     expect(element.querySelector('[data-testid="new-planning-tab"]')).not.toBeNull();
@@ -203,9 +209,10 @@ describe('Planning', () => {
 
     const previewChart = chartState.configs.find((config) => config.data.datasets.length === 2);
     expect(previewChart).toBeDefined();
-    expect(previewChart?.data.labels).toHaveLength(2);
+    expect(previewChart?.data.labels).toHaveLength(3);
     expect(previewChart?.data.datasets[0].data?.[0]).toMatchObject({
-      x: 0, power_w: 2800, stored_energy_kwh: 10.9, indoor_temperature_c: 18.5, target_temperature_c: 21,
+      x: 0, power_w: 2800, stored_energy_kwh: 10.9, stored_energy_next_kwh: 10.5,
+      indoor_temperature_c: 18.5, indoor_temperature_next_c: 18.9, target_temperature_c: 21,
     });
   });
 
@@ -386,12 +393,12 @@ describe('Planning', () => {
     expect(open.mock.calls.slice(0, 4).every(([, config]) => (config as { data?: { kind?: string } }).data?.kind === 'planning-table')).toBe(true);
     expect(open.mock.calls.slice(0, 4).every(([, config]) => (config as { width?: string; maxWidth?: string }).width === 'min(98vw, 192rem)' && (config as { maxWidth?: string }).maxWidth === '98vw')).toBe(true);
     expect((open.mock.calls[0][1] as { data?: { table?: { headers: string[]; rows: string[][] } } }).data?.table).toMatchObject({
-      headers: ['Intervalo', 'Salón interior (°C)', 'Salón objetivo (°C)', 'Exterior (°C)'],
-      rows: [[fixture.componentInstance.slotLabel(PLANNING.timeline[0]), '18.5', '21.0', '3.0'], [fixture.componentInstance.slotLabel(PLANNING.timeline[1]), '18.2', '21.0', '3.5']],
+      headers: ['Intervalo', 'Salón interior inicio (°C)', 'Salón interior fin (°C)', 'Salón objetivo (°C)', 'Exterior (°C)'],
+      rows: [[fixture.componentInstance.slotRangeLabel(PLANNING.timeline[0]), '18.5', '18.9', '21.0', '3.0'], [fixture.componentInstance.slotRangeLabel(PLANNING.timeline[1]), '18.9', '18.2', '21.0', '3.5']],
     });
     expect((open.mock.calls[1][1] as { data?: { table?: { headers: string[]; rows: string[][] } } }).data?.table?.headers).toEqual(['Intervalo', 'Salón (W)', 'Total (W)']);
     expect((open.mock.calls[2][1] as { data?: { table?: { headers: string[] } } }).data?.table?.headers).toEqual(['Intervalo', 'Total (W)', 'Carga base (W)', 'Límite contratado (W)', 'Límite calefacción (W)']);
-    expect((open.mock.calls[3][1] as { data?: { table?: { headers: string[] } } }).data?.table?.headers).toEqual(['Intervalo', 'Salón (kWh)']);
+    expect((open.mock.calls[3][1] as { data?: { table?: { headers: string[] } } }).data?.table?.headers).toEqual(['Intervalo', 'Salón inicio (kWh)', 'Salón fin (kWh)']);
     expect((open.mock.calls[4][1] as { data?: { kind?: string } }).data?.kind).toBe('chart');
     expect((open.mock.calls[5][1] as { data?: { kind?: string } }).data?.kind).toBe('preview');
     expect((open.mock.calls[4][1] as { data?: { chart?: { labels: string[] } } }).data?.chart?.labels.length).toBe(2);
@@ -404,10 +411,10 @@ describe('Planning', () => {
     fixture.detectChanges();
     const element = fixture.nativeElement as HTMLElement;
     const details = [
-      { testId: 'temperature-chart-detail-button', headers: ['Intervalo', 'Salón interior (°C)', 'Salón objetivo (°C)', 'Exterior (°C)'], values: ['18.5', '21.0', '3.0'] },
+      { testId: 'temperature-chart-detail-button', headers: ['Intervalo', 'Salón interior inicio (°C)', 'Salón interior fin (°C)', 'Salón objetivo (°C)', 'Exterior (°C)'], values: ['18.5', '18.9', '21.0', '3.0'] },
       { testId: 'heater-chart-detail-button', headers: ['Intervalo', 'Salón (W)', 'Total (W)'], values: ['2800', '2800'] },
       { testId: 'aggregate-chart-detail-button', headers: ['Intervalo', 'Total (W)', 'Carga base (W)', 'Límite contratado (W)', 'Límite calefacción (W)'], values: ['2800', '600', '5200', '4200'] },
-      { testId: 'cumulative-chart-detail-button', headers: ['Intervalo', 'Salón (kWh)'], values: ['10.90 kWh'] },
+      { testId: 'cumulative-chart-detail-button', headers: ['Intervalo', 'Salón inicio (kWh)', 'Salón fin (kWh)'], values: ['10.90 kWh', '10.50 kWh'] },
     ];
 
     for (const detail of details) {
@@ -442,7 +449,7 @@ describe('Planning', () => {
     await fixture.whenStable();
 
     const table = document.querySelector<HTMLTableElement>('[data-testid="planning-detail-table"]');
-    expect(Array.from(table?.querySelectorAll('tbody tr:first-child td') ?? []).map((cell) => cell.textContent?.trim())).toEqual(['sin dato', '21.0', 'sin dato']);
+    expect(Array.from(table?.querySelectorAll('tbody tr:first-child td') ?? []).map((cell) => cell.textContent?.trim())).toEqual(['sin dato', '18.9', '21.0', 'sin dato']);
     document.querySelector<HTMLButtonElement>('[data-testid="detail-dialog-close"]')?.click();
     await new Promise((resolve) => setTimeout(resolve, 100));
   });
@@ -487,7 +494,9 @@ describe('Planning', () => {
 
   it('shows stored room energy in kWh for every interval', () => {
     expect(fixture.componentInstance.storedEnergyKwh(PLANNING, 'salon', 0)).toBe(10.9);
-    expect(fixture.componentInstance.storedEnergyKwh(PLANNING, 'salon', 1)).toBe(9.8);
+    expect(fixture.componentInstance.storedEnergyKwh(PLANNING, 'salon', 1)).toBe(10.5);
+    expect(fixture.componentInstance.storedEnergyNextKwh(PLANNING, 'salon', 1)).toBe(9.8);
+    expect(fixture.componentInstance.storedEnergyPercent(PLANNING, 'salon', 0)).toBeCloseTo(10.9 / 22.4 * 100);
   });
 
   it('shows only charging intervals in the preview slots table', () => {

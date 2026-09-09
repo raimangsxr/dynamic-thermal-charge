@@ -16,6 +16,12 @@ es `K_room * (T_inside - T_outside) * dt` y la temperatura siguiente cumple
 permanecer entre cero y la capacidad, y la carga nominal solo se suma cuando el
 acumulador está encendido.
 
+Cuando una consigna está activa en un slot, la temperatura objetivo es una
+invariante en sus dos bordes: se evalúan tanto `T_inside` al inicio como
+`T_next` al final. El optimizador puede usar slots anteriores sin consigna para
+precalentar, pero un déficit en cualquiera de esos bordes conserva el plan como
+`DEGRADED` y registra el instante y el déficit proyectado.
+
 #### Scenario: Exterior más cálido que el interior
 
 - **WHEN** la temperatura exterior supera la interior durante un intervalo
@@ -44,6 +50,27 @@ mismo acumulador no pueden solaparse, incluso al cruzar medianoche.
 - **WHEN** un intervalo de planificación queda fuera de todas las reglas activas
 - **THEN** no tiene objetivo térmico ni déficit de confort
 
+#### Scenario: Precalentamiento antes de una consigna
+
+- **WHEN** una consigna comienza en el siguiente slot y la temperatura medida está
+  por debajo del objetivo
+- **THEN** el plan puede cargar y entregar calor en slots anteriores para alcanzar
+  el objetivo en el borde inicial y mantenerlo en el borde final del primer slot
+  activo
+
+#### Scenario: Fin exclusivo de una consigna
+
+- **WHEN** una consigna termina exactamente en un límite de slot
+- **THEN** se comprueba el objetivo en el borde final del último slot activo y no
+  se exige en el slot posterior salvo que otra regla esté activa
+
+#### Scenario: Déficit al comienzo del horizonte
+
+- **WHEN** una consigna está activa en el primer borde del horizonte y la
+  temperatura medida está por debajo del objetivo
+- **THEN** se conserva el déficit inicial con `at` igual al inicio del horizonte,
+  aunque el plan consiga alcanzar el objetivo al terminar ese slot
+
 #### Scenario: Solape de consignas
 
 - **WHEN** dos reglas del mismo acumulador ocupan el mismo tramo de un día
@@ -68,16 +95,18 @@ basado en porcentajes.
 ### Requirement: Auditoría física del plan
 
 Las vistas previas, el plan activo, las explicaciones y el historial deben
-conservar por acumulador e intervalo la temperatura interior proyectada, la
-consigna, la energía almacenada en kWh y SOC, el calor entregado, el intercambio
-térmico y el déficit de temperatura cuando exista.
+conservar por acumulador e intervalo la temperatura interior proyectada y la
+energía almacenada en los bordes de inicio y fin, la consigna, el SOC, el calor
+entregado, el intercambio térmico y los déficits de temperatura de ambos bordes
+cuando existan. La capacidad total en kWh debe estar disponible para expresar el
+SOC relativo de cada acumulador.
 
 #### Scenario: Consulta de un intervalo planificado
 
 - **WHEN** el operador abre el detalle de un intervalo
-- **THEN** puede distinguir energía almacenada, carga, calor entregado,
-  intercambio térmico, interior, objetivo y déficit sin inferir temperatura a
-  partir del SOC
+- **THEN** puede distinguir los valores de inicio y fin de energía almacenada,
+  carga, calor entregado, intercambio térmico, interior, objetivo y déficit sin
+  inferir temperatura a partir del SOC
 
 ### Requirement: Ciclo de previsión AEMET durable
 
@@ -216,8 +245,10 @@ un plan.
 
 La vista previa debe representar únicamente su ventana visible con una
 visualización compacta de series por acumulador. Cada acumulador debe conservar
-una tabla accesible por intervalo con potencia, energía almacenada, temperatura
-interior, objetivo, calor entregado, intercambio térmico, déficit y SOC. Si existen déficits o violaciones, la vista
+una tabla accesible por intervalo, etiquetado como inicio-fin, con potencia,
+energía almacenada en ambos bordes, temperatura interior en ambos bordes,
+objetivo, calor entregado, intercambio térmico, déficit de ambos bordes y SOC. Si
+existen déficits o violaciones, la vista
 previa debe ofrecer un diálogo accesible con el acumulador, requisito,
 momento, valores objetivo/proyectado/déficit, causa explicada y acción
 recomendada cuando exista; `deficits` tiene prioridad sobre `violations` como
@@ -262,7 +293,10 @@ ofrecer el detalle de cada una mediante su botón “Ver detalle”. Cada diálo
 detalle de gráfica debe mostrar únicamente una tabla accesible, con el intervalo
 como cabecera de fila y una columna por acumulador cuando aplique. El diálogo
 debe aprovechar el ancho disponible y limitar el scroll al contenedor de la tabla
-cuando el número de columnas lo requiera.
+cuando el número de columnas lo requiera. Las gráficas de potencia representan
+ocupación discreta por slot; las térmicas usan los bordes temporales reales y un
+rango vertical derivado de sus datos; la carga almacenada se representa en un
+eje común de 0–100% y su tabla conserva los kWh de inicio y fin.
 
 #### Scenario: Consulta del detalle de una gráfica activa
 

@@ -164,10 +164,14 @@ def test_planning_endpoint_returns_hourly_series_and_all_intervals(
     assert body["max_total_power_w"] == initialised_store.planning.site()["contracted_power_w"]
     first = body["timeline"][0]
     assert set(first["stored_energy_kwh_by_heater"]) == {heater.id for heater in config.heaters}
+    assert set(first["stored_energy_next_kwh_by_heater"]) == {heater.id for heater in config.heaters}
     assert set(first["indoor_temperature_c_by_heater"]) == {heater.id for heater in config.heaters}
+    assert set(first["indoor_temperature_next_c_by_heater"]) == {heater.id for heater in config.heaters}
     assert set(first["target_temperature_c_by_heater"]) == {heater.id for heater in config.heaters}
     assert set(first["heat_delivered_kwh_by_heater"]) == {heater.id for heater in config.heaters}
     assert set(first["thermal_loss_kwh_by_heater"]) == {heater.id for heater in config.heaters}
+    assert set(first["temperature_shortfall_start_c_by_heater"]) == {heater.id for heater in config.heaters}
+    assert body["heaters"][0]["capacity_kwh"] == pytest.approx(config.heaters[0].capacity_kwh)
 
 
 def test_planning_endpoint_excludes_past_forecast_hours(

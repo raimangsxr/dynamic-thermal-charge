@@ -71,10 +71,13 @@ interface PreviewChartPoint {
   y: number;
   power_w: number;
   stored_energy_kwh: number;
+  stored_energy_next_kwh: number;
   indoor_temperature_c: number;
+  indoor_temperature_next_c: number;
   target_temperature_c: number | null;
   heat_delivered_kwh: number;
   thermal_loss_kwh: number;
+  temperature_shortfall_start_c: number;
   temperature_shortfall_c: number;
   charge_energy_kwh: number;
 }
@@ -142,7 +145,7 @@ function recommendedPlanningAction(cause: string): string | null {
         <div class="table-scroll preview-slot-summary" data-testid="preview-slots-detail-table">
           <table aria-label="Intervalos con carga de la vista previa"><caption>Intervalos con carga</caption><thead><tr><th scope="col">Intervalo</th><th scope="col">Acumuladores</th><th scope="col">Potencia (W)</th></tr></thead><tbody>
             @for (slot of previewChargingSlots(preview); track $index) {
-              <tr><th scope="row">{{ previewSlotLabel(slot) }}</th><td>{{ previewSlotHeaters(slot) }}</td><td>{{ previewSlotPower(slot) }}</td></tr>
+              <tr><th scope="row">{{ previewSlotRangeLabel(slot) }}</th><td>{{ previewSlotHeaters(slot) }}</td><td>{{ previewSlotPower(slot) }}</td></tr>
             }
           </tbody></table>
         </div>
@@ -154,8 +157,8 @@ function recommendedPlanningAction(cause: string): string | null {
               <mat-tab [label]="heater.name">
                 <section class="preview-detail-table" data-testid="preview-detail-heater-table" [attr.aria-labelledby]="'preview-detail-heater-title-' + heater.id">
                   <h3 [id]="'preview-detail-heater-title-' + heater.id">{{ heater.name }}</h3>
-                  <div class="table-scroll"><table [attr.aria-label]="'Detalle de planificación de ' + heater.name"><thead><tr><th scope="col">Intervalo</th><th scope="col">Potencia (W)</th><th scope="col">Energía almacenada</th><th scope="col">Interior</th><th scope="col">Objetivo</th><th scope="col">Calor entregado</th><th scope="col">Intercambio térmico</th><th scope="col">Déficit</th></tr></thead><tbody>
-                    @for (slot of previewWindowSlots(preview); track $index) { <tr><th scope="row">{{ previewSlotLabel(slot) }}</th><td>{{ previewPower(slot, heater.id, heater.power_w) }}</td><td>{{ previewStoredEnergy(slot, heater.id).toFixed(2) }} kWh</td><td>{{ temperature(previewIndoorTemperature(slot, heater.id)) }}</td><td>{{ temperature(previewTargetTemperature(slot, heater.id)) }}</td><td>{{ previewHeatDelivered(slot, heater.id).toFixed(2) }} kWh</td><td>{{ previewThermalLoss(slot, heater.id).toFixed(2) }} kWh</td><td>{{ temperature(previewShortfall(slot, heater.id)) }}</td></tr> }
+                  <div class="table-scroll"><table [attr.aria-label]="'Detalle de planificación de ' + heater.name"><thead><tr><th scope="col">Intervalo</th><th scope="col">Potencia (W)</th><th scope="col">Energía inicio</th><th scope="col">Energía fin</th><th scope="col">Interior inicio</th><th scope="col">Interior fin</th><th scope="col">Objetivo</th><th scope="col">Déficit inicio</th><th scope="col">Déficit fin</th><th scope="col">Calor entregado</th><th scope="col">Intercambio térmico</th></tr></thead><tbody>
+                    @for (slot of previewWindowSlots(preview); track $index) { <tr><th scope="row">{{ previewSlotRangeLabel(slot) }}</th><td>{{ previewPower(slot, heater.id, heater.power_w) }}</td><td>{{ previewStoredEnergy(slot, heater.id).toFixed(2) }} kWh</td><td>{{ previewStoredEnergyNext(slot, heater.id).toFixed(2) }} kWh</td><td>{{ temperature(previewIndoorTemperature(slot, heater.id)) }}</td><td>{{ temperature(previewIndoorTemperatureNext(slot, heater.id)) }}</td><td>{{ temperature(previewTargetTemperature(slot, heater.id)) }}</td><td>{{ temperature(previewShortfallStart(slot, heater.id)) }}</td><td>{{ temperature(previewShortfall(slot, heater.id)) }}</td><td>{{ previewHeatDelivered(slot, heater.id).toFixed(2) }} kWh</td><td>{{ previewThermalLoss(slot, heater.id).toFixed(2) }} kWh</td></tr> }
                   </tbody></table></div>
                 </section>
               </mat-tab>
@@ -267,7 +270,7 @@ export class PlanningDetailDialog implements AfterViewInit, OnDestroy {
           maintainAspectRatio: false,
           interaction: { mode: 'index', intersect: false },
           plugins: { legend: { display: true } },
-          scales: { x: { ticks: { autoSkip: true, maxTicksLimit: 12 } }, y: { beginAtZero: true, ...(chart.yAxisTitle ? { title: { display: true, text: chart.yAxisTitle } } : {}) } },
+          scales: { x: { ticks: { autoSkip: true, maxTicksLimit: 12 } }, y: { beginAtZero: false, ...(chart.yAxisTitle ? { title: { display: true, text: chart.yAxisTitle } } : {}) } },
         } as never,
       }) as unknown as Chart;
     } catch {
@@ -361,6 +364,10 @@ export class PlanningDetailDialog implements AfterViewInit, OnDestroy {
     return this.dateTime(String(slot['start'] ?? ''));
   }
 
+  previewSlotRangeLabel(slot: Record<string, unknown>): string {
+    return `${this.dateTime(String(slot['start'] ?? ''))}–${this.dateTime(String(slot['end'] ?? ''))}`;
+  }
+
   previewSlotPower(slot: Record<string, unknown>): number {
     return Number(slot['power_w'] ?? 0);
   }
@@ -384,7 +391,7 @@ export class PlanningDetailDialog implements AfterViewInit, OnDestroy {
     });
   }
 
-  previewSlotMetric(slot: Record<string, unknown>, key: 'heater_power_w' | 'stored_energy_kwh' | 'indoor_temperature_c' | 'target_temperature_c' | 'heat_delivered_kwh' | 'thermal_loss_kwh' | 'temperature_shortfall_c' | 'charge_energy_kwh', heaterId: string): number {
+  previewSlotMetric(slot: Record<string, unknown>, key: 'heater_power_w' | 'stored_energy_kwh' | 'stored_energy_next_kwh' | 'indoor_temperature_c' | 'indoor_temperature_next_c' | 'target_temperature_c' | 'heat_delivered_kwh' | 'thermal_loss_kwh' | 'temperature_shortfall_start_c' | 'temperature_shortfall_c' | 'charge_energy_kwh', heaterId: string): number {
     const values = slot[key] as Record<string, number> | undefined;
     return typeof values?.[heaterId] === 'number' ? values[heaterId] : 0;
   }
@@ -402,8 +409,14 @@ export class PlanningDetailDialog implements AfterViewInit, OnDestroy {
   previewStoredEnergy(slot: Record<string, unknown>, heaterId: string): number {
     return this.previewSlotMetric(slot, 'stored_energy_kwh', heaterId);
   }
+  previewStoredEnergyNext(slot: Record<string, unknown>, heaterId: string): number {
+    return this.previewSlotMetric(slot, 'stored_energy_next_kwh', heaterId);
+  }
   previewIndoorTemperature(slot: Record<string, unknown>, heaterId: string): number {
     return this.previewSlotMetric(slot, 'indoor_temperature_c', heaterId);
+  }
+  previewIndoorTemperatureNext(slot: Record<string, unknown>, heaterId: string): number {
+    return this.previewSlotMetric(slot, 'indoor_temperature_next_c', heaterId);
   }
   previewTargetTemperature(slot: Record<string, unknown>, heaterId: string): number | null {
     const values = slot['target_temperature_c'] as Record<string, number> | undefined;
@@ -417,6 +430,9 @@ export class PlanningDetailDialog implements AfterViewInit, OnDestroy {
   }
   previewShortfall(slot: Record<string, unknown>, heaterId: string): number {
     return this.previewSlotMetric(slot, 'temperature_shortfall_c', heaterId);
+  }
+  previewShortfallStart(slot: Record<string, unknown>, heaterId: string): number {
+    return this.previewSlotMetric(slot, 'temperature_shortfall_start_c', heaterId);
   }
 
   checkText(name: string): string {
@@ -595,6 +611,10 @@ export class Planning implements AfterViewInit, OnDestroy {
     return this.dateTime(slot.start);
   }
 
+  slotRangeLabel(slot: { start: string; end: string }): string {
+    return `${this.dateTime(slot.start)}–${this.dateTime(slot.end)}`;
+  }
+
   dateTime(value: string | null | undefined): string {
     if (!value) return 'no disponible';
     const formatted = formatInstant(value, this.snapshot()?.timezone ?? 'Europe/Madrid');
@@ -692,11 +712,12 @@ export class Planning implements AfterViewInit, OnDestroy {
     const { data, slots } = active;
     this.openPlanningTableDetails({
       title: 'Balance térmico por acumulador',
-      ariaLabel: 'Valores de temperatura interior, objetivo y temperatura exterior por intervalo',
-      headers: ['Intervalo', ...data.heaters.map((heater) => `${heater.name} interior (°C)`), ...data.heaters.map((heater) => `${heater.name} objetivo (°C)`), 'Exterior (°C)'],
+      ariaLabel: 'Valores de temperatura interior en los bordes, objetivo y temperatura exterior por intervalo',
+      headers: ['Intervalo', ...data.heaters.map((heater) => `${heater.name} interior inicio (°C)`), ...data.heaters.map((heater) => `${heater.name} interior fin (°C)`), ...data.heaters.map((heater) => `${heater.name} objetivo (°C)`), 'Exterior (°C)'],
       rows: slots.map((slot) => [
-        this.slotLabel(slot),
+        this.slotRangeLabel(slot),
         ...data.heaters.map((heater) => this.formatTemperature(slot.indoor_temperature_c_by_heater?.[heater.id])),
+        ...data.heaters.map((heater) => this.formatTemperature(slot.indoor_temperature_next_c_by_heater?.[heater.id])),
         ...data.heaters.map((heater) => this.formatTemperature(slot.target_temperature_c_by_heater?.[heater.id])),
         this.formatTemperature(slot.temperature_c),
       ]),
@@ -712,7 +733,7 @@ export class Planning implements AfterViewInit, OnDestroy {
       ariaLabel: 'Potencia por acumulador y potencia total por intervalo',
       headers: ['Intervalo', ...data.heaters.map((heater) => `${heater.name} (W)`), 'Total (W)'],
       rows: slots.map((slot, index) => [
-        this.slotLabel(slot),
+        this.slotRangeLabel(slot),
         ...data.heaters.map((heater) => this.powerValue(this.heaterActiveInSlot(data, index, heater.id) ? heater.power_w : 0)),
         this.powerValue(this.aggregatePowerKw(data, index) * 1000),
       ]),
@@ -728,7 +749,7 @@ export class Planning implements AfterViewInit, OnDestroy {
       ariaLabel: 'Potencia agregada, carga base y límites por intervalo',
       headers: ['Intervalo', 'Total (W)', 'Carga base (W)', 'Límite contratado (W)', 'Límite calefacción (W)'],
       rows: slots.map((slot, index) => [
-        this.slotLabel(slot),
+        this.slotRangeLabel(slot),
         this.powerValue(this.aggregatePowerKw(data, index) * 1000),
         this.powerValue(data.base_load_w),
         this.powerValue(data.max_total_power_w),
@@ -743,11 +764,12 @@ export class Planning implements AfterViewInit, OnDestroy {
     const { data, slots } = active;
     this.openPlanningTableDetails({
       title: 'Energía almacenada por acumulador',
-      ariaLabel: 'Energía almacenada en kWh por acumulador y por intervalo',
-      headers: ['Intervalo', ...data.heaters.map((heater) => `${heater.name} (kWh)`)],
+      ariaLabel: 'Energía almacenada en kWh en los bordes por acumulador y por intervalo',
+      headers: ['Intervalo', ...data.heaters.map((heater) => `${heater.name} inicio (kWh)`), ...data.heaters.map((heater) => `${heater.name} fin (kWh)`)],
       rows: slots.map((slot, index) => [
-        this.slotLabel(slot),
+        this.slotRangeLabel(slot),
         ...data.heaters.map((heater) => `${(slot.stored_energy_kwh_by_heater?.[heater.id] ?? 0).toFixed(2)} kWh`),
+        ...data.heaters.map((heater) => `${(slot.stored_energy_next_kwh_by_heater?.[heater.id] ?? 0).toFixed(2)} kWh`),
       ]),
     });
   }
@@ -846,6 +868,24 @@ export class Planning implements AfterViewInit, OnDestroy {
     return data.timeline[slotIndex]?.stored_energy_kwh_by_heater[heaterId] ?? 0;
   }
 
+  storedEnergyNextKwh(data: PlanningDto, heaterId: string, slotIndex: number): number {
+    const fromPlan = data.plan?.slots[slotIndex]?.stored_energy_next_kwh_by_heater?.[heaterId];
+    if (fromPlan !== undefined) return fromPlan;
+    return data.timeline[slotIndex]?.stored_energy_next_kwh_by_heater[heaterId] ?? 0;
+  }
+
+  storedEnergyPercent(data: PlanningDto, heaterId: string, slotIndex: number): number {
+    const capacity = data.heaters.find((heater) => heater.id === heaterId)?.capacity_kwh ?? 0;
+    if (capacity <= 0) return 0;
+    return Math.max(0, Math.min(100, this.storedEnergyKwh(data, heaterId, slotIndex) / capacity * 100));
+  }
+
+  storedEnergyNextPercent(data: PlanningDto, heaterId: string, slotIndex: number): number {
+    const capacity = data.heaters.find((heater) => heater.id === heaterId)?.capacity_kwh ?? 0;
+    if (capacity <= 0) return 0;
+    return Math.max(0, Math.min(100, this.storedEnergyNextKwh(data, heaterId, slotIndex) / capacity * 100));
+  }
+
   kilowatts(watts: number): number {
     return watts / 1000;
   }
@@ -883,6 +923,7 @@ export class Planning implements AfterViewInit, OnDestroy {
   }
 
   previewSlotLabel(slot: Record<string, unknown>): string { return this.dateTime(String(slot['start'] ?? '')); }
+  previewSlotRangeLabel(slot: Record<string, unknown>): string { return `${this.dateTime(String(slot['start'] ?? ''))}–${this.dateTime(String(slot['end'] ?? ''))}`; }
   previewSlotPower(slot: Record<string, unknown>): number { return Number(slot['power_w'] ?? 0); }
   previewSlotHeaters(slot: Record<string, unknown>): string {
     const ids = Array.isArray(slot['heater_ids']) ? slot['heater_ids'].map(String) : [];
@@ -900,7 +941,7 @@ export class Planning implements AfterViewInit, OnDestroy {
       return Number.isFinite(start) && start >= windowStart && start < windowEnd;
     });
   }
-  previewSlotMetric(slot: Record<string, unknown>, key: 'heater_power_w' | 'stored_energy_kwh' | 'indoor_temperature_c' | 'target_temperature_c' | 'heat_delivered_kwh' | 'thermal_loss_kwh' | 'temperature_shortfall_c' | 'charge_energy_kwh', heaterId: string): number {
+  previewSlotMetric(slot: Record<string, unknown>, key: 'heater_power_w' | 'stored_energy_kwh' | 'stored_energy_next_kwh' | 'indoor_temperature_c' | 'indoor_temperature_next_c' | 'target_temperature_c' | 'heat_delivered_kwh' | 'thermal_loss_kwh' | 'temperature_shortfall_start_c' | 'temperature_shortfall_c' | 'charge_energy_kwh', heaterId: string): number {
     const values = slot[key] as Record<string, number> | undefined;
     return typeof values?.[heaterId] === 'number' ? values[heaterId] : 0;
   }
@@ -920,10 +961,13 @@ export class Planning implements AfterViewInit, OnDestroy {
       y: this.kilowatts(power_w),
       power_w,
       stored_energy_kwh: this.previewSlotMetric(slot, 'stored_energy_kwh', heaterId),
+      stored_energy_next_kwh: this.previewSlotMetric(slot, 'stored_energy_next_kwh', heaterId),
       indoor_temperature_c: this.previewSlotMetric(slot, 'indoor_temperature_c', heaterId),
+      indoor_temperature_next_c: this.previewSlotMetric(slot, 'indoor_temperature_next_c', heaterId),
       target_temperature_c: this.previewSlotMetric(slot, 'target_temperature_c', heaterId),
       heat_delivered_kwh: this.previewSlotMetric(slot, 'heat_delivered_kwh', heaterId),
       thermal_loss_kwh: this.previewSlotMetric(slot, 'thermal_loss_kwh', heaterId),
+      temperature_shortfall_start_c: this.previewSlotMetric(slot, 'temperature_shortfall_start_c', heaterId),
       temperature_shortfall_c: this.previewSlotMetric(slot, 'temperature_shortfall_c', heaterId),
       charge_energy_kwh: this.previewSlotMetric(slot, 'charge_energy_kwh', heaterId),
     };
@@ -960,6 +1004,7 @@ export class Planning implements AfterViewInit, OnDestroy {
       ...slot,
       temperature_c: slot.temperature_c === null ? null : truncateTemperature(slot.temperature_c),
       indoor_temperature_c_by_heater: Object.fromEntries(Object.entries(slot.indoor_temperature_c_by_heater).map(([id, value]) => [id, truncateTemperature(value)])),
+      indoor_temperature_next_c_by_heater: Object.fromEntries(Object.entries(slot.indoor_temperature_next_c_by_heater).map(([id, value]) => [id, truncateTemperature(value)])),
       target_temperature_c_by_heater: Object.fromEntries(Object.entries(slot.target_temperature_c_by_heater).map(([id, value]) => [id, truncateTemperature(value)])),
     }));
   }
@@ -1007,6 +1052,53 @@ export class Planning implements AfterViewInit, OnDestroy {
     this.api.planningPreviewJob(jobId).subscribe({ next: (job) => this.acceptPreviewJob(job), error: () => { try { sessionStorage.removeItem(this.previewStorageKey); } catch { /* ignore */ } } });
   }
 
+  private boundaryLabels(slots: PlanningTimelineSlotDto[]): string[] {
+    if (!slots.length) return [];
+    return [...slots.map((slot) => this.dateTime(slot.start)), this.dateTime(slots[slots.length - 1].end)];
+  }
+
+  private boundarySeries(
+    slots: PlanningTimelineSlotDto[],
+    startValue: (slot: PlanningTimelineSlotDto) => number | null | undefined,
+    endValue: (slot: PlanningTimelineSlotDto) => number | null | undefined,
+  ): Array<number | null> {
+    if (!slots.length) return [];
+    return [
+      ...slots.map((slot) => startValue(slot) ?? null),
+      endValue(slots[slots.length - 1]) ?? null,
+    ];
+  }
+
+  private discreteSeries(slots: PlanningTimelineSlotDto[], value: (slot: PlanningTimelineSlotDto, index: number) => number): number[] {
+    if (!slots.length) return [];
+    const values = slots.map(value);
+    return [...values, values[values.length - 1]];
+  }
+
+  private discreteBoundarySeries(
+    slots: PlanningTimelineSlotDto[],
+    startValue: (index: number) => number,
+    endValue: (index: number) => number,
+  ): number[] {
+    if (!slots.length) return [];
+    return [...slots.map((_slot, index) => startValue(index)), endValue(slots.length - 1)];
+  }
+
+  private discretePreviewSeries(slots: Array<Record<string, unknown>>, heaterId: string, fallbackPowerW: number): PreviewChartPoint[] {
+    if (!slots.length) return [];
+    const values = slots.map((slot, index) => this.previewChartPoint(slot, heaterId, fallbackPowerW, index));
+    return [...values, this.previewChartPoint(slots[slots.length - 1], heaterId, fallbackPowerW, slots.length)];
+  }
+
+  private temperatureAxisRange(series: Array<Array<number | null>>): { min: number; max: number } | undefined {
+    const values = series.flat().filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+    if (!values.length) return undefined;
+    const minimum = Math.min(...values);
+    const maximum = Math.max(...values);
+    const padding = Math.max(0.5, (maximum - minimum) * 0.1);
+    return { min: minimum - padding, max: maximum + padding };
+  }
+
   private renderCharts(): void {
     const data = this.snapshot();
     if (!data) return;
@@ -1020,7 +1112,7 @@ export class Planning implements AfterViewInit, OnDestroy {
           this.charts.push(new Chart(this.forecastCanvas.nativeElement, {
             type: 'line',
             data: { labels: this.intervalLabels(fullLabels), datasets: [{ label: 'Temperatura exterior (°C)', data: this.forecastTemperatures(points), borderColor: '#2457a6', backgroundColor: '#2457a622', tension: 0.25, spanGaps: false }] },
-            options: this.chartOptions<'line'>(fullLabels),
+            options: this.chartOptions<'line'>(fullLabels, '°C', undefined, this.temperatureAxisRange([this.forecastTemperatures(points)])),
           }));
         }
         return;
@@ -1029,7 +1121,8 @@ export class Planning implements AfterViewInit, OnDestroy {
       if (this.selectedTab() === 1) {
         if (!preview || !this.previewCanvas) return;
         const slots = this.previewWindowSlots(preview);
-        const fullLabels = slots.map((slot) => this.previewSlotLabel(slot));
+        if (!slots.length) return;
+        const fullLabels = [...slots.map((slot) => this.previewSlotLabel(slot)), this.dateTime(String(slots[slots.length - 1]['end'] ?? ''))];
         const colors = ['#2457a6', '#d46b28', '#3b8c68', '#8a4f9e', '#9b7a21'];
         const previewHeaters = this.previewChartHeaters(data, slots);
         this.charts.push(new Chart(this.previewCanvas.nativeElement, {
@@ -1038,24 +1131,40 @@ export class Planning implements AfterViewInit, OnDestroy {
             labels: this.intervalLabels(fullLabels),
             datasets: previewHeaters.map((heater, index) => ({
               label: heater.name,
-              data: slots.map((slot, slotIndex) => this.previewChartPoint(slot, heater.id, heater.power_w, slotIndex)),
+              data: this.discretePreviewSeries(slots, heater.id, heater.power_w),
               borderColor: colors[index % colors.length],
               backgroundColor: `${colors[index % colors.length]}22`,
-              tension: 0.2,
+              stepped: 'after' as const,
+              tension: 0,
+              pointRadius: 0,
               spanGaps: false,
             })),
           },
           options: this.chartOptions<'line'>(fullLabels, 'Potencia (kW)', (context) => {
             const point = context.raw as PreviewChartPoint;
-            return `${context.dataset.label ?? 'Acumulador'}: ${point.power_w} W · ${point.stored_energy_kwh.toFixed(2)} kWh almacenados · ${point.indoor_temperature_c.toFixed(1)} °C interior · ${point.heat_delivered_kwh.toFixed(2)} kWh entregados · ${point.thermal_loss_kwh.toFixed(2)} kWh intercambio`;
+            return `${context.dataset.label ?? 'Acumulador'}: ${point.power_w} W · ${point.stored_energy_kwh.toFixed(2)}→${point.stored_energy_next_kwh.toFixed(2)} kWh almacenados · ${point.indoor_temperature_c.toFixed(1)}→${point.indoor_temperature_next_c.toFixed(1)} °C interior · ${point.heat_delivered_kwh.toFixed(2)} kWh entregados · ${point.thermal_loss_kwh.toFixed(2)} kWh intercambio`;
           }),
         }) as unknown as Chart);
         return;
       }
       if (!data.plan || !timeline.length || !this.temperatureCanvas || !this.heaterCanvas || !this.aggregateCanvas || !this.cumulativeCanvas) return;
-      const fullLabels = timeline.map((slot) => this.slotLabel(slot));
+      const fullLabels = this.boundaryLabels(timeline);
       const labels = this.intervalLabels(fullLabels);
       const colors = ['#2457a6', '#d46b28', '#3b8c68', '#8a4f9e', '#9b7a21'];
+      const indoorSeries = data.heaters.map((heater) => this.boundarySeries(
+        timeline,
+        (slot) => slot.indoor_temperature_c_by_heater?.[heater.id],
+        (slot) => slot.indoor_temperature_next_c_by_heater?.[heater.id],
+      ));
+      const targetSeries = data.heaters.map((heater) => this.boundarySeries(
+        timeline,
+        (slot) => slot.target_temperature_c_by_heater?.[heater.id],
+        (slot) => slot.target_temperature_c_by_heater?.[heater.id],
+      ));
+      const outdoorSeries: Array<number | null> = [
+        ...timeline.map((slot) => slot.temperature_c),
+        timeline[timeline.length - 1].temperature_c,
+      ];
       this.charts.push(new Chart(this.temperatureCanvas.nativeElement, {
         type: 'line',
         data: {
@@ -1063,15 +1172,15 @@ export class Planning implements AfterViewInit, OnDestroy {
           datasets: [
             ...data.heaters.map((heater, index) => ({
               label: `${heater.name} interior (°C)`,
-              data: timeline.map((slot) => slot.indoor_temperature_c_by_heater?.[heater.id] ?? null),
+              data: indoorSeries[index],
               borderColor: colors[index % colors.length],
               backgroundColor: `${colors[index % colors.length]}22`,
-              tension: 0.25,
+              tension: 0,
               spanGaps: false,
             })),
             ...data.heaters.map((heater, index) => ({
               label: `${heater.name} objetivo (°C)`,
-              data: timeline.map((slot) => slot.target_temperature_c_by_heater?.[heater.id] ?? null),
+              data: targetSeries[index],
               borderColor: colors[index % colors.length],
               borderDash: [4, 3],
               pointRadius: 0,
@@ -1080,45 +1189,50 @@ export class Planning implements AfterViewInit, OnDestroy {
             })),
             {
               label: 'Previsión exterior (°C)',
-              data: timeline.map((slot) => slot.temperature_c),
+              data: outdoorSeries,
               borderColor: '#6b7280',
               backgroundColor: '#6b728022',
               borderDash: [6, 4],
-              tension: 0.25,
+              tension: 0,
               spanGaps: false,
             },
           ],
         },
-        options: this.chartOptions<'line'>(fullLabels, '°C'),
+        options: this.chartOptions<'line'>(fullLabels, '°C', undefined, this.temperatureAxisRange([...indoorSeries, ...targetSeries, outdoorSeries])),
       }));
 
       this.charts.push(new Chart(this.heaterCanvas.nativeElement, {
         type: 'line',
         data: { labels, datasets: data.heaters.map((heater, index) => ({
           label: heater.name,
-          data: timeline.map((_slot, slotIndex) => this.heaterActiveInSlot(data, slotIndex, heater.id) ? this.kilowatts(heater.power_w) : 0),
+          data: this.discreteSeries(timeline, (_slot, slotIndex) => this.heaterActiveInSlot(data, slotIndex, heater.id) ? this.kilowatts(heater.power_w) : 0),
+          borderColor: colors[index % colors.length],
           backgroundColor: `${colors[index % colors.length]}cc`,
+          stepped: 'after' as const,
+          tension: 0,
+          pointRadius: 0,
         })) },
         options: this.chartOptions<'line'>(fullLabels, 'kW'),
       }));
 
       this.charts.push(new Chart(this.aggregateCanvas.nativeElement, {
         type: 'line',
-        data: { labels, datasets: [{ label: 'Potencia agregada (kW)', data: timeline.map((_slot, slotIndex) => this.aggregatePowerKw(data, slotIndex)), borderColor: '#2457a6', backgroundColor: '#2457a688', tension: 0.15 }, { label: 'Carga base (kW)', data: timeline.map(() => this.kilowatts(data.base_load_w)), borderColor: '#6b7280', borderDash: [3, 3], pointRadius: 0 }, { label: 'Límite contratado (kW)', data: timeline.map(() => this.kilowatts(data.max_total_power_w)), borderColor: '#b33a3a', pointRadius: 0 }, { label: 'Límite calefacción (kW)', data: timeline.map(() => this.kilowatts(data.max_heating_power_w || data.max_total_power_w)), borderColor: '#d46b28', pointRadius: 0 }] },
+        data: { labels, datasets: [{ label: 'Potencia agregada (kW)', data: this.discreteSeries(timeline, (_slot, slotIndex) => this.aggregatePowerKw(data, slotIndex)), borderColor: '#2457a6', backgroundColor: '#2457a688', stepped: 'after' as const, tension: 0, pointRadius: 0 }, { label: 'Carga base (kW)', data: this.discreteSeries(timeline, () => this.kilowatts(data.base_load_w)), borderColor: '#6b7280', borderDash: [3, 3], stepped: 'after' as const, pointRadius: 0 }, { label: 'Límite contratado (kW)', data: this.discreteSeries(timeline, () => this.kilowatts(data.max_total_power_w)), borderColor: '#b33a3a', stepped: 'after' as const, pointRadius: 0 }, { label: 'Límite calefacción (kW)', data: this.discreteSeries(timeline, () => this.kilowatts(data.max_heating_power_w || data.max_total_power_w)), borderColor: '#d46b28', stepped: 'after' as const, pointRadius: 0 }] },
         options: this.chartOptions<'line'>(fullLabels, 'kW'),
       }));
 
       this.charts.push(new Chart(this.cumulativeCanvas.nativeElement, {
         type: 'line',
         data: { labels, datasets: data.heaters.map((heater, index) => ({
-          label: `${heater.name} (kWh)`,
-          data: timeline.map((_slot, slotIndex) => this.storedEnergyKwh(data, heater.id, slotIndex)),
+          label: `${heater.name} (%)`,
+          data: this.discreteBoundarySeries(timeline, (slotIndex) => this.storedEnergyPercent(data, heater.id, slotIndex), (slotIndex) => this.storedEnergyNextPercent(data, heater.id, slotIndex)),
           borderColor: colors[index % colors.length],
           backgroundColor: `${colors[index % colors.length]}22`,
-          stepped: true,
+          stepped: 'after' as const,
           tension: 0,
+          pointRadius: 0,
         })) },
-        options: this.chartOptions<'line'>(fullLabels, 'Energía almacenada (kWh)'),
+        options: this.chartOptions<'line'>(fullLabels, 'Energía almacenada (%)', undefined, { min: 0, max: 100 }),
       }));
     } catch {
       // Canvas is unavailable in some browsers/test environments. The table is
@@ -1143,7 +1257,7 @@ export class Planning implements AfterViewInit, OnDestroy {
     }, { injector: this.injector });
   }
 
-  private chartOptions<T extends 'line' | 'bar'>(fullLabels: string[], yAxisTitle?: string, tooltipLabel?: (context: TooltipItem<T>) => string): ChartOptions<T> {
+  private chartOptions<T extends 'line' | 'bar'>(fullLabels: string[], yAxisTitle?: string, tooltipLabel?: (context: TooltipItem<T>) => string, yAxisRange?: { min: number; max: number }): ChartOptions<T> {
     const options = {
       responsive: true,
       maintainAspectRatio: false,
@@ -1159,7 +1273,7 @@ export class Planning implements AfterViewInit, OnDestroy {
       },
       scales: {
         x: { ticks: { callback: (_value: string | number, index: number) => this.intervalLabels(fullLabels)[index] ?? '' } },
-        y: { beginAtZero: true, ...(yAxisTitle ? { title: { display: true, text: yAxisTitle } } : {}) },
+        y: { ...(yAxisRange ? { min: yAxisRange.min, max: yAxisRange.max, beginAtZero: false } : { beginAtZero: true }), ...(yAxisTitle ? { title: { display: true, text: yAxisTitle } } : {}) },
       },
     } as unknown as ChartOptions<T>;
     return options;

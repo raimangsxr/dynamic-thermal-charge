@@ -80,10 +80,13 @@ export interface PlanningSlotDto extends PlanSlotDto {
   temperature_c: number | null;
   temperature_interpolated: boolean;
   stored_energy_kwh_by_heater: Record<string, number>;
+  stored_energy_next_kwh_by_heater: Record<string, number>;
   indoor_temperature_c_by_heater: Record<string, number>;
+  indoor_temperature_next_c_by_heater: Record<string, number>;
   target_temperature_c_by_heater: Record<string, number>;
   heat_delivered_kwh_by_heater: Record<string, number>;
   thermal_loss_kwh_by_heater: Record<string, number>;
+  temperature_shortfall_start_c_by_heater: Record<string, number>;
   temperature_shortfall_c_by_heater: Record<string, number>;
   charge_energy_kwh_by_heater: Record<string, number>;
 }
@@ -96,10 +99,13 @@ export interface PlanningTimelineSlotDto {
   temperature_c: number | null;
   temperature_interpolated: boolean;
   stored_energy_kwh_by_heater: Record<string, number>;
+  stored_energy_next_kwh_by_heater: Record<string, number>;
   indoor_temperature_c_by_heater: Record<string, number>;
+  indoor_temperature_next_c_by_heater: Record<string, number>;
   target_temperature_c_by_heater: Record<string, number>;
   heat_delivered_kwh_by_heater: Record<string, number>;
   thermal_loss_kwh_by_heater: Record<string, number>;
+  temperature_shortfall_start_c_by_heater: Record<string, number>;
   temperature_shortfall_c_by_heater: Record<string, number>;
   charge_energy_kwh_by_heater: Record<string, number>;
 }
@@ -117,6 +123,7 @@ export interface PlanningHeaterDto {
   id: string;
   name: string;
   power_w: number;
+  capacity_kwh: number;
   priority: number;
   enabled: boolean;
 }
