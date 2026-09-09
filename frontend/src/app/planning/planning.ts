@@ -62,6 +62,9 @@ interface ChartDetail {
 
 type TemperatureTargetDraft = TemperatureTargetRequest;
 
+const WEEKDAY_NAMES = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'] as const;
+const WEEKDAY_SHORT_NAMES = ['L', 'M', 'X', 'J', 'V', 'S', 'D'] as const;
+
 interface PlanningRefreshOptions {
   restorePreview?: boolean;
 }
@@ -539,6 +542,56 @@ export class Planning implements AfterViewInit, OnDestroy {
       return { ...item, weekdays };
     }));
   }
+
+  weekdayName(day: number): string {
+    return WEEKDAY_NAMES[day] ?? `Día ${day + 1}`;
+  }
+
+  weekdayShortName(day: number): string {
+    return WEEKDAY_SHORT_NAMES[day] ?? '?';
+  }
+
+  targetDaysSummary(target: TemperatureTargetDraft): string {
+    const selectedDays = WEEKDAY_NAMES.filter((_name, day) => target.weekdays.includes(day));
+    if (selectedDays.length === WEEKDAY_NAMES.length) return 'Todos los días';
+    if (!selectedDays.length) return 'Ningún día seleccionado';
+    return selectedDays.join(', ');
+  }
+
+  targetEndLabel(endTime: string): string {
+    return endTime === '24:00' ? '24:00 (medianoche)' : endTime;
+  }
+
+  targetTimeSummary(target: TemperatureTargetDraft): string {
+    return `${target.start_time}–${this.targetEndLabel(target.end_time)}`;
+  }
+
+  targetCrossesMidnight(target: TemperatureTargetDraft): boolean {
+    return target.end_time !== '24:00' && target.start_time > target.end_time;
+  }
+
+  targetScheduleDescription(target: TemperatureTargetDraft): string {
+    if (this.targetCrossesMidnight(target)) return `Cruza medianoche: comienza a las ${target.start_time} y termina a las ${target.end_time}.`;
+    if (target.end_time === '24:00') return `Termina en medianoche (24:00), después de las ${target.start_time}.`;
+    return `Intervalo local de ${target.start_time} a ${target.end_time}.`;
+  }
+
+  isMidnight(target: TemperatureTargetDraft): boolean {
+    return target.end_time === '24:00';
+  }
+
+  targetEndInputValue(target: TemperatureTargetDraft): string {
+    return this.isMidnight(target) ? '00:00' : target.end_time;
+  }
+
+  toggleMidnight(index: number, enabled: boolean): void {
+    this.editTarget(index, 'end_time', enabled ? '24:00' : '00:00');
+  }
+
+  isTargetEnabled(target: TemperatureTargetDraft): boolean {
+    return target.enabled !== false;
+  }
+
   recalculate(): void {
     this.dismissedPreviewJobId = null;
     this.actionError.set(''); this.actionMessage.set('Iniciando vista previa…'); this.preview.set(null);

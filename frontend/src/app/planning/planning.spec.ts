@@ -238,6 +238,81 @@ describe('Planning', () => {
     expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="preview-visualization"]')).not.toBeNull();
   });
 
+  it('shows a clear empty state and creates a complete target card', async () => {
+    backend.expectOne('/api/v1/planning').flush({ ...PLANNING, temperature_targets: [] });
+    await fixture.whenStable();
+    fixture.detectChanges();
+    await selectPlanningTab(fixture, 1);
+
+    const element = fixture.nativeElement as HTMLElement;
+    expect(element.querySelector('[data-testid="targets-empty"]')?.textContent).toContain('Aún no hay consignas semanales');
+    expect(element.querySelectorAll('[data-testid="target-card"]')).toHaveLength(0);
+    expect(element.querySelector('[data-testid="add-target-button"]')?.textContent).toContain('Añadir primera consigna');
+
+    element.querySelector<HTMLButtonElement>('[data-testid="add-target-button"]')?.click();
+    fixture.detectChanges();
+
+    const card = element.querySelector('[data-testid="target-card"]');
+    expect(card).not.toBeNull();
+    expect(element.querySelector('[data-testid="targets-empty"]')).toBeNull();
+    expect(card?.textContent).toContain('Salón');
+    expect(card?.textContent).toContain('21.0 °C');
+    expect(card?.querySelector('[data-testid="duplicate-target-button"]')).not.toBeNull();
+    expect(card?.querySelector('[data-testid="remove-target-button"]')).not.toBeNull();
+    expect(element.querySelector('[data-testid="planning-actions"]')).not.toBeNull();
+  });
+
+  it('renders readable card summaries, full weekday labels and grouped accessible actions', async () => {
+    backend.expectOne('/api/v1/planning').flush({
+      ...PLANNING,
+      temperature_targets: [{ id: 1, heater_id: 'salon', target_temperature_c: 20.5, start_time: '22:00', end_time: '02:00', weekdays: [0, 2, 6], enabled: false }],
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+    await selectPlanningTab(fixture, 1);
+
+    const element = fixture.nativeElement as HTMLElement;
+    const card = element.querySelector('[data-testid="target-card"]');
+    expect(card?.textContent).toContain('Salón · 20.5 °C');
+    expect(card?.textContent).toContain('Lunes, Miércoles, Domingo');
+    expect(card?.textContent).toContain('22:00–02:00');
+    expect(card?.textContent).toContain('Cruza medianoche');
+    expect(card?.getAttribute('data-state')).toBe('disabled');
+    expect(Array.from(card?.querySelectorAll<HTMLInputElement>('[data-testid="target-day-toggle"]') ?? []).map((input) => input.getAttribute('aria-label'))).toEqual([
+      'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo',
+    ]);
+    expect(card?.querySelector<HTMLButtonElement>('[data-testid="duplicate-target-button"]')?.getAttribute('aria-label')).toBe('Duplicar consigna 1');
+    expect(card?.querySelector<HTMLButtonElement>('[data-testid="remove-target-button"]')?.getAttribute('aria-label')).toBe('Quitar consigna 1');
+  });
+
+  it('represents midnight explicitly and preserves the API value when toggled', async () => {
+    backend.expectOne('/api/v1/planning').flush(PLANNING);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    await selectPlanningTab(fixture, 1);
+
+    const element = fixture.nativeElement as HTMLElement;
+    const endInput = element.querySelector<HTMLInputElement>('[data-testid="target-end-time-input"]');
+    const midnightToggle = element.querySelector<HTMLInputElement>('[data-testid="target-midnight-toggle"]');
+    expect(element.querySelector('[data-testid="target-schedule-note"]')?.textContent).toContain('medianoche (24:00)');
+    expect(endInput?.value).toBe('00:00');
+    expect(endInput?.disabled).toBe(true);
+    expect(midnightToggle?.checked).toBe(true);
+
+    fixture.componentInstance.toggleMidnight(0, false);
+    fixture.componentInstance.editTarget(0, 'end_time', '21:30');
+    fixture.componentInstance.recalculate();
+    const ordinaryRequest = backend.expectOne('/api/v1/planning/preview/jobs');
+    expect(ordinaryRequest.request.body.temperature_targets[0].end_time).toBe('21:30');
+    ordinaryRequest.flush(PREVIEW_JOB(PREVIEW));
+
+    fixture.componentInstance.toggleMidnight(0, true);
+    fixture.componentInstance.recalculate();
+    const midnightRequest = backend.expectOne('/api/v1/planning/preview/jobs');
+    expect(midnightRequest.request.body.temperature_targets[0].end_time).toBe('24:00');
+    midnightRequest.flush(PREVIEW_JOB(PREVIEW));
+  });
+
   it('duplicates an interval as an independent exact draft copy', () => {
     const target = { heater_id: 'salon', target_temperature_c: 20, start_time: '22:00', end_time: '02:00', weekdays: [4, 5], enabled: true };
     fixture.componentInstance.draftTargets.set([target]);

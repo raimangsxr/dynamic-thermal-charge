@@ -76,6 +76,12 @@ mantiene una consigna durante los huecos y nunca usa telemetría de temperatura
 del acumulador ni deriva una temperatura desde el SOC. Los intervalos de un
 mismo acumulador no pueden solaparse, incluso al cruzar medianoche.
 
+La interfaz inline de Nueva planificación presenta cada regla como una tarjeta
+con resumen de acumulador, temperatura, días y horario, conserva los índices de
+día lunes=0 a domingo=6 y representa `end_time: "24:00"` como medianoche sin
+alterar el payload. El inicio se muestra como incluido y el fin como excluido;
+los cambios no inician una vista previa hasta que el operador la solicita.
+
 #### Scenario: Intervalo activo durante la semana
 
 - **WHEN** llega una hora local incluida entre el inicio y el fin de una regla
