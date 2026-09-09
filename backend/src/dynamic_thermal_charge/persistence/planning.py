@@ -37,6 +37,14 @@ from .schema import (
 from .url import StoreLocation
 
 
+def _normalised_topic(value: Any) -> str | None:
+    """Blank is absent: an empty topic must not be published to."""
+    if value is None:
+        return None
+    topic = str(value).strip()
+    return topic or None
+
+
 class SqlPlanningRepository:
     """Own planning-specific records while preserving the legacy repositories."""
 
@@ -115,9 +123,10 @@ class SqlPlanningRepository:
     def update_heater_charge_config(self, heater_id: str, values: Mapping[str, Any]) -> None:
         from .schema import heater_charge_config
         allowed = {
-            key: values[key]
+            key: _normalised_topic(values[key])
             for key in (
                 "damper_topic",
+                "setpoint_topic",
             )
             if key in values
         }

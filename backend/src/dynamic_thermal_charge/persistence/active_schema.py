@@ -19,7 +19,7 @@ from .topology import BootstrapCorruptError, BootstrapIncompatibleError
 from . import SchemaStatus, SchemaVersionError
 
 
-CONFIGURATION_SCHEMA_REVISION = 12
+CONFIGURATION_SCHEMA_REVISION = 13
 APPLICATION_SCHEMA_REVISION = 7
 POSTGRES_CONFIGURATION_SCHEMA = "dtc_config"
 POSTGRES_APPLICATION_SCHEMA = "dtc_app"
@@ -554,6 +554,20 @@ def _upgrade_configuration_schema(engine: Engine, revision: int, expected: int) 
                         text(f"ALTER TABLE heater ADD COLUMN {name} {definition}")
                     )
         revision = 12
+    if revision == 12 and expected >= 13:
+        charge_columns = {
+            column["name"]
+            for column in inspect(engine).get_columns("heater_charge_config")
+        }
+        if "setpoint_topic" not in charge_columns:
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "ALTER TABLE heater_charge_config "
+                        "ADD COLUMN setpoint_topic VARCHAR(512)"
+                    )
+                )
+        revision = 13
     if revision != expected:
         raise BootstrapIncompatibleError(
             f"configuration schema revision {revision} has no registered upgrade path to {expected}"
