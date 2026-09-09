@@ -236,6 +236,8 @@ export interface HeaterDto {
   model: string | null;
   power_kw: number;
   full_charge_hours: number;
+  full_discharge_hours: number;
+  static_emission_percent: number;
   priority: number;
   enabled: boolean;
   telemetry_topic: string | null;
@@ -281,6 +283,8 @@ export interface AddHeaterRequest {
   id: string;
   power_kw: number;
   full_charge_hours: number;
+  full_discharge_hours?: number;
+  static_emission_percent?: number;
   name?: string;
   model?: string;
   priority?: number;
@@ -300,6 +304,8 @@ export interface UpdateHeaterRequest {
   model: string | null;
   power_kw: number;
   full_charge_hours: number;
+  full_discharge_hours?: number;
+  static_emission_percent?: number;
   priority: number;
   enabled: boolean;
   telemetry_topic: string | null;

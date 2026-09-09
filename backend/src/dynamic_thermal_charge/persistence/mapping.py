@@ -271,6 +271,14 @@ def heater_from_rows(
             model=None if heater_row.get("model") is None else str(heater_row["model"]),
             power_w=int(heater_row["power_w"]),
             full_charge_minutes=int(heater_row["full_charge_minutes"]),
+            full_discharge_minutes=int(
+                heater_row.get("full_discharge_minutes") or 600
+            ),
+            static_emission_percent=float(
+                20.0
+                if heater_row.get("static_emission_percent") is None
+                else heater_row["static_emission_percent"]
+            ),
             priority=int(heater_row["priority"]),
             enabled=bool(heater_row["enabled"]),
             thermal=thermal,
@@ -400,6 +408,8 @@ def heater_params(heater: Heater, installation_id: int, position: int) -> dict[s
         "model": heater.model,
         "power_w": heater.power_w,
         "full_charge_minutes": heater.full_charge_minutes,
+        "full_discharge_minutes": heater.full_discharge_minutes,
+        "static_emission_percent": heater.static_emission_percent,
         "priority": heater.priority,
         "enabled": heater.enabled,
         "telemetry_topic": heater.telemetry_topic,

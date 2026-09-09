@@ -37,7 +37,7 @@ def _patch_batch(client, values, revision=None):
 def test_the_whole_configuration_is_readable(client):
     body = _config(client)
     assert body["config_revision"] == 1
-    assert body["schema_revision"] == "0017_group_mqtt_telemetry"
+    assert body["schema_revision"] == "0018_soc_dependent_emission"
     assert "state_file" not in body
     assert body["max_total_power_kw"] == 5.2
     assert body["slot_minutes"] == 30
@@ -65,6 +65,8 @@ def test_one_heater_is_readable(client):
     assert "thermal" not in body
     assert body["room_thermal_capacity_kwh_per_c"] == 2.5
     assert body["room_heat_loss_kw_per_c"] == 0.12
+    assert body["full_discharge_hours"] == 10.0
+    assert body["static_emission_percent"] == 20.0
     assert body["temperature_targets"] == [
         {
             "id": body["temperature_targets"][0]["id"],
@@ -127,6 +129,7 @@ def test_a_new_domain_field_cannot_appear_in_the_api_unnoticed():
     translated = {
         "power_w": "power_kw",
         "full_charge_minutes": "full_charge_hours",
+        "full_discharge_minutes": "full_discharge_hours",
         "thermal": None,
         # These fields are retained only as non-API compatibility attributes
         # while old domain callers are retired.
@@ -410,6 +413,9 @@ def test_removing_an_unknown_heater_is_not_found(client):
         ("pin", "17", "entrada", 422),
         ("room_thermal_capacity_kwh_per_c", "0", "entrada", 422),
         ("room_heat_loss_kw_per_c", "-1", "entrada", 422),
+        ("full_discharge_hours", "0", "entrada", 422),
+        ("static_emission_percent", "150", "entrada", 422),
+        ("static_emission_percent", "-1", "entrada", 422),
         ("design_outdoor_temperature_c", "30", "salon", 404),
         ("nonexistent_field", "1", None, 404),
         ("nonexistent_field", "1", "salon", 404),
@@ -508,3 +514,32 @@ def test_an_edit_does_not_alter_the_plan_in_progress(client, heartbeat, recorder
     assert _patch(client, "max_total_power_kw", "2.4").status_code == 200
     after = client.get("/api/v1/status", headers=AUTH).json()["plan"]
     assert after == before, "editing the configuration changed the running plan"
+
+
+def test_the_discharge_figures_are_persisted_and_rounded_to_minutes(client):
+    revision = _config(client)["config_revision"]
+    response = client.put(
+        "/api/v1/config/heaters/salon",
+        headers=AUTH,
+        json={
+            "revision": revision,
+            "name": "Salón",
+            "power_kw": 2.8,
+            "full_charge_hours": 8,
+            "full_discharge_hours": 10.5,
+            "static_emission_percent": 15.5,
+            "priority": 90,
+            "enabled": True,
+            "output": "gpio",
+            "pin": 17,
+            "active_high": False,
+            "room_thermal_capacity_kwh_per_c": 2.5,
+            "room_heat_loss_kw_per_c": 0.12,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    updated = client.get("/api/v1/config/heaters/salon", headers=AUTH).json()
+    # 10.5 hours is 630 minutes, so the round trip through minutes is exact.
+    assert updated["full_discharge_hours"] == 10.5
+    assert updated["static_emission_percent"] == 15.5

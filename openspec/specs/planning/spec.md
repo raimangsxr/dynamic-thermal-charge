@@ -14,10 +14,22 @@ capacidad. Para un intervalo de `dt` horas, el intercambio firmado del recinto
 es `K_room * (T_inside - T_outside) * dt` y la temperatura siguiente cumple
 `T_next = T_inside + (E_heater - E_loss) / C_room`. La energía almacenada debe
 permanecer entre cero y la capacidad, y la carga nominal solo se suma cuando el
-acumulador está encendido. El calor entregado por el acumulador en cada
-intervalo no puede superar `potencia nominal × duración real del intervalo` ni
-la energía disponible después de sumar la carga de ese intervalo; este límite
-se aplica también cuando carga y descarga coinciden.
+acumulador está encendido.
+
+La capacidad de emisión decae con el estado de carga. La potencia máxima de
+emisión es `capacidad kWh / horas de descarga nominal` y la residual es un
+porcentaje configurado de esa máxima; el calor entregado en un intervalo no
+puede superar
+`(P_residual + (P_emisión − P_residual) × SOC) × duración real del intervalo`,
+con el SOC del borde inicial del intervalo, ni la energía disponible después de
+sumar la carga de ese intervalo. El límite se aplica también cuando carga y
+descarga coinciden, y la emisión residual es una capacidad y no una emisión
+forzada: un acumulador vacío entrega cero.
+
+El calor entregado es cero en los intervalos sin consigna activa a partir de
+los cuales ninguna consigna del horizonte queda por delante. En los intervalos
+anteriores a una consigna la emisión sigue permitida, de modo que el plan puede
+precalentar hacia su borde inicial.
 
 Cuando una consigna está activa en un slot, la temperatura objetivo es una
 invariante en sus dos bordes: se evalúan tanto `T_inside` al inicio como
@@ -31,13 +43,27 @@ precalentar, pero un déficit en cualquiera de esos bordes conserva el plan como
 - **THEN** el intercambio térmico es negativo, aumenta la temperatura
   proyectada y se conserva el balance energético firmado
 
-#### Scenario: Descarga limitada por potencia nominal
+#### Scenario: Descarga limitada por la capacidad de emisión
 
-- **WHEN** una consigna requiere más calor que el que la potencia nominal puede
-  entregar durante un intervalo
-- **THEN** el modelo y el optimizador entregan como máximo esa potencia por la
+- **WHEN** una consigna requiere más calor que el que el acumulador puede
+  emitir con su estado de carga durante un intervalo
+- **THEN** el modelo y el optimizador entregan como máximo esa capacidad por la
   duración real del intervalo, conservan la energía almacenada no negativa y
   registran el déficit térmico como `DEGRADED`
+
+#### Scenario: Acumulador poco cargado ante una consigna
+
+- **WHEN** el estado de carga es bajo y la consigna exige subir o mantener la
+  temperatura
+- **THEN** la capacidad de emisión proyectada decae con ese estado de carga, el
+  déficit resultante se conserva y el plan no proyecta una emisión a la potencia
+  de un acumulador lleno
+
+#### Scenario: Intervalo sin ninguna consigna por delante
+
+- **WHEN** un intervalo no tiene consigna activa y ninguna consigna del
+  horizonte queda por delante de él
+- **THEN** el calor entregado en ese intervalo es cero
 
 ### Requirement: Consignas semanales y fuente del objetivo
 
@@ -108,16 +134,16 @@ basado en porcentajes.
 Las vistas previas, el plan activo, las explicaciones y el historial deben
 conservar por acumulador e intervalo la temperatura interior proyectada y la
 energía almacenada en los bordes de inicio y fin, la consigna, el SOC, el calor
-entregado, el intercambio térmico y los déficits de temperatura de ambos bordes
-cuando existan. La capacidad total en kWh debe estar disponible para expresar el
+entregado, el límite de emisión aplicado, el intercambio térmico y los déficits
+de temperatura de ambos bordes cuando existan. La capacidad total en kWh debe estar disponible para expresar el
 SOC relativo de cada acumulador.
 
 #### Scenario: Consulta de un intervalo planificado
 
 - **WHEN** el operador abre el detalle de un intervalo
 - **THEN** puede distinguir los valores de inicio y fin de energía almacenada,
-  carga, calor entregado, intercambio térmico, interior, objetivo y déficit sin
-  inferir temperatura a partir del SOC
+  carga, calor entregado, límite de emisión aplicado, intercambio térmico,
+  interior, objetivo y déficit sin inferir temperatura a partir del SOC
 
 ### Requirement: Ciclo de previsión AEMET durable
 

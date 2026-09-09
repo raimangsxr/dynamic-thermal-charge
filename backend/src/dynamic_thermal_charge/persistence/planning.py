@@ -523,6 +523,7 @@ class SqlPlanningRepository:
                     thermal_loss_json=json.dumps(slot.thermal_loss_kwh or {}),
                     temperature_shortfall_json=json.dumps(slot.temperature_shortfall_c or {}),
                     charge_energy_json=json.dumps(slot.charge_energy_kwh or {}),
+                    heat_limit_json=json.dumps(slot.heat_delivery_limit_kwh or {}),
                 ))
             connection.execute(insert(plan_audit).values(installation_id=self._installation_id, plan_id=plan_id, event="activated" if active else "preview", reason=reason, details_json=json.dumps({"status": plan.status, "violations": violations}), occurred_at=to_utc(now)))
         return plan_id
@@ -794,6 +795,7 @@ class SqlPlanningRepository:
                     "thermal_loss_kwh": json.loads(item.get("thermal_loss_json", "{}")),
                     "temperature_shortfall_c": json.loads(item.get("temperature_shortfall_json", "{}")),
                     "charge_energy_kwh": json.loads(item.get("charge_energy_json", "{}")),
+                    "heat_delivery_limit_kwh": json.loads(item.get("heat_limit_json", "{}")),
                 }
                 for item in slots
             ],

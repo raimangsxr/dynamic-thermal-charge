@@ -106,3 +106,42 @@ def test_indoor_reading_requires_an_aware_received_at():
 
     with pytest.raises(ValueError, match="timezone"):
         IndoorReading("salon", 20.5, datetime(2026, 1, 1))
+
+
+def test_emission_power_comes_from_the_nominal_discharge_time():
+    heater = Heater(
+        id="salon",
+        name="salon",
+        power_w=2400,
+        full_charge_minutes=480,
+        full_discharge_minutes=600,
+        static_emission_percent=20.0,
+    )
+
+    # 2.4 kW over 8 h stores 19.2 kWh, emitted over 10 h: 1.92 kW, with a
+    # residual floor of 20% of that.  The charge power is a different quantity.
+    assert heater.capacity_kwh == pytest.approx(19.2)
+    assert heater.emission_power_kw == pytest.approx(1.92)
+    assert heater.static_emission_power_kw == pytest.approx(0.384)
+    assert heater.charge_power_kw == pytest.approx(2.4)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("full_discharge_minutes", 0),
+        ("full_discharge_minutes", -60),
+        ("static_emission_percent", -1.0),
+        ("static_emission_percent", 101.0),
+        ("static_emission_percent", float("nan")),
+    ],
+)
+def test_invalid_discharge_figures_are_rejected(field, value):
+    with pytest.raises(ValueError):
+        Heater(
+            id="salon",
+            name="salon",
+            power_w=2400,
+            full_charge_minutes=480,
+            **{field: value},
+        )

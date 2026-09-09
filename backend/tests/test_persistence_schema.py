@@ -450,3 +450,64 @@ def test_no_migration_imports_the_live_schema_module():
         "these migrations import the live schema module, so they are not pinned "
         f"to their own revision: {offenders}"
     )
+
+
+def test_a_row_without_discharge_figures_takes_the_migration_defaults(sqlite_url):
+    """What an installation migrated by 0018 finds in its existing rows."""
+    engine = build_engine(parse_location(sqlite_url))
+    metadata.create_all(engine)
+    now = datetime(2026, 1, 1, 12, 0)
+    with engine.begin() as connection:
+        installation_id = connection.execute(
+            insert(installation_table).values(**_installation_row(now))
+        ).inserted_primary_key[0]
+        connection.execute(
+            insert(heater_table).values(
+                installation_id=installation_id,
+                heater_id="salon",
+                name="Salon",
+                power_w=2400,
+                full_charge_minutes=480,
+                priority=0,
+                enabled=True,
+                position=0,
+            )
+        )
+    with engine.connect() as connection:
+        row = connection.execute(select(heater_table)).mappings().one()
+
+    assert row["full_discharge_minutes"] == 600
+    assert row["static_emission_percent"] == 20.0
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [
+        ("full_discharge_minutes", 0),
+        ("static_emission_percent", 101.0),
+        ("static_emission_percent", -1.0),
+    ],
+)
+def test_invalid_discharge_figures_are_rejected_by_the_schema(sqlite_url, column, value):
+    engine = build_engine(parse_location(sqlite_url))
+    metadata.create_all(engine)
+    now = datetime(2026, 1, 1, 12, 0)
+    with engine.begin() as connection:
+        installation_id = connection.execute(
+            insert(installation_table).values(**_installation_row(now))
+        ).inserted_primary_key[0]
+    with pytest.raises(IntegrityError):
+        with engine.begin() as connection:
+            connection.execute(
+                insert(heater_table).values(
+                    installation_id=installation_id,
+                    heater_id="salon",
+                    name="Salon",
+                    power_w=2400,
+                    full_charge_minutes=480,
+                    priority=0,
+                    enabled=True,
+                    position=0,
+                    **{column: value},
+                )
+            )

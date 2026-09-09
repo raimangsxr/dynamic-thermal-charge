@@ -19,8 +19,8 @@ from .topology import BootstrapCorruptError, BootstrapIncompatibleError
 from . import SchemaStatus, SchemaVersionError
 
 
-CONFIGURATION_SCHEMA_REVISION = 11
-APPLICATION_SCHEMA_REVISION = 6
+CONFIGURATION_SCHEMA_REVISION = 12
+APPLICATION_SCHEMA_REVISION = 7
 POSTGRES_CONFIGURATION_SCHEMA = "dtc_config"
 POSTGRES_APPLICATION_SCHEMA = "dtc_app"
 
@@ -261,6 +261,14 @@ def _upgrade_application_schema(engine: Engine, revision: int, expected: int) ->
                 if name not in columns:
                     connection.execute(text(f"ALTER TABLE heater_telemetry ADD COLUMN {name} {definition}"))
         revision = 6
+    if revision == 6 and expected >= 7:
+        columns = {column["name"] for column in inspect(engine).get_columns("automatic_plan_slot")}
+        with engine.begin() as connection:
+            if "heat_limit_json" not in columns:
+                connection.execute(
+                    text("ALTER TABLE automatic_plan_slot ADD COLUMN heat_limit_json TEXT NOT NULL DEFAULT '{}'")
+                )
+        revision = 7
     if revision != expected:
         raise BootstrapIncompatibleError(
             f"application schema revision {revision} has no registered upgrade path to {expected}"
@@ -528,6 +536,24 @@ def _upgrade_configuration_schema(engine: Engine, revision: int, expected: int) 
         _drop_columns(engine, "heater", {"indoor_topic"})
         _drop_columns(engine, "heater_charge_config", {"stored_soc_topic"})
         revision = 11
+    if revision == 11 and expected >= 12:
+        heater_columns = {
+            column["name"] for column in inspect(engine).get_columns("heater")
+        }
+        # Existing rows take the documented defaults: ten hours of nominal
+        # discharge and a 20% residual emission floor.  The operator has to
+        # enter the figures of their own accumulator.
+        additions = (
+            ("full_discharge_minutes", "INTEGER NOT NULL DEFAULT 600"),
+            ("static_emission_percent", "FLOAT NOT NULL DEFAULT 20.0"),
+        )
+        with engine.begin() as connection:
+            for name, definition in additions:
+                if name not in heater_columns:
+                    connection.execute(
+                        text(f"ALTER TABLE heater ADD COLUMN {name} {definition}")
+                    )
+        revision = 12
     if revision != expected:
         raise BootstrapIncompatibleError(
             f"configuration schema revision {revision} has no registered upgrade path to {expected}"

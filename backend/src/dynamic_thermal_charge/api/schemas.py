@@ -164,6 +164,7 @@ class PlanningSlotView(PlanSlotView):
     temperature_shortfall_start_c_by_heater: dict[str, float] = Field(default_factory=dict)
     temperature_shortfall_c_by_heater: dict[str, float] = Field(default_factory=dict)
     charge_energy_kwh_by_heater: dict[str, float] = Field(default_factory=dict)
+    heat_delivery_limit_kwh_by_heater: dict[str, float] = Field(default_factory=dict)
 
 
 class PlanningTimelineSlotView(BaseModel):
@@ -183,6 +184,7 @@ class PlanningTimelineSlotView(BaseModel):
     temperature_shortfall_start_c_by_heater: dict[str, float] = Field(default_factory=dict)
     temperature_shortfall_c_by_heater: dict[str, float] = Field(default_factory=dict)
     charge_energy_kwh_by_heater: dict[str, float] = Field(default_factory=dict)
+    heat_delivery_limit_kwh_by_heater: dict[str, float] = Field(default_factory=dict)
 
 
 class PlanningHeaterView(BaseModel):
@@ -431,6 +433,8 @@ class HeaterResponse(BaseModel):
     model: str | None = None
     power_kw: float
     full_charge_hours: float
+    full_discharge_hours: float = 10.0
+    static_emission_percent: float = 20.0
     priority: int
     enabled: bool
     telemetry_topic: str | None = None
@@ -490,6 +494,8 @@ class AddHeaterRequest(BaseModel):
     id: str
     power_kw: float
     full_charge_hours: float
+    full_discharge_hours: float = Field(gt=0, default=10.0)
+    static_emission_percent: float = Field(ge=0, le=100, default=20.0)
     name: str | None = None
     model: str | None = None
     priority: int = 0
@@ -510,6 +516,8 @@ class UpdateHeaterRequest(BaseModel):
     model: str | None = None
     power_kw: float = Field(gt=0)
     full_charge_hours: float = Field(gt=0)
+    full_discharge_hours: float = Field(gt=0, default=10.0)
+    static_emission_percent: float = Field(ge=0, le=100, default=20.0)
     priority: int = 0
     enabled: bool = True
     telemetry_topic: str | None = None

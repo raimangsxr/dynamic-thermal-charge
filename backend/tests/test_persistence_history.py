@@ -472,3 +472,41 @@ def test_automatic_plan_status_aliases_are_read_as_canonical_codes(initialised_s
     )
 
     assert initialised_store.planning.latest_plan()["status"] == "FEASIBLE"
+
+
+def test_the_applied_emission_limit_survives_the_plan_round_trip(initialised_store):
+    """R6: a comfort deficit caused by a low state of charge stays explainable."""
+    plan = AutomaticPlan(
+        WINDOW_START,
+        WINDOW_START + timedelta(minutes=30),
+        30,
+        (
+            AutomaticPlanSlot(
+                WINDOW_START,
+                WINDOW_START + timedelta(minutes=30),
+                ("salon",),
+                2800,
+                {},
+                {},
+                heat_delivered_kwh={"salon": 0.581376},
+                heat_delivery_limit_kwh={"salon": 0.581376},
+            ),
+        ),
+        (),
+        "DEGRADED",
+        (),
+        "emission-limit-round-trip",
+        WINDOW_START,
+    )
+    initialised_store.planning.save_plan(
+        plan,
+        configuration_revision=1,
+        constraints_revision=initialised_store.planning.site()["revision"],
+        reason="periodic",
+        active=True,
+    )
+
+    stored = initialised_store.planning.active_plan()
+
+    assert stored is not None
+    assert stored["slots"][0]["heat_delivery_limit_kwh"] == {"salon": 0.581376}
