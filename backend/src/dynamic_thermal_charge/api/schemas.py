@@ -375,6 +375,8 @@ class PlanningSiteConfigRequest(BaseModel):
     contracted_power_w: int = Field(gt=0)
     max_heating_power_w: int = Field(gt=0)
     base_load_w: int = Field(ge=0, default=0)
+    deviation_shortfall_tolerance_c: float = Field(gt=0, default=0.1)
+    deviation_surplus_soc_percent: float = Field(gt=0, default=5.0)
     mqtt_simulation_enabled: bool = False
     mqtt_simulation_initial_temperature_c: float = Field(ge=-50, le=80, default=45.0)
     mqtt_simulation_publish_seconds: float = Field(gt=0, default=30.0)
@@ -398,6 +400,8 @@ class PlanningSiteConfigResponse(BaseModel):
     contracted_power_w: int
     max_heating_power_w: int
     base_load_w: int
+    deviation_shortfall_tolerance_c: float = 0.1
+    deviation_surplus_soc_percent: float = 5.0
     mqtt_simulation_enabled: bool
     mqtt_simulation_initial_temperature_c: float
     mqtt_simulation_publish_seconds: float

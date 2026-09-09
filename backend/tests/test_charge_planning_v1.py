@@ -440,3 +440,49 @@ def test_an_unknown_heater_cannot_receive_command_topics(client):
     )
 
     assert response.status_code == 422, response.text
+
+
+def test_the_deviation_tolerances_are_persisted_and_validated(client):
+    config = client.get("/api/v1/planning/config", headers=AUTH).json()
+    assert config["deviation_shortfall_tolerance_c"] == 0.1
+    assert config["deviation_surplus_soc_percent"] == 5.0
+
+    saved = client.patch(
+        "/api/v1/planning/config",
+        headers=AUTH,
+        json={
+            **{key: value for key, value in config.items() if key != "revision"},
+            "expected_revision": config["revision"],
+            "deviation_shortfall_tolerance_c": 0.25,
+            "deviation_surplus_soc_percent": 8.0,
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["deviation_shortfall_tolerance_c"] == 0.25
+    assert saved.json()["deviation_surplus_soc_percent"] == 8.0
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("deviation_shortfall_tolerance_c", 0),
+        ("deviation_shortfall_tolerance_c", -1),
+        ("deviation_surplus_soc_percent", 0),
+        ("deviation_surplus_soc_percent", -5),
+    ],
+)
+def test_an_invalid_deviation_tolerance_is_rejected(client, field, value):
+    config = client.get("/api/v1/planning/config", headers=AUTH).json()
+
+    response = client.patch(
+        "/api/v1/planning/config",
+        headers=AUTH,
+        json={
+            **{key: item for key, item in config.items() if key != "revision"},
+            "expected_revision": config["revision"],
+            field: value,
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    assert client.get("/api/v1/planning/config", headers=AUTH).json() == config

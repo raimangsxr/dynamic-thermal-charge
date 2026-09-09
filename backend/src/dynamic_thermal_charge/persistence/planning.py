@@ -81,6 +81,8 @@ class SqlPlanningRepository:
                 "contracted_power_w": 5200,
                 "max_heating_power_w": 5200,
                 "base_load_w": 0,
+                "deviation_shortfall_tolerance_c": 0.1,
+                "deviation_surplus_soc_percent": 5.0,
                 "mqtt_simulation_enabled": False,
                 "mqtt_simulation_initial_temperature_c": 45.0,
                 "mqtt_simulation_publish_seconds": 30.0,
@@ -99,6 +101,8 @@ class SqlPlanningRepository:
             "base_load_w",
         )
         floats = (
+            "deviation_shortfall_tolerance_c",
+            "deviation_surplus_soc_percent",
             "mqtt_simulation_initial_temperature_c",
             "mqtt_simulation_publish_seconds",
             "mqtt_simulation_thermal_loss_c_per_hour",
@@ -152,6 +156,8 @@ class SqlPlanningRepository:
             "base_load_w",
         }
         float_fields = {
+            "deviation_shortfall_tolerance_c",
+            "deviation_surplus_soc_percent",
             "mqtt_simulation_initial_temperature_c",
             "mqtt_simulation_publish_seconds",
             "mqtt_simulation_thermal_loss_c_per_hour",
@@ -187,6 +193,16 @@ class SqlPlanningRepository:
             raise ConfigValidationError("power limits must be positive", field="contracted_power_w")
         if int(combined["base_load_w"]) < 0:
             raise ConfigValidationError("base_load_w must be non-negative", field="base_load_w")
+        if float(combined["deviation_shortfall_tolerance_c"]) <= 0:
+            raise ConfigValidationError(
+                "deviation_shortfall_tolerance_c must be positive",
+                field="deviation_shortfall_tolerance_c",
+            )
+        if float(combined["deviation_surplus_soc_percent"]) <= 0:
+            raise ConfigValidationError(
+                "deviation_surplus_soc_percent must be positive",
+                field="deviation_surplus_soc_percent",
+            )
         if not -50 <= float(combined["mqtt_simulation_initial_temperature_c"]) <= 80:
             raise ConfigValidationError(
                 "mqtt_simulation_initial_temperature_c must be between -50 and 80",
@@ -480,6 +496,8 @@ class SqlPlanningRepository:
         reason: str,
         active: bool,
         forecast_ref: ForecastRef | None = None,
+        preserve_active: bool = False,
+        audit_details: Mapping[str, Any] | None = None,
     ) -> int:
         now = datetime.now(timezone.utc)
         active = active and plan.status != "INVALID"
@@ -499,7 +517,11 @@ class SqlPlanningRepository:
             "explanations": [_json_ready(item.__dict__) for item in plan.explanations],
         }
         with transaction(self._application, self._application_location) as connection:
-            if active or plan.status == "INVALID":
+            # An invalid recalculation deliberately clears the active plan.
+            # ``preserve_active`` is the explicit exception for a recalculation
+            # that was only an extra attempt: leaving the installation as it was
+            # is never worse than not having tried.
+            if active or (plan.status == "INVALID" and not preserve_active):
                 connection.execute(update(automatic_plan).where((automatic_plan.c.installation_id == self._installation_id) & automatic_plan.c.active.is_(True)).values(active=False))
             forecast_id = (
                 forecast_ref.id
@@ -534,7 +556,10 @@ class SqlPlanningRepository:
                     charge_energy_json=json.dumps(slot.charge_energy_kwh or {}),
                     heat_limit_json=json.dumps(slot.heat_delivery_limit_kwh or {}),
                 ))
-            connection.execute(insert(plan_audit).values(installation_id=self._installation_id, plan_id=plan_id, event="activated" if active else "preview", reason=reason, details_json=json.dumps({"status": plan.status, "violations": violations}), occurred_at=to_utc(now)))
+            details = {"status": plan.status, "violations": violations}
+            if audit_details:
+                details.update(_json_ready(dict(audit_details)))
+            connection.execute(insert(plan_audit).values(installation_id=self._installation_id, plan_id=plan_id, event="activated" if active else "preview", reason=reason, details_json=json.dumps(details), occurred_at=to_utc(now)))
         return plan_id
 
     def create_preview_job(

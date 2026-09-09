@@ -54,12 +54,12 @@ recalcular en cuanto deje de servir.
 
 ## Tasks
 
-- [ ] T1: Añadir las dos tolerancias a la configuración de Planificación con migración Alembic, esquema, API y panel.
-- [ ] T2: Añadir una función pura que, dado el plan activo, la telemetría vigente y el instante, devuelva si hay que replanificar y el motivo, el acumulador y los valores que lo justifican.
-- [ ] T3: Conectarla al ciclo de control en el límite de slot, con el límite de una replanificación por desviación por slot.
-- [ ] T4: Registrar el motivo y sus valores en la auditoría del plan, distinguible de `periodic` y de una activación del operador.
-- [ ] T5: Añadir al guardado del plan la vía explícita para persistir un resultado `INVALID` sin desactivar el plan anterior, y usarla solo en el disparo por desviación.
-- [ ] T6: Añadir el tipo de alerta de replanificación imposible al catálogo de `email-alerts` y emitirlo en ese caso.
-- [ ] T7: Cubrir con tests el déficit reproyectado, el caso sin desviación, el excedente, el límite por slot, la telemetría no utilizable, la conservación del plan anterior con un `INVALID` por desviación, la desactivación con un `INVALID` periódico, la alerta y la auditoría.
-- [ ] T8: Actualizar `openspec/specs/planning/spec.md` y la sección de replanificación de `README.md`.
-- [ ] T9: Ejecutar `make check`.
+- [x] T1: Añadir las dos tolerancias a la configuración de Planificación con migración Alembic, esquema, API y panel.
+- [x] T2: Añadir una función pura que, dado el plan activo, la telemetría vigente y el instante, devuelva si hay que replanificar y el motivo, el acumulador y los valores que lo justifican.
+- [x] T3: Conectarla al ciclo de control en el límite de slot, con el límite de una replanificación por desviación por slot.
+- [x] T4: Registrar el motivo y sus valores en la auditoría del plan, distinguible de `periodic` y de una activación del operador.
+- [x] T5: Añadir al guardado del plan la vía explícita para persistir un resultado `INVALID` sin desactivar el plan anterior, y usarla solo en el disparo por desviación.
+- [x] T6: Añadir el tipo de alerta de replanificación imposible al catálogo de `email-alerts` y emitirlo en ese caso.
+- [x] T7: Cubrir con tests el déficit reproyectado, el caso sin desviación, el excedente, el límite por slot, la telemetría no utilizable, la conservación del plan anterior con un `INVALID` por desviación, la desactivación con un `INVALID` periódico, la alerta y la auditoría.
+- [x] T8: Actualizar `openspec/specs/planning/spec.md` y la sección de replanificación de `README.md`.
+- [x] T9: Ejecutar `make check`.

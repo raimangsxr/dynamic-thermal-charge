@@ -77,6 +77,7 @@ function systemConfigurationDto(overrides: Partial<SystemConfigurationDto> = {})
 function planningConfigDto(overrides: Partial<PlanningSiteConfigDto> = {}): PlanningSiteConfigDto {
   return {
     revision: 2, replan_minutes: 30, planning_window_hours: 12, forecast_horizon_hours: 48, solver_time_limit_seconds: 120, aemet_query_hour: 12,
+    deviation_shortfall_tolerance_c: 0.1, deviation_surplus_soc_percent: 5,
     contracted_power_w: 5200, max_heating_power_w: 5200, base_load_w: 0,
     mqtt_simulation_enabled: false, mqtt_simulation_initial_temperature_c: 45, mqtt_simulation_publish_seconds: 30, mqtt_simulation_topic_prefix: 'dtc/sim', mqtt_simulation_thermal_loss_c_per_hour: 2,
     ...overrides,
@@ -524,6 +525,21 @@ describe('Config', () => {
   });
 
   /* --------------------------------------------------------------- CRUD */
+
+  it('saves the deviation tolerances with the planning configuration', () => {
+    loadUnified();
+    fixture.componentInstance.chooseArea('planning');
+    fixture.componentInstance.planningEdit('deviation_shortfall_tolerance_c', '0.25');
+    fixture.componentInstance.planningEdit('deviation_surplus_soc_percent', '8');
+    fixture.componentInstance.savePlanning();
+
+    const request = backend.expectOne('/api/v1/planning/config');
+    expect(request.request.method).toBe('PATCH');
+    expect(request.request.body).toMatchObject({
+      deviation_shortfall_tolerance_c: 0.25,
+      deviation_surplus_soc_percent: 8,
+    });
+  });
 
   it('reads the alert catalogue when the email section is selected and silences one alert', () => {
     loadUnified();

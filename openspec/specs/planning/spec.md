@@ -192,6 +192,59 @@ posición de compuerta recibida.
 - **THEN** no recibe mando alguno, la condición se registra una vez y el resto de
   acumuladores del mismo ciclo reciben el suyo
 
+### Requirement: Replanificación por desviación del plan
+
+En cada límite de slot, con un plan activo y el control automático habilitado,
+el controlador debe reproyectar los intervalos restantes del plan partiendo de
+la temperatura interior y el SOC medidos de cada acumulador, conservando las
+decisiones de carga del plan vigente. La reproyección usa el modelo físico de
+sala y no resuelve el MILP, así que no consume presupuesto de solver.
+
+Si la reproyección revela un déficit de temperatura que el plan no preveía, o lo
+agrava por encima de la tolerancia configurada, se replanifica de inmediato en
+lugar de esperar la cadencia periódica. Si alcanza todas las consignas y deja un
+excedente de energía almacenada por encima de su tolerancia respecto a la
+proyección del plan, también se replanifica, para recortar carga que las
+condiciones reales han vuelto innecesaria. Como máximo se produce una
+replanificación por desviación por slot.
+
+Un acumulador sin telemetría reciente utilizable no se reproyecta y no dispara
+por sí mismo una replanificación. Un recálculo disparado por desviación que
+devuelva `INVALID` conserva el plan activo anterior en lugar de desactivarlo,
+registra el resultado inválido sin activarlo y avisa de que la replanificación
+no ha sido posible. Un recálculo periódico `INVALID` conserva su comportamiento
+de desactivar el plan. Toda replanificación por desviación queda auditada con su
+motivo, el acumulador y los valores que la provocaron, distinguible de una
+periódica y de una activación del operador.
+
+#### Scenario: Habitación más fría de lo proyectado
+
+- **WHEN** la temperatura interior medida hace que la reproyección revele un
+  déficit que el plan no preveía
+- **THEN** el ciclo replanifica sin esperar la cadencia periódica
+
+#### Scenario: Desviación sin consecuencias para el confort
+
+- **WHEN** la reproyección alcanza todas las consignas y no deja excedente
+- **THEN** no se dispara ninguna replanificación
+
+#### Scenario: Condiciones más favorables de lo previsto
+
+- **WHEN** la reproyección alcanza todas las consignas y deja un excedente de
+  energía almacenada por encima de su tolerancia
+- **THEN** se replanifica para recortar la carga que ya no hace falta
+
+#### Scenario: Desviación sostenida dentro de un slot
+
+- **WHEN** la desviación persiste durante varios ciclos del mismo slot
+- **THEN** se produce como máximo una replanificación por desviación en ese slot
+
+#### Scenario: Recálculo por desviación inválido
+
+- **WHEN** un recálculo disparado por desviación devuelve `INVALID`
+- **THEN** el plan anterior sigue activo, el resultado inválido queda registrado
+  sin activarse y se avisa de que la replanificación no ha sido posible
+
 ### Requirement: Auditoría física del plan
 
 Las vistas previas, el plan activo, las explicaciones y el historial deben

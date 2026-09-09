@@ -205,6 +205,8 @@ const PLANNING_FIELDS: readonly FieldDefinition[] = [
   { name: 'contracted_power_w', label: 'Potencia total contratada (W)', type: 'number', min: '1', step: '100', hint: 'Fuente única para el optimizador y el indicador de Estado.' },
   { name: 'max_heating_power_w', label: 'Límite de calefacción (W)', type: 'number', min: '1', step: '100' },
   { name: 'base_load_w', label: 'Consumo base estimado (W)', type: 'number', min: '0', step: '100' },
+  { name: 'deviation_shortfall_tolerance_c', label: 'Tolerancia de déficit reproyectado (°C)', type: 'number', min: '0.01', step: '0.05', hint: 'Déficit de consigna que la reproyección puede revelar antes de replanificar por adelantado.' },
+  { name: 'deviation_surplus_soc_percent', label: 'Tolerancia de excedente (puntos de SOC)', type: 'number', min: '0.1', step: '0.5', hint: 'Carga sobrante respecto al plan que se admite antes de recortarla con una replanificación.' },
   { name: 'mqtt_simulation_enabled', label: 'Activar simulación MQTT', type: 'boolean' },
   { name: 'mqtt_simulation_initial_temperature_c', label: 'Temperatura inicial simulada (°C)', type: 'number', step: '0.1' },
   { name: 'mqtt_simulation_publish_seconds', label: 'Publicación simulada (s)', type: 'number', min: '1', step: '1' },
@@ -805,6 +807,7 @@ export class Config {
     const values = {
       replan_minutes: number('replan_minutes'), planning_window_hours: number('planning_window_hours'), forecast_horizon_hours: number('forecast_horizon_hours'), aemet_query_hour: number('aemet_query_hour'), solver_time_limit_seconds: number('solver_time_limit_seconds'),
       contracted_power_w: number('contracted_power_w'), max_heating_power_w: number('max_heating_power_w'), base_load_w: number('base_load_w'),
+      deviation_shortfall_tolerance_c: number('deviation_shortfall_tolerance_c'), deviation_surplus_soc_percent: number('deviation_surplus_soc_percent'),
       mqtt_simulation_enabled: this.planningValue('mqtt_simulation_enabled') === true || this.planningValue('mqtt_simulation_enabled') === 'true', mqtt_simulation_initial_temperature_c: number('mqtt_simulation_initial_temperature_c'), mqtt_simulation_publish_seconds: number('mqtt_simulation_publish_seconds'), mqtt_simulation_topic_prefix: String(this.planningValue('mqtt_simulation_topic_prefix')), mqtt_simulation_thermal_loss_c_per_hour: number('mqtt_simulation_thermal_loss_c_per_hour'),
     };
     this.planningSaving.set(true);

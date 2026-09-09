@@ -133,6 +133,8 @@ export interface PlanningHeaterDto {
 export interface PlanningSiteConfigDto {
   revision: number;
   replan_minutes: number;
+  deviation_shortfall_tolerance_c: number;
+  deviation_surplus_soc_percent: number;
   planning_window_hours: number;
   forecast_horizon_hours: number;
   solver_time_limit_seconds: number;

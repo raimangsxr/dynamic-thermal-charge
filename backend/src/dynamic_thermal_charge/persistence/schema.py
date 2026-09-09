@@ -286,6 +286,20 @@ charge_planning_site = Table(
     Column("contracted_power_w", Integer, nullable=False, server_default="5200"),
     Column("max_heating_power_w", Integer, nullable=False, server_default="5200"),
     Column("base_load_w", Integer, nullable=False, server_default="0"),
+    # Deviation tolerances: what counts as "the plan no longer serves these
+    # conditions" when the controller reprojects the remaining intervals.
+    Column(
+        "deviation_shortfall_tolerance_c",
+        Float,
+        nullable=False,
+        server_default="0.1",
+    ),
+    Column(
+        "deviation_surplus_soc_percent",
+        Float,
+        nullable=False,
+        server_default="5",
+    ),
     Column("mqtt_simulation_enabled", Boolean, nullable=False, server_default="0"),
     Column(
         "mqtt_simulation_initial_temperature_c",

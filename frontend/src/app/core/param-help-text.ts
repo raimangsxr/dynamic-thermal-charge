@@ -32,6 +32,10 @@ const HEATER: Record<string, string> = {
     'Horas de descarga nominal del fabricante. La emisión máxima es la capacidad dividida por estas horas, y decae con el estado de carga.',
   static_emission_percent:
     'Emisión que el acumulador conserva con la carga agotada, en porcentaje de la máxima. Fija el suelo de la curva de emisión.',
+  deviation_shortfall_tolerance_c:
+    'El controlador reproyecta el resto del plan con la telemetría medida en cada límite de slot. Si aparece un déficit de consigna mayor que esta tolerancia, replanifica sin esperar la cadencia periódica.',
+  deviation_surplus_soc_percent:
+    'Si la reproyección alcanza todas las consignas y deja más carga de la prevista que estos puntos de SOC, se replanifica para recortar carga que las condiciones reales han vuelto innecesaria.',
   room_thermal_capacity_kwh_per_c:
     'Capacidad térmica efectiva de la sala (kWh/°C). El balance usa esta constante para convertir calor neto en variación de temperatura.',
   room_heat_loss_kw_per_c:

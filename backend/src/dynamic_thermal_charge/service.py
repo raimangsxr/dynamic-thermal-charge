@@ -70,6 +70,7 @@ class ControllerService:
         control_state: Callable[[], object] | None = None,
         mark_recalculation_processed: Callable[[int], None] | None = None,
         alerts=None,
+        deviation_check: Callable[[datetime], bool] | None = None,
     ) -> None:
         self._controller = controller
         self._store = store
@@ -85,6 +86,8 @@ class ControllerService:
         self._mark_recalculation_processed = mark_recalculation_processed
         self._alerts = alerts
         self._alert_failure: str | None = None
+        self._deviation_check = deviation_check
+        self._deviation_failure: str | None = None
         self._current_plan_ref: PlanRef | None = None
         self._degraded = False
         self._refresh_abandoned = False
@@ -116,14 +119,20 @@ class ControllerService:
                     durable_control, "recalculation_pending", False
                 ):
                     next_refresh = now
+                governed = not (
+                    durable_control is not None
+                    and not getattr(durable_control, "automatic_control_enabled", True)
+                )
+                # Ask whether the plan still serves the measured conditions
+                # before deciding to wait for the periodic cadence.
                 if (
-                    now >= next_refresh
+                    governed
                     and not self._refresh_abandoned
-                    and not (
-                        durable_control is not None
-                        and not getattr(durable_control, "automatic_control_enabled", True)
-                    )
+                    and now < next_refresh
+                    and self._deviation_detected(now)
                 ):
+                    next_refresh = now
+                if now >= next_refresh and not self._refresh_abandoned and governed:
                     plan, next_refresh = self._try_refresh(now, plan)
                 self._controller.apply(plan, now)
                 # Published every iteration, not only on refresh: refreshing can
@@ -228,6 +237,23 @@ class ControllerService:
             ),
             plan_ref=self._current_plan_ref,
         )
+
+    def _deviation_detected(self, now: datetime) -> bool:
+        """Whether the plan has stopped serving; never breaks the cycle."""
+        if self._deviation_check is None:
+            return False
+        try:
+            detected = bool(self._deviation_check(now))
+        except Exception as exc:  # noqa: BLE001 - the periodic cadence still runs
+            detail = str(exc)
+            if detail != self._deviation_failure:
+                logger.error("Could not evaluate the plan deviation: %s", detail)
+                self._deviation_failure = detail
+            return False
+        if self._deviation_failure is not None:
+            logger.info("Plan deviation evaluation recovered")
+            self._deviation_failure = None
+        return detected
 
     def _deliver_alerts(self) -> None:
         if self._alerts is None:

@@ -298,6 +298,30 @@ telemetría MQTT de cada acumulador se valida por separado y una muestra
 incompleta o de más de 15 minutos se marca como caducada y deja ese acumulador
 fuera del plan.
 
+La planificación se recalcula por cadencia, cada `max(replan_minutes,
+slot_minutes)` en un límite de slot, y también **por desviación**: en cada límite
+de slot el controlador reproyecta los intervalos restantes del plan con la
+temperatura interior y el SOC medidos, conservando sus decisiones de carga. El
+criterio no es una desviación en grados contra un umbral, sino el déficit que la
+reproyección revela: una desviación de dos grados que no compromete ninguna
+consigna no dispara nada, y una pequeña que sí la compromete replanifica en el
+acto para programar la carga adicional. El caso simétrico también dispara: unas
+condiciones más benignas de lo previsto dejan energía almacenada de sobra, que es
+carga que ya no hace falta. Ambas tolerancias
+(`deviation_shortfall_tolerance_c` y `deviation_surplus_soc_percent`) se
+configuran en Planificación, y se produce como máximo una replanificación por
+desviación por slot. La reproyección usa la función de paso del modelo físico, no
+el MILP, así que no consume presupuesto de solver.
+
+Un recálculo disparado por desviación que resulte `INVALID` **conserva el plan
+anterior**, porque es una comprobación adicional: dejar la instalación como
+estaba nunca es peor que no haber disparado. En ese caso se envía la alerta de
+replanificación imposible. Un recálculo periódico `INVALID` sí desactiva el plan,
+porque expresa que las entradas vigentes ya no sostienen ninguno. El sistema no
+mide la temperatura exterior, así que una previsión equivocada no se corrige: la
+realimentación es el interior y el SOC medidos, que basta para que el recálculo
+programe la carga que falta.
+
 La ventana y el horizonte se cuentan en horas de reloj de pared, y los límites de
 slot caen siempre en múltiplos de la duración de slot configurada. Los dos días
 del año en que cambia la hora, un horizonte de 24 horas cubre por tanto 25 horas

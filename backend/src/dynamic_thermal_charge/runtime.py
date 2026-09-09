@@ -26,6 +26,7 @@ from .alerts import (
     plan_recalculation_invalid_message,
 )
 from .charge_planning import INVALID, PLANNING_HORIZON_HOURS, DeterministicChargeOptimizer, PlanningInput, resolve_planning_telemetry
+from .plan_deviation import DeviationVerdict, SlotBoundaryGate, evaluate_plan_deviation
 from .models import AppConfig
 from .persistence import ConfigStoreError
 from .persistence.active_plan import SqlActivePlanRepository
@@ -189,6 +190,67 @@ def _run_controller(
                 config=config.weather.watchdog,
             )
 
+            # The verdict travels from the check to the refresh so the plan is
+            # persisted with its own reason, its audit values and the
+            # preservation of the previous plan.
+            pending_deviation: list[DeviationVerdict] = []
+            boundary_gate = SlotBoundaryGate()
+
+            def deviation_check(now: datetime) -> bool:
+                """Reproject the remaining plan once per slot boundary."""
+                live_config, _revision = store.repository.current()
+                slot_minutes = live_config.site.slot_minutes
+                if not boundary_gate.enter(now, slot_minutes):
+                    return False
+                planning_site = store.planning.site()
+                live_mqtt = _live_mqtt_settings(
+                    store, None if system is None else system.mqtt
+                )
+                persisted = (
+                    {}
+                    if live_mqtt is not None and not live_mqtt.enabled
+                    else store.planning.telemetry()
+                )
+                telemetry = resolve_planning_telemetry(
+                    live_config.heaters, persisted, now, mqtt=live_mqtt
+                )
+                verdict = evaluate_plan_deviation(
+                    store.planning.active_plan(),
+                    heaters=live_config.heaters,
+                    telemetry=telemetry,
+                    forecast=store.planning.latest_forecast(now),
+                    targets=_room_energy_targets(
+                        store,
+                        live_config,
+                        None if control_repository is None else control_repository.control_state(),
+                    ),
+                    at=now,
+                    slot_minutes=slot_minutes,
+                    timezone_name=(
+                        live_config.schedule.timezone
+                        if live_config.schedule is not None
+                        else "UTC"
+                    ),
+                    shortfall_tolerance_c=float(
+                        planning_site.get("deviation_shortfall_tolerance_c", 0.1)
+                    ),
+                    surplus_soc_percent=float(
+                        planning_site.get("deviation_surplus_soc_percent", 5.0)
+                    ),
+                )
+                if not verdict.replan:
+                    return False
+                pending_deviation.append(verdict)
+                del pending_deviation[:-1]
+                logger.info(
+                    "Recalculating early: %s for %s (planned %s, projected %s)",
+                    verdict.reason,
+                    verdict.heater_id,
+                    verdict.planned_value,
+                    verdict.projected_value,
+                )
+                return True
+
             def refresh_plan(now: datetime) -> PlanRefresh:
                 # Re-read the configuration each refresh so an edit takes effect
                 # on the next recalculation, never mid-plan (FR-039).
@@ -227,22 +289,9 @@ def _run_controller(
                     query_hour=int(planning_site["aemet_query_hour"]),
                     timezone_name=timezone_name,
                 )
-                room_energy_targets = {
-                    heater.id: tuple(getattr(heater, "temperature_targets", ()))
-                    for heater in live_config.heaters
-                    if heater.enabled and (
-                        control is None or control.heater_enabled(heater.id)
-                    )
-                }
-                if hasattr(store.planning, "temperature_targets"):
-                    persisted_targets = store.planning.temperature_targets()
-                    room_energy_targets.update(
-                        {
-                            heater_id: tuple(targets)
-                            for heater_id, targets in persisted_targets.items()
-                            if control is None or control.heater_enabled(heater_id)
-                        }
-                    )
+                room_energy_targets = _room_energy_targets(
+                    store, live_config, control
+                )
                 # Every enabled heater is now governed by the room-energy
                 # planner.  An empty target map is an explicit invalid input,
                 # not a reason to fall back to percentage planning.
@@ -263,12 +312,19 @@ def _run_controller(
                         mqtt=live_mqtt,
                     )
                     if automatic is not None:
+                        deviation = (
+                            pending_deviation.pop() if pending_deviation else None
+                        )
                         store.planning.save_plan(
                             automatic[0],
                             configuration_revision=live_revision,
                             constraints_revision=planning_site["revision"],
-                            reason="periodic",
+                            reason="periodic" if deviation is None else "deviation",
                             active=automatic[0].status != "INVALID",
+                            preserve_active=deviation is not None,
+                            audit_details=(
+                                None if deviation is None else deviation.audit_details()
+                            ),
                         )
                         logger.debug(
                             "Automatic plan persisted: status=%s slots=%d violations=%d",
@@ -281,6 +337,7 @@ def _run_controller(
                             automatic[0],
                             installation=store.repository.installation_name(),
                             at=now,
+                            previous_plan_preserved=deviation is not None,
                         )
                         return PlanRefresh(
                             plan=automatic[1],
@@ -380,6 +437,7 @@ def _run_controller(
                     else control_repository.mark_recalculation_processed
                 ),
                 alerts=alerts,
+                deviation_check=deviation_check,
             )
             return service.run()
         finally:
@@ -477,6 +535,24 @@ def _build_automatic_runtime_plan(
         allocated,
         _aggregate_unmet_minutes(config, plan.deficits),
     )
+
+
+def _room_energy_targets(store, config: AppConfig, control=None) -> dict:
+    """The weekly targets in force, with the persisted schedule winning."""
+    targets = {
+        heater.id: tuple(getattr(heater, "temperature_targets", ()))
+        for heater in config.heaters
+        if heater.enabled and (control is None or control.heater_enabled(heater.id))
+    }
+    if hasattr(store.planning, "temperature_targets"):
+        targets.update(
+            {
+                heater_id: tuple(persisted)
+                for heater_id, persisted in store.planning.temperature_targets().items()
+                if control is None or control.heater_enabled(heater_id)
+            }
+        )
+    return targets
 
 
 def _build_alert_service(store) -> AlertService | None:
