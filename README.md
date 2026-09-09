@@ -198,6 +198,33 @@ las entidades con la misma disponibilidad en un único mensaje por dispositivo;
 las entidades que requieren además `state_available` mantienen su disponibilidad
 individual.
 
+### Alertas por email
+
+El panel configura el envío de alertas en Configuración → Integraciones →
+Alertas por email: activación, servidor SMTP, puerto, cifrado (`starttls`, `tls`
+o ninguno), remitente, destinatarios y tiempo de espera. El usuario y la
+contraseña SMTP se guardan como secretos de la configuración de sistema, igual
+que la clave de AEMET y las credenciales MQTT, así que la API informa de si
+están configurados pero nunca devuelve su valor; no hay ninguna variable de
+entorno nueva. Activar el envío exige servidor, remitente y al menos un
+destinatario, y las credenciales son opcionales porque un relé sin autenticación
+es legítimo. Un botón envía un correo de prueba con la configuración vigente,
+para no descubrir un servidor mal configurado la primera vez que hiciera falta
+una alerta.
+
+Cada tipo de alerta del catálogo se puede silenciar por separado. Un aviso se
+envía **una vez por episodio**: al entrar en la condición y otra vez solo cuando
+se ha resuelto y vuelve a ocurrir; el estado de rearme se persiste, así que un
+reinicio no reenvía lo ya avisado. Los avisos se encolan de forma duradera y se
+entregan desde el ciclo del controlador con reintentos y espera creciente, de
+modo que sobreviven a un reinicio y un fallo de correo nunca interrumpe el
+control ni el accionamiento de las salidas.
+
+La primera alerta del catálogo avisa de una **replanificación imposible**: un
+recálculo que devuelve `INVALID`. El correo identifica la instalación, el
+instante, la causa y la consecuencia, que es quedarse sin plan activo cuando el
+recálculo periódico lo desactiva.
+
 ### Topics MQTT de lectura y escritura
 
 El prefijo MQTT de la instalación es `<prefijo>/installation` (por defecto,

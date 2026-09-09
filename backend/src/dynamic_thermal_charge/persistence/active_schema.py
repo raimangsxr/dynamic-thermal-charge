@@ -19,8 +19,8 @@ from .topology import BootstrapCorruptError, BootstrapIncompatibleError
 from . import SchemaStatus, SchemaVersionError
 
 
-CONFIGURATION_SCHEMA_REVISION = 13
-APPLICATION_SCHEMA_REVISION = 7
+CONFIGURATION_SCHEMA_REVISION = 14
+APPLICATION_SCHEMA_REVISION = 8
 POSTGRES_CONFIGURATION_SCHEMA = "dtc_config"
 POSTGRES_APPLICATION_SCHEMA = "dtc_app"
 
@@ -269,6 +269,11 @@ def _upgrade_application_schema(engine: Engine, revision: int, expected: int) ->
                     text("ALTER TABLE automatic_plan_slot ADD COLUMN heat_limit_json TEXT NOT NULL DEFAULT '{}'")
                 )
         revision = 7
+    if revision == 7 and expected >= 8:
+        from .schema import alert_delivery, alert_episode
+
+        application_metadata.create_all(engine, tables=[alert_delivery, alert_episode])
+        revision = 8
     if revision != expected:
         raise BootstrapIncompatibleError(
             f"application schema revision {revision} has no registered upgrade path to {expected}"
@@ -565,6 +570,25 @@ def _upgrade_configuration_schema(engine: Engine, revision: int, expected: int) 
                     text("ALTER TABLE heater_charge_config ADD COLUMN setpoint_topic VARCHAR(512)")
                 )
         revision = 13
+    if revision == 13 and expected >= 14:
+        from .schema import alert_type_config
+
+        system_columns = {
+            column["name"]
+            for column in inspect(engine).get_columns("system_configuration")
+        }
+        with engine.begin() as connection:
+            if "email_json" not in system_columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE system_configuration ADD COLUMN email_json TEXT "
+                        "NOT NULL DEFAULT '{\"enabled\":false,\"host\":null,"
+                        "\"port\":587,\"recipients\":[],\"security\":\"starttls\","
+                        "\"sender\":null,\"timeout_seconds\":10.0}'"
+                    )
+                )
+        configuration_metadata.create_all(engine, tables=[alert_type_config])
+        revision = 14
     if revision != expected:
         raise BootstrapIncompatibleError(
             f"configuration schema revision {revision} has no registered upgrade path to {expected}"

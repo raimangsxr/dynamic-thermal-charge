@@ -391,7 +391,7 @@ export interface RelayTestHeaterDto { id: string; name: string; position: number
 export interface RelayTestViewDto { session: { id: string; status: 'starting' | 'active' | 'ending' | 'ended' | 'failed'; owner: boolean; requested_at: string; activated_at: string | null; ended_at: string | null; lease_expires_at: string | null; end_reason: string | null } | null; controller: { state_is_current: boolean; last_seen_at: string | null }; safety: { automatic_control_blocked: boolean; fault_latched: boolean; fault_session_id: string | null; fault_reason: string | null; fault_latched_at: string | null; fault_recovery_attempted_at: string | null; fault_recovered_at: string | null }; audit: { degraded: boolean; degraded_since: string | null }; state_poll_seconds?: number; lease_renew_seconds?: number; heaters: RelayTestHeaterDto[]; }
 export interface RelayTestStartDto { session_id: string; client_credential: string; status: string; lease_expires_at: string; state_poll_seconds: number; lease_renew_seconds: number; }
 
-export type SystemSection = 'database' | 'api' | 'mqtt' | 'weather' | 'output' | 'logging' | 'operations';
+export type SystemSection = 'database' | 'api' | 'mqtt' | 'weather' | 'output' | 'logging' | 'operations' | 'email';
 export type ActivationPolicy = 'hot' | 'next_cycle' | 'restart';
 export interface SecretStatusDto { configured: boolean; rotated_at: string | null; }
 export interface SystemConfigurationDto {
@@ -466,4 +466,15 @@ export interface ApiErrorDto {
   message: string;
   field: string | null;
   heater_id: string | null;
+}
+
+export interface AlertTypeDto {
+  name: string;
+  title: string;
+  description: string;
+  enabled: boolean;
+}
+
+export interface AlertCatalogueDto {
+  alerts: AlertTypeDto[];
 }

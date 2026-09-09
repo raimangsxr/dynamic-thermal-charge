@@ -14,6 +14,7 @@ import { Injectable, inject } from '@angular/core';
 import type { Observable } from 'rxjs';
 
 import type {
+  AlertCatalogueDto,
   AddHeaterRequest,
   UpdateHeaterRequest,
   ChangeDto,
@@ -71,6 +72,15 @@ export class Api {
     });
   }
 
+  alertCatalogue(): Observable<AlertCatalogueDto> {
+    return this.http.get<AlertCatalogueDto>(`${BASE}/system/alerts`);
+  }
+  setAlertEnabled(name: string, enabled: boolean): Observable<AlertCatalogueDto> {
+    return this.http.patch<AlertCatalogueDto>(`${BASE}/system/alerts/${encodeURIComponent(name)}`, { enabled });
+  }
+  testEmail(): Observable<{ ok: boolean; host: string | null; port: number }> {
+    return this.http.post<{ ok: boolean; host: string | null; port: number }>(`${BASE}/system/tests/email`, {});
+  }
   planningHeaterTopics(heaterId: string, body: { damper_topic?: string | null; setpoint_topic?: string | null }): Observable<PlanningDto> {
     return this.http.patch<PlanningDto>(`${BASE}/planning/heaters/${encodeURIComponent(heaterId)}`, body);
   }

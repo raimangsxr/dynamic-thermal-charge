@@ -69,6 +69,7 @@ class ControllerService:
         heartbeat: HeartbeatPublisher | None = None,
         control_state: Callable[[], object] | None = None,
         mark_recalculation_processed: Callable[[int], None] | None = None,
+        alerts=None,
     ) -> None:
         self._controller = controller
         self._store = store
@@ -82,6 +83,8 @@ class ControllerService:
         self._heartbeat = heartbeat
         self._control_state = control_state
         self._mark_recalculation_processed = mark_recalculation_processed
+        self._alerts = alerts
+        self._alert_failure: str | None = None
         self._current_plan_ref: PlanRef | None = None
         self._degraded = False
         self._refresh_abandoned = False
@@ -127,6 +130,10 @@ class ControllerService:
                 # be hours apart, and a dead controller would look alive for all
                 # of it. Never raises, by contract.
                 self._publish_heartbeat(now)
+                # Alert delivery is the last thing in the cycle and can never
+                # affect it: the conditions that raise an alert are exactly the
+                # ones where the loop must keep running.
+                self._deliver_alerts()
                 cycles += 1
                 if max_cycles is None or cycles < max_cycles:
                     self._wait(self._poll_seconds)
@@ -221,6 +228,21 @@ class ControllerService:
             ),
             plan_ref=self._current_plan_ref,
         )
+
+    def _deliver_alerts(self) -> None:
+        if self._alerts is None:
+            return
+        try:
+            self._alerts.deliver_pending()
+        except Exception as exc:  # noqa: BLE001 - never break the control loop
+            detail = str(exc)
+            if detail != self._alert_failure:
+                logger.error("Could not deliver queued alerts: %s", detail)
+                self._alert_failure = detail
+            return
+        if self._alert_failure is not None:
+            logger.info("Alert delivery recovered")
+            self._alert_failure = None
 
     def _prune_history(self, now: datetime) -> None:
         if self._history is None:

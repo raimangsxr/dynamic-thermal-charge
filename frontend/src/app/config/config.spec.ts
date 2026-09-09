@@ -66,6 +66,7 @@ function systemConfigurationDto(overrides: Partial<SystemConfigurationDto> = {})
       output: { driver: 'simulated' },
       logging: { level: 'INFO', max_events: 1000 },
       operations: { controller_poll_seconds: 5, heartbeat_stale_multiplier: 3, relay_test_lease_seconds: 30, relay_test_state_poll_seconds: 1, relay_test_lease_renew_seconds: 10, retention_days: 365, fallback_max_age_minutes: 1440 },
+      email: { enabled: false, host: null, port: 587, security: 'starttls', sender: null, recipients: [], timeout_seconds: 10 },
     },
     secrets: { mqtt_password: { configured: false, rotated_at: null }, aemet_api_key: { configured: false, rotated_at: null } },
     activation: { 'mqtt.enabled': 'hot', 'database.driver': 'restart' },
@@ -523,6 +524,61 @@ describe('Config', () => {
   });
 
   /* --------------------------------------------------------------- CRUD */
+
+  it('reads the alert catalogue when the email section is selected and silences one alert', () => {
+    loadUnified();
+    fixture.componentInstance.chooseArea('integrations');
+    fixture.componentInstance.chooseIntegration('email');
+    backend.expectOne('/api/v1/system/alerts').flush({
+      alerts: [{ name: 'plan_recalculation_invalid', title: 'Replanificación imposible', description: 'x', enabled: true }],
+    });
+    fixture.detectChanges();
+    expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="alert-catalogue"]')).not.toBeNull();
+
+    fixture.componentInstance.toggleAlert('plan_recalculation_invalid', false);
+    const request = backend.expectOne('/api/v1/system/alerts/plan_recalculation_invalid');
+    expect(request.request.method).toBe('PATCH');
+    expect(request.request.body).toEqual({ enabled: false });
+    request.flush({
+      alerts: [{ name: 'plan_recalculation_invalid', title: 'Replanificación imposible', description: 'x', enabled: false }],
+    });
+
+    expect(fixture.componentInstance.alertCatalogue()[0].enabled).toBe(false);
+    // Selecting the section again does not re-read a catalogue it already has.
+    fixture.componentInstance.chooseIntegration('email');
+    backend.expectNone('/api/v1/system/alerts');
+  });
+
+  it('reports the outcome of the email test send', () => {
+    loadUnified();
+    fixture.componentInstance.testEmail();
+    backend.expectOne('/api/v1/system/tests/email').flush({ ok: true, host: 'smtp.example.org', port: 587 });
+    expect(fixture.componentInstance.emailTestMessage()).toContain('prueba');
+
+    fixture.componentInstance.testEmail();
+    backend.expectOne('/api/v1/system/tests/email').flush(
+      { code: 'connection_test_failed', message: 'email test failed (connection refused)' },
+      { status: 503, statusText: 'Service Unavailable' },
+    );
+    expect(fixture.componentInstance.emailTestError()).toContain('connection refused');
+  });
+
+  it('sends the email recipients as a list and a blank sender as absent', () => {
+    loadUnified();
+    fixture.componentInstance.chooseArea('integrations');
+    fixture.componentInstance.chooseIntegration('email');
+    backend.expectOne('/api/v1/system/alerts').flush({ alerts: [] });
+    fixture.componentInstance.systemEdit('email', 'recipients', 'uno@example.org, dos@example.org');
+    fixture.componentInstance.systemEdit('email', 'sender', '');
+    fixture.componentInstance.requestSystemSave('email');
+    fixture.componentInstance.confirmSystemSave();
+
+    const request = backend.expectOne('/api/v1/system/configuration/email');
+    expect(request.request.body.values).toMatchObject({
+      recipients: ['uno@example.org', 'dos@example.org'],
+      sender: null,
+    });
+  });
 
   it('creates an accumulator with the configuration revision', () => {
     load();

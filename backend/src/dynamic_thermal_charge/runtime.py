@@ -19,7 +19,13 @@ from zoneinfo import ZoneInfo
 from .controller import ChargeController
 from .drivers import OutputDriver, RecordingOutputDriver, SimulatedOutputDriver
 from .gpio_driver import GpioOutputDriver
-from .charge_planning import PLANNING_HORIZON_HOURS, DeterministicChargeOptimizer, PlanningInput, resolve_planning_telemetry
+from .alerts import (
+    PLAN_RECALCULATION_INVALID,
+    AlertService,
+    build_alert_service,
+    plan_recalculation_invalid_message,
+)
+from .charge_planning import INVALID, PLANNING_HORIZON_HOURS, DeterministicChargeOptimizer, PlanningInput, resolve_planning_telemetry
 from .models import AppConfig
 from .persistence import ConfigStoreError
 from .persistence.active_plan import SqlActivePlanRepository
@@ -140,6 +146,7 @@ def _run_controller(
         location=store.location,
     )
     indoor_fallback = _IndoorFallbackTracker()
+    alerts = _build_alert_service(store)
     driver: OutputDriver | None = None
     service: ControllerService | None = None
     with _controlled_termination():
@@ -269,6 +276,12 @@ def _run_controller(
                             len(automatic[0].slots),
                             len(automatic[0].violations),
                         )
+                        _notify_recalculation_result(
+                            alerts,
+                            automatic[0],
+                            installation=store.repository.installation_name(),
+                            at=now,
+                        )
                         return PlanRefresh(
                             plan=automatic[1],
                             next_refresh_seconds=_seconds_to_next_replan(
@@ -366,6 +379,7 @@ def _run_controller(
                     if control_repository is None
                     else control_repository.mark_recalculation_processed
                 ),
+                alerts=alerts,
             )
             return service.run()
         finally:
@@ -463,6 +477,52 @@ def _build_automatic_runtime_plan(
         allocated,
         _aggregate_unmet_minutes(config, plan.deficits),
     )
+
+
+def _build_alert_service(store) -> AlertService | None:
+    """The controller must start even if alerts cannot be wired."""
+    try:
+        return build_alert_service(store)
+    except Exception:  # noqa: BLE001
+        logger.exception("Could not initialise email alerts; continuing without them")
+        return None
+
+
+def _notify_recalculation_result(
+    alerts,
+    plan,
+    *,
+    installation: str,
+    at: datetime,
+    previous_plan_preserved: bool = False,
+) -> None:
+    """Raise or rearm the alert for a recalculation that produced no plan.
+
+    A periodic `INVALID` deactivates the previous plan on purpose, so the
+    installation is left without one; that is the condition the operator has to
+    learn about without reading the log.
+    """
+    if alerts is None:
+        return
+    try:
+        if plan.status != INVALID:
+            alerts.clear_alert(PLAN_RECALCULATION_INVALID)
+            return
+        violation = next(iter(plan.violations), None)
+        subject, body = plan_recalculation_invalid_message(
+            installation=installation,
+            at=at,
+            reason="desconocida" if violation is None else violation.reason,
+            detail=(
+                "El recálculo no pudo producir un plan ejecutable."
+                if violation is None
+                else f"{violation.requirement}: {violation.reason}"
+            ),
+            previous_plan_preserved=previous_plan_preserved,
+        )
+        alerts.raise_alert(PLAN_RECALCULATION_INVALID, subject=subject, body=body)
+    except Exception:  # noqa: BLE001 - alerting can never break a refresh
+        logger.exception("Could not raise the recalculation alert")
 
 
 def _aggregate_unmet_minutes(config: AppConfig, violations) -> dict[str, int]:

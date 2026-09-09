@@ -24,6 +24,7 @@ import { forkJoin } from 'rxjs';
 
 import { Api } from '../core/api';
 import type {
+  AlertTypeDto,
   AddHeaterRequest,
   ApiErrorDto,
   ConfigDto,
@@ -46,7 +47,7 @@ import { confirmationText, needsConfirmation } from './electrical-fields';
 import { ParamHelp } from '../shared/param-help/param-help';
 
 type ConfigArea = 'summary' | 'installation' | 'heaters' | 'planning' | 'integrations' | 'service';
-type IntegrationSection = 'mqtt' | 'weather';
+type IntegrationSection = 'mqtt' | 'weather' | 'email';
 type ServiceSection = 'database' | 'api' | 'output' | 'logging' | 'operations';
 
 interface FormEdit { readonly field: string; readonly value: string; }
@@ -175,6 +176,12 @@ const HEATER_FORM_GROUPS = [
   { title: 'Salida y telemetría', fields: ['output', 'pin', 'active_high', 'telemetry_topic'] },
 ] as const;
 
+const EMAIL_SECURITY_MODES: readonly Option[] = [
+  { value: 'starttls', label: 'STARTTLS' },
+  { value: 'tls', label: 'TLS' },
+  { value: 'none', label: 'Sin cifrado' },
+];
+
 const WEATHER_PROVIDERS: readonly Option[] = [
   { value: 'aemet', label: 'AEMET' },
   { value: 'simulated', label: 'Simulada' },
@@ -231,6 +238,15 @@ const SYSTEM_FIELDS: Record<SystemSection, readonly FieldDefinition[]> = {
     { name: 'fixed_stored_soc_percent', label: 'SOC almacenado fijo (%)', type: 'number', min: '0', max: '100', step: '1' },
     { name: 'fixed_indoor_temperature_c', label: 'Temperatura interior fija (°C)', type: 'number', step: '0.1' },
   ],
+  email: [
+    { name: 'enabled', label: 'Activar alertas por email', type: 'boolean', hint: 'Al activarlas, el servidor, el remitente y al menos un destinatario son obligatorios.' },
+    { name: 'host', label: 'Servidor SMTP', type: 'text' },
+    { name: 'port', label: 'Puerto SMTP', type: 'number', min: '1', max: '65535', step: '1' },
+    { name: 'security', label: 'Cifrado', type: 'select', options: EMAIL_SECURITY_MODES },
+    { name: 'sender', label: 'Remitente', type: 'text' },
+    { name: 'recipients', label: 'Destinatarios', type: 'text', hint: 'Separa varias direcciones con comas.' },
+    { name: 'timeout_seconds', label: 'Tiempo de espera (s)', type: 'number', min: '1', step: '1' },
+  ],
   weather: [
     { name: 'provider', label: 'Proveedor meteorológico', type: 'select', options: WEATHER_PROVIDERS },
     { name: 'municipality_code', label: 'Código de municipio AEMET', type: 'text', hint: 'Código INE de 5 dígitos.' },
@@ -263,6 +279,7 @@ const SECTION_LABELS: Record<SystemSection, string> = {
   api: 'Acceso al panel',
   mqtt: 'MQTT',
   weather: 'Meteorología',
+  email: 'Alertas por email',
   output: 'Salidas físicas',
   logging: 'Registros',
   operations: 'Operación',
@@ -271,6 +288,8 @@ const SECTION_LABELS: Record<SystemSection, string> = {
 const SECRET_LABELS: Record<string, string> = {
   admin_token_digest: 'Credencial de administrador',
   postgres_username: 'Usuario PostgreSQL',
+  smtp_username: 'Usuario SMTP',
+  smtp_password: 'Contraseña SMTP',
   postgres_password: 'Contraseña PostgreSQL',
   mqtt_username: 'Usuario MQTT',
   mqtt_password: 'Contraseña MQTT',
@@ -316,7 +335,7 @@ export class Config {
     { id: 'integrations', label: 'Integraciones', description: 'MQTT y meteorología' },
     { id: 'service', label: 'Servicio', description: 'Acceso, datos y operación' },
   ] as const;
-  readonly integrationSections: readonly IntegrationSection[] = ['mqtt', 'weather'];
+  readonly integrationSections: readonly IntegrationSection[] = ['mqtt', 'weather', 'email'];
   readonly serviceSections: readonly ServiceSection[] = ['database', 'api', 'output', 'logging', 'operations'];
   readonly heaterFormGroups = HEATER_FORM_GROUPS;
   readonly installationGroups = INSTALLATION_GROUPS;
@@ -364,7 +383,12 @@ export class Config {
   constructor() { this.load(); }
 
   chooseArea(area: ConfigArea): void { this.activeArea.set(area); }
-  chooseIntegration(section: IntegrationSection): void { this.activeIntegrationSection.set(section); }
+  chooseIntegration(section: IntegrationSection): void {
+    this.activeIntegrationSection.set(section);
+    // The catalogue is only needed by the alert section, so it is read on
+    // demand instead of on every panel load.
+    if (section === 'email' && !this.alertCatalogue().length) this.loadAlertCatalogue();
+  }
   chooseService(section: ServiceSection): void { this.activeServiceSection.set(section); }
 
   areaIs(area: ConfigArea): boolean { return this.activeArea() === area; }
@@ -440,6 +464,44 @@ export class Config {
   }
   canonicalPower(): number | null { return this.planningConfig()?.contracted_power_w ?? null; }
   enabledText(value: unknown): string { return value === true || value === 'true' ? 'Activado' : 'Desactivado'; }
+  readonly alertCatalogue = signal<AlertTypeDto[]>([]);
+  readonly alertSaving = signal<string | null>(null);
+  readonly alertError = signal('');
+  readonly emailTestLoading = signal(false);
+  readonly emailTestMessage = signal('');
+  readonly emailTestError = signal('');
+
+  loadAlertCatalogue(): void {
+    this.alertError.set('');
+    this.api.alertCatalogue().subscribe({
+      next: (dto) => this.alertCatalogue.set(dto.alerts),
+      error: () => this.alertError.set('No se pudo leer el catálogo de alertas.'),
+    });
+  }
+
+  toggleAlert(name: string, enabled: boolean): void {
+    this.alertSaving.set(name);
+    this.alertError.set('');
+    this.api.setAlertEnabled(name, enabled).subscribe({
+      next: (dto) => { this.alertSaving.set(null); this.alertCatalogue.set(dto.alerts); },
+      error: () => { this.alertSaving.set(null); this.alertError.set('No se pudo cambiar la activación de la alerta.'); },
+    });
+  }
+
+  testEmail(): void {
+    this.emailTestLoading.set(true);
+    this.emailTestMessage.set('');
+    this.emailTestError.set('');
+    this.api.testEmail().subscribe({
+      next: () => { this.emailTestLoading.set(false); this.emailTestMessage.set('Mensaje de prueba entregado al servidor de correo.'); },
+      error: (error: unknown) => {
+        this.emailTestLoading.set(false);
+        const body = error instanceof HttpErrorResponse ? error.error as { message?: unknown } : null;
+        this.emailTestError.set(typeof body?.message === 'string' ? body.message : 'No se pudo enviar el mensaje de prueba.');
+      },
+    });
+  }
+
   systemValue(section: SystemSection, field: string): unknown {
     const key = this.systemKey(section, field);
     return this.systemDraft()[key] ?? this.configuration()?.sections[section]?.[field] ?? '';
@@ -483,7 +545,7 @@ export class Config {
   }
   secrets(section: SystemSection): string[] {
     if (section === 'mqtt' && !this.mqttEnabled()) return [];
-    return ({ api: ['admin_token_digest'], database: ['postgres_username', 'postgres_password'], mqtt: ['mqtt_username', 'mqtt_password'], weather: ['aemet_api_key'] } as Partial<Record<SystemSection, string[]>>)[section] ?? [];
+    return ({ api: ['admin_token_digest'], database: ['postgres_username', 'postgres_password'], mqtt: ['mqtt_username', 'mqtt_password'], weather: ['aemet_api_key'], email: ['smtp_username', 'smtp_password'] } as Partial<Record<SystemSection, string[]>>)[section] ?? [];
   }
   secretAction(name: string): SecretEditDto['action'] { return this.secretActions()[name] ?? 'keep'; }
   setSecretAction(name: string, action: SecretEditDto['action']): void {
@@ -816,8 +878,8 @@ export class Config {
     });
   }
   private coerce(field: FieldDefinition, value: unknown): unknown {
-    if (field.name === 'cors_origins') return String(value).split(',').map((item) => item.trim()).filter(Boolean);
-    if (value === '' && ['host', 'database', 'municipality_code', 'stale_seconds', 'retention_days'].includes(field.name)) return null;
+    if (field.name === 'cors_origins' || field.name === 'recipients') return String(value).split(',').map((item) => item.trim()).filter(Boolean);
+    if (value === '' && ['host', 'database', 'municipality_code', 'stale_seconds', 'retention_days', 'sender'].includes(field.name)) return null;
     if (field.type === 'number') return Number(value);
     if (field.type === 'boolean') return value === true || value === 'true';
     return String(value);

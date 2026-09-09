@@ -53,6 +53,7 @@ KNOWN_REVISIONS: tuple[str, ...] = (
     "0017_group_mqtt_telemetry",
     "0018_soc_dependent_emission",
     "0019_discharge_setpoint_topic",
+    "0020_email_alerts",
 )
 EXPECTED_REVISION = KNOWN_REVISIONS[-1]
 

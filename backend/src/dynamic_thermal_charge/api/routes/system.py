@@ -12,6 +12,12 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 
+from ...alerts import (
+    ALERT_TYPES_BY_NAME,
+    AlertDeliveryError,
+    alert_catalogue,
+    build_alert_service,
+)
 from ...persistence.bootstrap import Store
 from ...persistence.system_configuration import SecretAction, SecretMutation
 from ...persistence.locator import DatabaseDriver, DatabaseLocator
@@ -125,6 +131,69 @@ def update_configuration(
     response["revision"] = revision
     response["pending_restart"] = restart
     return response
+
+
+class AlertTypePatch(BaseModel):
+    enabled: bool
+
+
+@router.get("/alerts", responses={401: SYSTEM_ERRORS[401], 503: SYSTEM_ERRORS[503]})
+def alerts(store: Store = Depends(usable_store)) -> dict[str, object]:
+    """The alert catalogue with its per-type activation."""
+    return {"alerts": alert_catalogue(store.alerts.enabled_types())}
+
+
+@router.patch("/alerts/{name}", responses=SYSTEM_ERRORS)
+def update_alert(
+    name: str, payload: AlertTypePatch, store: Store = Depends(usable_store)
+) -> dict[str, object]:
+    if name not in ALERT_TYPES_BY_NAME:
+        raise ApiError(
+            422,
+            "invalid_configuration",
+            f"unknown alert type {name!r}; allowed: {', '.join(sorted(ALERT_TYPES_BY_NAME))}",
+        )
+    store.alerts.set_type_enabled(name, payload.enabled)
+    return {"alerts": alert_catalogue(store.alerts.enabled_types())}
+
+
+@router.post("/tests/email", responses=SYSTEM_ERRORS)
+def test_email(store: Store = Depends(usable_store)) -> dict[str, object]:
+    """Send one message with the live configuration, outside the catalogue.
+
+    A mail server configured wrong would otherwise be discovered the first time
+    an alert actually mattered.
+    """
+    email = store.system_configuration.current().configuration.email
+    if not email.deliverable:
+        raise ApiError(
+            422,
+            "connection_test_failed",
+            "email alerts are disabled or incompletely configured",
+        )
+    service = build_alert_service(store)
+    if service is None:
+        raise ApiError(
+            503, "connection_test_failed", "this store cannot deliver email"
+        )
+    try:
+        service.send_test_message(
+            "Prueba de alertas de Dynamic Thermal Charge",
+            "Este mensaje confirma que la configuración de correo puede entregar alertas.",
+        )
+    except AlertDeliveryError as exc:
+        store.system_configuration.record_audit(
+            actor="api", action="connection_test", section="email",
+            fields=("host", "port"), result="rejected",
+        )
+        raise ApiError(
+            503, "connection_test_failed", f"email test failed ({exc})"
+        ) from exc
+    store.system_configuration.record_audit(
+        actor="api", action="connection_test", section="email",
+        fields=("host", "port"), result="succeeded",
+    )
+    return {"ok": True, "driver": "email", "host": email.host, "port": email.port}
 
 
 @router.post("/tests/database", responses=SYSTEM_ERRORS)

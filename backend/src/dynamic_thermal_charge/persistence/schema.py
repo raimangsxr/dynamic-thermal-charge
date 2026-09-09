@@ -467,6 +467,36 @@ preview_job = Table(
     Index("ix_preview_job_installation_requested", "installation_id", "requested_at"),
 )
 
+alert_delivery = Table(
+    "alert_delivery",
+    application_metadata,
+    Column("id", Integer, primary_key=True),
+    Column("installation_id", Integer, nullable=False),
+    Column("alert_type", String(64), nullable=False),
+    Column("subject", String(512), nullable=False),
+    Column("body", Text, nullable=False),
+    Column("status", String(16), nullable=False, server_default="pending"),
+    Column("attempts", Integer, nullable=False, server_default="0"),
+    Column("next_attempt_at", DateTime, nullable=False),
+    Column("created_at", DateTime, nullable=False),
+    Column("sent_at", DateTime, nullable=True),
+    Column("last_error", String(512), nullable=True),
+    CheckConstraint(
+        "status IN ('pending', 'sent', 'failed')", name="ck_alert_delivery_status"
+    ),
+    CheckConstraint("attempts >= 0", name="ck_alert_delivery_attempts"),
+)
+alert_episode = Table(
+    "alert_episode",
+    application_metadata,
+    Column("id", Integer, primary_key=True),
+    Column("installation_id", Integer, nullable=False),
+    Column("alert_type", String(64), nullable=False),
+    Column("active", Boolean, nullable=False, server_default="0"),
+    Column("since", DateTime, nullable=True),
+    Column("last_enqueued_at", DateTime, nullable=True),
+    UniqueConstraint("installation_id", "alert_type", name="uq_alert_episode"),
+)
 preview_job_step = Table(
     "preview_job_step",
     application_metadata,
@@ -777,6 +807,17 @@ system_configuration = Table(
     Column("output_json", Text, nullable=False),
     Column("logging_json", Text, nullable=False),
     Column("operations_json", Text, nullable=False),
+    # An installation configured before alerts existed reads this default, so
+    # sending stays disabled until somebody configures it.
+    Column(
+        "email_json",
+        Text,
+        nullable=False,
+        server_default=(
+            '{"enabled":false,"host":null,"port":587,"recipients":[],'
+            '"security":"starttls","sender":null,"timeout_seconds":10.0}'
+        ),
+    ),
     Column("created_at", DateTime, nullable=False),
     Column("updated_at", DateTime, nullable=False),
     CheckConstraint("revision >= 1", name="ck_system_configuration_revision"),
@@ -791,6 +832,12 @@ system_secret = Table(
     CheckConstraint(
         "kind IN ('digest', 'recoverable')", name="ck_system_secret_kind"
     ),
+)
+alert_type_config = Table(
+    "alert_type_config",
+    configuration_metadata,
+    Column("name", String(64), primary_key=True),
+    Column("enabled", Boolean, nullable=False, server_default="1"),
 )
 system_audit_event = Table(
     "system_audit_event",
@@ -917,6 +964,18 @@ CONSTRAINT_FIELDS: dict[str, tuple[str, str]] = {
     "ck_room_heat_loss": (
         "room_heat_loss_kw_per_c",
         "room_heat_loss_kw_per_c must be non-negative",
+    ),
+    "ck_alert_delivery_status": (
+        "status",
+        "the alert delivery status must be pending, sent or failed",
+    ),
+    "ck_alert_delivery_attempts": (
+        "attempts",
+        "the alert delivery attempts must be non-negative",
+    ),
+    "uq_alert_episode": (
+        "alert_type",
+        "an alert type has a single episode per installation",
     ),
     "ck_temperature_target_range": (
         "target_temperature_c",
