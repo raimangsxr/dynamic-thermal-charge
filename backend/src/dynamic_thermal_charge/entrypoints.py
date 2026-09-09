@@ -246,6 +246,17 @@ def run_mqtt() -> None:
             status_reader=status_reader,
             clock=lambda: datetime.now(timezone.utc),
             charge_config_provider=store.planning.heater_charge_config,
+            plan_provider=store.planning.active_plan,
+            control_state_provider=(
+                None
+                if getattr(store, "home_assistant", None) is None
+                else store.home_assistant.control_state
+            ),
+            relay_test_provider=(
+                None
+                if getattr(store, "relay_tests", None) is None
+                else store.relay_tests.current
+            ),
         )
         transport = PahoMqttClient(settings)
 
@@ -265,6 +276,7 @@ def run_mqtt() -> None:
             snapshots,
             discovery=lambda: snapshots.discovery(topics, store.repository.installation_name()),
             subscriptions=all_subscriptions,
+            discharge=snapshots.discharge_commands,
         )
         commands = CommandProcessor(store.repository, topics, republish=publisher.republish_heater)
         charge_telemetry = ChargeTelemetryMessageProcessor(

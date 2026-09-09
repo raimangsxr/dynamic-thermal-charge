@@ -60,6 +60,10 @@ export class Api {
     return this.http.get<PlanningDto>(`${BASE}/planning`);
   }
 
+  planningHeaterTopics(heaterId: string, body: { damper_topic?: string | null; setpoint_topic?: string | null }): Observable<PlanningDto> {
+    return this.http.patch<PlanningDto>(`${BASE}/planning/heaters/${encodeURIComponent(heaterId)}`, body);
+  }
+
   planningConfig(): Observable<PlanningSiteConfigDto> {
     return this.http.get<PlanningSiteConfigDto>(`${BASE}/planning/config`);
   }

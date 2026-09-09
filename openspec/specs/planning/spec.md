@@ -137,6 +137,69 @@ basado en porcentajes.
 - **THEN** el resultado identifica la entrada ausente y no publica un plan
   automático basado en un valor supuesto
 
+### Requirement: Accionamiento de la descarga por MQTT
+
+El plan activo debe accionar la descarga de cada acumulador. Cuando el plan
+indica emisión en el intervalo vigente, el sistema publica la activación de la
+descarga en el topic de compuerta del acumulador y la temperatura objetivo
+vigente en su topic de consigna; cuando deja de indicarla, publica la
+desactivación y no publica consigna. La emisión está indicada mientras una
+consigna esté activa y también en un intervalo anterior sin consigna en el que
+el plan proyecte calor entregado, caso en el que la consigna publicada es la de
+la próxima consigna que motiva esa emisión.
+
+El mando activa o desactiva la descarga; no ordena abrir la compuerta. El
+termostato del acumulador la modula contra la consigna publicada, cerrándola al
+alcanzar el objetivo y abriéndola cuando la estancia se enfría. Una posición de
+compuerta cerrada recibida por telemetría mientras la descarga está activada no
+es una discrepancia y no genera alerta.
+
+Los mandos se reafirman en cada ciclo de publicación y no se publican con
+retención, de modo que el broker nunca entregue una orden obsoleta. Se publica
+la desactivación cuando no hay plan activo, el plan es `INVALID`, el control
+automático está desactivado, el acumulador está en modo `OFF`, hay una prueba de
+relés en curso o el estado del controlador no está vigente. Un acumulador sin
+topic de compuerta configurado no recibe mando y no impide el del resto. El
+estado publicado por acumulador debe distinguir la descarga comandada de la
+posición de compuerta recibida.
+
+#### Scenario: Consigna activa en el intervalo vigente
+
+- **WHEN** el plan activo tiene una consigna activa para un acumulador en el
+  intervalo que contiene el instante actual
+- **THEN** se publica la activación de su descarga y su consigna, sin retención
+
+#### Scenario: Fin del intervalo de consigna
+
+- **WHEN** termina el intervalo de consigna y el plan no proyecta calor para ese
+  acumulador
+- **THEN** se publica la desactivación de su descarga y no se publica consigna
+
+#### Scenario: Anticipación antes de una consigna
+
+- **WHEN** el plan proyecta calor entregado en un intervalo sin consigna activa
+- **THEN** se publica la activación de la descarga y la consigna de la próxima
+  ventana del plan
+
+#### Scenario: Compuerta cerrada con la descarga activada
+
+- **WHEN** la telemetría informa de una compuerta cerrada mientras la descarga
+  está activada
+- **THEN** el mando se mantiene y no se registra ni se publica discrepancia
+
+#### Scenario: Condición degradada
+
+- **WHEN** no hay plan activo, el plan es `INVALID`, el control automático está
+  desactivado, el acumulador está en modo `OFF`, hay una prueba de relés en curso
+  o el estado del controlador no está vigente
+- **THEN** se publica la desactivación de la descarga y no se publica consigna
+
+#### Scenario: Acumulador sin topic de compuerta
+
+- **WHEN** un acumulador no tiene topic de compuerta configurado
+- **THEN** no recibe mando alguno, la condición se registra una vez y el resto de
+  acumuladores del mismo ciclo reciben el suyo
+
 ### Requirement: Auditoría física del plan
 
 Las vistas previas, el plan activo, las explicaciones y el historial deben

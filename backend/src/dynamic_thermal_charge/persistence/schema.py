@@ -347,6 +347,7 @@ heater_charge_config = Table(
     Column("heater_id", String(64), primary_key=True),
     Column("control_mode", String(8), nullable=False, server_default="AUTO"),
     Column("damper_topic", String(512), nullable=True),
+    Column("setpoint_topic", String(512), nullable=True),
     UniqueConstraint("installation_id", "heater_id", name="uq_heater_charge_config"),
     CheckConstraint("control_mode IN ('AUTO', 'OFF')", name="ck_heater_control_mode"),
 )

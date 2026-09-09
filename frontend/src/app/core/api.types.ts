@@ -126,6 +126,8 @@ export interface PlanningHeaterDto {
   capacity_kwh: number;
   priority: number;
   enabled: boolean;
+  damper_topic?: string | null;
+  setpoint_topic?: string | null;
 }
 
 export interface PlanningSiteConfigDto {

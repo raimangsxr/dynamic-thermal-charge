@@ -58,6 +58,9 @@ class MqttService:
 
     def stop(self) -> None:
         if self._connected:
+            stop_discharge = getattr(self._publisher, "stop_discharge", None)
+            if callable(stop_discharge):
+                stop_discharge()
             for topic in (self._topics.state_available, self._topics.availability):
                 try:
                     self._client.publish(topic, "offline", qos=1, retain=True)
