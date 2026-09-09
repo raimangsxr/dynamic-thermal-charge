@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import json
 import math
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -65,12 +66,10 @@ def simulation_topics(
     heater: Heater,
     *,
     topic_prefix: str,
-) -> tuple[str, str]:
-    """Resolve the indoor-temperature and stored-SOC simulation topics."""
+) -> str:
+    """Resolve the grouped JSON telemetry topic for one heater."""
     prefix = topic_prefix.strip("/")
-    indoor = heater.indoor_topic or f"{prefix}/{heater.id}/indoor_temperature"
-    stored_soc = heater.stored_soc_topic or f"{prefix}/{heater.id}/stored_soc"
-    return indoor, stored_soc
+    return heater.telemetry_topic or f"{prefix}/{heater.id}/telemetry"
 
 
 def heater_telemetry_topics(
@@ -78,24 +77,19 @@ def heater_telemetry_topics(
     *,
     simulation: MqttSimulationConfig | None,
 ) -> dict[str, str]:
-    """Map MQTT topics to telemetry fields for one heater."""
+    """Return the one grouped MQTT topic accepted for one heater."""
     if simulation is not None and simulation.enabled:
-        indoor, stored_soc = simulation_topics(
+        topic = simulation_topics(
             heater,
             topic_prefix=simulation.topic_prefix,
         )
-        candidates = {
-            indoor: "indoor_temperature_c",
-            stored_soc: "stored_soc_percent",
-        }
+        return {topic: "telemetry"}
     else:
-        candidates = {
-            heater.indoor_topic: "indoor_temperature_c",
-            heater.stored_soc_topic: "stored_soc_percent",
-        }
-    return {
-        topic: field for topic, field in candidates.items() if topic is not None
-    }
+        return (
+            {heater.telemetry_topic: "telemetry"}
+            if heater.telemetry_topic is not None
+            else {}
+        )
 
 
 def simulation_subscription_topics(
@@ -111,7 +105,7 @@ def simulation_subscription_topics(
     for heater in heaters:
         if not heater.enabled:
             continue
-        topics.extend(heater_telemetry_topics(heater, simulation=config))
+        topics.extend(heater_telemetry_topics(heater, simulation=config).keys())
     return tuple(dict.fromkeys(topics))
 
 
@@ -168,7 +162,7 @@ class MqttPlanningSimulator:
                 elapsed_hours=elapsed_hours,
             )
             self._temperatures[heater.id] = current
-            indoor_topic, stored_soc_topic = simulation_topics(
+            telemetry_topic = simulation_topics(
                 heater,
                 topic_prefix=config.topic_prefix,
             )
@@ -179,13 +173,16 @@ class MqttPlanningSimulator:
                     stored_soc + elapsed_hours / heater.full_charge_time_hours * 100.0,
                 )
             self._stored_soc[heater.id] = stored_soc
-            messages = (
-                (indoor_topic, f"{current:.2f}"),
-                (stored_soc_topic, f"{stored_soc:.1f}"),
+            payload = json.dumps(
+                {
+                    "indoor_temperature_c": round(current, 2),
+                    "stored_soc_percent": round(stored_soc, 1),
+                },
+                sort_keys=True,
+                separators=(",", ":"),
             )
-            for topic, payload in messages:
-                self._publish(topic, payload)
-                published_messages.append(f"{topic}={payload}")
+            self._publish(telemetry_topic, payload)
+            published_messages.append(f"{telemetry_topic}={payload}")
             published_heaters += 1
         self._last_advanced_at = now
         if published_heaters:

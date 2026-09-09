@@ -27,6 +27,8 @@ class DiscoveryEntity:
     payload: dict[str, Any]
 
     def topic(self, topics: TopicLayout) -> str:
+        if self.component == "device":
+            return topics.device_discovery_topic(self.heater_id)
         return topics.discovery_topic(self.component, self.heater_id, self.entity)
 
 
@@ -97,6 +99,34 @@ def _entity(
     return DiscoveryEntity(key, component, heater_id, entity, payload)
 
 
+def _device_group(
+    *,
+    topics: TopicLayout,
+    key: str,
+    heater_id: str | None,
+    device_name: str,
+    state_topic: str,
+    members: list[DiscoveryEntity],
+) -> DiscoveryEntity:
+    components: dict[str, dict[str, Any]] = {}
+    for member in members:
+        component = dict(member.payload)
+        component.pop("device", None)
+        component.pop("state_topic", None)
+        component.pop("availability", None)
+        component.pop("availability_mode", None)
+        component["p"] = member.component
+        components[member.entity] = component
+    payload = {
+        "dev": _device(topics, device_name, heater_id),
+        "o": {"name": MANUFACTURER},
+        "cmps": components,
+        "state_topic": state_topic,
+        **_availability(topics, False),
+    }
+    return DiscoveryEntity(key, "device", heater_id, "device", payload)
+
+
 def discovery_entities(
     config: AppConfig,
     installation_name: str,
@@ -104,7 +134,7 @@ def discovery_entities(
 ) -> list[DiscoveryEntity]:
     """Return deterministic discovery definitions for the current inventory."""
     state = topics.installation_state
-    entities = [
+    installation_controller_entities = [
         _entity(
             topics=topics,
             key="installation_instant_power",
@@ -118,6 +148,20 @@ def discovery_entities(
             device_class="power",
             unit_of_measurement="W",
         ),
+        _entity(
+            topics=topics,
+            key="installation_percent_of_limit",
+            component="sensor",
+            entity="percent_of_limit",
+            name="Porcentaje del límite",
+            device_name=installation_name,
+            state_topic=state,
+            value="percent_of_limit",
+            controller_dependent=True,
+            unit_of_measurement="%",
+        ),
+    ]
+    installation_group_entities = [
         _entity(
             topics=topics,
             key="installation_window_start",
@@ -164,18 +208,6 @@ def discovery_entities(
         ),
         _entity(
             topics=topics,
-            key="installation_percent_of_limit",
-            component="sensor",
-            entity="percent_of_limit",
-            name="Porcentaje del límite",
-            device_name=installation_name,
-            state_topic=state,
-            value="percent_of_limit",
-            controller_dependent=True,
-            unit_of_measurement="%",
-        ),
-        _entity(
-            topics=topics,
             key="installation_power_limit",
             component="sensor",
             entity="power_limit",
@@ -210,6 +242,17 @@ def discovery_entities(
             payload_off=False,
         ),
     ]
+    entities = [
+        _device_group(
+            topics=topics,
+            key="installation_device",
+            heater_id=None,
+            device_name=installation_name,
+            state_topic=state,
+            members=installation_group_entities,
+        ),
+        *installation_controller_entities,
+    ]
     for heater in config.heaters:
         heater_state = topics.heater_state(heater.id)
         common = {
@@ -218,48 +261,46 @@ def discovery_entities(
             "device_name": heater.name,
             "state_topic": heater_state,
         }
-        entities.extend(
-            [
-                _entity(
-                    **common,
-                    key=f"heater_{heater.id}_output",
-                    component="binary_sensor",
-                    entity="output",
-                    name="Salida",
-                    value="output_on",
-                    controller_dependent=True,
-                    payload_on=True,
-                    payload_off=False,
-                ),
-                _entity(
-                    **common,
-                    key=f"heater_{heater.id}_power",
-                    component="sensor",
-                    entity="power",
-                    name="Potencia nominal",
-                    value="power_w",
-                    device_class="power",
-                    unit_of_measurement="W",
-                ),
-                _entity(
-                    **common,
-                    key=f"heater_{heater.id}_enabled",
-                    component="switch",
-                    entity="enabled",
-                    name="Habilitado",
-                    value="enabled",
-                    command_topic=topics.command(heater.id, "enabled"),
-                    payload_on="ON",
-                    payload_off="OFF",
-                ),
-            ]
+        controller_entity = _entity(
+            **common,
+            key=f"heater_{heater.id}_output",
+            component="binary_sensor",
+            entity="output",
+            name="Salida",
+            value="output_on",
+            controller_dependent=True,
+            payload_on=True,
+            payload_off=False,
         )
+        group_entities = [
+            _entity(
+                **common,
+                key=f"heater_{heater.id}_power",
+                component="sensor",
+                entity="power",
+                name="Potencia nominal",
+                value="power_w",
+                device_class="power",
+                unit_of_measurement="W",
+            ),
+            _entity(
+                **common,
+                key=f"heater_{heater.id}_enabled",
+                component="switch",
+                entity="enabled",
+                name="Habilitado",
+                value="enabled",
+                command_topic=topics.command(heater.id, "enabled"),
+                payload_on="ON",
+                payload_off="OFF",
+            ),
+        ]
         for field, label in (
             ("requested_minutes", "Minutos solicitados"),
             ("allocated_minutes", "Minutos asignados"),
             ("unmet_minutes", "Minutos no atendidos"),
         ):
-            entities.append(
+            group_entities.append(
                 _entity(
                     **common,
                     key=f"heater_{heater.id}_{field}",
@@ -270,6 +311,19 @@ def discovery_entities(
                     unit_of_measurement="min",
                 )
             )
+        entities.extend(
+            [
+                _device_group(
+                    topics=topics,
+                    key=f"heater_{heater.id}_device",
+                    heater_id=heater.id,
+                    device_name=heater.name,
+                    state_topic=heater_state,
+                    members=group_entities,
+                ),
+                controller_entity,
+            ]
+        )
     return entities
 
 

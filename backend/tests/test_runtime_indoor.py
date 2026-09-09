@@ -16,7 +16,7 @@ def _config():
     config = example_installation()
     return replace(
         config,
-        heaters=(replace(config.heaters[0], indoor_topic="ha/salon/temp"),),
+        heaters=(replace(config.heaters[0], telemetry_topic="ha/salon/telemetry"),),
     )
 
 

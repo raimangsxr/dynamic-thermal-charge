@@ -45,8 +45,7 @@ def _heater(heater_id: str = "salon", **topics: str) -> Heater:
         priority=0,
         output=OutputConfig(),
         enabled=True,
-        indoor_topic=topics.get("indoor_topic"),
-        stored_soc_topic=topics.get("stored_soc_topic"),
+        telemetry_topic=topics.get("telemetry_topic"),
     )
 
 
@@ -73,21 +72,12 @@ def test_temperature_to_stored_charge_percent_maps_between_bounds():
 
 def test_simulation_topics_use_prefix_when_heater_topics_missing():
     heater = _heater()
-    assert simulation_topics(heater, topic_prefix="dtc/sim") == (
-        "dtc/sim/salon/indoor_temperature",
-        "dtc/sim/salon/stored_soc",
-    )
+    assert simulation_topics(heater, topic_prefix="dtc/sim") == "dtc/sim/salon/telemetry"
 
 
 def test_simulation_topics_prefer_configured_heater_topics():
-    heater = _heater(
-        indoor_topic="custom/temp",
-        stored_soc_topic="custom/soc",
-    )
-    assert simulation_topics(heater, topic_prefix="dtc/sim") == (
-        "custom/temp",
-        "custom/soc",
-    )
+    heater = _heater(telemetry_topic="custom/telemetry")
+    assert simulation_topics(heater, topic_prefix="dtc/sim") == "custom/telemetry"
 
 
 def test_heater_telemetry_topics_use_simulation_prefix_when_enabled():
@@ -100,10 +90,7 @@ def test_heater_telemetry_topics_use_simulation_prefix_when_enabled():
         thermal_loss_c_per_hour=2.0,
     )
     topics = heater_telemetry_topics(heater, simulation=config)
-    assert topics == {
-        "dtc/sim/salon/indoor_temperature": "indoor_temperature_c",
-        "dtc/sim/salon/stored_soc": "stored_soc_percent",
-    }
+    assert topics == {"dtc/sim/salon/telemetry": "telemetry"}
 
 
 def test_simulation_subscription_topics_include_all_enabled_heaters():
@@ -116,11 +103,13 @@ def test_simulation_subscription_topics_include_all_enabled_heaters():
         site,
         mqtt_enabled=True,
     )
-    assert "dtc/sim/salon/indoor_temperature" in topics
-    assert "dtc/sim/entrada/stored_soc" in topics
+    assert topics == (
+        "dtc/sim/salon/telemetry",
+        "dtc/sim/entrada/telemetry",
+    )
 
 
-def test_simulator_logs_and_publishes_two_planning_topics_per_heater(caplog):
+def test_simulator_logs_and_publishes_one_grouped_topic_per_heater(caplog):
     import logging
 
     caplog.set_level(logging.INFO)
@@ -143,13 +132,12 @@ def test_simulator_logs_and_publishes_two_planning_topics_per_heater(caplog):
     )
     simulator.publish_cycle()
     topics = {topic for topic, _payload in client.publications}
-    assert topics == {
-        "dtc/sim/salon/indoor_temperature",
-        "dtc/sim/salon/stored_soc",
-    }
+    assert topics == {"dtc/sim/salon/telemetry"}
     assert "Published simulated telemetry for 1 heater(s)" in caplog.text
-    assert "dtc/sim/salon/indoor_temperature=45.00" in caplog.text
-    assert "dtc/sim/salon/stored_soc=50.0" in caplog.text
+    assert 'dtc/sim/salon/telemetry={"indoor_temperature_c":45.0,"stored_soc_percent":50.0}' in caplog.text
+    assert client.publications[0][1] == (
+        '{"indoor_temperature_c":45.0,"stored_soc_percent":50.0}'
+    )
 
 
 def test_simulator_supervisor_starts_only_when_enabled_and_mqtt_is_on():

@@ -62,5 +62,13 @@ class TopicLayout:
     ) -> str:
         return f"{self.discovery_prefix}/{component}/{self.unique_id(heater_id, entity)}/config"
 
+    def device_discovery_topic(self, heater_id: str | None = None) -> str:
+        device_id = (
+            self.installation_device_id
+            if heater_id is None
+            else self.heater_device_id(heater_id)
+        )
+        return f"{self.discovery_prefix}/device/{device_id}/config"
+
 
 __all__ = ["IDENTITY_NAMESPACE", "INSTALLATION_SEGMENT", "TopicLayout"]

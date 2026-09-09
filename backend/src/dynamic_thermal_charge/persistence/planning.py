@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 import json
+import math
 from typing import Any, Mapping
 from uuid import uuid4
 
@@ -116,7 +117,6 @@ class SqlPlanningRepository:
         allowed = {
             key: values[key]
             for key in (
-                "stored_soc_topic",
                 "damper_topic",
             )
             if key in values
@@ -234,6 +234,10 @@ class SqlPlanningRepository:
             raise ConfigValidationError(f"unknown telemetry field {field}", field=field, heater_id=heater_id)
         if received_at.tzinfo is None:
             raise ValueError("received_at requires a timezone")
+        if not math.isfinite(value):
+            raise ConfigValidationError(
+                "telemetry value must be finite", field=field, heater_id=heater_id
+            )
         if field == "stored_soc_percent" and not 0 <= value <= 100:
             raise ConfigValidationError("stored SOC must be between 0 and 100", field=field, heater_id=heater_id)
         if field == "damper_position_percent" and not 0 <= value <= 100:
@@ -252,8 +256,52 @@ class SqlPlanningRepository:
                 connection.execute(update(heater_telemetry).where((heater_telemetry.c.installation_id == self._installation_id) & (heater_telemetry.c.heater_id == heater_id)).values(**values))
 
     def invalidate_telemetry(self, heater_id: str, field: str, at: datetime) -> None:
+        invalid_field = field
+        aliases = {
+            "indoor_temperature_c": "temperature_c",
+            "stored_soc_percent": "stored_soc_percent",
+            "damper_position_percent": "damper_position_percent",
+        }
+        field = aliases.get(field, field)
+        if field not in {"temperature_c", "stored_soc_percent", "damper_position_percent"}:
+            raise ConfigValidationError(
+                f"unknown telemetry field {field}", field=field, heater_id=heater_id
+            )
+        timestamp = {
+            "temperature_c": "temperature_received_at",
+            "stored_soc_percent": "stored_soc_received_at",
+            "damper_position_percent": "damper_received_at",
+        }[field]
         with transaction(self._application, self._application_location) as connection:
-            connection.execute(update(heater_telemetry).where((heater_telemetry.c.installation_id == self._installation_id) & (heater_telemetry.c.heater_id == heater_id)).values(invalid_field=field, invalid_at=to_utc(at)))
+            row = connection.execute(
+                select(heater_telemetry).where(
+                    (heater_telemetry.c.installation_id == self._installation_id)
+                    & (heater_telemetry.c.heater_id == heater_id)
+                )
+            ).first()
+            values = {
+                field: None,
+                timestamp: None,
+                "invalid_field": invalid_field,
+                "invalid_at": to_utc(at),
+            }
+            if row is None:
+                connection.execute(
+                    insert(heater_telemetry).values(
+                        installation_id=self._installation_id,
+                        heater_id=heater_id,
+                        **values,
+                    )
+                )
+            else:
+                connection.execute(
+                    update(heater_telemetry)
+                    .where(
+                        (heater_telemetry.c.installation_id == self._installation_id)
+                        & (heater_telemetry.c.heater_id == heater_id)
+                    )
+                    .values(**values)
+                )
 
     def temperature_targets(self, *, enabled_only: bool = True) -> dict[str, tuple]:
         """Read the weekly target schedule used by room-energy planning."""

@@ -97,15 +97,17 @@ def test_a_heater_field_changes_only_that_heater(initialised_store):
             assert changed[heater.id] == heater, "an unrelated heater changed"
 
 
-def test_a_charge_field_changes_only_that_heater(initialised_store):
+def test_a_telemetry_topic_changes_only_that_heater(initialised_store):
     repository = initialised_store.repository
     before, revision = repository.current()
-    repository.set_field(revision, "heater", "salon", "stored_soc_topic", "ha/salon/soc")
+    repository.set_field(
+        revision, "heater", "salon", "telemetry_topic", "ha/salon/telemetry"
+    )
     after, _ = repository.current()
     changed = {heater.id: heater for heater in after.heaters}
     unchanged = {heater.id: heater for heater in before.heaters}
-    assert changed["salon"].stored_soc_topic == "ha/salon/soc"
-    assert changed["entrada"].stored_soc_topic == unchanged["entrada"].stored_soc_topic
+    assert changed["salon"].telemetry_topic == "ha/salon/telemetry"
+    assert changed["entrada"].telemetry_topic == unchanged["entrada"].telemetry_topic
 
 
 def test_disabling_a_heater_keeps_it_in_the_configuration(initialised_store):

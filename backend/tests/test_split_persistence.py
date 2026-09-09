@@ -12,6 +12,7 @@ from dynamic_thermal_charge.persistence.active_schema import (
     POSTGRES_APPLICATION_SCHEMA,
     POSTGRES_CONFIGURATION_SCHEMA,
     require_active_schemas,
+    upgrade_active_schemas,
 )
 from dynamic_thermal_charge.persistence.canonical_engines import (
     build_canonical_engines,
@@ -148,6 +149,63 @@ def test_independent_schema_version_failure_does_not_modify_the_other_store(spli
         assert connection.execute(
             select(application_schema_version.c.revision)
         ).scalar_one() == APPLICATION_SCHEMA_REVISION
+
+
+def test_active_schema_groups_old_indoor_and_soc_topics_without_inventing_one(
+    split_store,
+):
+    _paths, engines, repository = split_store
+    with engines.configuration.begin() as connection:
+        connection.execute(text("ALTER TABLE heater ADD COLUMN indoor_topic VARCHAR(512)"))
+        connection.execute(
+            text(
+                "ALTER TABLE heater_charge_config "
+                "ADD COLUMN stored_soc_topic VARCHAR(512)"
+            )
+        )
+        connection.execute(
+            text(
+                "UPDATE heater SET indoor_topic = 'ha/shared' "
+                "WHERE heater_id = 'salon'"
+            )
+        )
+        connection.execute(
+            text(
+                "UPDATE heater_charge_config SET stored_soc_topic = 'ha/shared' "
+                "WHERE heater_id = 'salon'"
+            )
+        )
+        connection.execute(
+            text(
+                "UPDATE heater SET indoor_topic = 'ha/temperature' "
+                "WHERE heater_id = 'entrada'"
+            )
+        )
+        connection.execute(
+            text(
+                "UPDATE heater_charge_config SET stored_soc_topic = 'ha/soc' "
+                "WHERE heater_id = 'entrada'"
+            )
+        )
+        connection.execute(
+            update(configuration_schema_version).values(revision=10)
+        )
+
+    upgrade_active_schemas(engines.configuration, engines.application)
+    config, _revision = repository.current()
+    topics = {heater.id: heater.telemetry_topic for heater in config.heaters}
+    assert topics["salon"] == "ha/shared"
+    assert topics["entrada"] is None
+    assert "indoor_topic" not in {
+        column["name"]
+        for column in inspect(engines.configuration).get_columns("heater")
+    }
+    assert "stored_soc_topic" not in {
+        column["name"]
+        for column in inspect(engines.configuration).get_columns(
+            "heater_charge_config"
+        )
+    }
 
 
 def test_postgresql_namespace_names_are_fixed_not_user_controlled():

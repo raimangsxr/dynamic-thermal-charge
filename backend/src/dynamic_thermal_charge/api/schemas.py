@@ -356,7 +356,6 @@ class AutomaticPlanAuditPage(BaseModel):
 
 class HeaterChargeConfigRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    stored_soc_topic: str | None = None
     damper_topic: str | None = None
 
 
@@ -434,8 +433,7 @@ class HeaterResponse(BaseModel):
     full_charge_hours: float
     priority: int
     enabled: bool
-    indoor_topic: str | None = None
-    stored_soc_topic: str | None = None
+    telemetry_topic: str | None = None
     output: OutputView
     room_thermal_capacity_kwh_per_c: float = 2.5
     room_heat_loss_kw_per_c: float = 0.12
@@ -496,8 +494,7 @@ class AddHeaterRequest(BaseModel):
     model: str | None = None
     priority: int = 0
     enabled: bool = True
-    indoor_topic: str | None = None
-    stored_soc_topic: str | None = None
+    telemetry_topic: str | None = None
     output: str = "simulated"
     pin: int | None = None
     active_high: bool = True
@@ -515,8 +512,7 @@ class UpdateHeaterRequest(BaseModel):
     full_charge_hours: float = Field(gt=0)
     priority: int = 0
     enabled: bool = True
-    indoor_topic: str | None = None
-    stored_soc_topic: str | None = None
+    telemetry_topic: str | None = None
     output: str = "simulated"
     pin: int | None = None
     active_high: bool = True
