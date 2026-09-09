@@ -143,7 +143,8 @@ El plan activo debe accionar la descarga de cada acumulador. Cuando el plan
 indica emisión en el intervalo vigente, el sistema publica la activación de la
 descarga en el topic de compuerta del acumulador y la temperatura objetivo
 vigente en su topic de consigna; cuando deja de indicarla, publica la
-desactivación y no publica consigna. La emisión está indicada mientras una
+desactivación y el sentinel textual `NULL` en el topic de consigna configurado,
+sin publicar una consigna numérica. La emisión está indicada mientras una
 consigna esté activa y también en un intervalo anterior sin consigna en el que
 el plan proyecte calor entregado, caso en el que la consigna publicada es la de
 la próxima consigna que motiva esa emisión.
@@ -161,7 +162,9 @@ automático está desactivado, el acumulador está en modo `OFF`, hay una prueba
 relés en curso o el estado del controlador no está vigente. Un acumulador sin
 topic de compuerta configurado no recibe mando y no impide el del resto. El
 estado publicado por acumulador debe distinguir la descarga comandada de la
-posición de compuerta recibida.
+posición de compuerta recibida. Cuando la descarga está desactivada, el topic de
+consigna configurado recibe el sentinel textual `NULL` para que el acumulador
+pueda limpiar su indicación de temperatura objetivo.
 
 #### Scenario: Consigna activa en el intervalo vigente
 
@@ -173,7 +176,8 @@ posición de compuerta recibida.
 
 - **WHEN** termina el intervalo de consigna y el plan no proyecta calor para ese
   acumulador
-- **THEN** se publica la desactivación de su descarga y no se publica consigna
+- **THEN** se publica la desactivación de su descarga y `NULL` en su topic de
+  consigna configurado
 
 #### Scenario: Anticipación antes de una consigna
 
@@ -192,7 +196,8 @@ posición de compuerta recibida.
 - **WHEN** no hay plan activo, el plan es `INVALID`, el control automático está
   desactivado, el acumulador está en modo `OFF`, hay una prueba de relés en curso
   o el estado del controlador no está vigente
-- **THEN** se publica la desactivación de la descarga y no se publica consigna
+- **THEN** se publica la desactivación de la descarga y `NULL` en su topic de
+  consigna configurado
 
 #### Scenario: Acumulador sin topic de compuerta
 

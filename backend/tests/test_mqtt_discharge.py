@@ -191,7 +191,7 @@ def test_the_command_and_its_setpoint_are_published_without_retention(mqtt_clien
     ]
 
 
-def test_a_disabled_discharge_publishes_off_and_no_setpoint(mqtt_client):
+def test_a_disabled_discharge_publishes_off_and_clears_the_setpoint(mqtt_client):
     commands = resolve_discharge_commands(
         ("salon",), plan=None, at=NOW, charge_config=TOPICS
     )
@@ -200,7 +200,9 @@ def test_a_disabled_discharge_publishes_off_and_no_setpoint(mqtt_client):
     assert _published(mqtt_client, "ha/salon/discharge") == [
         ("ha/salon/discharge", "OFF", 1, False)
     ]
-    assert _published(mqtt_client, "ha/salon/setpoint") == []
+    assert _published(mqtt_client, "ha/salon/setpoint") == [
+        ("ha/salon/setpoint", "NULL", 1, False)
+    ]
 
 
 def test_every_cycle_reasserts_the_command(mqtt_client):
@@ -329,4 +331,7 @@ def test_orderly_service_stop_publishes_off_without_retention(mqtt_client):
 
     assert _published(mqtt_client, "ha/salon/discharge") == [
         ("ha/salon/discharge", "OFF", 1, False)
+    ]
+    assert _published(mqtt_client, "ha/salon/setpoint") == [
+        ("ha/salon/setpoint", "NULL", 1, False)
     ]

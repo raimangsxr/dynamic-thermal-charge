@@ -23,6 +23,7 @@ HEAT_EPSILON_KWH = 1e-6
 
 ON = "ON"
 OFF = "OFF"
+NO_SETPOINT = "NULL"
 
 
 @dataclass(frozen=True)
@@ -41,9 +42,11 @@ class DischargeCommand:
 
     @property
     def setpoint_payload(self) -> str | None:
-        """One decimal, the simple-payload convention of the other commands."""
-        if not self.enabled or self.setpoint_c is None:
+        """A decimal target, or the explicit no-target sentinel when off."""
+        if self.setpoint_topic is None:
             return None
+        if not self.enabled or self.setpoint_c is None:
+            return NO_SETPOINT
         return f"{self.setpoint_c:.1f}"
 
 
@@ -168,5 +171,6 @@ def resolve_discharge_commands(
 __all__ = [
     "HEAT_EPSILON_KWH",
     "DischargeCommand",
+    "NO_SETPOINT",
     "resolve_discharge_commands",
 ]

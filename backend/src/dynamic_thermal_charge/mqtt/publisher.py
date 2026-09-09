@@ -17,7 +17,7 @@ from ..persistence import (
     SchemaVersionError,
 )
 from . import MqttClient, MqttError
-from .discharge import DischargeCommand, resolve_discharge_commands
+from .discharge import DischargeCommand, NO_SETPOINT, resolve_discharge_commands
 from .discovery import DiscoveryEntity
 from .discovery import discovery_entities
 from .topics import TopicLayout
@@ -230,6 +230,8 @@ class MqttPublisher:
                 continue
             try:
                 self._publish_command(command.damper_topic, "OFF")
+                if command.setpoint_topic is not None:
+                    self._publish_command(command.setpoint_topic, NO_SETPOINT)
             except MqttError:
                 failures.add(command.heater_id)
         if failures:

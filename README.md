@@ -214,7 +214,7 @@ La dirección se expresa desde el punto de vista del `Controller`.
 | `ha/salon/telemetry` (`telemetry_topic` configurado) | `Heater` | `Controller` | JSON de telemetría | Suscripción QoS 1 / no retenido |
 | `dtc/sim/salon/telemetry` (simulación sin topic propio) | Simulador del `Controller` | `Controller` | JSON de telemetría | QoS 0 / no retenido |
 | `ha/salon/discharge` (`damper_topic` configurado) | `Controller` (proceso MQTT) | `Heater` | `ON` o `OFF` para habilitar/deshabilitar la descarga | QoS 1 / no retenido |
-| `ha/salon/setpoint` (`setpoint_topic` configurado) | `Controller` (proceso MQTT) | `Heater` | Temperatura objetivo en °C, con un decimal | QoS 1 / no retenido |
+| `ha/salon/setpoint` (`setpoint_topic` configurado) | `Controller` (proceso MQTT) | `Heater` | Temperatura objetivo en °C, con un decimal; `NULL` si está desactivada | QoS 1 / no retenido |
 | `dtc/installation/heater/salon/set/enabled` | Home Assistant u otro cliente MQTT | `Controller` | `ON` o `OFF` | El comando retenido se rechaza |
 | `dtc/installation/availability` | `Controller` | Clientes MQTT / Home Assistant | `online` u `offline` | QoS 1 / retenido |
 | `dtc/installation/state_available` | `Controller` | Clientes MQTT / Home Assistant | `online` u `offline` | QoS 1 / retenido |
@@ -242,8 +242,9 @@ si el plan proyecta calor entregado, publica `ON` y la próxima consigna. Al
 terminar la ventana, o si no hay plan, el plan es `INVALID`, el control
 automático está desactivado, el acumulador está en `OFF`, hay una prueba de
 relés o el estado del `Controller` no es actual, publica `OFF` y no publica
-consigna. Sin `damper_topic` no envía mando a ese acumulador y continúa con los
-demás.
+consigna numérica: si `setpoint_topic` está configurado, publica `NULL` para que
+el acumulador limpie su pantalla. Sin `damper_topic` no envía ninguno de los dos
+mandos a ese acumulador y continúa con los demás.
 
 #### Ejemplos de mensajes MQTT
 
@@ -277,14 +278,17 @@ Cuando la descarga debe quedar desactivada, el mensaje es:
 ```text
 Topic: ha/salon/discharge
 Payload: OFF
+
+Topic: ha/salon/setpoint
+Payload: NULL
 ```
 
-En ese caso no se publica un mensaje en `ha/salon/setpoint`. Estos dos mensajes
-no son retenidos y se reafirman en cada ciclo; una parada ordenada también
-publica `OFF`. El campo `discharge_enabled` del estado del acumulador refleja
-el mando del `Controller`, mientras `damper_position_percent`, si está
-presente, es la telemetría emitida por el `Heater` y puede valer `0` aunque la
-descarga siga habilitada.
+`NULL` es el sentinel de “sin consigna”; el `Heater` lo muestra como `--`.
+Estos dos mensajes no son retenidos y se reafirman en cada ciclo; una parada
+ordenada también publica `OFF` y `NULL`. El campo `discharge_enabled` del estado
+del acumulador refleja el mando del `Controller`, mientras
+`damper_position_percent`, si está presente, es la telemetría emitida por el
+`Heater` y puede valer `0` aunque la descarga siga habilitada.
 
 Comando de habilitación emitido por Home Assistant u otro cliente MQTT. No es
 un comando del `Heater` ni contiene una consigna de temperatura:
@@ -349,7 +353,8 @@ El topic de ese mensaje es `dtc/installation/heater/salon/state`.
 La consigna `target_temperature_c` se guarda como horario semanal y la usa el
 planificador del `Controller`; no se incluye en `state` ni en
 `heater/<id>/state`, sino que se publica como un número con un decimal en el
-`setpoint_topic` del `Heater` mientras `discharge_enabled` sea `true`. El campo
+`setpoint_topic` del `Heater` mientras `discharge_enabled` sea `true`; cuando es
+`false`, ese topic recibe `NULL`. El campo
 heredado `target_temperature_topic` no se reutiliza para esta orden; sigue
 siendo obsoleto junto con `temperature_topic`, `stored_charge_topic`,
 `stored_soc_topic` e `indoor_topic`. La entrada actual de telemetría es el
