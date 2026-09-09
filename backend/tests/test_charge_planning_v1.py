@@ -381,3 +381,62 @@ def test_preview_activation_persists_v1_snapshot(client, initialised_store, api_
     assert stored is not None
     assert stored["slots"][0]["stored_energy_kwh"]
     assert stored["explanations"] and stored["demand"]
+
+
+def test_the_discharge_command_topics_round_trip_through_the_api(client):
+    """R9: both topics are readable and writable for the panel."""
+    response = client.patch(
+        "/api/v1/planning/heaters/salon",
+        headers=AUTH,
+        json={"damper_topic": " ha/salon/discharge ", "setpoint_topic": "ha/salon/setpoint"},
+    )
+    assert response.status_code == 200, response.text
+
+    heaters = {item["id"]: item for item in response.json()["heaters"]}
+    assert heaters["salon"]["damper_topic"] == "ha/salon/discharge"
+    assert heaters["salon"]["setpoint_topic"] == "ha/salon/setpoint"
+    assert heaters["entrada"]["damper_topic"] is None
+
+
+def test_editing_one_topic_leaves_the_other_untouched(client):
+    client.patch(
+        "/api/v1/planning/heaters/salon",
+        headers=AUTH,
+        json={"damper_topic": "ha/salon/discharge", "setpoint_topic": "ha/salon/setpoint"},
+    )
+
+    response = client.patch(
+        "/api/v1/planning/heaters/salon",
+        headers=AUTH,
+        json={"damper_topic": "ha/salon/other"},
+    )
+
+    assert response.status_code == 200, response.text
+    heaters = {item["id"]: item for item in response.json()["heaters"]}
+    assert heaters["salon"]["damper_topic"] == "ha/salon/other"
+    assert heaters["salon"]["setpoint_topic"] == "ha/salon/setpoint"
+
+
+def test_a_blank_topic_is_stored_as_absent(client):
+    client.patch(
+        "/api/v1/planning/heaters/salon",
+        headers=AUTH,
+        json={"damper_topic": "ha/salon/discharge"},
+    )
+
+    response = client.patch(
+        "/api/v1/planning/heaters/salon", headers=AUTH, json={"damper_topic": "   "}
+    )
+
+    heaters = {item["id"]: item for item in response.json()["heaters"]}
+    assert heaters["salon"]["damper_topic"] is None
+
+
+def test_an_unknown_heater_cannot_receive_command_topics(client):
+    response = client.patch(
+        "/api/v1/planning/heaters/cocina",
+        headers=AUTH,
+        json={"damper_topic": "ha/cocina/discharge"},
+    )
+
+    assert response.status_code == 422, response.text

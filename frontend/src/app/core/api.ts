@@ -71,6 +71,9 @@ export class Api {
     });
   }
 
+  planningHeaterTopics(heaterId: string, body: { damper_topic?: string | null; setpoint_topic?: string | null }): Observable<PlanningDto> {
+    return this.http.patch<PlanningDto>(`${BASE}/planning/heaters/${encodeURIComponent(heaterId)}`, body);
+  }
   planningPreview(temperatureTargets: TemperatureTargetRequest[], expectedRevision?: number): Observable<PlanningPreviewDto> {
     return this.http.post<PlanningPreviewDto>(`${BASE}/planning/preview`, { temperature_targets: temperatureTargets, expected_revision: expectedRevision });
   }

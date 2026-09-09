@@ -186,6 +186,7 @@ def get_planning(
     cycle_status = forecast_cycle_context(store.planning)
     planning_site = store.planning.site()
     timezone_name = config.schedule.timezone if config.schedule is not None else "UTC"
+    charge_config = store.planning.heater_charge_config()
     heaters = [
         PlanningHeaterView(
             id=heater.id,
@@ -194,6 +195,8 @@ def get_planning(
             capacity_kwh=heater.capacity_kwh,
             priority=heater.priority,
             enabled=heater.enabled,
+            damper_topic=charge_config.get(heater.id, {}).get("damper_topic"),
+            setpoint_topic=charge_config.get(heater.id, {}).get("setpoint_topic"),
         )
         for heater in config.heaters
     ]
@@ -565,7 +568,11 @@ def update_heater_planning(
     config, _revision = store.repository.current()
     if heater_id not in {heater.id for heater in config.heaters}:
         raise ConfigValidationError("heater does not exist", field="heater_id", heater_id=heater_id)
-    store.planning.update_heater_charge_config(heater_id, payload.model_dump())
+    # Only what the caller actually sent: a partial edit must not clear the
+    # other topic.
+    store.planning.update_heater_charge_config(
+        heater_id, payload.model_dump(exclude_unset=True)
+    )
     # Re-read through the public projection so the response cannot contain a
     # partially applied topic configuration.
     return get_planning(app_request, store)

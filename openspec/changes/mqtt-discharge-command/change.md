@@ -51,12 +51,12 @@ module su compuerta durante la ventana.
 
 ## Tasks
 
-- [ ] T1: Añadir `setpoint_topic` a `heater_charge_config` con migración Alembic, `schema.py`, `active_schema.py` y su lectura y escritura en `persistence/home_assistant.py`.
-- [ ] T2: Exponer y validar `setpoint_topic` en los esquemas y en la ruta de configuración de planificación del acumulador, junto a `damper_topic`.
-- [ ] T3: Añadir los campos de `damper_topic` y `setpoint_topic` al formulario de acumuladores del panel, con sus tipos, su texto de ayuda y sus pruebas.
-- [ ] T4: Añadir un módulo de mando de descarga en `mqtt/` que, dado el plan activo, el instante y el estado de control, resuelva de forma pura el estado de descarga y la consigna por acumulador.
-- [ ] T5: Publicar ese resultado sin retención desde el ciclo del servicio MQTT, reafirmándolo en cada publicación y aplicando la desactivación de R5 por latido no vigente y por prueba de relés.
-- [ ] T6: Incluir el estado de descarga comandado en la proyección de estado MQTT por acumulador.
-- [ ] T7: Cubrir con tests la resolución pura, la reafirmación por ciclo, cada condición de desactivación de R5, la ausencia de `damper_topic`, la telemetría de compuerta cerrada con descarga activada y la tolerancia a un fallo de publicación.
-- [ ] T8: Actualizar `openspec/specs/planning/spec.md` con el requisito de accionamiento de la descarga y la tabla de topics y la sección de Home Assistant de `README.md`.
-- [ ] T9: Ejecutar `make check`.
+- [x] T1: Añadir `setpoint_topic` a `heater_charge_config` con migración Alembic, `schema.py`, `active_schema.py` y su lectura y escritura en `persistence/home_assistant.py`.
+- [x] T2: Exponer y validar `setpoint_topic` en los esquemas y en la ruta de configuración de planificación del acumulador, junto a `damper_topic`.
+- [x] T3: Añadir los campos de `damper_topic` y `setpoint_topic` al formulario de acumuladores del panel, con sus tipos, su texto de ayuda y sus pruebas.
+- [x] T4: Añadir un módulo de mando de descarga en `mqtt/` que, dado el plan activo, el instante y el estado de control, resuelva de forma pura el estado de descarga y la consigna por acumulador.
+- [x] T5: Publicar ese resultado sin retención desde el ciclo del servicio MQTT, reafirmándolo en cada publicación y aplicando la desactivación de R5 por latido no vigente y por prueba de relés.
+- [x] T6: Incluir el estado de descarga comandado en la proyección de estado MQTT por acumulador.
+- [x] T7: Cubrir con tests la resolución pura, la reafirmación por ciclo, cada condición de desactivación de R5, la ausencia de `damper_topic`, la telemetría de compuerta cerrada con descarga activada y la tolerancia a un fallo de publicación.
+- [x] T8: Actualizar `openspec/specs/planning/spec.md` con el requisito de accionamiento de la descarga y la tabla de topics y la sección de Home Assistant de `README.md`.
+- [x] T9: Ejecutar `make check`.

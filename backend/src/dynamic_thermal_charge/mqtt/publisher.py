@@ -16,7 +16,8 @@ from ..persistence import (
     SchemaStatus,
     SchemaVersionError,
 )
-from . import MqttClient
+from . import MqttClient, MqttError
+from .discharge import DischargeCommand, resolve_discharge_commands
 from .discovery import DiscoveryEntity
 from .discovery import discovery_entities
 from .topics import TopicLayout
@@ -106,14 +107,18 @@ class MqttPublisher:
         *,
         discovery: Callable[[], Iterable[DiscoveryEntity]] | None = None,
         subscriptions: Callable[[], Iterable[str]] | None = None,
+        discharge: Callable[[], Iterable[DischargeCommand]] | None = None,
     ) -> None:
         self._client = client
         self._topics = topics
         self._snapshot = snapshot
         self._discovery = discovery or (lambda: ())
         self._subscriptions = subscriptions or (lambda: ())
+        self._discharge = discharge or (lambda: ())
         self._inventory: set[str] = set()
         self._failure: str | None = None
+        self._discharge_failures: set[str] = set()
+        self._missing_damper_topic: set[str] = set()
 
     def refresh(self, *, force_discovery: bool = False) -> bool:
         try:
@@ -134,9 +139,61 @@ class MqttPublisher:
         )
         self._publish(self._topics.state_available, state_available)
         self._publish_json(self._topics.installation_state, installation)
+        commands = self._discharge_commands()
+        for command in commands:
+            payload = heaters.get(command.heater_id)
+            if payload is not None:
+                # The commanded state, distinct from the damper position that
+                # telemetry reports: the thermostat closes its damper on
+                # reaching the setpoint while the discharge stays enabled.
+                payload["discharge_enabled"] = command.enabled
         for heater_id, payload in heaters.items():
             self._publish_json(self._topics.heater_state(heater_id), payload)
+        self._publish_discharge(commands)
         return True
+
+    def _discharge_commands(self) -> tuple[DischargeCommand, ...]:
+        try:
+            return tuple(self._discharge())
+        except Exception:
+            # An unresolvable command must not stop the state projection; the
+            # accumulators keep their last command until the next cycle.
+            logger.error("Could not resolve the discharge commands", exc_info=True)
+            return ()
+
+    def _publish_discharge(self, commands: Iterable[DischargeCommand]) -> None:
+        """Reassert every discharge command, one failure at a time."""
+        failures: set[str] = set()
+        missing: set[str] = set()
+        for command in commands:
+            if command.damper_topic is None:
+                missing.add(command.heater_id)
+                continue
+            setpoint = command.setpoint_payload
+            try:
+                self._publish_command(command.damper_topic, command.payload)
+                if setpoint is not None and command.setpoint_topic is not None:
+                    self._publish_command(command.setpoint_topic, setpoint)
+            except MqttError:
+                failures.add(command.heater_id)
+        if failures != self._discharge_failures:
+            if failures:
+                logger.error(
+                    "Could not publish the discharge command of %s; every cycle "
+                    "retries it",
+                    sorted(failures),
+                )
+            else:
+                logger.info("Every discharge command was published again")
+            self._discharge_failures = failures
+        if missing != self._missing_damper_topic:
+            if missing:
+                logger.warning(
+                    "No damper topic is configured for %s, so their discharge "
+                    "is not commanded",
+                    sorted(missing),
+                )
+            self._missing_damper_topic = missing
 
     def subscription_topics(self) -> tuple[str, ...]:
         return tuple(dict.fromkeys(self._subscriptions()))
@@ -177,6 +234,12 @@ class MqttPublisher:
     def _publish(self, topic: str, payload: str) -> None:
         self._client.publish(topic, payload, qos=1, retain=True)
 
+    def _publish_command(self, topic: str, payload: str) -> None:
+        """Commands are not retained: they are reasserted every cycle, so the
+        broker must never hand a stale order to an accumulator that reconnects.
+        """
+        self._client.publish(topic, payload, qos=1, retain=False)
+
 
 class StoreSnapshotReader:
     """Compose existing persistence readers with the shared liveness rule."""
@@ -190,6 +253,9 @@ class StoreSnapshotReader:
         status_reader,
         clock: Callable[[], Any],
         charge_config_provider: Callable[[], Mapping[str, Mapping[str, Any]]] | None = None,
+        plan_provider: Callable[[], Mapping[str, Any] | None] | None = None,
+        control_state_provider: Callable[[], Any] | None = None,
+        relay_test_provider: Callable[[], Mapping[str, Any] | None] | None = None,
     ) -> None:
         self._config_repository = config_repository
         self._schema_gate = schema_gate
@@ -197,8 +263,12 @@ class StoreSnapshotReader:
         self._status_reader = status_reader
         self._clock = clock
         self._charge_config_provider = charge_config_provider or (lambda: {})
+        self._plan_provider = plan_provider or (lambda: None)
+        self._control_state_provider = control_state_provider or (lambda: None)
+        self._relay_test_provider = relay_test_provider or (lambda: None)
         self._previous_heartbeat: Heartbeat | None = None
         self._config: AppConfig | None = None
+        self._state_is_current: bool | None = None
 
     def __call__(self) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
         status = self._schema_gate.check()
@@ -228,7 +298,40 @@ class StoreSnapshotReader:
         }
         raw_plan = self._status_reader.plan_in_progress(now)
         plan = self._plan(raw_plan)
+        self._state_is_current = bool(controller.state_is_current)
         return project_state(config, controller, last_states, plan=plan)
+
+    def discharge_commands(self) -> tuple[DischargeCommand, ...]:
+        """Resolve the discharge command of every accumulator for now.
+
+        Reads the durable active plan, so the command matches the plan the
+        operator sees and is right on the first cycle after a restart.  Every
+        piece of missing evidence resolves to a disabled discharge.
+        """
+        if self._config is None:
+            self()
+        assert self._config is not None
+        heater_ids = tuple(heater.id for heater in self._config.heaters)
+        control = self._control_state_provider()
+        relay_test = self._relay_test_provider()
+        return resolve_discharge_commands(
+            heater_ids,
+            plan=self._plan_provider(),
+            at=self._clock(),
+            charge_config=self._charge_config_provider(),
+            automatic_control_enabled=(
+                True
+                if control is None
+                else bool(getattr(control, "automatic_control_enabled", True))
+            ),
+            heater_modes=(
+                {} if control is None else dict(getattr(control, "heater_modes", {}) or {})
+            ),
+            # Never seen is not current either, so an unproven controller does
+            # not get to spend stored energy.
+            controller_state_is_current=bool(self._state_is_current),
+            relay_test_in_progress=_relay_test_in_progress(relay_test),
+        )
 
     def discovery(
         self, topics: TopicLayout, installation_name: str
@@ -266,6 +369,17 @@ class StoreSnapshotReader:
                 for allocation in raw.get("allocations", ())
             },
         }
+
+
+def _relay_test_in_progress(view: Mapping[str, Any] | None) -> bool:
+    """A live session or a latched fault both stop plan execution."""
+    if view is None:
+        return False
+    session = view.get("session")
+    if isinstance(session, Mapping) and session.get("status") in {"starting", "active", "ending"}:
+        return True
+    safety = view.get("safety")
+    return bool(isinstance(safety, Mapping) and safety.get("fault_latched"))
 
 
 __all__ = ["MqttPublisher", "StoreSnapshotReader", "project_state"]

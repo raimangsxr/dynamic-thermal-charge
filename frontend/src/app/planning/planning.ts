@@ -496,12 +496,50 @@ export class Planning implements AfterViewInit, OnDestroy {
     this.scheduleChartRender();
   }
 
+  readonly topicDrafts = signal<Record<string, { damper_topic: string; setpoint_topic: string }>>({});
+  readonly topicSaving = signal<string | null>(null);
+  readonly topicMessage = signal('');
+  readonly topicError = signal('');
+
+  topicDraft(heaterId: string): { damper_topic: string; setpoint_topic: string } {
+    return this.topicDrafts()[heaterId] ?? { damper_topic: '', setpoint_topic: '' };
+  }
+
+  editTopic(heaterId: string, field: 'damper_topic' | 'setpoint_topic', value: string): void {
+    this.topicDrafts.update((items) => ({ ...items, [heaterId]: { ...this.topicDraft(heaterId), [field]: value } }));
+  }
+
+  saveTopics(heaterId: string): void {
+    const draft = this.topicDraft(heaterId);
+    this.topicMessage.set(''); this.topicError.set(''); this.topicSaving.set(heaterId);
+    this.api.planningHeaterTopics(heaterId, {
+      damper_topic: draft.damper_topic.trim() || null,
+      setpoint_topic: draft.setpoint_topic.trim() || null,
+    }).subscribe({
+      next: (planning) => {
+        this.topicSaving.set(null);
+        this.snapshot.set(planning);
+        this.topicDrafts.set(this.topicDraftsFrom(planning));
+        this.topicMessage.set(`Mandos de ${this.heaterText(heaterId)} guardados.`);
+      },
+      error: (error: unknown) => { this.topicSaving.set(null); this.topicError.set(this.topicsError(error)); },
+    });
+  }
+
+  private topicDraftsFrom(planning: PlanningDto): Record<string, { damper_topic: string; setpoint_topic: string }> {
+    return Object.fromEntries(planning.heaters.map((heater) => [heater.id, {
+      damper_topic: heater.damper_topic ?? '',
+      setpoint_topic: heater.setpoint_topic ?? '',
+    }]));
+  }
+
   refresh(options: PlanningRefreshOptions = {}): void {
     const restorePreview = options.restorePreview ?? true;
     this.api.planning().subscribe({
       next: (planning) => {
         this.snapshot.set(planning);
         this.draftTargets.set(this.draftTargetsFrom(planning));
+        this.topicDrafts.set(this.topicDraftsFrom(planning));
         this.failure.set(null);
         this.loading.set(false);
         if (restorePreview && planning.preview_job) this.acceptPreviewJob(planning.preview_job);
@@ -1293,6 +1331,13 @@ export class Planning implements AfterViewInit, OnDestroy {
     const explained = this.describe(error);
     const detail = explained.action ? `${explained.title}. ${explained.action}` : explained.title;
     return `No se pudo guardar y activar: ${detail}`;
+  }
+
+  private topicsError(error: unknown): string {
+    const apiMessage = this.apiMessage(error);
+    return apiMessage === null
+      ? 'No se pudieron guardar los mandos de descarga. Vuelve a intentarlo.'
+      : `No se pudieron guardar los mandos de descarga: ${apiMessage}`;
   }
 
   private previewStartError(error: unknown): string {

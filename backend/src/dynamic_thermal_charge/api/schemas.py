@@ -194,6 +194,8 @@ class PlanningHeaterView(BaseModel):
     capacity_kwh: float
     priority: int
     enabled: bool
+    damper_topic: str | None = None
+    setpoint_topic: str | None = None
 
 
 class PlanningPlanView(BaseModel):
@@ -359,6 +361,7 @@ class AutomaticPlanAuditPage(BaseModel):
 class HeaterChargeConfigRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     damper_topic: str | None = None
+    setpoint_topic: str | None = None
 
 
 class PlanningSiteConfigRequest(BaseModel):

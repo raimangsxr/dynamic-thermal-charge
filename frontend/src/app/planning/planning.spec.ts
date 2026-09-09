@@ -216,6 +216,58 @@ describe('Planning', () => {
     });
   });
 
+  it('edits and saves the discharge command topics of one accumulator', async () => {
+    backend.expectOne('/api/v1/planning').flush({
+      ...PLANNING,
+      heaters: [{ ...PLANNING.heaters[0], damper_topic: 'ha/salon/discharge', setpoint_topic: null }],
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    await selectPlanningTab(fixture, 1);
+    const element = fixture.nativeElement as HTMLElement;
+    expect(element.querySelector('[data-testid="discharge-topics"]')).not.toBeNull();
+    expect(fixture.componentInstance.topicDraft('salon')).toEqual({
+      damper_topic: 'ha/salon/discharge',
+      setpoint_topic: '',
+    });
+
+    fixture.componentInstance.editTopic('salon', 'setpoint_topic', ' ha/salon/setpoint ');
+    fixture.componentInstance.saveTopics('salon');
+    const request = backend.expectOne('/api/v1/planning/heaters/salon');
+    expect(request.request.method).toBe('PATCH');
+    expect(request.request.body).toEqual({
+      damper_topic: 'ha/salon/discharge',
+      setpoint_topic: 'ha/salon/setpoint',
+    });
+    request.flush({
+      ...PLANNING,
+      heaters: [{ ...PLANNING.heaters[0], damper_topic: 'ha/salon/discharge', setpoint_topic: 'ha/salon/setpoint' }],
+    });
+    await fixture.whenStable();
+
+    expect(fixture.componentInstance.topicDraft('salon').setpoint_topic).toBe('ha/salon/setpoint');
+    expect(fixture.componentInstance.topicMessage()).toContain('Salón');
+  });
+
+  it('blanks a discharge topic to absent instead of sending an empty string', async () => {
+    backend.expectOne('/api/v1/planning').flush({
+      ...PLANNING,
+      heaters: [{ ...PLANNING.heaters[0], damper_topic: 'ha/salon/discharge', setpoint_topic: 'ha/salon/setpoint' }],
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    fixture.componentInstance.editTopic('salon', 'damper_topic', '   ');
+    fixture.componentInstance.saveTopics('salon');
+    const request = backend.expectOne('/api/v1/planning/heaters/salon');
+
+    expect(request.request.body).toEqual({
+      damper_topic: null,
+      setpoint_topic: 'ha/salon/setpoint',
+    });
+  });
+
   it('keeps the editor and preview state while returning to the active planning tab', async () => {
     backend.expectOne('/api/v1/planning').flush({ ...TWO_HEATER_PLANNING, preview_job: PREVIEW_JOB(PREVIEW) });
     await fixture.whenStable();

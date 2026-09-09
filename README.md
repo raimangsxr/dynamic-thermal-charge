@@ -211,6 +211,24 @@ El prefijo MQTT de la instalación es `<prefijo>/installation` (por defecto,
 | Escribe | `<prefijo>/installation/state_available` | `online` u `offline` | Sí |
 | Escribe | `<prefijo>/installation/state` | Estado JSON de la instalación | Sí |
 | Escribe | `<prefijo>/installation/heater/<id>/state` | Estado JSON del acumulador | Sí |
+| Escribe | Topic de compuerta configurado por acumulador | `ON` u `OFF` | No |
+| Escribe | Topic de consigna configurado por acumulador | Temperatura objetivo en °C con un decimal | No |
+
+Cada acumulador configura además, en la pestaña Nueva planificación, el topic en
+el que recibe la activación de su descarga y el topic en el que recibe su
+consigna. Cuando el plan activo indica emisión en el intervalo vigente se publica
+`ON` y la consigna; cuando deja de indicarla, `OFF`. El mando activa o desactiva
+la descarga y no ordena abrir la compuerta: el termostato del acumulador la
+modula contra la consigna publicada, cerrándola al alcanzar el objetivo y
+abriéndola cuando la estancia se enfría, así que una compuerta cerrada mientras
+la descarga está activada es normal y no es una discrepancia. Los mandos se
+reafirman en cada ciclo de publicación y no se retienen, para que el broker no
+entregue una orden obsoleta a un acumulador que reconecta. Se publica `OFF` sin
+plan activo, con un plan `INVALID`, con el control automático desactivado, con el
+acumulador en modo `OFF`, durante una prueba de relés y cuando el estado del
+controlador no está vigente. Un acumulador sin topic de compuerta no recibe
+mando. El estado JSON del acumulador incluye `discharge_enabled`, la descarga
+comandada, distinta de la posición de compuerta que llega por telemetría.
 
 El topic de telemetría de cada acumulador se configura en el panel. Su payload
 es un objeto JSON con las claves numéricas opcionales

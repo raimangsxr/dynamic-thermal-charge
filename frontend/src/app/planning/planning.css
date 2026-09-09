@@ -45,6 +45,11 @@ h3 { margin: 0; color: var(--ink); font-size: 1rem; }
 .constraint-row input:not([type='checkbox']), .constraint-row select { width: 100%; min-height: 2.35rem; padding: .45rem .6rem; border: 1px solid var(--border); border-radius: .4rem; background: #fff; color: var(--ink); font: inherit; font-size: .9rem; }
 .constraint-row input:not([type='checkbox']):focus, .constraint-row select:focus { border-color: var(--primary); outline: 2px solid color-mix(in srgb, var(--primary) 22%, transparent); outline-offset: 0; }
 .constraint-row input:not([type='checkbox']):disabled, .constraint-row select:disabled { background: #f4f6f9; color: var(--muted); cursor: not-allowed; }
+.topic-row { display: grid; grid-template-columns: minmax(7rem, auto) auto minmax(10rem, 1fr) auto minmax(10rem, 1fr) auto; align-items: center; gap: .75rem; padding: .9rem 0; border-top: 1px solid var(--border); }
+.topic-row > label { color: var(--muted); font-size: .84rem; font-weight: 650; line-height: 1.3; }
+.topic-row .heater-name { color: var(--ink); font-size: .92rem; font-weight: 650; }
+.topic-row input { width: 100%; min-height: 2.35rem; padding: .45rem .6rem; border: 1px solid var(--border); border-radius: .4rem; background: #fff; color: var(--ink); font: inherit; font-size: .9rem; }
+.topic-row input:focus { border-color: var(--primary); outline: 2px solid color-mix(in srgb, var(--primary) 22%, transparent); outline-offset: 0; }
 fieldset { display: flex; align-items: center; flex-wrap: wrap; gap: .35rem; margin: 0; padding: 0; border: 0; }
 fieldset legend { width: 100%; margin-bottom: .25rem; }
 fieldset label { display: inline-flex; align-items: center; gap: .2rem; color: var(--ink); font-size: .84rem; font-weight: 500; white-space: nowrap; }
@@ -109,6 +114,7 @@ th, td { padding: .65rem .75rem; border-bottom: 1px solid var(--border); text-al
   .banner > button { align-self: flex-start; }
   .chart-wrap { height: 13rem; }
   .constraint-row { grid-template-columns: 1fr 1fr; }
+  .topic-row { grid-template-columns: 1fr; }
   .constraint-row > label { font-size: .84rem; }
   .constraint-row fieldset, .constraint-row > button { grid-column: 1 / -1; }
   .checks { grid-template-columns: 1fr; }
