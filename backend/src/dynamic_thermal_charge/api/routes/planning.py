@@ -1542,9 +1542,25 @@ def _temperature_for_interval(forecast, start: datetime, end: datetime) -> tuple
 def _forecast_view(forecast) -> PlanningForecastView | None:
     if forecast is None:
         return None
+    hourly_points = [HourlyForecastPointView(**point) for point in forecast["hourly_points"]]
+    summary = {
+        key: value
+        for key, value in forecast.items()
+        if key != "hourly_points"
+    }
+    # The stored AEMET summary is a daily value, while the planning graph shows
+    # the future hourly points. Derive all three values from that same visible
+    # series so the summary cannot describe a different period than the graph.
+    temperatures = [point.temperature_c for point in hourly_points]
+    if temperatures:
+        summary.update(
+            average_temperature_c=sum(temperatures) / len(temperatures),
+            minimum_temperature_c=min(temperatures),
+            maximum_temperature_c=max(temperatures),
+        )
     return PlanningForecastView(
-        **{key: value for key, value in forecast.items() if key != "hourly_points"},
-        hourly_points=[HourlyForecastPointView(**point) for point in forecast["hourly_points"]],
+        **summary,
+        hourly_points=hourly_points,
     )
 
 
