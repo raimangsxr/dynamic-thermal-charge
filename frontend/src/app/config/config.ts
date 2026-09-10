@@ -24,6 +24,7 @@ import { forkJoin } from 'rxjs';
 
 import { Api } from '../core/api';
 import type {
+  AlertTypeDto,
   AddHeaterRequest,
   ApiErrorDto,
   ConfigDto,
@@ -46,7 +47,7 @@ import { confirmationText, needsConfirmation } from './electrical-fields';
 import { ParamHelp } from '../shared/param-help/param-help';
 
 type ConfigArea = 'summary' | 'installation' | 'heaters' | 'planning' | 'integrations' | 'service';
-type IntegrationSection = 'mqtt' | 'weather';
+type IntegrationSection = 'mqtt' | 'weather' | 'email';
 type ServiceSection = 'database' | 'api' | 'output' | 'logging' | 'operations';
 
 interface FormEdit { readonly field: string; readonly value: string; }
@@ -175,6 +176,12 @@ const HEATER_FORM_GROUPS = [
   { title: 'Salida y telemetría', fields: ['output', 'pin', 'active_high', 'telemetry_topic'] },
 ] as const;
 
+const EMAIL_SECURITY_MODES: readonly Option[] = [
+  { value: 'starttls', label: 'STARTTLS' },
+  { value: 'tls', label: 'TLS' },
+  { value: 'none', label: 'Sin cifrado' },
+];
+
 const WEATHER_PROVIDERS: readonly Option[] = [
   { value: 'aemet', label: 'AEMET' },
   { value: 'simulated', label: 'Simulada' },
@@ -198,6 +205,8 @@ const PLANNING_FIELDS: readonly FieldDefinition[] = [
   { name: 'contracted_power_w', label: 'Potencia total contratada (W)', type: 'number', min: '1', step: '100', hint: 'Fuente única para el optimizador y el indicador de Estado.' },
   { name: 'max_heating_power_w', label: 'Límite de calefacción (W)', type: 'number', min: '1', step: '100' },
   { name: 'base_load_w', label: 'Consumo base estimado (W)', type: 'number', min: '0', step: '100' },
+  { name: 'deviation_shortfall_tolerance_c', label: 'Tolerancia de déficit imprevisto (°C)', type: 'number', min: '0.01', step: '0.1', hint: 'Desviación térmica adicional que se tolera antes de solicitar un recálculo inmediato.' },
+  { name: 'deviation_surplus_soc_percent', label: 'Tolerancia de excedente de SOC (%)', type: 'number', min: '0.1', step: '0.5', hint: 'Excedente de carga almacenada que se tolera antes de solicitar un recálculo inmediato.' },
   { name: 'mqtt_simulation_enabled', label: 'Activar simulación MQTT', type: 'boolean' },
   { name: 'mqtt_simulation_initial_temperature_c', label: 'Temperatura inicial simulada (°C)', type: 'number', step: '0.1' },
   { name: 'mqtt_simulation_publish_seconds', label: 'Publicación simulada (s)', type: 'number', min: '1', step: '1' },
@@ -231,6 +240,15 @@ const SYSTEM_FIELDS: Record<SystemSection, readonly FieldDefinition[]> = {
     { name: 'fixed_stored_soc_percent', label: 'SOC almacenado fijo (%)', type: 'number', min: '0', max: '100', step: '1' },
     { name: 'fixed_indoor_temperature_c', label: 'Temperatura interior fija (°C)', type: 'number', step: '0.1' },
   ],
+  email: [
+    { name: 'enabled', label: 'Activar alertas por email', type: 'boolean', hint: 'Al activarlas, el servidor, el remitente y al menos un destinatario son obligatorios.' },
+    { name: 'host', label: 'Servidor SMTP', type: 'text' },
+    { name: 'port', label: 'Puerto SMTP', type: 'number', min: '1', max: '65535', step: '1' },
+    { name: 'security', label: 'Cifrado', type: 'select', options: EMAIL_SECURITY_MODES },
+    { name: 'sender', label: 'Remitente', type: 'text' },
+    { name: 'recipients', label: 'Destinatarios', type: 'text', hint: 'Separa varias direcciones con comas.' },
+    { name: 'timeout_seconds', label: 'Tiempo de espera (s)', type: 'number', min: '1', step: '1' },
+  ],
   weather: [
     { name: 'provider', label: 'Proveedor meteorológico', type: 'select', options: WEATHER_PROVIDERS },
     { name: 'municipality_code', label: 'Código de municipio AEMET', type: 'text', hint: 'Código INE de 5 dígitos.' },
@@ -263,6 +281,7 @@ const SECTION_LABELS: Record<SystemSection, string> = {
   api: 'Acceso al panel',
   mqtt: 'MQTT',
   weather: 'Meteorología',
+  email: 'Alertas por email',
   output: 'Salidas físicas',
   logging: 'Registros',
   operations: 'Operación',
@@ -271,6 +290,8 @@ const SECTION_LABELS: Record<SystemSection, string> = {
 const SECRET_LABELS: Record<string, string> = {
   admin_token_digest: 'Credencial de administrador',
   postgres_username: 'Usuario PostgreSQL',
+  smtp_username: 'Usuario SMTP',
+  smtp_password: 'Contraseña SMTP',
   postgres_password: 'Contraseña PostgreSQL',
   mqtt_username: 'Usuario MQTT',
   mqtt_password: 'Contraseña MQTT',
@@ -316,7 +337,7 @@ export class Config {
     { id: 'integrations', label: 'Integraciones', description: 'MQTT y meteorología' },
     { id: 'service', label: 'Servicio', description: 'Acceso, datos y operación' },
   ] as const;
-  readonly integrationSections: readonly IntegrationSection[] = ['mqtt', 'weather'];
+  readonly integrationSections: readonly IntegrationSection[] = ['mqtt', 'weather', 'email'];
   readonly serviceSections: readonly ServiceSection[] = ['database', 'api', 'output', 'logging', 'operations'];
   readonly heaterFormGroups = HEATER_FORM_GROUPS;
   readonly installationGroups = INSTALLATION_GROUPS;
@@ -364,7 +385,12 @@ export class Config {
   constructor() { this.load(); }
 
   chooseArea(area: ConfigArea): void { this.activeArea.set(area); }
-  chooseIntegration(section: IntegrationSection): void { this.activeIntegrationSection.set(section); }
+  chooseIntegration(section: IntegrationSection): void {
+    this.activeIntegrationSection.set(section);
+    // The catalogue is only needed by the alert section, so it is read on
+    // demand instead of on every panel load.
+    if (section === 'email' && !this.alertCatalogue().length) this.loadAlertCatalogue();
+  }
   chooseService(section: ServiceSection): void { this.activeServiceSection.set(section); }
 
   areaIs(area: ConfigArea): boolean { return this.activeArea() === area; }
@@ -440,6 +466,44 @@ export class Config {
   }
   canonicalPower(): number | null { return this.planningConfig()?.contracted_power_w ?? null; }
   enabledText(value: unknown): string { return value === true || value === 'true' ? 'Activado' : 'Desactivado'; }
+  readonly alertCatalogue = signal<AlertTypeDto[]>([]);
+  readonly alertSaving = signal<string | null>(null);
+  readonly alertError = signal('');
+  readonly emailTestLoading = signal(false);
+  readonly emailTestMessage = signal('');
+  readonly emailTestError = signal('');
+
+  loadAlertCatalogue(): void {
+    this.alertError.set('');
+    this.api.alertCatalogue().subscribe({
+      next: (dto) => this.alertCatalogue.set(dto.alerts),
+      error: () => this.alertError.set('No se pudo leer el catálogo de alertas.'),
+    });
+  }
+
+  toggleAlert(name: string, enabled: boolean): void {
+    this.alertSaving.set(name);
+    this.alertError.set('');
+    this.api.setAlertEnabled(name, enabled).subscribe({
+      next: (dto) => { this.alertSaving.set(null); this.alertCatalogue.set(dto.alerts); },
+      error: () => { this.alertSaving.set(null); this.alertError.set('No se pudo cambiar la activación de la alerta.'); },
+    });
+  }
+
+  testEmail(): void {
+    this.emailTestLoading.set(true);
+    this.emailTestMessage.set('');
+    this.emailTestError.set('');
+    this.api.testEmail().subscribe({
+      next: () => { this.emailTestLoading.set(false); this.emailTestMessage.set('Mensaje de prueba entregado al servidor de correo.'); },
+      error: (error: unknown) => {
+        this.emailTestLoading.set(false);
+        const body = error instanceof HttpErrorResponse ? error.error as { message?: unknown } : null;
+        this.emailTestError.set(typeof body?.message === 'string' ? body.message : 'No se pudo enviar el mensaje de prueba.');
+      },
+    });
+  }
+
   systemValue(section: SystemSection, field: string): unknown {
     const key = this.systemKey(section, field);
     return this.systemDraft()[key] ?? this.configuration()?.sections[section]?.[field] ?? '';
@@ -473,8 +537,8 @@ export class Config {
   planningGroups(): readonly FieldGroup[] {
     return [
       { title: 'Cadencia y horizonte', description: 'Define cuánto mira el optimizador y cuándo vuelve a calcular.', fields: PLANNING_FIELDS.slice(0, 5) },
-      { title: 'Límites de potencia', description: 'La potencia contratada total es la fuente única que usa el optimizador y Estado.', fields: PLANNING_FIELDS.slice(5, 8) },
-      { title: 'Simulación MQTT de acumuladores', description: 'Solo se usa para pruebas controladas.', fields: PLANNING_FIELDS.slice(8) },
+      { title: 'Límites y sensibilidad', description: 'La potencia contratada total es la fuente única que usa el optimizador y Estado. Las tolerancias gobiernan los recálculos por desviación.', fields: PLANNING_FIELDS.slice(5, 10) },
+      { title: 'Simulación MQTT de acumuladores', description: 'Solo se usa para pruebas controladas.', fields: PLANNING_FIELDS.slice(10) },
     ];
   }
   mqttEnabled(): boolean {
@@ -483,7 +547,7 @@ export class Config {
   }
   secrets(section: SystemSection): string[] {
     if (section === 'mqtt' && !this.mqttEnabled()) return [];
-    return ({ api: ['admin_token_digest'], database: ['postgres_username', 'postgres_password'], mqtt: ['mqtt_username', 'mqtt_password'], weather: ['aemet_api_key'] } as Partial<Record<SystemSection, string[]>>)[section] ?? [];
+    return ({ api: ['admin_token_digest'], database: ['postgres_username', 'postgres_password'], mqtt: ['mqtt_username', 'mqtt_password'], weather: ['aemet_api_key'], email: ['smtp_username', 'smtp_password'] } as Partial<Record<SystemSection, string[]>>)[section] ?? [];
   }
   secretAction(name: string): SecretEditDto['action'] { return this.secretActions()[name] ?? 'keep'; }
   setSecretAction(name: string, action: SecretEditDto['action']): void {
@@ -742,7 +806,7 @@ export class Config {
     const number = (name: string): number => Number(this.planningValue(name));
     const values = {
       replan_minutes: number('replan_minutes'), planning_window_hours: number('planning_window_hours'), forecast_horizon_hours: number('forecast_horizon_hours'), aemet_query_hour: number('aemet_query_hour'), solver_time_limit_seconds: number('solver_time_limit_seconds'),
-      contracted_power_w: number('contracted_power_w'), max_heating_power_w: number('max_heating_power_w'), base_load_w: number('base_load_w'),
+      contracted_power_w: number('contracted_power_w'), max_heating_power_w: number('max_heating_power_w'), base_load_w: number('base_load_w'), deviation_shortfall_tolerance_c: number('deviation_shortfall_tolerance_c'), deviation_surplus_soc_percent: number('deviation_surplus_soc_percent'),
       mqtt_simulation_enabled: this.planningValue('mqtt_simulation_enabled') === true || this.planningValue('mqtt_simulation_enabled') === 'true', mqtt_simulation_initial_temperature_c: number('mqtt_simulation_initial_temperature_c'), mqtt_simulation_publish_seconds: number('mqtt_simulation_publish_seconds'), mqtt_simulation_topic_prefix: String(this.planningValue('mqtt_simulation_topic_prefix')), mqtt_simulation_thermal_loss_c_per_hour: number('mqtt_simulation_thermal_loss_c_per_hour'),
     };
     this.planningSaving.set(true);
@@ -816,8 +880,8 @@ export class Config {
     });
   }
   private coerce(field: FieldDefinition, value: unknown): unknown {
-    if (field.name === 'cors_origins') return String(value).split(',').map((item) => item.trim()).filter(Boolean);
-    if (value === '' && ['host', 'database', 'municipality_code', 'stale_seconds', 'retention_days'].includes(field.name)) return null;
+    if (field.name === 'cors_origins' || field.name === 'recipients') return String(value).split(',').map((item) => item.trim()).filter(Boolean);
+    if (value === '' && ['host', 'database', 'municipality_code', 'stale_seconds', 'retention_days', 'sender'].includes(field.name)) return null;
     if (field.type === 'number') return Number(value);
     if (field.type === 'boolean') return value === true || value === 'true';
     return String(value);

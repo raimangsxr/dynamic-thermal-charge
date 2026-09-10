@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, Request
 
 from ...persistence.bootstrap import Store
 from ...persistence.history import SqlStatusReader
+from ...charge_planning import group_planning_violations
 from ..dependencies import controller_view, usable_store
 from ..liveness import ControllerView
 from ..read_model import automatic_window, forecast_cycle_context, real_at_or_after, real_before
@@ -36,6 +37,27 @@ from ..schemas import (
 
 
 router = APIRouter()
+
+
+def _canonical_plan_status(value) -> str:
+    raw = str(value)
+    return {
+        "VALID": "VALID",
+        "CONVERGING": "CONVERGING",
+        "DEGRADED": "DEGRADED",
+        "INVALID": "INVALID",
+        "FEASIBLE": "VALID",
+        "DEFICIT": "DEGRADED",
+        "BEST_EFFORT": "DEGRADED",
+        "PREVIEW": "INVALID",
+    }.get(raw.upper(), raw)
+
+
+def _plan_violations(plan: dict) -> list | tuple:
+    violations = plan.get("violations")
+    if violations is not None:
+        return violations
+    return plan.get("deficits", [])
 
 
 @router.get(
@@ -116,12 +138,27 @@ def get_status(
         else None
     )
     canonical_plan = active_automatic
-    if canonical_plan is None and latest_automatic is not None and latest_automatic["status"] == "INVALID":
+    diagnostic_plan = None
+    if (
+        latest_automatic is not None
+        and _canonical_plan_status(latest_automatic["status"]) == "DEGRADED"
+        and (
+            active_automatic is None
+            or latest_automatic["created_at"] > active_automatic["created_at"]
+        )
+    ):
+        # A degraded candidate is deliberately retained as an operator
+        # diagnostic while the last activable plan continues to govern.
+        diagnostic_plan = latest_automatic
+    if canonical_plan is None and latest_automatic is not None and _canonical_plan_status(latest_automatic["status"]) == "INVALID":
         # An invalid recalculation intentionally removes the previous active
         # plan.  Keep that safe outcome visible instead of reviving a legacy
         # plan which is no longer executable.
         canonical_plan = latest_automatic
         absence_reason = "invalid_automatic_plan"
+
+    if canonical_plan is None and diagnostic_plan is not None:
+        absence_reason = "no_active_automatic_plan"
 
     if canonical_plan is not None:
         horizon_start = canonical_plan["horizon_start"]
@@ -131,7 +168,7 @@ def get_status(
             int(planning_site["planning_window_hours"]),
             timezone_name,
         )
-        if canonical_plan["status"] == "INVALID":
+        if _canonical_plan_status(canonical_plan["status"]) == "INVALID":
             plan = None
         elif real_at_or_after(observed_at, window_start) and real_before(observed_at, window_end):
             grouped: dict[tuple[datetime, datetime], list[str]] = {}
@@ -241,8 +278,39 @@ def get_status(
         forecast=forecast,
         allocations=allocations,
         telemetry=telemetry_views,
-        plan_status=None if canonical_plan is None else canonical_plan["status"],
-        deficits=[] if canonical_plan is None else [PlanningDeficitView(**item) for item in canonical_plan["deficits"]],
+        plan_status=(
+            _canonical_plan_status(diagnostic_plan["status"])
+            if diagnostic_plan is not None
+            else None if canonical_plan is None else _canonical_plan_status(canonical_plan["status"])
+        ),
+        deficits=(
+            [PlanningDeficitView(**item) for item in group_planning_violations(
+                _plan_violations(diagnostic_plan),
+                slot_minutes=diagnostic_plan.get("slot_minutes"),
+            )]
+            if diagnostic_plan is not None
+            else []
+            if canonical_plan is None
+            else [PlanningDeficitView(**item) for item in group_planning_violations(
+                _plan_violations(canonical_plan),
+                slot_minutes=canonical_plan.get("slot_minutes"),
+            )]
+        ),
+        convergence_by_heater=(
+            diagnostic_plan.get("convergence_by_heater", {})
+            if diagnostic_plan is not None
+            else {} if canonical_plan is None else canonical_plan.get("convergence_by_heater", {})
+        ),
+        convergence_at=(
+            diagnostic_plan.get("convergence_at")
+            if diagnostic_plan is not None
+            else None if canonical_plan is None else canonical_plan.get("convergence_at")
+        ),
+        guaranteed_until=(
+            diagnostic_plan.get("guaranteed_until")
+            if diagnostic_plan is not None
+            else None if canonical_plan is None else canonical_plan.get("guaranteed_until")
+        ),
         horizon_start=horizon_start,
         horizon_end=horizon_end,
         absence_reason=absence_reason,

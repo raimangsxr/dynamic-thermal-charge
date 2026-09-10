@@ -72,7 +72,7 @@
           <p class="warning-text">{{ data.deficits.length }} aviso(s) de planificación</p>
         } @else if (data.plan) {
           <p>Sin déficit detectado</p>
-        } @else if (data.plan_status === 'INVALID' || data.plan_status === 'invalid') {
+        } @else if (isInvalidStatus(data.plan_status)) {
           <p class="warning-text">Plan no válido; salidas automáticas apagadas</p>
         } @else {
           <p>{{ absenceText(data.absence_reason) }}</p>
@@ -115,6 +115,17 @@
       </div>
     }
 
+    @if (isConvergingStatus(data.plan_status)) {
+      <div class="banner warn" role="status" data-testid="plan-converging">
+        <div class="banner-content"><mat-icon aria-hidden="true">autorenew</mat-icon><div><strong>Plan en convergencia</strong><p>El plan activo sigue siendo utilizable y está adaptándose al objetivo térmico.</p><p>Objetivo alcanzado: {{ convergenceText(data) }}@if (data.guaranteed_until) { · cobertura garantizada hasta {{ instant(data.guaranteed_until) }} }.</p></div></div>
+      </div>
+    }
+    @if (isDegradedStatus(data.plan_status)) {
+      <div class="banner warn" role="alert" data-testid="plan-degraded">
+        <div class="banner-content"><mat-icon aria-hidden="true">warning</mat-icon><div><strong>Resultado degradado: no activable</strong><p>Se muestra el último plan utilizable, si existe; este resultado no gobierna las salidas.</p></div></div>
+      </div>
+    }
+
     @if (data.deficits?.length) {
       <div class="banner warn" role="status" data-testid="plan-deficits">
         <div class="banner-content"><mat-icon aria-hidden="true">warning</mat-icon><div><strong>Avisos de planificación</strong><ul>@for (deficit of data.deficits; track $index) { <li>{{ deficitText(deficit) }}</li> }</ul></div></div>
@@ -136,7 +147,7 @@
         </dl>
       } @else {
         <p class="empty" data-testid="no-plan">{{ absenceText(data.absence_reason) }}</p>
-        @if (data.plan_status === 'INVALID' || data.absence_reason === 'invalid_automatic_plan') { <p class="warning-text" data-testid="invalid-plan">Las salidas automáticas permanecen apagadas porque el plan no es válido.</p> }
+        @if (isInvalidStatus(data.plan_status) || data.absence_reason === 'invalid_automatic_plan') { <p class="warning-text" data-testid="invalid-plan">Las salidas automáticas permanecen apagadas porque el plan no es válido.</p> }
       }
     </section>
 

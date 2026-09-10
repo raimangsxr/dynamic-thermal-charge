@@ -3,10 +3,12 @@
  * API codes remain stable and are intentionally not rendered as primary copy.
  */
 
-export type CanonicalPlanStatus = 'FEASIBLE' | 'DEGRADED' | 'INVALID';
+export type CanonicalPlanStatus = 'VALID' | 'CONVERGING' | 'DEGRADED' | 'INVALID';
 
 const PLAN_STATUS_ALIASES: Record<string, CanonicalPlanStatus> = {
-  feasible: 'FEASIBLE',
+  valid: 'VALID',
+  feasible: 'VALID',
+  converging: 'CONVERGING',
   degraded: 'DEGRADED',
   deficit: 'DEGRADED',
   best_effort: 'DEGRADED',
@@ -21,7 +23,8 @@ export function normalizePlanStatus(value: unknown): CanonicalPlanStatus | null 
 
 export function planStatusLabel(value: unknown): string {
   switch (normalizePlanStatus(value)) {
-    case 'FEASIBLE': return 'Cumplido';
+    case 'VALID': return 'Cumplido';
+    case 'CONVERGING': return 'Convergiendo';
     case 'DEGRADED': return 'Degradado';
     case 'INVALID': return 'No válido';
     default: return value ? 'Estado no reconocido' : 'Sin evaluación';
@@ -70,6 +73,8 @@ const PLAN_REASON_LABELS: Record<string, string> = {
   solver_time_limit: 'Tiempo del optimizador agotado',
   solver_failure: 'Fallo del optimizador',
   solver_unavailable: 'Optimizador no disponible',
+  projected_deficit: 'Déficit térmico no previsto',
+  surplus_stored_energy: 'Excedente de energía almacenada',
 };
 
 const PLAN_EVENT_LABELS: Record<string, string> = {

@@ -11,7 +11,7 @@ from uuid import uuid4
 from sqlalchemy import delete, insert, select, update
 from sqlalchemy.engine import Engine
 
-from ..charge_planning import AutomaticPlan
+from ..charge_planning import CONVERGING, DEGRADED, INVALID, VALID, AutomaticPlan
 from ..models import ChargeTelemetry, TemperatureTarget, validate_temperature_targets
 from ..weather import ForecastCycleState, HourlyForecastPoint, future_forecast_points
 from . import ConfigConflictError, ConfigValidationError, ForecastRef
@@ -81,6 +81,8 @@ class SqlPlanningRepository:
                 "contracted_power_w": 5200,
                 "max_heating_power_w": 5200,
                 "base_load_w": 0,
+                "deviation_shortfall_tolerance_c": 0.1,
+                "deviation_surplus_soc_percent": 5.0,
                 "mqtt_simulation_enabled": False,
                 "mqtt_simulation_initial_temperature_c": 45.0,
                 "mqtt_simulation_publish_seconds": 30.0,
@@ -99,6 +101,8 @@ class SqlPlanningRepository:
             "base_load_w",
         )
         floats = (
+            "deviation_shortfall_tolerance_c",
+            "deviation_surplus_soc_percent",
             "mqtt_simulation_initial_temperature_c",
             "mqtt_simulation_publish_seconds",
             "mqtt_simulation_thermal_loss_c_per_hour",
@@ -152,6 +156,8 @@ class SqlPlanningRepository:
             "base_load_w",
         }
         float_fields = {
+            "deviation_shortfall_tolerance_c",
+            "deviation_surplus_soc_percent",
             "mqtt_simulation_initial_temperature_c",
             "mqtt_simulation_publish_seconds",
             "mqtt_simulation_thermal_loss_c_per_hour",
@@ -187,6 +193,16 @@ class SqlPlanningRepository:
             raise ConfigValidationError("power limits must be positive", field="contracted_power_w")
         if int(combined["base_load_w"]) < 0:
             raise ConfigValidationError("base_load_w must be non-negative", field="base_load_w")
+        if float(combined["deviation_shortfall_tolerance_c"]) <= 0:
+            raise ConfigValidationError(
+                "deviation_shortfall_tolerance_c must be positive",
+                field="deviation_shortfall_tolerance_c",
+            )
+        if float(combined["deviation_surplus_soc_percent"]) <= 0:
+            raise ConfigValidationError(
+                "deviation_surplus_soc_percent must be positive",
+                field="deviation_surplus_soc_percent",
+            )
         if not -50 <= float(combined["mqtt_simulation_initial_temperature_c"]) <= 80:
             raise ConfigValidationError(
                 "mqtt_simulation_initial_temperature_c must be between -50 and 80",
@@ -480,26 +496,28 @@ class SqlPlanningRepository:
         reason: str,
         active: bool,
         forecast_ref: ForecastRef | None = None,
+        preserve_active: bool = False,
+        audit_details: Mapping[str, Any] | None = None,
     ) -> int:
         now = datetime.now(timezone.utc)
-        active = active and plan.status != "INVALID"
+        status = _canonical_plan_status(plan.status)
+        active = active and status in {VALID, CONVERGING}
         # New rows use the canonical domain codes.  ``active_plan`` still
         # accepts the historical lower-case values so old installations remain
         # readable after an upgrade.
-        stored_status = {
-            "FEASIBLE": "FEASIBLE",
-            "DEGRADED": "DEGRADED",
-            "INVALID": "INVALID",
-        }.get(plan.status, plan.status)
+        stored_status = status
         violations = [_json_ready(item.__dict__) for item in plan.violations]
         inputs = {
             "input_token": plan.input_token,
             "generated_at": None if plan.generated_at is None else plan.generated_at.isoformat(),
             "demand": [_json_ready(item.__dict__) for item in plan.demand],
             "explanations": [_json_ready(item.__dict__) for item in plan.explanations],
+            "convergence_by_heater": _json_ready(dict(plan.convergence_by_heater)),
+            "convergence_at": _json_ready(plan.convergence_at),
+            "guaranteed_until": _json_ready(plan.guaranteed_until),
         }
         with transaction(self._application, self._application_location) as connection:
-            if active or plan.status == "INVALID":
+            if active or (status == INVALID and not preserve_active):
                 connection.execute(update(automatic_plan).where((automatic_plan.c.installation_id == self._installation_id) & automatic_plan.c.active.is_(True)).values(active=False))
             forecast_id = (
                 forecast_ref.id
@@ -534,7 +552,14 @@ class SqlPlanningRepository:
                     charge_energy_json=json.dumps(slot.charge_energy_kwh or {}),
                     heat_limit_json=json.dumps(slot.heat_delivery_limit_kwh or {}),
                 ))
-            connection.execute(insert(plan_audit).values(installation_id=self._installation_id, plan_id=plan_id, event="activated" if active else "preview", reason=reason, details_json=json.dumps({"status": plan.status, "violations": violations}), occurred_at=to_utc(now)))
+            details = {
+                "status": status,
+                "violations": violations,
+                "preserve_active": preserve_active,
+            }
+            if audit_details:
+                details.update(_json_ready(dict(audit_details)))
+            connection.execute(insert(plan_audit).values(installation_id=self._installation_id, plan_id=plan_id, event="activated" if active else "preview", reason=reason, details_json=json.dumps(details), occurred_at=to_utc(now)))
         return plan_id
 
     def create_preview_job(
@@ -759,15 +784,11 @@ class SqlPlanningRepository:
                     return None
                 slots = connection.execute(select(automatic_plan_slot).where(automatic_plan_slot.c.plan_id == row["id"]).order_by(automatic_plan_slot.c.slot_start)).mappings().all()
         inputs = json.loads(row["inputs_json"])
-        status = {
-            "FEASIBLE": "FEASIBLE",
-            "DEGRADED": "DEGRADED",
-            "INVALID": "INVALID",
-            "feasible": "FEASIBLE",
-            "deficit": "DEGRADED",
-            "best_effort": "DEGRADED",
-            "preview": "INVALID",
-        }.get(row["status"], row["status"])
+        status = _canonical_plan_status(row["status"])
+        convergence_by_heater = {
+            str(heater_id): _datetime_or_none(value)
+            for heater_id, value in (inputs.get("convergence_by_heater") or {}).items()
+        }
         return {
             "id": int(row["id"]),
             "configuration_revision": int(row["configuration_revision"]),
@@ -785,6 +806,9 @@ class SqlPlanningRepository:
             "violations": json.loads(row["deficits_json"]),
             "demand": inputs.get("demand", []),
             "explanations": inputs.get("explanations", []),
+            "convergence_by_heater": convergence_by_heater,
+            "convergence_at": _datetime_or_none(inputs.get("convergence_at")),
+            "guaranteed_until": _datetime_or_none(inputs.get("guaranteed_until")),
             "slots": [
                 {
                     "start": from_utc(item["slot_start"]),
@@ -973,6 +997,32 @@ class SqlPlanningRepository:
 
 def _float_or_none(value: Any) -> float | None:
     return None if value is None else float(value)
+
+
+def _canonical_plan_status(value: Any) -> str:
+    raw = str(value)
+    return {
+        VALID: VALID,
+        CONVERGING: CONVERGING,
+        DEGRADED: DEGRADED,
+        INVALID: INVALID,
+        # Historical automatic-plan rows.
+        "FEASIBLE": VALID,
+        "DEFICIT": DEGRADED,
+        "BEST_EFFORT": DEGRADED,
+        "PREVIEW": INVALID,
+    }.get(raw.upper(), raw)
+
+
+def _datetime_or_none(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
 
 
 def _json_ready(value: Any) -> Any:

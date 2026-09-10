@@ -34,6 +34,7 @@ import {
   forecastNextRunLabel,
   forecastSourceLabel,
   forecastStatusLabel,
+  normalizePlanStatus,
   planReasonLabel,
   planStatusLabel,
   requirementLabel,
@@ -85,6 +86,26 @@ export class Status {
 
   planStatus(status: string | null | undefined): string {
     return planStatusLabel(status);
+  }
+
+  isConvergingStatus(status: string | null | undefined): boolean {
+    return normalizePlanStatus(status) === 'CONVERGING';
+  }
+
+  isDegradedStatus(status: string | null | undefined): boolean {
+    return normalizePlanStatus(status) === 'DEGRADED';
+  }
+
+  isInvalidStatus(status: string | null | undefined): boolean {
+    return normalizePlanStatus(status) === 'INVALID';
+  }
+
+  convergenceText(status: StatusDto): string {
+    const entries = Object.entries(status.convergence_by_heater ?? {})
+      .filter(([, value]) => Boolean(value))
+      .map(([heaterId, value]) => `${this.heaterText(heaterId)}: ${this.instant(value)}`);
+    if (entries.length) return entries.join(' · ');
+    return status.convergence_at ? `cumplimiento global: ${this.instant(status.convergence_at)}` : 'sin hora de cumplimiento demostrable';
   }
 
   private readonly poller = new Poller(() => this.refresh());

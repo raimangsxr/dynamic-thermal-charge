@@ -67,6 +67,8 @@ SECRET_KINDS = {
     "mqtt_username": "recoverable",
     "mqtt_password": "recoverable",
     "aemet_api_key": "recoverable",
+    "smtp_username": "recoverable",
+    "smtp_password": "recoverable",
 }
 
 
@@ -350,6 +352,12 @@ class SystemConfigurationRepository:
         mqtt_password = bool(secrets.get("mqtt_password"))
         if mqtt_user != mqtt_password:
             missing.append("mqtt_username/mqtt_password pair")
+        # An unauthenticated relay is legitimate, so credentials are optional;
+        # half a credential pair is not.
+        smtp_user = bool(secrets.get("smtp_username"))
+        smtp_password = bool(secrets.get("smtp_password"))
+        if smtp_user != smtp_password:
+            missing.append("smtp_username/smtp_password pair")
         if configuration.weather.provider == "aemet" and not secrets.get(
             "aemet_api_key"
         ):

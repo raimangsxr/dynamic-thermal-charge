@@ -12,8 +12,11 @@ import {
 
 describe('operator presentation vocabulary', () => {
   it.each([
-    ['FEASIBLE', 'FEASIBLE'],
-    ['feasible', 'FEASIBLE'],
+    ['VALID', 'VALID'],
+    ['valid', 'VALID'],
+    ['FEASIBLE', 'VALID'],
+    ['feasible', 'VALID'],
+    ['converging', 'CONVERGING'],
     ['Degraded', 'DEGRADED'],
     ['best_effort', 'DEGRADED'],
     ['INVALID', 'INVALID'],
@@ -23,7 +26,8 @@ describe('operator presentation vocabulary', () => {
   });
 
   it('localizes canonical and legacy plan status codes', () => {
-    expect(planStatusLabel('FEASIBLE')).toBe('Cumplido');
+    expect(planStatusLabel('VALID')).toBe('Cumplido');
+    expect(planStatusLabel('converging')).toBe('Convergiendo');
     expect(planStatusLabel('deficit')).toBe('Degradado');
     expect(planStatusLabel('invalid')).toBe('No válido');
   });

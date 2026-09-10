@@ -4,13 +4,16 @@ from datetime import datetime, time, timedelta, timezone
 import pytest
 
 from dynamic_thermal_charge.charge_planning import (
+    CONVERGING,
     DEGRADED,
     FEASIBLE,
     INVALID,
     PlanningInput,
+    PlanningViolation,
     RoomEnergyDemandEstimator,
     RoomEnergyPlanner,
     active_temperature_target,
+    group_planning_violations,
     room_energy_step,
 )
 from dynamic_thermal_charge.models import ChargeTelemetry, Heater, OutputConfig, TemperatureTarget, ThermalProfile
@@ -297,6 +300,93 @@ def test_horizon_start_deficit_uses_initial_temperature_and_boundary_time():
         and item.shortfall == pytest.approx(0.5)
         for item in result.violations
     )
+
+
+def test_an_initial_deficit_is_converging_only_after_a_later_active_boundary():
+    heater = replace(
+        _heater(),
+        temperature_targets=(TemperatureTarget(20.5, time(0, 0)),),
+    )
+    result = RoomEnergyPlanner().build(
+        _request(
+            heaters=(heater,),
+            outdoor=20.0,
+            horizon_hours=2,
+            telemetry={"salon": _telemetry("salon", indoor=20.0, soc=100.0)},
+        )
+    )
+
+    assert result.status == CONVERGING
+    assert result.convergence_by_heater["salon"] == START + timedelta(hours=1)
+    assert result.convergence_at == START + timedelta(hours=1)
+    assert result.guaranteed_until == START + timedelta(hours=2)
+
+
+def test_a_target_window_end_cannot_be_used_as_convergence_evidence():
+    heater = replace(
+        _heater(),
+        temperature_targets=(TemperatureTarget(20.5, time(0, 0), time(1, 0)),),
+    )
+    result = RoomEnergyPlanner().build(
+        _request(
+            heaters=(heater,),
+            horizon_hours=2,
+            telemetry={"salon": _telemetry("salon", indoor=20.0, soc=100.0)},
+        )
+    )
+
+    assert result.status == DEGRADED
+    assert result.convergence_by_heater == {}
+
+
+def test_consecutive_deficits_are_grouped_without_losing_raw_observations():
+    window_start = START + timedelta(hours=1)
+    window_end = START + timedelta(hours=4)
+    raw = (
+        PlanningViolation(
+            "salon", "temperature_comfort", 20.0, 0.4, window_start,
+            "insufficient_stored_energy_or_power", window_start, window_end,
+        ),
+        PlanningViolation(
+            "salon", "temperature_comfort", 19.7, 0.8,
+            window_start + timedelta(minutes=30),
+            "insufficient_stored_energy_or_power", window_start, window_end,
+        ),
+        PlanningViolation(
+            "salon", "temperature_comfort", 19.9, 0.6,
+            window_start + timedelta(hours=1),
+            "insufficient_stored_energy_or_power", window_start, window_end,
+        ),
+    )
+
+    grouped = group_planning_violations(raw, slot_minutes=30)
+
+    assert len(raw) == 3
+    assert len(grouped) == 1
+    assert grouped[0]["observation_count"] == 3
+    assert grouped[0]["affected_from"] == window_start
+    assert grouped[0]["affected_until"] == window_start + timedelta(hours=1)
+    assert grouped[0]["shortfall"] == pytest.approx(0.8)
+
+
+def test_a_gap_splits_deficit_groups_with_the_same_cause():
+    window_start = START + timedelta(hours=1)
+    window_end = START + timedelta(hours=5)
+    raw = (
+        PlanningViolation(
+            "salon", "temperature_comfort", 20.0, 0.4, window_start,
+            "insufficient_stored_energy_or_power", window_start, window_end,
+        ),
+        PlanningViolation(
+            "salon", "temperature_comfort", 19.5, 0.7,
+            window_start + timedelta(hours=2),
+            "insufficient_stored_energy_or_power", window_start, window_end,
+        ),
+    )
+
+    grouped = group_planning_violations(raw, slot_minutes=30)
+
+    assert len(grouped) == 2
 
 
 def test_insufficient_storage_reports_shortfall_without_negative_energy():

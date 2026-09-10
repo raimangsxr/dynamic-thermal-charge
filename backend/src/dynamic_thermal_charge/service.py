@@ -52,6 +52,9 @@ class PlanRefresh:
     plan_ref: PlanRef | None = None
     installation_revision: int = 0
     forecast_ref: ForecastRef | None = None
+    # A degraded candidate is recorded for diagnostics but must not replace the
+    # controller's last activable schedule.
+    persist_plan: bool = True
 
 
 class ControllerService:
@@ -69,6 +72,8 @@ class ControllerService:
         heartbeat: HeartbeatPublisher | None = None,
         control_state: Callable[[], object] | None = None,
         mark_recalculation_processed: Callable[[int], None] | None = None,
+        alerts=None,
+        deviation_check: Callable[[datetime], bool] | None = None,
     ) -> None:
         self._controller = controller
         self._store = store
@@ -82,6 +87,10 @@ class ControllerService:
         self._heartbeat = heartbeat
         self._control_state = control_state
         self._mark_recalculation_processed = mark_recalculation_processed
+        self._alerts = alerts
+        self._alert_failure: str | None = None
+        self._deviation_check = deviation_check
+        self._deviation_failure: str | None = None
         self._current_plan_ref: PlanRef | None = None
         self._degraded = False
         self._refresh_abandoned = False
@@ -113,6 +122,17 @@ class ControllerService:
                     durable_control, "recalculation_pending", False
                 ):
                     next_refresh = now
+                governed = not (
+                    durable_control is not None
+                    and not getattr(durable_control, "automatic_control_enabled", True)
+                )
+                if (
+                    governed
+                    and not self._refresh_abandoned
+                    and now < next_refresh
+                    and self._deviation_detected(now)
+                ):
+                    next_refresh = now
                 if (
                     now >= next_refresh
                     and not self._refresh_abandoned
@@ -127,6 +147,10 @@ class ControllerService:
                 # be hours apart, and a dead controller would look alive for all
                 # of it. Never raises, by contract.
                 self._publish_heartbeat(now)
+                # Alert delivery is the last thing in the cycle and can never
+                # affect it: the conditions that raise an alert are exactly the
+                # ones where the loop must keep running.
+                self._deliver_alerts()
                 cycles += 1
                 if max_cycles is None or cycles < max_cycles:
                     self._wait(self._poll_seconds)
@@ -141,11 +165,13 @@ class ControllerService:
     ) -> tuple[ScheduleResult | None, datetime]:
         try:
             refreshed = self._refresh_plan(now)
-            persisted_ref = self._store.save(
-                refreshed.plan,
-                installation_revision=refreshed.installation_revision,
-                forecast_ref=refreshed.forecast_ref,
-            )
+            persisted_ref = None
+            if refreshed.persist_plan:
+                persisted_ref = self._store.save(
+                    refreshed.plan,
+                    installation_revision=refreshed.installation_revision,
+                    forecast_ref=refreshed.forecast_ref,
+                )
         except ConfigStoreUnavailableError as exc:
             self._enter_degraded(exc)
             self._warn_if_planless(plan)
@@ -173,7 +199,10 @@ class ControllerService:
             return plan, now + timedelta(seconds=self._error_retry_seconds)
 
         self._leave_degraded()
-        self._current_plan_ref = persisted_ref or refreshed.plan_ref
+        if refreshed.persist_plan:
+            self._current_plan_ref = persisted_ref or refreshed.plan_ref
+        elif refreshed.plan_ref is not None:
+            self._current_plan_ref = refreshed.plan_ref
         self._acknowledge_recalculation()
         self._prune_history(now)
         return (
@@ -221,6 +250,38 @@ class ControllerService:
             ),
             plan_ref=self._current_plan_ref,
         )
+
+    def _deviation_detected(self, now: datetime) -> bool:
+        """Whether the active plan stopped serving; never breaks the loop."""
+        if self._deviation_check is None:
+            return False
+        try:
+            detected = bool(self._deviation_check(now))
+        except Exception as exc:  # noqa: BLE001 - the cadence still runs
+            detail = str(exc)
+            if detail != self._deviation_failure:
+                logger.error("Could not evaluate the plan deviation: %s", detail)
+                self._deviation_failure = detail
+            return False
+        if self._deviation_failure is not None:
+            logger.info("Plan deviation evaluation recovered")
+            self._deviation_failure = None
+        return detected
+
+    def _deliver_alerts(self) -> None:
+        if self._alerts is None:
+            return
+        try:
+            self._alerts.deliver_pending()
+        except Exception as exc:  # noqa: BLE001 - never break the control loop
+            detail = str(exc)
+            if detail != self._alert_failure:
+                logger.error("Could not deliver queued alerts: %s", detail)
+                self._alert_failure = detail
+            return
+        if self._alert_failure is not None:
+            logger.info("Alert delivery recovered")
+            self._alert_failure = None
 
     def _prune_history(self, now: datetime) -> None:
         if self._history is None:

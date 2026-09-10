@@ -412,10 +412,12 @@ def _plan_history_item(row: dict[str, Any], source: str) -> dict[str, Any]:
     """Project either plan table into the stable history API shape."""
     if source == "automatic":
         status = {
-            "FEASIBLE": "FEASIBLE",
+            "VALID": "VALID",
+            "CONVERGING": "CONVERGING",
             "DEGRADED": "DEGRADED",
             "INVALID": "INVALID",
-            "feasible": "FEASIBLE",
+            "FEASIBLE": "VALID",
+            "feasible": "VALID",
             "deficit": "DEGRADED",
             "best_effort": "DEGRADED",
             "preview": "INVALID",

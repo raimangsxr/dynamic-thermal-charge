@@ -89,6 +89,7 @@ export interface PlanningSlotDto extends PlanSlotDto {
   temperature_shortfall_start_c_by_heater: Record<string, number>;
   temperature_shortfall_c_by_heater: Record<string, number>;
   charge_energy_kwh_by_heater: Record<string, number>;
+  heat_delivery_limit_kwh_by_heater: Record<string, number>;
 }
 
 export interface PlanningTimelineSlotDto {
@@ -108,6 +109,7 @@ export interface PlanningTimelineSlotDto {
   temperature_shortfall_start_c_by_heater: Record<string, number>;
   temperature_shortfall_c_by_heater: Record<string, number>;
   charge_energy_kwh_by_heater: Record<string, number>;
+  heat_delivery_limit_kwh_by_heater: Record<string, number>;
 }
 
 export interface PlanningPlanDto {
@@ -140,6 +142,8 @@ export interface PlanningSiteConfigDto {
   contracted_power_w: number;
   max_heating_power_w: number;
   base_load_w: number;
+  deviation_shortfall_tolerance_c: number;
+  deviation_surplus_soc_percent: number;
   mqtt_simulation_enabled: boolean;
   mqtt_simulation_initial_temperature_c: number;
   mqtt_simulation_publish_seconds: number;
@@ -164,6 +168,9 @@ export interface PlanningDto {
   telemetry?: ChargeTelemetryDto[];
   plan_status?: string | null;
   deficits?: PlanningDeficitDto[];
+  convergence_by_heater?: Record<string, string | null>;
+  convergence_at?: string | null;
+  guaranteed_until?: string | null;
   preview_token?: string | null;
   temperature_targets_revision?: number;
   temperature_targets?: TemperatureTargetDto[];
@@ -178,9 +185,9 @@ export interface PlanningDto {
 
 export interface TemperatureTargetDto { id: number | null; heater_id: string; target_temperature_c: number; start_time: string; end_time: string; weekdays: number[]; enabled: boolean; }
 export interface ChargeTelemetryDto { heater_id: string; indoor_temperature_c: number | null; stored_soc_percent: number | null; indoor_received_at: string | null; stored_soc_received_at: string | null; state: string; missing_fields: string[]; oldest_age_seconds: number | null; stored_energy_kwh: number | null; }
-export interface PlanningDeficitDto { heater_id: string | null; requirement: string; achievable_value: number | null; shortfall: number | null; at: string | null; reason: string; target_temperature_c: number | null; projected_temperature_c: number | null; shortfall_c: number | null; stored_energy_kwh: number | null; stored_soc_percent: number | null; }
+export interface PlanningDeficitDto { heater_id: string | null; requirement: string; achievable_value: number | null; shortfall: number | null; at: string | null; reason: string; target_temperature_c: number | null; projected_temperature_c: number | null; shortfall_c: number | null; stored_energy_kwh: number | null; stored_soc_percent: number | null; target_window_start?: string | null; target_window_end?: string | null; affected_from?: string | null; affected_until?: string | null; observation_count?: number; }
 export interface TemperatureTargetRequest { heater_id: string; target_temperature_c: number; start_time: string; end_time: string; weekdays: number[]; enabled?: boolean; }
-export interface PlanningPreviewDto { token: string; status: 'FEASIBLE' | 'DEGRADED' | 'INVALID'; score: number[]; window_start: string; window_end: string; horizon_start: string; horizon_end: string; slot_minutes: number; slots: Array<Record<string, unknown>>; deficits: PlanningDeficitDto[]; violations: PlanningDeficitDto[]; explanations: Array<Record<string, unknown>>; demand: Array<Record<string, unknown>>; temperature_targets: TemperatureTargetDto[]; operator_summary: Record<string, unknown>; }
+export interface PlanningPreviewDto { token: string; status: 'VALID' | 'CONVERGING' | 'DEGRADED' | 'INVALID' | 'FEASIBLE'; score: number[]; window_start: string; window_end: string; horizon_start: string; horizon_end: string; slot_minutes: number; slots: Array<Record<string, unknown>>; deficits: PlanningDeficitDto[]; violations: PlanningDeficitDto[]; convergence_by_heater?: Record<string, string | null>; convergence_at?: string | null; guaranteed_until?: string | null; explanations: Array<Record<string, unknown>>; demand: Array<Record<string, unknown>>; temperature_targets: TemperatureTargetDto[]; operator_summary: Record<string, unknown>; }
 export interface PlanningCheckDto { name: string; status: 'pending' | 'running' | 'completed' | 'error' | 'cancelled' | 'skipped'; detail: string | null; started_at: string | null; finished_at: string | null; }
 export interface PlanningPreviewJobDto { job_id: string; status: 'queued' | 'running' | 'cancelling' | 'completed' | 'error' | 'cancelled' | 'interrupted'; cancellation_requested: boolean; requested_at: string; started_at: string | null; finished_at: string | null; checks: PlanningCheckDto[]; result: PlanningPreviewDto | null; operator_summary: Record<string, unknown>; error_code: string | null; error_detail: string | null; }
 export interface AutomaticPlanAuditItem { id: number; plan_id: number | null; event: string; reason: string; details: Record<string, unknown>; occurred_at: string; }
@@ -207,6 +214,9 @@ export interface StatusDto {
   telemetry?: ChargeTelemetryDto[];
   plan_status?: string | null;
   deficits?: PlanningDeficitDto[];
+  convergence_by_heater?: Record<string, string | null>;
+  convergence_at?: string | null;
+  guaranteed_until?: string | null;
   horizon_start?: string | null;
   horizon_end?: string | null;
   absence_reason?: string | null;
@@ -391,7 +401,7 @@ export interface RelayTestHeaterDto { id: string; name: string; position: number
 export interface RelayTestViewDto { session: { id: string; status: 'starting' | 'active' | 'ending' | 'ended' | 'failed'; owner: boolean; requested_at: string; activated_at: string | null; ended_at: string | null; lease_expires_at: string | null; end_reason: string | null } | null; controller: { state_is_current: boolean; last_seen_at: string | null }; safety: { automatic_control_blocked: boolean; fault_latched: boolean; fault_session_id: string | null; fault_reason: string | null; fault_latched_at: string | null; fault_recovery_attempted_at: string | null; fault_recovered_at: string | null }; audit: { degraded: boolean; degraded_since: string | null }; state_poll_seconds?: number; lease_renew_seconds?: number; heaters: RelayTestHeaterDto[]; }
 export interface RelayTestStartDto { session_id: string; client_credential: string; status: string; lease_expires_at: string; state_poll_seconds: number; lease_renew_seconds: number; }
 
-export type SystemSection = 'database' | 'api' | 'mqtt' | 'weather' | 'output' | 'logging' | 'operations';
+export type SystemSection = 'database' | 'api' | 'mqtt' | 'weather' | 'output' | 'logging' | 'operations' | 'email';
 export type ActivationPolicy = 'hot' | 'next_cycle' | 'restart';
 export interface SecretStatusDto { configured: boolean; rotated_at: string | null; }
 export interface SystemConfigurationDto {
@@ -466,4 +476,15 @@ export interface ApiErrorDto {
   message: string;
   field: string | null;
   heater_id: string | null;
+}
+
+export interface AlertTypeDto {
+  name: string;
+  title: string;
+  description: string;
+  enabled: boolean;
+}
+
+export interface AlertCatalogueDto {
+  alerts: AlertTypeDto[];
 }

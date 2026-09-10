@@ -471,7 +471,7 @@ def test_automatic_plan_status_aliases_are_read_as_canonical_codes(initialised_s
         active=False,
     )
 
-    assert initialised_store.planning.latest_plan()["status"] == "FEASIBLE"
+    assert initialised_store.planning.latest_plan()["status"] == "VALID"
 
 
 def test_the_applied_emission_limit_survives_the_plan_round_trip(initialised_store):
@@ -503,10 +503,10 @@ def test_the_applied_emission_limit_survives_the_plan_round_trip(initialised_sto
         configuration_revision=1,
         constraints_revision=initialised_store.planning.site()["revision"],
         reason="periodic",
-        active=True,
+        active=False,
     )
 
-    stored = initialised_store.planning.active_plan()
+    stored = initialised_store.planning.latest_plan()
 
     assert stored is not None
     assert stored["slots"][0]["heat_delivery_limit_kwh"] == {"salon": 0.581376}

@@ -178,6 +178,56 @@ class OperationsSystemSettings:
             raise ValueError("relay-test renewal must be shorter than its lease")
 
 
+EMAIL_SECURITY_MODES = frozenset({"none", "starttls", "tls"})
+
+
+@dataclass(frozen=True)
+class EmailSystemSettings:
+    """How alert email leaves the installation.
+
+    The credentials are not here: they live in the secret store, like the AEMET
+    key and the MQTT password.
+    """
+
+    enabled: bool = False
+    host: str | None = None
+    port: int = 587
+    security: str = "starttls"
+    sender: str | None = None
+    recipients: tuple[str, ...] = ()
+    timeout_seconds: float = 10.0
+
+    def __post_init__(self) -> None:
+        if self.security not in EMAIL_SECURITY_MODES:
+            raise ValueError("email.security must be none, starttls or tls")
+        if not 1 <= self.port <= 65535:
+            raise ValueError("email.port must be between 1 and 65535")
+        if not math.isfinite(self.timeout_seconds) or self.timeout_seconds <= 0:
+            raise ValueError("email.timeout_seconds must be positive")
+        for address in self.recipients:
+            if "@" not in str(address).strip():
+                raise ValueError("every email.recipients entry must be an address")
+        if self.sender is not None and "@" not in self.sender:
+            raise ValueError("email.sender must be an address")
+        if self.enabled:
+            if not (self.host or "").strip():
+                raise ValueError("email.host is required to send alerts")
+            if not (self.sender or "").strip():
+                raise ValueError("email.sender is required to send alerts")
+            if not self.recipients:
+                raise ValueError("email.recipients is required to send alerts")
+
+    @property
+    def deliverable(self) -> bool:
+        """Whether an alert could actually be sent with this configuration."""
+        return bool(
+            self.enabled
+            and (self.host or "").strip()
+            and (self.sender or "").strip()
+            and self.recipients
+        )
+
+
 @dataclass(frozen=True)
 class SystemConfiguration:
     database: DatabaseSettings = DatabaseSettings()
@@ -187,10 +237,12 @@ class SystemConfiguration:
     output: OutputSystemSettings = OutputSystemSettings()
     logging: LoggingSystemSettings = LoggingSystemSettings()
     operations: OperationsSystemSettings = OperationsSystemSettings()
+    email: EmailSystemSettings = EmailSystemSettings()
 
     def documents(self) -> dict[str, dict[str, Any]]:
         documents = asdict(self)
         documents["api"]["cors_origins"] = list(self.api.cors_origins)
+        documents["email"]["recipients"] = list(self.email.recipients)
         return documents
 
     @classmethod
@@ -206,6 +258,10 @@ class SystemConfiguration:
         if "fixed_stored_soc_percent" not in mqtt and "fixed_stored_charge_percent" in mqtt:
             mqtt["fixed_stored_soc_percent"] = mqtt["fixed_stored_charge_percent"]
         mqtt.pop("fixed_stored_charge_percent", None)
+        # An installation configured before alerts existed has no email
+        # document; the defaults keep sending disabled until it is configured.
+        email = dict(documents.get("email") or {})
+        email["recipients"] = tuple(email.get("recipients", ()))
         return cls(
             database=_strict_build(DatabaseSettings, documents["database"]),
             api=_strict_build(ApiSystemSettings, api),
@@ -214,6 +270,7 @@ class SystemConfiguration:
             output=_strict_build(OutputSystemSettings, documents["output"]),
             logging=_strict_build(LoggingSystemSettings, documents["logging"]),
             operations=_strict_build(OperationsSystemSettings, documents["operations"]),
+            email=_strict_build(EmailSystemSettings, email),
         )
 
 
@@ -225,6 +282,7 @@ SECTION_TYPES = {
     "output": OutputSystemSettings,
     "logging": LoggingSystemSettings,
     "operations": OperationsSystemSettings,
+    "email": EmailSystemSettings,
 }
 
 PUBLIC_SECTION_FIELDS = {
@@ -271,6 +329,13 @@ ACTIVATION_POLICIES: dict[str, ActivationPolicy] = {
     "operations.relay_test_lease_renew_seconds": ActivationPolicy.HOT,
     "operations.retention_days": ActivationPolicy.NEXT_CYCLE,
     "operations.fallback_max_age_minutes": ActivationPolicy.HOT,
+    "email.enabled": ActivationPolicy.HOT,
+    "email.host": ActivationPolicy.HOT,
+    "email.port": ActivationPolicy.HOT,
+    "email.security": ActivationPolicy.HOT,
+    "email.sender": ActivationPolicy.HOT,
+    "email.recipients": ActivationPolicy.HOT,
+    "email.timeout_seconds": ActivationPolicy.HOT,
 }
 
 
@@ -295,6 +360,8 @@ __all__ = [
     "ActivationPolicy",
     "ApiSystemSettings",
     "DatabaseSettings",
+    "EMAIL_SECURITY_MODES",
+    "EmailSystemSettings",
     "LoggingSystemSettings",
     "MqttSystemSettings",
     "OperationsSystemSettings",

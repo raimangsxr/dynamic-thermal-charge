@@ -40,6 +40,8 @@ SENTINELS = {
     "mqtt_username": "secret-mqtt-user",
     "mqtt_password": "secret-mqtt-password",
     "aemet_api_key": "secret-aemet-key",
+    "smtp_username": "secret-smtp-user",
+    "smtp_password": "secret-smtp-password",
 }
 
 
