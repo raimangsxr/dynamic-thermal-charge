@@ -15,14 +15,19 @@ from ...persistence.history import SqlStatusReader
 from ...charge_planning import (
     AutomaticPlan,
     AutomaticPlanSlot,
+    CONVERGING,
+    DEGRADED,
     DemandEstimate,
     HeaterExplanation,
+    INVALID,
     RoomEnergyInterval,
+    VALID,
     PLANNING_HORIZON_HOURS,
     DeterministicChargeOptimizer,
     PlanningCancelled,
     PlanningInput,
     PlanningViolation,
+    group_planning_violations,
     input_token,
     resolve_planning_telemetry,
 )
@@ -222,7 +227,7 @@ def get_planning(
         if hasattr(store.planning, "latest_plan")
         else None
     )
-    if latest_automatic is not None and latest_automatic["status"] == "INVALID":
+    if latest_automatic is not None and _canonical_plan_status(latest_automatic["status"]) == INVALID:
         response = PlanningResponse(
             observed_at=observed_at,
             timezone=timezone_name,
@@ -233,7 +238,13 @@ def get_planning(
             absence_reason="invalid_automatic_plan",
             forecast=_forecast_view(latest_forecast),
             plan_status="INVALID",
-            deficits=[PlanningDeficitView(**item) for item in latest_automatic["deficits"]],
+            deficits=_grouped_deficit_views(
+                _plan_violations(latest_automatic),
+                slot_minutes=latest_automatic.get("slot_minutes"),
+            ),
+            convergence_by_heater=latest_automatic.get("convergence_by_heater", {}),
+            convergence_at=latest_automatic.get("convergence_at"),
+            guaranteed_until=latest_automatic.get("guaranteed_until"),
             horizon_start=latest_automatic["horizon_start"],
             horizon_end=latest_automatic["horizon_end"],
             forecast_status=cycle_status.get("forecast_status"),
@@ -255,6 +266,16 @@ def get_planning(
             heaters=heaters,
             absence_reason="no_active_automatic_plan",
             forecast=_forecast_view(latest_forecast),
+            plan_status=_canonical_plan_status(latest_automatic["status"]),
+            deficits=_grouped_deficit_views(
+                _plan_violations(latest_automatic),
+                slot_minutes=latest_automatic.get("slot_minutes"),
+            ),
+            convergence_by_heater=latest_automatic.get("convergence_by_heater", {}),
+            convergence_at=latest_automatic.get("convergence_at"),
+            guaranteed_until=latest_automatic.get("guaranteed_until"),
+            horizon_start=latest_automatic["horizon_start"],
+            horizon_end=latest_automatic["horizon_end"],
             forecast_status=cycle_status.get("forecast_status"),
             forecast_last_attempt_at=cycle_status.get("forecast_last_attempt_at"),
             forecast_last_error=cycle_status.get("forecast_last_error"),
@@ -510,8 +531,11 @@ def activate_planning(
     )
     if plan is None:
         plan = DeterministicChargeOptimizer().build(planning_request)
-    if plan.status == "INVALID":
-        raise ConfigValidationError("the plan is invalid and cannot be activated", field="planning")
+    if plan.status not in {VALID, CONVERGING}:
+        raise ConfigValidationError(
+            "only VALID or CONVERGING plans can be activated",
+            field="planning",
+        )
     new_revision = (
         store.planning.replace_all_temperature_targets(
             temperature_targets,
@@ -574,6 +598,67 @@ def update_heater_planning(
     # Re-read through the public projection so the response cannot contain a
     # partially applied topic configuration.
     return get_planning(app_request, store)
+
+
+def _violation_payload(item: PlanningViolation | dict[str, Any]) -> dict[str, Any]:
+    if isinstance(item, dict):
+        return dict(item)
+    return dict(item.__dict__)
+
+
+def _canonical_plan_status(value: Any) -> str:
+    raw = str(value)
+    return {
+        VALID: VALID,
+        CONVERGING: CONVERGING,
+        DEGRADED: DEGRADED,
+        INVALID: INVALID,
+        "FEASIBLE": VALID,
+        "DEFICIT": DEGRADED,
+        "BEST_EFFORT": DEGRADED,
+        "PREVIEW": INVALID,
+    }.get(raw.upper(), raw)
+
+
+def _plan_violations(plan: dict[str, Any]) -> list[dict[str, Any]] | tuple:
+    """Read raw observations while accepting older persistence payloads."""
+    violations = plan.get("violations")
+    if violations is not None:
+        return violations
+    return plan.get("deficits", [])
+
+
+def _deficit_view(item: PlanningViolation | dict[str, Any]) -> PlanningDeficitView:
+    payload = _violation_payload(item)
+    if (
+        payload.get("requirement") == "temperature_comfort"
+        and payload.get("achievable_value") is not None
+        and payload.get("shortfall") is not None
+    ):
+        payload.setdefault(
+            "target_temperature_c",
+            float(payload["achievable_value"]) + float(payload["shortfall"]),
+        )
+        payload.setdefault("projected_temperature_c", payload["achievable_value"])
+        payload.setdefault("shortfall_c", payload["shortfall"])
+    return PlanningDeficitView.model_validate(payload)
+
+
+def _raw_deficit_views(
+    violations: list[PlanningViolation | dict[str, Any]] | tuple[PlanningViolation | dict[str, Any], ...],
+) -> list[PlanningDeficitView]:
+    return [_deficit_view(item) for item in violations]
+
+
+def _grouped_deficit_views(
+    violations: list[PlanningViolation | dict[str, Any]] | tuple[PlanningViolation | dict[str, Any], ...],
+    *,
+    slot_minutes: int | None = None,
+) -> list[PlanningDeficitView]:
+    return [
+        _deficit_view(item)
+        for item in group_planning_violations(violations, slot_minutes=slot_minutes)
+    ]
 
 
 def _automatic_planning_response(
@@ -641,11 +726,16 @@ def _automatic_planning_response(
         forecast_last_error=cycle_status.get("forecast_last_error"),
         forecast_next_run_at=cycle_status.get("forecast_next_run_at"),
         plan=automatic_plan,
-        plan_status=automatic["status"],
-        deficits=[PlanningDeficitView(**item) for item in automatic["deficits"]],
+        plan_status=_canonical_plan_status(automatic["status"]),
+        deficits=_grouped_deficit_views(
+            _plan_violations(automatic), slot_minutes=automatic.get("slot_minutes")
+        ),
+        convergence_by_heater=automatic.get("convergence_by_heater", {}),
+        convergence_at=automatic.get("convergence_at"),
+        guaranteed_until=automatic.get("guaranteed_until"),
         absence_reason=(
             "invalid_automatic_plan"
-            if automatic["status"] == "INVALID"
+            if _canonical_plan_status(automatic["status"]) == INVALID
             else None
         ),
         horizon_start=horizon_start,
@@ -705,6 +795,17 @@ def _enrich(response: PlanningResponse, store: Store, observed_at: datetime) -> 
             ),
         ))
     active = planning.active_plan()
+    latest = planning.latest_plan() if hasattr(planning, "latest_plan") else None
+    diagnostic = (
+        latest
+        if latest is not None
+        and _canonical_plan_status(latest["status"]) == DEGRADED
+        and (
+            active is None
+            or latest["created_at"] > active["created_at"]
+        )
+        else None
+    )
     response.temperature_targets = [
         TemperatureTargetView(
             id=target.id,
@@ -719,10 +820,17 @@ def _enrich(response: PlanningResponse, store: Store, observed_at: datetime) -> 
         for target in heater.temperature_targets
     ]
     response.telemetry = views
-    if active is not None:
-        response.plan_status = active["status"]
-        response.deficits = [PlanningDeficitView(**item) for item in active["deficits"]]
-        response.preview_token = active["input_token"]
+    if active is not None or diagnostic is not None:
+        projection = diagnostic or active
+        assert projection is not None
+        response.plan_status = _canonical_plan_status(projection["status"])
+        response.deficits = _grouped_deficit_views(
+            _plan_violations(projection), slot_minutes=projection.get("slot_minutes")
+        )
+        response.convergence_by_heater = projection.get("convergence_by_heater", {})
+        response.convergence_at = projection.get("convergence_at")
+        response.guaranteed_until = projection.get("guaranteed_until")
+        response.preview_token = active["input_token"] if active is not None else None
     site = planning.site()
     response.temperature_targets_revision = site["revision"]
     response.base_load_w = int(site.get("base_load_w", 0))
@@ -964,6 +1072,8 @@ def _automatic_plan_from_preview_payload(payload: dict[str, Any]) -> AutomaticPl
             _preview_optional_float(item.get("shortfall")),
             _preview_optional_datetime(item.get("at")),
             str(item["reason"]),
+            _preview_optional_datetime(item.get("target_window_start")),
+            _preview_optional_datetime(item.get("target_window_end")),
         )
         for item in _preview_dict_list(violation_payload)
     )
@@ -1024,18 +1134,25 @@ def _automatic_plan_from_preview_payload(payload: dict[str, Any]) -> AutomaticPl
             )
             for item in demand_items
         )
+    convergence_by_heater = {
+        str(heater_id): _preview_optional_datetime(value)
+        for heater_id, value in (payload.get("convergence_by_heater") or {}).items()
+    }
     return AutomaticPlan(
         _preview_datetime(payload["horizon_start"]),
         _preview_datetime(payload["horizon_end"]),
         int(payload["slot_minutes"]),
         slots,
         violations,
-        str(payload["status"]),
+        _canonical_plan_status(payload["status"]),
         tuple(float(value) for value in payload.get("score", [])),
         str(payload["token"]),
         _preview_optional_datetime(payload.get("generated_at")),
         explanations,
         demand,
+        convergence_by_heater,
+        _preview_optional_datetime(payload.get("convergence_at")),
+        _preview_optional_datetime(payload.get("guaranteed_until")),
     )
 
 
@@ -1180,24 +1297,13 @@ def _preview_response(
     forecast_status: dict[str, Any] | None = None,
     timezone_name: str = "UTC",
 ) -> PlanningPreviewResponse:
-    violations = [
-        PlanningDeficitView(
-            **item.__dict__,
-            target_temperature_c=(
-                item.achievable_value + item.shortfall
-                if item.requirement == "temperature_comfort"
-                and item.achievable_value is not None
-                and item.shortfall is not None
-                else None
-            ),
-            projected_temperature_c=item.achievable_value
-            if item.requirement == "temperature_comfort"
-            else None,
-            shortfall_c=item.shortfall
-            if item.requirement == "temperature_comfort"
-            else None,
+    raw_violations = [_violation_payload(item) for item in plan.violations]
+    violations = _raw_deficit_views(raw_violations)
+    grouped_violations = [
+        _deficit_view(item)
+        for item in group_planning_violations(
+            raw_violations, slot_minutes=plan.slot_minutes
         )
-        for item in plan.violations
     ]
     planning_window_hours = 12 if site is None else int(site["planning_window_hours"])
     horizon_hours = PLANNING_HORIZON_HOURS if site is None else int(site["forecast_horizon_hours"])
@@ -1219,11 +1325,23 @@ def _preview_response(
         "stale": None if forecast_status is None else forecast_status.get("forecast_stale"),
         "last_error": None if forecast_status is None else forecast_status.get("forecast_last_error"),
     }
-    warnings: dict[str, dict[str, Any]] = {}
-    for item in violations:
+    warnings = []
+    for item in grouped_violations:
         cause = item.reason.split(":", 1)[0]
-        warning = warnings.setdefault(cause, {"cause": cause, "count": 0, "recommended_action": _recommended_action(cause)})
-        warning["count"] += 1
+        warnings.append(
+            {
+                "cause": cause,
+                "heater_id": item.heater_id,
+                "requirement": item.requirement,
+                "count": item.observation_count,
+                "shortfall_c": item.shortfall_c,
+                "target_window_start": item.target_window_start,
+                "target_window_end": item.target_window_end,
+                "affected_from": item.affected_from,
+                "affected_until": item.affected_until,
+                "recommended_action": _recommended_action(cause),
+            }
+        )
     room_energy_model = bool(
         plan.demand and isinstance(plan.demand[0], RoomEnergyInterval)
     )
@@ -1239,7 +1357,8 @@ def _preview_response(
             for heater_id in sorted({item.heater_id for item in plan.demand})
         } if room_energy_model else {},
         "room_energy_model": room_energy_model,
-        "warnings": list(warnings.values()),
+        "warnings": warnings,
+        "deficit_groups": [item.model_dump(mode="json") for item in grouped_violations],
         "recommended_action": "Revisa los avisos agrupados y corrige la entrada indicada." if warnings else "No se requieren acciones adicionales.",
         "power_limits": {
             "contracted_w": None if site is None else int(site["contracted_power_w"]),
@@ -1277,8 +1396,11 @@ def _preview_response(
         horizon_start=plan.horizon_start, horizon_end=plan.horizon_end,
         slot_minutes=plan.slot_minutes,
         slots=preview_slots,
-        deficits=violations,
+        deficits=grouped_violations,
         violations=violations,
+        convergence_by_heater=dict(plan.convergence_by_heater),
+        convergence_at=plan.convergence_at,
+        guaranteed_until=plan.guaranteed_until,
         explanations=[
             {
                 "heater_id": item.heater_id,

@@ -348,7 +348,7 @@ def test_preview_uses_mqtt_fixed_telemetry_when_broker_disabled(client, initiali
     assert preview.json()["status"] != INVALID
 
 
-def test_preview_activation_persists_v1_snapshot(client, initialised_store, api_clock):
+def test_preview_activation_persists_room_energy_snapshot(client, initialised_store, api_clock):
     config, revision = initialised_store.repository.current()
     points = forecast(API_NOW, 25, 4)
     record = SimpleNamespace(
@@ -363,18 +363,33 @@ def test_preview_activation_persists_v1_snapshot(client, initialised_store, api_
     for item in config.heaters:
         for field, value in (("indoor_temperature_c", 21), ("stored_soc_percent", 100)):
             initialised_store.planning.record_telemetry(item.id, field, value, API_NOW)
+    targets = [
+        {
+            "heater_id": heater.id,
+            "target_temperature_c": 0,
+            "start_time": "00:00",
+            "end_time": "00:00",
+            "weekdays": list(range(7)),
+            "enabled": True,
+        }
+        for heater in config.heaters
+    ]
     api_clock.advance(minutes=1)
     preview = client.post(
         "/api/v1/planning/preview", headers=AUTH,
-        json={"expected_revision": 1},
+        json={"expected_revision": 1, "temperature_targets": targets},
     )
     assert preview.status_code == 200, preview.text
     body = preview.json()
-    assert body["status"] in {FEASIBLE, DEGRADED}
+    assert body["status"] == FEASIBLE
     api_clock.advance(minutes=4)
     activated = client.post(
         "/api/v1/planning/activate", headers=AUTH,
-        json={"token": body["token"], "expected_revision": 1},
+        json={
+            "token": body["token"],
+            "expected_revision": 1,
+            "temperature_targets": targets,
+        },
     )
     assert activated.status_code == 200, activated.text
     stored = initialised_store.planning.active_plan()

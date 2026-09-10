@@ -320,9 +320,87 @@ def test_status_uses_the_active_automatic_plan_over_a_legacy_plan(
 
     body = _status(client)
 
-    assert body["plan_status"] == "FEASIBLE"
+    assert body["plan_status"] == "VALID"
     assert body["plan"]["slot_minutes"] == 15
     assert body["plan"]["slots"][0]["heater_ids"] == [heater_id]
+
+
+def test_status_shows_a_new_degraded_candidate_without_governing_outputs(
+    client, initialised_store, heartbeat
+):
+    from dynamic_thermal_charge.charge_planning import (
+        AutomaticPlan,
+        AutomaticPlanSlot,
+        DEGRADED,
+        PlanningViolation,
+        VALID,
+    )
+
+    config, revision = initialised_store.repository.current()
+    heater_id = config.heaters[0].id
+    start = API_NOW
+    slot = AutomaticPlanSlot(
+        start,
+        start + timedelta(minutes=30),
+        (heater_id,),
+        config.heaters[0].power_w,
+        {heater_id: 50.0},
+        {heater_id: 0.0},
+        outdoor_temperature_c=5.0,
+    )
+    planning = initialised_store.planning
+    planning.save_plan(
+        AutomaticPlan(
+            start,
+            start + timedelta(hours=2),
+            30,
+            (slot,),
+            (),
+            VALID,
+            (),
+            "active-valid",
+            start,
+        ),
+        configuration_revision=revision,
+        constraints_revision=planning.site()["revision"],
+        reason="periodic",
+        active=True,
+    )
+    planning.save_plan(
+        AutomaticPlan(
+            start,
+            start + timedelta(hours=2),
+            30,
+            (),
+            (
+                PlanningViolation(
+                    heater_id,
+                    "temperature_comfort",
+                    19.0,
+                    2.0,
+                    start,
+                    "insufficient_stored_energy_or_power",
+                ),
+            ),
+            DEGRADED,
+            (),
+            "candidate-degraded",
+            start,
+        ),
+        configuration_revision=revision,
+        constraints_revision=planning.site()["revision"],
+        reason="periodic",
+        active=False,
+        preserve_active=True,
+    )
+    heartbeat.publish(API_NOW, degraded=False)
+
+    body = _status(client)
+
+    assert body["plan_status"] == DEGRADED
+    assert body["plan"] is not None
+    assert body["plan"]["slots"][0]["heater_ids"] == [heater_id]
+    assert body["deficits"][0]["shortfall"] == pytest.approx(2.0)
 
 
 def test_status_does_not_revive_legacy_plan_after_an_invalid_automatic_plan(
@@ -369,6 +447,58 @@ def test_status_does_not_revive_legacy_plan_after_an_invalid_automatic_plan(
     assert planning.status_code == 200, planning.text
     assert planning.json()["plan_status"] == "INVALID"
     assert planning.json()["deficits"][0]["reason"] == "invalid_configuration"
+
+
+def test_activation_rejects_a_degraded_preview_without_changing_the_active_plan(
+    client, initialised_store, monkeypatch
+):
+    from dynamic_thermal_charge.api.routes import planning as planning_route
+    from dynamic_thermal_charge.charge_planning import (
+        AutomaticPlan,
+        DEGRADED,
+        input_token,
+    )
+
+    def degraded_plan(_self, request):
+        return AutomaticPlan(
+            request.horizon_start,
+            request.horizon_start + timedelta(hours=request.horizon_hours),
+            request.slot_minutes,
+            (),
+            (),
+            DEGRADED,
+            (),
+            input_token(request),
+            request.horizon_start,
+        )
+
+    monkeypatch.setattr(
+        planning_route.DeterministicChargeOptimizer,
+        "build",
+        degraded_plan,
+    )
+    revision = initialised_store.planning.site()["revision"]
+
+    preview = client.post(
+        "/api/v1/planning/preview",
+        headers=AUTH,
+        json={"expected_revision": revision},
+    )
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["status"] == DEGRADED
+
+    activation = client.post(
+        "/api/v1/planning/activate",
+        headers=AUTH,
+        json={
+            "token": preview.json()["token"],
+            "expected_revision": revision,
+        },
+    )
+
+    assert activation.status_code == 422
+    assert "VALID or CONVERGING" in activation.json()["message"]
+    assert initialised_store.planning.active_plan() is None
 
 
 def test_planning_projection_reports_signed_room_exchange():

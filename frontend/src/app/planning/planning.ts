@@ -18,6 +18,7 @@ import {
   forecastNextRunLabel,
   forecastSourceLabel,
   forecastStatusLabel,
+  normalizePlanStatus,
   planReasonLabel,
   planStatusLabel,
   requirementLabel,
@@ -100,6 +101,8 @@ function explainPlanningDeficit(item: PlanningDeficitDto): string {
   if (item.reason.startsWith('heater_power_exceeds_global_limit')) return 'La potencia nominal del acumulador supera el límite disponible de calefacción.';
   if (item.reason.startsWith('solver_time_limit')) return 'El optimizador alcanzó su límite de tiempo y entregó una solución degradada.';
   if (item.reason.startsWith('solver_failure') || item.reason.startsWith('solver_unavailable')) return 'El optimizador no pudo resolver el plan; revisa la instalación o contacta soporte.';
+  if (item.reason.startsWith('projected_deficit')) return 'La proyección actual muestra un déficit térmico que el plan anterior no contemplaba.';
+  if (item.reason.startsWith('surplus_stored_energy')) return 'La proyección actual conserva más energía almacenada de la prevista y el plan puede adaptarse.';
   return detail || item.reason;
 }
 
@@ -137,6 +140,9 @@ function recommendedPlanningAction(cause: string): string | null {
                 <div><dt>Temperatura proyectada</dt><dd>{{ temperature(item.projected_temperature_c) }}</dd></div>
                 <div><dt>Déficit térmico</dt><dd>{{ temperature(item.shortfall_c) }}</dd></div>
                 <div><dt>Energía almacenada</dt><dd>{{ energy(item.stored_energy_kwh) }}</dd></div>
+                @if (item.target_window_start || item.target_window_end) { <div><dt>Ventana objetivo</dt><dd>{{ dateTime(item.target_window_start) }}–{{ dateTime(item.target_window_end) }}</dd></div> }
+                @if (item.affected_from || item.affected_until) { <div><dt>Intervalo afectado</dt><dd>{{ dateTime(item.affected_from) }}–{{ dateTime(item.affected_until) }}</dd></div> }
+                @if (item.observation_count && item.observation_count > 1) { <div><dt>Observaciones agrupadas</dt><dd>{{ item.observation_count }}</dd></div> }
                 <div><dt>Causa</dt><dd>{{ problemExplanation(item) }}</dd></div>
                 @if (problemAction(item, preview); as action) { <div><dt>Acción recomendada</dt><dd>{{ action }}</dd></div> }
               </dl>
@@ -689,6 +695,10 @@ export class Planning implements AfterViewInit, OnDestroy {
   activate(): void {
     const preview = this.preview(); const revision = this.snapshot()?.temperature_targets_revision;
     if (!preview || revision === undefined || this.activationInFlight()) return;
+    if (!this.canActivateStatus(preview.status)) {
+      this.actionError.set('Solo se pueden activar previews VALID o CONVERGING.');
+      return;
+    }
     this.activationInFlight.set(true);
     this.actionError.set(''); this.actionMessage.set('Guardando y activando…');
     this.api.planningActivate(preview.token, this.apiTargets(), revision).subscribe({
@@ -727,6 +737,34 @@ export class Planning implements AfterViewInit, OnDestroy {
 
   planStatus(status: string | null | undefined): string {
     return planStatusLabel(status);
+  }
+
+  canActivateStatus(status: string | null | undefined): boolean {
+    const normalized = normalizePlanStatus(status);
+    return normalized === 'VALID' || normalized === 'CONVERGING';
+  }
+
+  isConvergingStatus(status: string | null | undefined): boolean {
+    return normalizePlanStatus(status) === 'CONVERGING';
+  }
+
+  isDegradedStatus(status: string | null | undefined): boolean {
+    return normalizePlanStatus(status) === 'DEGRADED';
+  }
+
+  isInvalidStatus(status: string | null | undefined): boolean {
+    return normalizePlanStatus(status) === 'INVALID';
+  }
+
+  convergenceText(
+    convergenceByHeater: Record<string, string | null> | undefined,
+    convergenceAt: string | null | undefined,
+  ): string {
+    const entries = Object.entries(convergenceByHeater ?? {})
+      .filter(([, value]) => Boolean(value))
+      .map(([heaterId, value]) => `${this.heaterText(heaterId)}: ${this.dateTime(value)}`);
+    if (entries.length) return entries.join(' · ');
+    return convergenceAt ? `cumplimiento global: ${this.dateTime(convergenceAt)}` : 'sin hora de cumplimiento demostrable';
   }
 
   heaterText(heaterId: string | null | undefined): string {
@@ -1156,7 +1194,16 @@ export class Planning implements AfterViewInit, OnDestroy {
     if (job.result) {
       this.preview.set(job.result);
       this.previewPoller.stop();
-      this.actionMessage.set(job.result.status === 'INVALID' ? 'La ventana no es planificable; revisa los avisos.' : 'Vista previa calculada. Todavía no modifica el plan activo.');
+      const status = normalizePlanStatus(job.result.status);
+      this.actionMessage.set(
+        status === 'INVALID'
+          ? 'La ventana no es planificable; revisa los errores.'
+          : status === 'DEGRADED'
+            ? 'La vista previa es degradada y no se puede activar; revisa los avisos.'
+            : status === 'CONVERGING'
+              ? 'Vista previa convergente calculada. Puede activarse y seguirá adaptándose.'
+              : 'Vista previa calculada. Todavía no modifica el plan activo.',
+      );
       this.scheduleChartRender();
     } else if (['completed', 'error', 'cancelled', 'interrupted'].includes(job.status)) {
       this.previewPoller.stop();

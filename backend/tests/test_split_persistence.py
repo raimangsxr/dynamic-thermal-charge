@@ -1,8 +1,8 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import inspect, select, text, update
+from sqlalchemy import insert, inspect, select, text, update
 
 from dynamic_thermal_charge.models import IndoorReading
 from dynamic_thermal_charge.persistence import ConfigConflictError
@@ -31,6 +31,8 @@ from dynamic_thermal_charge.persistence.schema import (
     CONFIG_TABLES,
     application_metadata,
     application_schema_version,
+    automatic_plan,
+    automatic_plan_slot,
     configuration_metadata,
     configuration_schema_version,
 )
@@ -85,6 +87,81 @@ def test_configuration_repository_never_writes_application_store(split_store):
         assert connection.execute(
             select(application_schema_version.c.revision)
         ).scalar_one() == app_before
+
+
+def test_application_status_upgrade_preserves_plan_slots_and_allows_converging(
+    split_store,
+):
+    _paths, engines, _repository = split_store
+    end = NOW + timedelta(hours=1)
+    with engines.application.begin() as connection:
+        plan_id = connection.execute(
+            insert(automatic_plan).values(
+                installation_id=1,
+                configuration_revision=1,
+                constraints_revision=1,
+                forecast_id=None,
+                horizon_start=NOW,
+                horizon_end=end,
+                slot_minutes=30,
+                status="FEASIBLE",
+                reason="periodic",
+                input_token="migration-status-test",
+                score_json="[]",
+                deficits_json="[]",
+                inputs_json="{}",
+                active=True,
+                created_at=NOW,
+            )
+        ).inserted_primary_key[0]
+        connection.execute(
+            insert(automatic_plan_slot).values(
+                plan_id=plan_id,
+                slot_start=NOW,
+                slot_end=NOW + timedelta(minutes=30),
+                heater_ids_json="[\"salon\"]",
+                power_w=2800,
+                stored_charge_json="{}",
+                required_charge_json="{}",
+                outdoor_temperature_c=5.0,
+            )
+        )
+        connection.execute(
+            update(application_schema_version).values(revision=8)
+        )
+
+    upgrade_active_schemas(engines.configuration, engines.application)
+
+    with engines.application.connect() as connection:
+        assert connection.execute(
+            select(automatic_plan_slot.c.plan_id).where(
+                automatic_plan_slot.c.plan_id == plan_id
+            )
+        ).scalar_one() == plan_id
+        connection.execute(
+            insert(automatic_plan).values(
+                installation_id=1,
+                configuration_revision=1,
+                constraints_revision=1,
+                forecast_id=None,
+                horizon_start=NOW,
+                horizon_end=end,
+                slot_minutes=30,
+                status="CONVERGING",
+                reason="periodic",
+                input_token="converging-status-test",
+                score_json="[]",
+                deficits_json="[]",
+                inputs_json="{}",
+                active=False,
+                created_at=NOW + timedelta(minutes=1),
+            )
+        )
+    status_sql = " ".join(
+        str(item.get("sqltext", ""))
+        for item in inspect(engines.application).get_check_constraints("automatic_plan")
+    )
+    assert "CONVERGING" in status_sql
 
 
 def test_history_and_indoor_readings_use_application_engine(split_store):

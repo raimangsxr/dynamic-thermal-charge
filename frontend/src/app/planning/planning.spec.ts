@@ -36,14 +36,14 @@ const PLANNING: PlanningDto = {
     window_start: '2026-01-16T00:00:00Z', window_end: '2026-01-16T01:00:00Z',
     slot_minutes: 30, installation_revision: 4, created_at: '2026-01-15T20:00:00Z',
     slots: [
-      { start: '2026-01-16T00:00:00Z', end: '2026-01-16T00:30:00Z', heater_ids: ['salon'], total_power_w: 2800, temperature_c: 3, temperature_interpolated: false, stored_energy_kwh_by_heater: { salon: 10.9 }, stored_energy_next_kwh_by_heater: { salon: 10.5 }, indoor_temperature_c_by_heater: { salon: 18.5 }, indoor_temperature_next_c_by_heater: { salon: 18.9 }, target_temperature_c_by_heater: { salon: 21 }, heat_delivered_kwh_by_heater: { salon: 1.2 }, thermal_loss_kwh_by_heater: { salon: 0.4 }, temperature_shortfall_start_c_by_heater: { salon: 2.5 }, temperature_shortfall_c_by_heater: { salon: 2.1 }, charge_energy_kwh_by_heater: { salon: 1.4 } },
-      { start: '2026-01-16T00:30:00Z', end: '2026-01-16T01:00:00Z', heater_ids: [], total_power_w: 0, temperature_c: null, temperature_interpolated: true, stored_energy_kwh_by_heater: { salon: 10.5 }, stored_energy_next_kwh_by_heater: { salon: 9.8 }, indoor_temperature_c_by_heater: { salon: 18.9 }, indoor_temperature_next_c_by_heater: { salon: 18.2 }, target_temperature_c_by_heater: { salon: 21 }, heat_delivered_kwh_by_heater: { salon: 0.3 }, thermal_loss_kwh_by_heater: { salon: 0.4 }, temperature_shortfall_start_c_by_heater: { salon: 2.1 }, temperature_shortfall_c_by_heater: { salon: 2.8 }, charge_energy_kwh_by_heater: { salon: 0 } },
+      { start: '2026-01-16T00:00:00Z', end: '2026-01-16T00:30:00Z', heater_ids: ['salon'], total_power_w: 2800, temperature_c: 3, temperature_interpolated: false, stored_energy_kwh_by_heater: { salon: 10.9 }, stored_energy_next_kwh_by_heater: { salon: 10.5 }, indoor_temperature_c_by_heater: { salon: 18.5 }, indoor_temperature_next_c_by_heater: { salon: 18.9 }, target_temperature_c_by_heater: { salon: 21 }, heat_delivered_kwh_by_heater: { salon: 1.2 }, thermal_loss_kwh_by_heater: { salon: 0.4 }, temperature_shortfall_start_c_by_heater: { salon: 2.5 }, temperature_shortfall_c_by_heater: { salon: 2.1 }, charge_energy_kwh_by_heater: { salon: 1.4 }, heat_delivery_limit_kwh_by_heater: { salon: 1.25 } },
+      { start: '2026-01-16T00:30:00Z', end: '2026-01-16T01:00:00Z', heater_ids: [], total_power_w: 0, temperature_c: null, temperature_interpolated: true, stored_energy_kwh_by_heater: { salon: 10.5 }, stored_energy_next_kwh_by_heater: { salon: 9.8 }, indoor_temperature_c_by_heater: { salon: 18.9 }, indoor_temperature_next_c_by_heater: { salon: 18.2 }, target_temperature_c_by_heater: { salon: 21 }, heat_delivered_kwh_by_heater: { salon: 0.3 }, thermal_loss_kwh_by_heater: { salon: 0.4 }, temperature_shortfall_start_c_by_heater: { salon: 2.1 }, temperature_shortfall_c_by_heater: { salon: 2.8 }, charge_energy_kwh_by_heater: { salon: 0 }, heat_delivery_limit_kwh_by_heater: { salon: 1.25 } },
     ],
   },
   horizon_start: '2026-01-16T00:00:00Z', horizon_end: '2026-01-18T00:00:00Z',
   timeline: [
-    { start: '2026-01-16T00:00:00Z', end: '2026-01-16T00:30:00Z', heater_ids: ['salon'], total_power_w: 2800, temperature_c: 3, temperature_interpolated: false, stored_energy_kwh_by_heater: { salon: 10.9 }, stored_energy_next_kwh_by_heater: { salon: 10.5 }, indoor_temperature_c_by_heater: { salon: 18.5 }, indoor_temperature_next_c_by_heater: { salon: 18.9 }, target_temperature_c_by_heater: { salon: 21 }, heat_delivered_kwh_by_heater: { salon: 1.2 }, thermal_loss_kwh_by_heater: { salon: 0.4 }, temperature_shortfall_start_c_by_heater: { salon: 2.5 }, temperature_shortfall_c_by_heater: { salon: 2.1 }, charge_energy_kwh_by_heater: { salon: 1.4 } },
-    { start: '2026-01-16T00:30:00Z', end: '2026-01-16T01:00:00Z', heater_ids: [], total_power_w: 0, temperature_c: 3.5, temperature_interpolated: false, stored_energy_kwh_by_heater: { salon: 10.5 }, stored_energy_next_kwh_by_heater: { salon: 9.8 }, indoor_temperature_c_by_heater: { salon: 18.9 }, indoor_temperature_next_c_by_heater: { salon: 18.2 }, target_temperature_c_by_heater: { salon: 21 }, heat_delivered_kwh_by_heater: { salon: 0.3 }, thermal_loss_kwh_by_heater: { salon: 0.4 }, temperature_shortfall_start_c_by_heater: { salon: 2.1 }, temperature_shortfall_c_by_heater: { salon: 2.8 }, charge_energy_kwh_by_heater: { salon: 0 } },
+    { start: '2026-01-16T00:00:00Z', end: '2026-01-16T00:30:00Z', heater_ids: ['salon'], total_power_w: 2800, temperature_c: 3, temperature_interpolated: false, stored_energy_kwh_by_heater: { salon: 10.9 }, stored_energy_next_kwh_by_heater: { salon: 10.5 }, indoor_temperature_c_by_heater: { salon: 18.5 }, indoor_temperature_next_c_by_heater: { salon: 18.9 }, target_temperature_c_by_heater: { salon: 21 }, heat_delivered_kwh_by_heater: { salon: 1.2 }, thermal_loss_kwh_by_heater: { salon: 0.4 }, temperature_shortfall_start_c_by_heater: { salon: 2.5 }, temperature_shortfall_c_by_heater: { salon: 2.1 }, charge_energy_kwh_by_heater: { salon: 1.4 }, heat_delivery_limit_kwh_by_heater: { salon: 1.25 } },
+    { start: '2026-01-16T00:30:00Z', end: '2026-01-16T01:00:00Z', heater_ids: [], total_power_w: 0, temperature_c: 3.5, temperature_interpolated: false, stored_energy_kwh_by_heater: { salon: 10.5 }, stored_energy_next_kwh_by_heater: { salon: 9.8 }, indoor_temperature_c_by_heater: { salon: 18.9 }, indoor_temperature_next_c_by_heater: { salon: 18.2 }, target_temperature_c_by_heater: { salon: 21 }, heat_delivered_kwh_by_heater: { salon: 0.3 }, thermal_loss_kwh_by_heater: { salon: 0.4 }, temperature_shortfall_start_c_by_heater: { salon: 2.1 }, temperature_shortfall_c_by_heater: { salon: 2.8 }, charge_energy_kwh_by_heater: { salon: 0 }, heat_delivery_limit_kwh_by_heater: { salon: 1.25 } },
   ],
   allocations: [{ heater_id: 'salon', requested_minutes: 60, allocated_minutes: 30, unmet_minutes: 30 }],
   heaters: [{ id: 'salon', name: 'Salón', power_w: 2800, capacity_kwh: 22.4, priority: 90, enabled: true }],
@@ -462,12 +462,53 @@ describe('Planning', () => {
     document.querySelector<HTMLButtonElement>('[data-testid="detail-dialog-close"]')?.click();
     await new Promise((resolve) => setTimeout(resolve, 100));
 
-    const invalid = { ...PREVIEW, status: 'INVALID' as const, deficits: [], violations: PREVIEW.deficits };
+    const invalid = {
+      ...PREVIEW,
+      status: 'INVALID' as const,
+      deficits: [],
+      violations: [
+        ...PREVIEW.deficits,
+        { ...PREVIEW.deficits[0], at: '2026-01-16T01:30:00Z', shortfall: 2.9, shortfall_c: 2.9 },
+      ],
+    };
     fixture.componentInstance.previewJob.set(PREVIEW_JOB(invalid));
     fixture.componentInstance.preview.set(invalid);
     fixture.detectChanges();
     expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="preview-problems-button"]')).not.toBeNull();
     expect((fixture.nativeElement as HTMLElement).querySelector('.preview-reasons')?.textContent).toContain('La energía almacenada o la potencia disponible');
+    const invalidButton = (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('[data-testid="preview-problems-button"]');
+    invalidButton?.click();
+    await fixture.whenStable();
+    expect(document.querySelectorAll('[data-testid="preview-problem"]')).toHaveLength(2);
+    document.querySelector<HTMLButtonElement>('[data-testid="detail-dialog-close"]')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  });
+
+  it('blocks degraded previews while allowing converging previews to activate', async () => {
+    backend.expectOne('/api/v1/planning').flush(PLANNING);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    await selectPlanningTab(fixture, 1);
+
+    fixture.componentInstance.preview.set(PREVIEW);
+    fixture.detectChanges();
+    let activateButton = (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('[data-testid="activate-button"]');
+    expect(activateButton?.disabled).toBe(true);
+    expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="candidate-degraded"]')?.textContent).toContain('No activable');
+
+    fixture.componentInstance.preview.set({
+      ...PREVIEW,
+      status: 'CONVERGING',
+      deficits: [],
+      violations: [],
+      convergence_by_heater: { salon: '2026-01-16T02:00:00Z' },
+      convergence_at: '2026-01-16T02:00:00Z',
+      guaranteed_until: '2026-01-17T00:00:00Z',
+    });
+    fixture.detectChanges();
+    activateButton = (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('[data-testid="activate-button"]');
+    expect(activateButton?.disabled).toBe(false);
+    expect((fixture.nativeElement as HTMLElement).textContent).toContain('Convergiendo');
   });
 
   it('does not show the problem button for a feasible preview', async () => {

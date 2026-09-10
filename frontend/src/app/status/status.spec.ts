@@ -189,6 +189,22 @@ describe('Status', () => {
     expect(deficits?.textContent).toContain('Salón');
     expect(deficits?.textContent).toContain('Objetivo térmico');
     expect(deficits?.textContent).not.toContain('insufficient_capacity_or_power');
+    expect(testId(element, 'plan-degraded')).not.toBeNull();
+  });
+
+  it('presents converging as an activable non-blocking warning with its guarantee', () => {
+    const element = load({
+      ...statusDto(),
+      plan_status: 'CONVERGING',
+      convergence_by_heater: { salon: '2026-01-16T02:00:00Z' },
+      convergence_at: '2026-01-16T02:00:00Z',
+      guaranteed_until: '2026-01-17T01:00:00Z',
+    });
+
+    expect(testId(element, 'plan-converging')).not.toBeNull();
+    expect(testId(element, 'plan-converging')?.textContent).toContain('convergencia');
+    expect(testId(element, 'plan-converging')?.textContent).toContain('garantizada');
+    expect(testId(element, 'plan-degraded')).toBeNull();
   });
 
   /* ------------------------------------------------------------ not current */

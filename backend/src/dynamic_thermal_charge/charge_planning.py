@@ -9,7 +9,7 @@ import json
 import logging
 import math
 from time import monotonic
-from typing import Callable, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
 from .models import (
@@ -23,7 +23,12 @@ from .scheduler import _normalize, advance_real, align_to_slot, next_slot_bounda
 from .system_settings import MqttSystemSettings
 from .weather import HourlyForecastPoint
 
-FEASIBLE = "FEASIBLE"
+# ``VALID`` is the only successful public status.  Keep ``FEASIBLE`` as an
+# import-level compatibility alias for integrations that still import the old
+# symbol; it deliberately has the new persisted value.
+VALID = "VALID"
+FEASIBLE = VALID
+CONVERGING = "CONVERGING"
 DEGRADED = "DEGRADED"
 INVALID = "INVALID"
 # Direct planner callers without persisted site settings retain the historical
@@ -116,6 +121,8 @@ class PlanningViolation:
     shortfall: float | None
     at: datetime | None
     reason: str
+    target_window_start: datetime | None = None
+    target_window_end: datetime | None = None
 
     @property
     def target_charge_percent(self) -> float:
@@ -200,6 +207,9 @@ class AutomaticPlan:
     generated_at: datetime | None = None
     explanations: tuple[HeaterExplanation, ...] = ()
     demand: tuple[DemandEstimate, ...] = ()
+    convergence_by_heater: Mapping[str, datetime | None] = field(default_factory=dict)
+    convergence_at: datetime | None = None
+    guaranteed_until: datetime | None = None
 
     @property
     def violations(self) -> tuple[PlanningViolation, ...]:
@@ -1000,6 +1010,196 @@ def active_temperature_target(
     return float(matches[0].target_temperature_c)
 
 
+def _target_window_for_at(
+    targets: Sequence[TemperatureTarget], at: datetime, timezone_name: str
+) -> tuple[datetime, datetime] | None:
+    """Return the concrete occurrence of the weekly target covering ``at``."""
+    zone = ZoneInfo(timezone_name)
+    local = at.astimezone(zone)
+    minute = local.hour * 60 + local.minute + local.second / 60 + local.microsecond / 60_000_000
+    weekday = local.weekday()
+    local_date = local.date()
+    for target in targets:
+        if not target.enabled:
+            continue
+        start = target.start_time.hour * 60 + target.start_time.minute
+        end = target.end_time.hour * 60 + target.end_time.minute
+        if start == end:
+            if weekday not in target.weekdays:
+                continue
+            return (
+                datetime.combine(local_date, target.start_time, tzinfo=zone),
+                datetime.combine(local_date + timedelta(days=1), target.end_time, tzinfo=zone),
+            )
+        if end > start:
+            if weekday not in target.weekdays or not start <= minute < end:
+                continue
+            return (
+                datetime.combine(local_date, target.start_time, tzinfo=zone),
+                datetime.combine(local_date, target.end_time, tzinfo=zone),
+            )
+        if weekday in target.weekdays and minute >= start:
+            return (
+                datetime.combine(local_date, target.start_time, tzinfo=zone),
+                datetime.combine(local_date + timedelta(days=1), target.end_time, tzinfo=zone),
+            )
+        previous_weekday = (weekday - 1) % 7
+        if previous_weekday in target.weekdays and minute < end:
+            previous_date = local_date - timedelta(days=1)
+            return (
+                datetime.combine(previous_date, target.start_time, tzinfo=zone),
+                datetime.combine(local_date, target.end_time, tzinfo=zone),
+            )
+    return None
+
+
+def _value_from_violation(
+    violation: PlanningViolation | Mapping[str, Any], name: str, default: Any = None
+) -> Any:
+    if isinstance(violation, Mapping):
+        return violation.get(name, default)
+    return getattr(violation, name, default)
+
+
+def _violation_time_key(value: Any) -> tuple[int, str]:
+    if isinstance(value, datetime):
+        return (0, _key(value).isoformat())
+    if value is None:
+        return (2, "")
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return (1, str(value))
+    return (0, _key(parsed).isoformat() if parsed.tzinfo is not None else parsed.isoformat())
+
+
+def group_planning_violations(
+    violations: Sequence[PlanningViolation | Mapping[str, Any]],
+    *,
+    slot_minutes: int | None = None,
+) -> list[dict[str, Any]]:
+    """Collapse consecutive observations for the operator-facing summary.
+
+    The input is intentionally left untouched: callers can expose the returned
+    groups while retaining every original boundary observation in the technical
+    ``violations`` collection.
+    """
+    grouped: dict[tuple[Any, ...], list[PlanningViolation | Mapping[str, Any]]] = {}
+    for violation in violations:
+        reason = str(_value_from_violation(violation, "reason", ""))
+        window_start = _value_from_violation(violation, "target_window_start")
+        window_end = _value_from_violation(violation, "target_window_end")
+        key = (
+            _value_from_violation(violation, "heater_id"),
+            _value_from_violation(violation, "requirement", ""),
+            reason.split(":", 1)[0],
+            _violation_time_key(window_start),
+            _violation_time_key(window_end),
+        )
+        grouped.setdefault(key, []).append(violation)
+
+    result: list[dict[str, Any]] = []
+    for candidates in grouped.values():
+        ordered_candidates = sorted(
+            candidates,
+            key=lambda item: _violation_time_key(_value_from_violation(item, "at")),
+        )
+        runs: list[list[PlanningViolation | Mapping[str, Any]]] = []
+        for item in ordered_candidates:
+            if not runs or not _violation_run_is_contiguous(
+                runs[-1][-1], item, slot_minutes
+            ):
+                runs.append([item])
+            else:
+                runs[-1].append(item)
+        for items in runs:
+            ordered = sorted(
+                items,
+                key=lambda item: _violation_time_key(_value_from_violation(item, "at")),
+            )
+            first = ordered[0]
+            shortfalls = [
+                float(value)
+                for item in items
+                if (value := _value_from_violation(item, "shortfall")) is not None
+            ]
+            achievable = [
+                float(value)
+                for item in items
+                if (value := _value_from_violation(item, "achievable_value")) is not None
+            ]
+            first_shortfall = _value_from_violation(first, "shortfall")
+            first_achievable = _value_from_violation(first, "achievable_value")
+            requirement = str(_value_from_violation(first, "requirement", ""))
+            max_shortfall = max(shortfalls, default=None)
+            first_at = _value_from_violation(first, "at")
+            last_at = _value_from_violation(ordered[-1], "at")
+            result.append(
+                {
+                    "heater_id": _value_from_violation(first, "heater_id"),
+                    "requirement": requirement,
+                    "achievable_value": min(achievable) if achievable else first_achievable,
+                    "shortfall": max_shortfall,
+                    "at": first_at,
+                    "reason": str(_value_from_violation(first, "reason", "")).split(":", 1)[0],
+                    "target_temperature_c": (
+                        float(first_achievable) + float(first_shortfall)
+                        if requirement == "temperature_comfort"
+                        and first_achievable is not None
+                        and first_shortfall is not None
+                        else None
+                    ),
+                    "projected_temperature_c": min(achievable) if achievable else None,
+                    "shortfall_c": max_shortfall if requirement == "temperature_comfort" else None,
+                    "stored_energy_kwh": _value_from_violation(first, "stored_energy_kwh"),
+                    "stored_soc_percent": _value_from_violation(first, "stored_soc_percent"),
+                    "target_window_start": _value_from_violation(first, "target_window_start"),
+                    "target_window_end": _value_from_violation(first, "target_window_end"),
+                    "affected_from": first_at,
+                    "affected_until": last_at,
+                    "observation_count": len(items),
+                }
+            )
+    return sorted(
+        result,
+        key=lambda item: (
+            _violation_time_key(item.get("target_window_start")),
+            _violation_time_key(item.get("affected_from")),
+            str(item.get("heater_id") or ""),
+        ),
+    )
+
+
+def _violation_run_is_contiguous(
+    previous: PlanningViolation | Mapping[str, Any],
+    current: PlanningViolation | Mapping[str, Any],
+    slot_minutes: int | None,
+) -> bool:
+    """Keep separate runs separate when a target gap has no observations."""
+    if slot_minutes is None or slot_minutes <= 0:
+        return True
+    previous_at = _violation_datetime(_value_from_violation(previous, "at"))
+    current_at = _violation_datetime(_value_from_violation(current, "at"))
+    if previous_at is None or current_at is None:
+        return True
+    if previous_at.tzinfo is not None and current_at.tzinfo is not None:
+        elapsed = (_key(current_at) - _key(previous_at)).total_seconds()
+    else:
+        elapsed = (current_at - previous_at).total_seconds()
+    return elapsed <= slot_minutes * 60 + 1e-6
+
+
+def _violation_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if value is None:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+
+
 def _room_telemetry_usable(value: ChargeTelemetry | None) -> bool:
     if value is None or value.indoor_temperature_c is None or value.stored_soc_percent is None:
         return False
@@ -1266,6 +1466,70 @@ def _build_room_energy_plan(request: PlanningInput) -> AutomaticPlan:
         )
 
 
+def _room_convergence_by_heater(
+    intervals: Sequence[RoomEnergyInterval],
+    heaters: Sequence[Heater],
+    horizon_end: datetime,
+    *,
+    targets: Mapping[str, Sequence[TemperatureTarget]] | None = None,
+    timezone_name: str = "UTC",
+    tolerance: float = 1e-6,
+) -> dict[str, datetime]:
+    """Find the first active target boundary after which comfort stays met."""
+    result: dict[str, datetime] = {}
+    target_map = targets or {}
+    for heater in heaters:
+        # A room target is an invariant at both borders of each active slot.
+        # Do not count a target-window end or an untargeted gap as evidence:
+        # the target must still be active at the boundary after the interval.
+        observations_by_boundary: dict[datetime, tuple[datetime, float]] = {}
+        for interval in intervals:
+            if interval.heater_id != heater.id or interval.target_temperature_c is None:
+                continue
+            start_key = _key(interval.start)
+            previous = observations_by_boundary.get(start_key)
+            if previous is None or interval.temperature_shortfall_start_c > previous[1]:
+                observations_by_boundary[start_key] = (
+                    interval.start,
+                    interval.temperature_shortfall_start_c,
+                )
+            end_target = active_temperature_target(
+                target_map.get(heater.id, ()), interval.end, timezone_name
+            )
+            if end_target is not None and math.isclose(
+                end_target, interval.target_temperature_c, abs_tol=tolerance
+            ):
+                end_key = _key(interval.end)
+                previous = observations_by_boundary.get(end_key)
+                if previous is None or interval.temperature_shortfall_c > previous[1]:
+                    observations_by_boundary[end_key] = (
+                        interval.end,
+                        interval.temperature_shortfall_c,
+                    )
+        observations = sorted(
+            observations_by_boundary.values(), key=lambda item: _key(item[0])
+        )
+        if not observations or not any(shortfall > tolerance for _, shortfall in observations):
+            continue
+        # A converging plan may only start with a deficit.  If a later target
+        # becomes deficient after an already-satisfied boundary, it is not a
+        # temporary adaptation and must remain DEGRADED.
+        first_deficit = next(
+            index for index, (_, shortfall) in enumerate(observations) if shortfall > tolerance
+        )
+        if first_deficit != 0:
+            continue
+        for index in range(1, len(observations)):
+            at, shortfall = observations[index]
+            if shortfall > tolerance:
+                continue
+            if all(value <= tolerance for _, value in observations[index:]):
+                if _key(at) < _key(horizon_end):
+                    result[heater.id] = at
+                break
+    return result
+
+
 def _solve_room_energy(
     request: PlanningInput, boundaries: Sequence[datetime], generated_at: datetime
 ) -> AutomaticPlan:
@@ -1439,11 +1703,17 @@ def _solve_room_energy(
             for index in range(len(starts))
         ),
     )
+    # Comfort is the primary objective.  Keep the secondary terms large enough
+    # to survive CBC's feasibility tolerances: otherwise a plan can satisfy a
+    # target while needlessly overshooting it because the heat tie-breaker is
+    # numerically invisible.  The comfort scale still dominates the complete
+    # range of the energy terms, so a measurable comfort deficit is never
+    # traded for a cheaper plan.
     objective = (
-        comfort_objective
-        + total_charge / charge_bound
+        1000.0 * comfort_objective
+        + 1e-6 * total_charge / charge_bound
         + 1e-3 * total_heat / heat_bound
-        + 1e-6 * deterministic / deterministic_bound
+        + 1e-12 * deterministic / deterministic_bound
     )
     score: list[float] = []
     started = monotonic()
@@ -1518,6 +1788,13 @@ def _solve_room_energy(
             heat_value = _required_solver_value(heat[(heater.id, index)].value(), "heat delivered")
             target = target_values[(heater.id, index)]
             outdoor = outdoor_values[(heater.id, index)]
+            target_window = (
+                None
+                if target is None
+                else _target_window_for_at(
+                    _room_targets(request, heater), start, request.timezone_name
+                )
+            )
             loss_value = heater.room_heat_loss_kw_per_c * (indoor_value - outdoor) * slot_hours
             charge_value = heater.charge_power_kw * slot_hours * on_value
             limit_value = _heat_delivery_limit_kwh(
@@ -1534,6 +1811,8 @@ def _solve_room_energy(
                         start_short_value,
                         start,
                         "insufficient_stored_energy_or_power",
+                        None if target_window is None else target_window[0],
+                        None if target_window is None else target_window[1],
                     )
                 )
             if target is not None and short_value > 1e-6:
@@ -1545,6 +1824,8 @@ def _solve_room_energy(
                         short_value,
                         boundaries[index + 1],
                         "insufficient_stored_energy_or_power",
+                        None if target_window is None else target_window[0],
+                        None if target_window is None else target_window[1],
                     )
                 )
             if on_value > 0.5:
@@ -1637,11 +1918,43 @@ def _solve_room_energy(
     )
     if time_limited:
         violations.append(PlanningViolation(None, "solver_time_limit", None, None, starts[0], "solver_time_limit"))
-    status = DEGRADED if violations else FEASIBLE
+    convergence_by_heater = _room_convergence_by_heater(
+        room_intervals,
+        heaters,
+        boundaries[-1],
+        targets={heater.id: _room_targets(request, heater) for heater in heaters},
+        timezone_name=request.timezone_name,
+    )
+    comfort_heaters = {
+        item.heater_id
+        for item in violations
+        if item.requirement == "temperature_comfort" and item.heater_id is not None
+    }
+    non_comfort_violations = tuple(
+        item for item in violations if item.requirement != "temperature_comfort"
+    )
+    if not violations:
+        status = VALID
+    elif (
+        comfort_heaters
+        and not non_comfort_violations
+        and comfort_heaters == set(convergence_by_heater)
+    ):
+        status = CONVERGING
+    else:
+        status = DEGRADED
+    convergence_at = (
+        max(convergence_by_heater.values())
+        if convergence_by_heater
+        else None
+    )
     plan = AutomaticPlan(
         starts[0], boundaries[-1], request.slot_minutes, tuple(plan_slots), tuple(violations),
         status, tuple(score), input_token(request), generated_at, explanations,
         tuple(room_intervals),
+        convergence_by_heater,
+        convergence_at,
+        boundaries[-1] if status in {VALID, CONVERGING} else None,
     )
     _notify(request, "safety")
     _notify(request, "summary")
@@ -1713,10 +2026,11 @@ def _invalid_room_plan(
 
 
 __all__ = [
-    "AutomaticPlan", "AutomaticPlanSlot", "DEGRADED", "DemandEstimate",
+    "AutomaticPlan", "AutomaticPlanSlot", "CONVERGING", "DEGRADED", "DemandEstimate",
     "DegreeHoursDemandEstimator", "DeterministicChargeOptimizer", "FEASIBLE",
     "HeaterExplanation", "INVALID", "MaterializedConstraint", "MilpChargePlanner",
     "PlanningCancelled", "PlanningDeficit", "PlanningInput", "PlanningViolation", "PLANNING_HORIZON_HOURS", "SOLVER_TIME_LIMIT_SECONDS", "input_token",
     "materialize_constraints", "resolve_planning_telemetry", "RoomEnergyDemandEstimator",
-    "RoomEnergyInterval", "RoomEnergyPlanner", "active_temperature_target", "room_energy_step",
+    "RoomEnergyInterval", "RoomEnergyPlanner", "VALID", "active_temperature_target",
+    "group_planning_violations", "room_energy_step",
 ]

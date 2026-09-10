@@ -63,6 +63,18 @@ class Store:
         )
 
     @property
+    def alerts(self):
+        from .alerts import SqlAlertRepository
+
+        return SqlAlertRepository(
+            self.configuration_engine or self.engine,
+            self.application_engine or self.engine,
+            self.repository.installation_id(),
+            self.location,
+            self.location,
+        )
+
+    @property
     def home_assistant(self):
         from .home_assistant import SqlHomeAssistantRepository
 

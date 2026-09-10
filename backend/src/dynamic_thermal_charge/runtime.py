@@ -19,7 +19,25 @@ from zoneinfo import ZoneInfo
 from .controller import ChargeController
 from .drivers import OutputDriver, RecordingOutputDriver, SimulatedOutputDriver
 from .gpio_driver import GpioOutputDriver
-from .charge_planning import PLANNING_HORIZON_HOURS, DeterministicChargeOptimizer, PlanningInput, resolve_planning_telemetry
+from .alerts import (
+    PLAN_RECALCULATION_DEGRADED,
+    PLAN_RECALCULATION_INVALID,
+    AlertService,
+    build_alert_service,
+    plan_recalculation_degraded_message,
+    plan_recalculation_invalid_message,
+)
+from .charge_planning import (
+    CONVERGING,
+    DEGRADED,
+    INVALID,
+    PLANNING_HORIZON_HOURS,
+    VALID,
+    DeterministicChargeOptimizer,
+    PlanningInput,
+    resolve_planning_telemetry,
+)
+from .plan_deviation import DeviationVerdict, SlotBoundaryGate, evaluate_plan_deviation
 from .models import AppConfig
 from .persistence import ConfigStoreError
 from .persistence.active_plan import SqlActivePlanRepository
@@ -140,6 +158,7 @@ def _run_controller(
         location=store.location,
     )
     indoor_fallback = _IndoorFallbackTracker()
+    alerts = _build_alert_service(store)
     driver: OutputDriver | None = None
     service: ControllerService | None = None
     with _controlled_termination():
@@ -182,6 +201,67 @@ def _run_controller(
                 config=config.weather.watchdog,
             )
 
+            # Keep the early-replan verdict next to the refresh that consumes
+            # it. A boundary gate prevents repeated solver launches during the
+            # same wall-clock slot.
+            pending_deviation: list[DeviationVerdict] = []
+            boundary_gate = SlotBoundaryGate()
+
+            def deviation_check(now: datetime) -> bool:
+                live_config, _live_revision = store.repository.current()
+                slot_minutes = live_config.site.slot_minutes
+                if not boundary_gate.enter(now, slot_minutes):
+                    return False
+                planning_site = store.planning.site()
+                live_mqtt = _live_mqtt_settings(
+                    store, None if system is None else system.mqtt
+                )
+                persisted = (
+                    {}
+                    if live_mqtt is not None and not live_mqtt.enabled
+                    else store.planning.telemetry()
+                )
+                telemetry = resolve_planning_telemetry(
+                    live_config.heaters, persisted, now, mqtt=live_mqtt
+                )
+                control = (
+                    control_repository.control_state()
+                    if control_repository is not None
+                    else None
+                )
+                verdict = evaluate_plan_deviation(
+                    store.planning.active_plan(),
+                    heaters=live_config.heaters,
+                    telemetry=telemetry,
+                    forecast=store.planning.latest_forecast(now),
+                    targets=_room_energy_targets(store, live_config, control),
+                    at=now,
+                    slot_minutes=slot_minutes,
+                    timezone_name=(
+                        live_config.schedule.timezone
+                        if live_config.schedule is not None
+                        else "UTC"
+                    ),
+                    shortfall_tolerance_c=float(
+                        planning_site.get("deviation_shortfall_tolerance_c", 0.1)
+                    ),
+                    surplus_soc_percent=float(
+                        planning_site.get("deviation_surplus_soc_percent", 5.0)
+                    ),
+                )
+                if not verdict.replan:
+                    return False
+                pending_deviation.append(verdict)
+                del pending_deviation[:-1]
+                logger.info(
+                    "Recalculating early: %s for %s (planned %s, projected %s)",
+                    verdict.reason,
+                    verdict.heater_id,
+                    verdict.planned_value,
+                    verdict.projected_value,
+                )
+                return True
+
             def refresh_plan(now: datetime) -> PlanRefresh:
                 # Re-read the configuration each refresh so an edit takes effect
                 # on the next recalculation, never mid-plan (FR-039).
@@ -220,22 +300,9 @@ def _run_controller(
                     query_hour=int(planning_site["aemet_query_hour"]),
                     timezone_name=timezone_name,
                 )
-                room_energy_targets = {
-                    heater.id: tuple(getattr(heater, "temperature_targets", ()))
-                    for heater in live_config.heaters
-                    if heater.enabled and (
-                        control is None or control.heater_enabled(heater.id)
-                    )
-                }
-                if hasattr(store.planning, "temperature_targets"):
-                    persisted_targets = store.planning.temperature_targets()
-                    room_energy_targets.update(
-                        {
-                            heater_id: tuple(targets)
-                            for heater_id, targets in persisted_targets.items()
-                            if control is None or control.heater_enabled(heater_id)
-                        }
-                    )
+                room_energy_targets = _room_energy_targets(
+                    store, live_config, control
+                )
                 # Every enabled heater is now governed by the room-energy
                 # planner.  An empty target map is an explicit invalid input,
                 # not a reason to fall back to percentage planning.
@@ -256,19 +323,77 @@ def _run_controller(
                         mqtt=live_mqtt,
                     )
                     if automatic is not None:
+                        deviation = (
+                            pending_deviation.pop() if pending_deviation else None
+                        )
+                        previous_automatic = store.planning.active_plan()
+                        previous_schedule = active_plan.load()
+                        candidate = automatic[0]
+                        candidate_degraded = candidate.status == DEGRADED
+                        preserve_active = (
+                            deviation is not None or candidate_degraded
+                        )
+                        retained_horizon_end = (
+                            None
+                            if previous_automatic is None
+                            else previous_automatic.get("horizon_end")
+                        )
                         store.planning.save_plan(
-                            automatic[0],
+                            candidate,
                             configuration_revision=live_revision,
                             constraints_revision=planning_site["revision"],
-                            reason="periodic",
-                            active=automatic[0].status != "INVALID",
+                            reason="periodic" if deviation is None else "deviation",
+                            active=candidate.status in {VALID, CONVERGING},
+                            preserve_active=preserve_active,
+                            audit_details=(
+                                None if deviation is None else deviation.audit_details()
+                            ),
                         )
                         logger.debug(
                             "Automatic plan persisted: status=%s slots=%d violations=%d",
-                            automatic[0].status,
-                            len(automatic[0].slots),
-                            len(automatic[0].violations),
+                            candidate.status,
+                            len(candidate.slots),
+                            len(candidate.violations),
                         )
+                        _notify_recalculation_result(
+                            alerts,
+                            candidate,
+                            installation=store.repository.installation_name(),
+                            at=now,
+                            previous_plan_preserved=(
+                                preserve_active and previous_schedule is not None
+                            ),
+                            retained_horizon_end=retained_horizon_end,
+                        )
+                        if candidate_degraded:
+                            # The candidate is useful for operator diagnostics,
+                            # but a non-activable result must never overwrite the
+                            # legacy schedule driving the relays.
+                            retained = previous_schedule or _empty_schedule(live_config)
+                            return PlanRefresh(
+                                plan=retained,
+                                next_refresh_seconds=_seconds_to_next_replan(
+                                    now,
+                                    replan_minutes=int(planning_site["replan_minutes"]),
+                                    slot_minutes=live_config.site.slot_minutes,
+                                ),
+                                plan_ref=None,
+                                installation_revision=live_revision,
+                                persist_plan=False,
+                            )
+                        if candidate.status == INVALID and deviation is not None:
+                            retained = previous_schedule or _empty_schedule(live_config)
+                            return PlanRefresh(
+                                plan=retained,
+                                next_refresh_seconds=_seconds_to_next_replan(
+                                    now,
+                                    replan_minutes=int(planning_site["replan_minutes"]),
+                                    slot_minutes=live_config.site.slot_minutes,
+                                ),
+                                plan_ref=None,
+                                installation_revision=live_revision,
+                                persist_plan=False,
+                            )
                         return PlanRefresh(
                             plan=automatic[1],
                             next_refresh_seconds=_seconds_to_next_replan(
@@ -278,6 +403,7 @@ def _run_controller(
                             ),
                             plan_ref=None,
                             installation_revision=live_revision,
+                            persist_plan=True,
                         )
                 start = (
                     live_config.schedule.active_or_next_start(now)
@@ -366,6 +492,8 @@ def _run_controller(
                     if control_repository is None
                     else control_repository.mark_recalculation_processed
                 ),
+                alerts=alerts,
+                deviation_check=deviation_check,
             )
             return service.run()
         finally:
@@ -463,6 +591,98 @@ def _build_automatic_runtime_plan(
         allocated,
         _aggregate_unmet_minutes(config, plan.deficits),
     )
+
+
+def _room_energy_targets(store, config: AppConfig, control=None) -> dict:
+    """Return the weekly target rules currently in force."""
+    targets = {
+        heater.id: tuple(getattr(heater, "temperature_targets", ()))
+        for heater in config.heaters
+        if heater.enabled and (control is None or control.heater_enabled(heater.id))
+    }
+    if hasattr(store.planning, "temperature_targets"):
+        targets.update(
+            {
+                heater_id: tuple(persisted)
+                for heater_id, persisted in store.planning.temperature_targets().items()
+                if control is None or control.heater_enabled(heater_id)
+            }
+        )
+    return targets
+
+
+def _empty_schedule(config: AppConfig) -> ScheduleResult:
+    return ScheduleResult(
+        slots=(),
+        allocated_minutes={
+            heater.id: 0 for heater in config.heaters if heater.enabled
+        },
+        unmet_minutes={},
+    )
+
+
+def _build_alert_service(store) -> AlertService | None:
+    """The controller must start even if alerts cannot be wired."""
+    try:
+        return build_alert_service(store)
+    except Exception:  # noqa: BLE001
+        logger.exception("Could not initialise email alerts; continuing without them")
+        return None
+
+
+def _notify_recalculation_result(
+    alerts,
+    plan,
+    *,
+    installation: str,
+    at: datetime,
+    previous_plan_preserved: bool = False,
+    retained_horizon_end: datetime | None = None,
+) -> None:
+    """Raise or rearm the alert for a non-activable recalculation.
+
+    Alert episodes are independent: resolving a degraded candidate rearms its
+    own catalogue entry, while a later invalid result uses the existing invalid
+    episode and vice versa.
+    """
+    if alerts is None:
+        return
+    try:
+        status = str(plan.status).upper()
+        if status in {VALID, CONVERGING, "FEASIBLE"}:
+            alerts.clear_alert(PLAN_RECALCULATION_INVALID)
+            alerts.clear_alert(PLAN_RECALCULATION_DEGRADED)
+            return
+        if status == DEGRADED:
+            alerts.clear_alert(PLAN_RECALCULATION_INVALID)
+            subject, body = plan_recalculation_degraded_message(
+                installation=installation,
+                at=at,
+                plan=plan,
+                retained_horizon_end=retained_horizon_end,
+            )
+            alerts.raise_alert(
+                PLAN_RECALCULATION_DEGRADED,
+                subject=subject,
+                body=body,
+            )
+            return
+        alerts.clear_alert(PLAN_RECALCULATION_DEGRADED)
+        violation = next(iter(plan.violations), None)
+        subject, body = plan_recalculation_invalid_message(
+            installation=installation,
+            at=at,
+            reason="desconocida" if violation is None else violation.reason,
+            detail=(
+                "El recálculo no pudo producir un plan ejecutable."
+                if violation is None
+                else f"{violation.requirement}: {violation.reason}"
+            ),
+            previous_plan_preserved=previous_plan_preserved,
+        )
+        alerts.raise_alert(PLAN_RECALCULATION_INVALID, subject=subject, body=body)
+    except Exception:  # noqa: BLE001 - alerting can never break a refresh
+        logger.exception("Could not raise the recalculation alert")
 
 
 def _aggregate_unmet_minutes(config: AppConfig, violations) -> dict[str, int]:

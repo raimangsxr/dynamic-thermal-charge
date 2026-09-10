@@ -34,8 +34,9 @@ precalentar hacia su borde inicial.
 Cuando una consigna está activa en un slot, la temperatura objetivo es una
 invariante en sus dos bordes: se evalúan tanto `T_inside` al inicio como
 `T_next` al final. El optimizador puede usar slots anteriores sin consigna para
-precalentar, pero un déficit en cualquiera de esos bordes conserva el plan como
-`DEGRADED` y registra el instante y el déficit proyectado.
+precalentar, pero un déficit en cualquiera de esos bordes conserva la
+observación y deja el plan como `DEGRADED` salvo que pueda demostrar una
+convergencia posterior continuada en todos los bordes con consigna activa.
 
 #### Scenario: Exterior más cálido que el interior
 
@@ -137,6 +138,36 @@ basado en porcentajes.
 - **THEN** el resultado identifica la entrada ausente y no publica un plan
   automático basado en un valor supuesto
 
+### Requirement: Estados canónicos y convergencia continuada
+
+La planificación pública y persistida usa `VALID`, `CONVERGING`, `DEGRADED` e
+`INVALID`. Solo `VALID` y `CONVERGING` son activables. `CONVERGING` exige un
+déficit inicial y un borde posterior con consigna activa desde el que todos los
+bordes activos siguientes cumplen hasta el final del horizonte; el final de una
+ventana o un hueco sin consigna no prueban convergencia. La respuesta conserva
+la hora de convergencia por acumulador, la hora global y el final del horizonte
+garantizado, además de las observaciones originales que explican el resultado.
+Los planes históricos con `FEASIBLE` se leen y exponen como `VALID`.
+
+#### Scenario: Activación de un plan convergente
+
+- **WHEN** un preview `CONVERGING` tiene evidencia de cumplimiento continuado
+- **THEN** se activa desde el siguiente límite de slot que no haya pasado y
+  publica la hora de convergencia y el horizonte garantizado
+
+#### Scenario: Candidato degradado durante una replanificación
+
+- **WHEN** un recálculo produce `DEGRADED` mientras existe un plan `VALID` o
+  `CONVERGING` con slots vigentes
+- **THEN** el candidato no sustituye al plan activo, la degradación queda
+  visible y el sistema continúa recalculando
+
+#### Scenario: Histórico con estado anterior
+
+- **WHEN** se consulta un plan persistido con estado `FEASIBLE`
+- **THEN** se devuelve como `VALID` sin perder sus slots, explicaciones ni
+  auditoría
+
 ### Requirement: Accionamiento de la descarga por MQTT
 
 El plan activo debe accionar la descarga de cada acumulador. Cuando el plan
@@ -237,7 +268,7 @@ respaldo o simuladas.
 
 ### Requirement: Integridad de la planificación automática
 
-Un plan solo será `FEASIBLE` si todas las fases del solver alcanzan el óptimo y
+Un plan solo será `VALID` si todas las fases del solver alcanzan el óptimo y
 todas sus variables necesarias tienen valor. Una solución factible verificada
 al expirar el límite de tiempo será `DEGRADED` con la violación
 `solver_time_limit`; una solución no verificable será `INVALID`.
@@ -375,7 +406,7 @@ fuente de problemas.
 
 #### Scenario: Preview sin problemas
 
-- **WHEN** una vista previa `FEASIBLE` no contiene déficits ni violaciones
+- **WHEN** una vista previa `VALID` no contiene déficits ni violaciones
 - **THEN** no se muestra el botón de problemas
 
 ### Requirement: Separación de contextos en la vista de planificación

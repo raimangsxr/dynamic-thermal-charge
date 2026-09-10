@@ -129,10 +129,10 @@ def test_preview_job_with_legacy_result_remains_readable(client, initialised_sto
     assert body["result"]["window_end"] == "2026-01-16T13:00:00Z"
 
 
-def _seed_valid_preview_inputs(initialised_store):
+def _seed_valid_preview_inputs(initialised_store, *, forecast_temperature_c=4.0):
     config, configuration_revision = initialised_store.repository.current()
     points = tuple(
-        HourlyForecastPoint(API_NOW + timedelta(hours=index), 4.0)
+        HourlyForecastPoint(API_NOW + timedelta(hours=index), forecast_temperature_c)
         for index in range(25)
     )
     SqlHistoryRecorder(
@@ -140,8 +140,8 @@ def _seed_valid_preview_inputs(initialised_store):
         initialised_store.repository.installation_id(),
         initialised_store.location,
     ).record_forecast(SimpleNamespace(
-        date=API_NOW.date(), average_temperature_c=4.0,
-        minimum_temperature_c=4.0, maximum_temperature_c=4.0,
+        date=API_NOW.date(), average_temperature_c=forecast_temperature_c,
+        minimum_temperature_c=forecast_temperature_c, maximum_temperature_c=forecast_temperature_c,
         source="aemet", location="test", retrieved_at=API_NOW,
         hourly_points=points,
     ))
@@ -183,7 +183,9 @@ def _persist_preview_job(initialised_store, result, configuration_revision, cons
 def test_activation_reuses_completed_preview_without_second_solver_call(
     client, initialised_store, monkeypatch,
 ):
-    configuration_revision, constraints_revision = _seed_valid_preview_inputs(initialised_store)
+    configuration_revision, constraints_revision = _seed_valid_preview_inputs(
+        initialised_store, forecast_temperature_c=20.0
+    )
     preview = client.post(
         "/api/v1/planning/preview",
         headers=AUTH,

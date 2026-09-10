@@ -217,6 +217,25 @@
         }
         <div class="form-actions"><button mat-flat-button color="primary" type="submit" [disabled]="!systemHasChanges(activeIntegrationSection()) || systemSaving() || !writable()">{{ systemSaving() ? 'Guardando…' : 'Guardar integración' }}</button></div>
       </form>
+      @if (activeIntegrationSection() === 'email') {
+        <section class="status-card" aria-labelledby="alert-catalogue-title" data-testid="alert-catalogue">
+          <div>
+            <h3 id="alert-catalogue-title">Catálogo de alertas</h3>
+            <p class="field-hint">Cada alerta avisa una vez por episodio: al entrar en la condición y otra vez solo cuando se resuelve y vuelve a ocurrir. Los avisos se encolan y se entregan con reintentos, así que sobreviven a un reinicio.</p>
+            @for (alert of alertCatalogue(); track alert.name) {
+              <div class="alert-row">
+                <div><strong>{{ alert.title }}</strong><p class="field-hint">{{ alert.description }}</p></div>
+                <select class="native-input" [attr.aria-label]="alert.title" [attr.data-testid]="'alert-toggle-' + alert.name" [ngModel]="alert.enabled" [ngModelOptions]="{ standalone: true }" (ngModelChange)="toggleAlert(alert.name, $event)" [disabled]="alertSaving() === alert.name || !writable()"><option [ngValue]="true">Activa</option><option [ngValue]="false">Silenciada</option></select>
+              </div>
+            }
+            @if (!alertCatalogue().length) { <p class="field-hint">Sin catálogo disponible.</p> }
+            @if (alertError()) { <p class="field-error" role="alert">{{ alertError() }}</p> }
+          </div>
+          <button mat-stroked-button type="button" (click)="testEmail()" [disabled]="emailTestLoading() || !writable() || systemValue('email', 'enabled') !== true" data-testid="email-test-button">{{ emailTestLoading() ? 'Enviando…' : 'Enviar correo de prueba' }}</button>
+          @if (emailTestMessage()) { <p class="saved" role="status">{{ emailTestMessage() }}</p> }
+          @if (emailTestError()) { <p class="field-error" role="alert">{{ emailTestError() }}</p> }
+        </section>
+      }
       @if (activeIntegrationSection() === 'weather') {
         <section class="status-card" aria-labelledby="weather-status-title"><div><h3 id="weather-status-title">Estado de la previsión</h3><p>Última consulta: {{ dateTime(systemValue('weather', 'forecast_last_attempt_at')) }} · resultado: {{ weatherStatusText(systemValue('weather', 'forecast_status')) }}</p><p>{{ weatherNextText(systemValue('weather', 'forecast_next_run_kind')) }}: {{ dateTime(systemValue('weather', 'forecast_next_run_at')) }}</p><p class="field-hint">La consulta diaria usa la hora local de AEMET configurada; los errores programan un reintento separado.</p></div><button mat-stroked-button type="button" (click)="refreshWeather()" [disabled]="weatherRefreshLoading() || !writable() || systemValue('weather', 'provider') !== 'aemet'">{{ weatherRefreshLoading() ? 'Consultando AEMET…' : 'Consultar AEMET ahora' }}</button>@if (systemValue('weather', 'forecast_last_error')) { <p class="field-error" role="alert">Último error del proveedor: {{ systemValue('weather', 'forecast_last_error') }}</p> }@if (weatherRefreshMessage()) { <p class="saved" role="status">{{ weatherRefreshMessage() }}</p> }@if (weatherRefreshError()) { <p class="field-error" role="alert">{{ weatherRefreshError() }}</p> }</section>
       }

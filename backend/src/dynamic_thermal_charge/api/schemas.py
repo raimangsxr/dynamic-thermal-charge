@@ -129,6 +129,9 @@ class StatusResponse(BaseModel):
     telemetry: list["ChargeTelemetryView"] = Field(default_factory=list)
     plan_status: str | None = None
     deficits: list["PlanningDeficitView"] = Field(default_factory=list)
+    convergence_by_heater: dict[str, datetime | None] = Field(default_factory=dict)
+    convergence_at: datetime | None = None
+    guaranteed_until: datetime | None = None
     horizon_start: datetime | None = None
     horizon_end: datetime | None = None
     absence_reason: str | None = None
@@ -222,6 +225,9 @@ class PlanningResponse(BaseModel):
     telemetry: list["ChargeTelemetryView"] = Field(default_factory=list)
     plan_status: str | None = None
     deficits: list["PlanningDeficitView"] = Field(default_factory=list)
+    convergence_by_heater: dict[str, datetime | None] = Field(default_factory=dict)
+    convergence_at: datetime | None = None
+    guaranteed_until: datetime | None = None
     preview_token: str | None = None
     temperature_targets_revision: int = 1
     forecast_status: str | None = None
@@ -270,6 +276,11 @@ class PlanningDeficitView(BaseModel):
     shortfall_c: float | None = None
     stored_energy_kwh: float | None = None
     stored_soc_percent: float | None = None
+    target_window_start: datetime | None = None
+    target_window_end: datetime | None = None
+    affected_from: datetime | None = None
+    affected_until: datetime | None = None
+    observation_count: int = 1
 
 
 class TemperatureTargetRequest(BaseModel):
@@ -310,6 +321,9 @@ class PlanningPreviewResponse(BaseModel):
     slots: list[dict]
     deficits: list[PlanningDeficitView] = Field(default_factory=list)
     violations: list[PlanningDeficitView] = Field(default_factory=list)
+    convergence_by_heater: dict[str, datetime | None] = Field(default_factory=dict)
+    convergence_at: datetime | None = None
+    guaranteed_until: datetime | None = None
     explanations: list[dict] = Field(default_factory=list)
     demand: list[dict] = Field(default_factory=list)
     temperature_targets: list[TemperatureTargetView] = Field(default_factory=list)
@@ -375,6 +389,8 @@ class PlanningSiteConfigRequest(BaseModel):
     contracted_power_w: int = Field(gt=0)
     max_heating_power_w: int = Field(gt=0)
     base_load_w: int = Field(ge=0, default=0)
+    deviation_shortfall_tolerance_c: float = Field(gt=0, default=0.1)
+    deviation_surplus_soc_percent: float = Field(gt=0, default=5.0)
     mqtt_simulation_enabled: bool = False
     mqtt_simulation_initial_temperature_c: float = Field(ge=-50, le=80, default=45.0)
     mqtt_simulation_publish_seconds: float = Field(gt=0, default=30.0)
@@ -398,6 +414,8 @@ class PlanningSiteConfigResponse(BaseModel):
     contracted_power_w: int
     max_heating_power_w: int
     base_load_w: int
+    deviation_shortfall_tolerance_c: float = 0.1
+    deviation_surplus_soc_percent: float = 5.0
     mqtt_simulation_enabled: bool
     mqtt_simulation_initial_temperature_c: float
     mqtt_simulation_publish_seconds: float

@@ -177,6 +177,10 @@ def test_the_schema_declares_every_expected_table():
             "controller_log_event",
             "preview_job",
             "preview_job_step",
+            # Added in email-alerts: the catalogue, the queue and its episodes.
+            "alert_type_config",
+            "alert_delivery",
+            "alert_episode",
     }
 
 

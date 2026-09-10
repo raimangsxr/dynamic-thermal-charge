@@ -110,3 +110,7 @@ h4 { font-size: .84rem; letter-spacing: .03em; text-transform: uppercase; }
   .summary-grid { grid-template-columns: minmax(0, 1fr); }
   .area-tab { min-height: 4rem; }
 }
+
+.alert-row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 1rem; padding: .7rem 0; border-top: 1px solid var(--border); }
+.alert-row:first-of-type { border-top: 0; }
+.alert-row p { margin: .2rem 0 0; }

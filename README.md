@@ -202,6 +202,33 @@ las entidades con la misma disponibilidad en un único mensaje por dispositivo;
 las entidades que requieren además `state_available` mantienen su disponibilidad
 individual.
 
+### Alertas por email
+
+El panel configura el envío de alertas en Configuración → Integraciones →
+Alertas por email: activación, servidor SMTP, puerto, cifrado (`starttls`, `tls`
+o ninguno), remitente, destinatarios y tiempo de espera. El usuario y la
+contraseña SMTP se guardan como secretos de la configuración de sistema, igual
+que la clave de AEMET y las credenciales MQTT, así que la API informa de si
+están configurados pero nunca devuelve su valor; no hay ninguna variable de
+entorno nueva. Activar el envío exige servidor, remitente y al menos un
+destinatario, y las credenciales son opcionales porque un relé sin autenticación
+es legítimo. Un botón envía un correo de prueba con la configuración vigente,
+para no descubrir un servidor mal configurado la primera vez que hiciera falta
+una alerta.
+
+Cada tipo de alerta del catálogo se puede silenciar por separado. Un aviso se
+envía **una vez por episodio**: al entrar en la condición y otra vez solo cuando
+se ha resuelto y vuelve a ocurrir; el estado de rearme se persiste, así que un
+reinicio no reenvía lo ya avisado. Los avisos se encolan de forma duradera y se
+entregan desde el ciclo del controlador con reintentos y espera creciente, de
+modo que sobreviven a un reinicio y un fallo de correo nunca interrumpe el
+control ni el accionamiento de las salidas.
+
+La primera alerta del catálogo avisa de una **replanificación imposible**: un
+recálculo que devuelve `INVALID`. El correo identifica la instalación, el
+instante, la causa y la consecuencia, que es quedarse sin plan activo cuando el
+recálculo periódico lo desactiva.
+
 ### Topics MQTT de lectura y escritura
 
 El prefijo MQTT de la instalación es `<prefijo>/installation` (por defecto,
@@ -490,6 +517,19 @@ horizonte no se publica un plan parcial. La
 telemetría MQTT de cada acumulador se valida por separado y una muestra
 incompleta o de más de 15 minutos se marca como caducada y deja ese acumulador
 fuera del plan.
+
+La planificación usa los estados públicos `VALID`, `CONVERGING`, `DEGRADED` e
+`INVALID`. Solo `VALID` y `CONVERGING` pueden sustituir el plan activo; un
+resultado `CONVERGING` se aplica desde el siguiente slot y muestra la hora en
+que el modelo demuestra el cumplimiento continuado y hasta qué fin de horizonte
+queda garantizado. Un `DEGRADED` se conserva como diagnóstico y mantiene el
+último plan activable mientras tenga intervalos vigentes; `INVALID` bloquea la
+activación y deja las salidas en estado seguro cuando no hay sustituto válido.
+Los históricos que usaban `FEASIBLE` se leen como `VALID`. La configuración
+incluye `deviation_shortfall_tolerance_c` (por defecto 0,1 °C) y
+`deviation_surplus_soc_percent` (por defecto 5 %) para solicitar un recálculo
+inmediato cuando la telemetría se desvía de la proyección; ambos valores deben
+ser positivos.
 
 La ventana y el horizonte se cuentan en horas de reloj de pared, y los límites de
 slot caen siempre en múltiplos de la duración de slot configurada. Los dos días

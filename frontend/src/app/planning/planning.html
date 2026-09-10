@@ -55,12 +55,23 @@
                   <div><dt>Zona horaria</dt><dd>{{ data.timezone || 'Europe/Madrid' }}</dd></div>
                 </dl>
               } @else {
-                @if (data.plan_status === 'INVALID' || data.plan_status === 'invalid') { <p class="empty">El plan automático no es válido.</p><p class="warning">Las salidas permanecen apagadas hasta corregir la planificación.</p> }
+                @if (isInvalidStatus(data.plan_status)) { <p class="empty">El plan automático no es válido.</p><p class="warning">Las salidas permanecen apagadas hasta corregir la planificación.</p> }
                 @else if (data.absence_reason === 'outside_visible_window') { <p class="empty">Hay un plan automático dentro del horizonte, pero ahora está fuera de la ventana visible.</p> }
                 @else { <p class="empty">No hay un plan actual ni próximo.</p> }
               }
             </section>
           </div>
+
+          @if (isConvergingStatus(data.plan_status)) {
+            <div class="banner warn" role="status" data-testid="planning-converging">
+              <div class="banner-content"><mat-icon aria-hidden="true">autorenew</mat-icon><div><strong>Plan en convergencia</strong><p>El plan sigue siendo utilizable mientras adapta la instalación al objetivo térmico.</p><p>Objetivo alcanzado: {{ convergenceText(data.convergence_by_heater, data.convergence_at) }}@if (data.guaranteed_until) { · cobertura garantizada hasta {{ dateTime(data.guaranteed_until) }} }.</p></div></div>
+            </div>
+          }
+          @if (isDegradedStatus(data.plan_status)) {
+            <div class="banner warn" role="alert" data-testid="planning-degraded">
+              <div class="banner-content"><mat-icon aria-hidden="true">warning</mat-icon><div><strong>Resultado degradado: no activable</strong><p>Este recálculo no gobierna las salidas. Se conserva el último plan VALID o CONVERGING mientras queden intervalos vigentes.</p>@if (data.deficits?.length) { <ul>@for (deficit of data.deficits ?? []; track $index) { <li>{{ deficitText(deficit) }}@if (deficit.affected_from || deficit.affected_until) { · {{ dateTime(deficit.affected_from) }}–{{ dateTime(deficit.affected_until) }} }</li> }</ul> }</div></div>
+            </div>
+          }
 
           @if (data.plan; as plan) {
             <p class="window" data-testid="planning-window">Ventana visible {{ dateTime(plan.window_start) }}–{{ dateTime(plan.window_end) }} · horizonte {{ dateTime(data.horizon_start) }}–{{ dateTime(data.horizon_end) }} · configuración rev. {{ plan.installation_revision }}</p>
@@ -261,7 +272,7 @@
             <div class="planning-actions" role="group" aria-label="Acciones de la planificación" data-testid="planning-actions">
               <button mat-flat-button color="primary" type="button" (click)="recalculate()" [disabled]="activationInFlight()" data-testid="recalculate-button">Recalcular vista previa</button>
               <button mat-button type="button" (click)="discardChanges()" [disabled]="activationInFlight()" data-testid="discard-button">Descartar</button>
-              <button mat-flat-button color="primary" type="button" [disabled]="activationInFlight() || !preview() || preview()?.status === 'INVALID'" (click)="activate()" data-testid="activate-button">{{ activationInFlight() ? 'Guardando…' : 'Guardar y activar' }}</button>
+              <button mat-flat-button color="primary" type="button" [disabled]="activationInFlight() || !preview() || !canActivateStatus(preview()?.status)" (click)="activate()" data-testid="activate-button">{{ activationInFlight() ? 'Guardando…' : 'Guardar y activar' }}</button>
             </div>
             @if (actionMessage()) { <p class="action-feedback" role="status" data-testid="planning-action-status">{{ actionMessage() }}</p> }
             @if (actionError()) { <p class="action-feedback error" role="alert" data-testid="planning-action-error">{{ actionError() }}</p> }
@@ -275,6 +286,9 @@
               </ol>
               @if (job.result; as result) {
                 <div class="operator-result" data-testid="operator-summary"><strong>Resultado para el operador</strong><p>Ventana {{ dateTime(result.window_start) }}–{{ dateTime(result.window_end) }} · horizonte {{ dateTime(result.horizon_start) }}–{{ dateTime(result.horizon_end) }} · previsión: {{ operatorForecastText(result.operator_summary) }}</p><p>Carga prevista: {{ previewSummaryText(result.operator_summary) }}</p><p>{{ result.operator_summary['recommended_action'] }}</p></div>
+                @if (isConvergingStatus(result.status)) { <p class="warning" data-testid="preview-converging">Puede activarse: converge en {{ convergenceText(result.convergence_by_heater, result.convergence_at) }}@if (result.guaranteed_until) { y mantiene el objetivo hasta {{ dateTime(result.guaranteed_until) }} }.</p> }
+                @if (isDegradedStatus(result.status)) { <p class="warning" data-testid="preview-degraded">No se puede activar: el resultado degradado no demuestra la convergencia de todos los objetivos.</p> }
+                @if (isInvalidStatus(result.status)) { <p class="error" data-testid="preview-invalid">No se puede activar: faltan entradas válidas o una solución verificable.</p> }
                 @if (result.temperature_targets.length) { <div class="semantic-table chart-table" role="table" data-testid="target-markers" aria-label="Consignas de temperatura por acumulador"><div role="row" class="semantic-row header"><span role="columnheader">Acumulador</span><span role="columnheader">Objetivo</span><span role="columnheader">Inicio</span><span role="columnheader">Fin</span></div>@for (target of result.temperature_targets; track $index) { <div role="row" class="semantic-row"><span role="cell">{{ heaterText(target.heater_id) }}</span><span role="cell">{{ target.target_temperature_c }} °C</span><span role="cell">{{ target.start_time }}</span><span role="cell">{{ targetEndLabel(target.end_time) }}</span></div> }</div> }
                 @if (previewProblems(result).length) { <button mat-stroked-button type="button" class="preview-problems-button" (click)="openPreviewProblems(result)" data-testid="preview-problems-button">Ver detalle de problemas ({{ previewProblems(result).length }})</button> }
                 <div class="preview-visualization" data-testid="preview-visualization">
@@ -292,7 +306,13 @@
               @if (previewProblems(candidate).length) {
                 <span class="warning"> · Problemas detectados: {{ previewProblems(candidate).length }}</span>
               }
-              @if (candidate.status === 'INVALID' && previewProblems(candidate).length) {
+              @if (isConvergingStatus(candidate.status)) {
+                <span class="warning" data-testid="candidate-converging"> · Puede activarse: converge en {{ convergenceText(candidate.convergence_by_heater, candidate.convergence_at) }}</span>
+              }
+              @if (isDegradedStatus(candidate.status)) {
+                <span class="warning" data-testid="candidate-degraded"> · No activable: se conserva el último plan VALID o CONVERGING</span>
+              }
+              @if (isInvalidStatus(candidate.status) && previewProblems(candidate).length) {
                 <ul class="preview-reasons">
                   @for (item of previewProblems(candidate); track $index) {
                     <li>{{ deficitExplanation(item) }}</li>

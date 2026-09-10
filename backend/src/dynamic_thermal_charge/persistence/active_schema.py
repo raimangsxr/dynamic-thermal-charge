@@ -19,8 +19,8 @@ from .topology import BootstrapCorruptError, BootstrapIncompatibleError
 from . import SchemaStatus, SchemaVersionError
 
 
-CONFIGURATION_SCHEMA_REVISION = 13
-APPLICATION_SCHEMA_REVISION = 7
+CONFIGURATION_SCHEMA_REVISION = 15
+APPLICATION_SCHEMA_REVISION = 9
 POSTGRES_CONFIGURATION_SCHEMA = "dtc_config"
 POSTGRES_APPLICATION_SCHEMA = "dtc_app"
 
@@ -269,6 +269,14 @@ def _upgrade_application_schema(engine: Engine, revision: int, expected: int) ->
                     text("ALTER TABLE automatic_plan_slot ADD COLUMN heat_limit_json TEXT NOT NULL DEFAULT '{}'")
                 )
         revision = 7
+    if revision == 7 and expected >= 8:
+        from .schema import alert_delivery, alert_episode
+
+        application_metadata.create_all(engine, tables=[alert_delivery, alert_episode])
+        revision = 8
+    if revision == 8 and expected >= 9:
+        _replace_automatic_plan_status_constraint(engine)
+        revision = 9
     if revision != expected:
         raise BootstrapIncompatibleError(
             f"application schema revision {revision} has no registered upgrade path to {expected}"
@@ -568,6 +576,44 @@ def _upgrade_configuration_schema(engine: Engine, revision: int, expected: int) 
                     )
                 )
         revision = 13
+    if revision == 13 and expected >= 14:
+        from .schema import alert_type_config
+
+        system_columns = {
+            column["name"]
+            for column in inspect(engine).get_columns("system_configuration")
+        }
+        with engine.begin() as connection:
+            if "email_json" not in system_columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE system_configuration ADD COLUMN email_json TEXT "
+                        "NOT NULL DEFAULT '{\"enabled\":false,\"host\":null,"
+                        "\"port\":587,\"recipients\":[],\"security\":\"starttls\","
+                        "\"sender\":null,\"timeout_seconds\":10.0}'"
+                    )
+                )
+        configuration_metadata.create_all(engine, tables=[alert_type_config])
+        revision = 14
+    if revision == 14 and expected >= 15:
+        site_columns = {
+            column["name"]
+            for column in inspect(engine).get_columns("charge_planning_site")
+        }
+        additions = (
+            ("deviation_shortfall_tolerance_c", "FLOAT NOT NULL DEFAULT 0.1"),
+            ("deviation_surplus_soc_percent", "FLOAT NOT NULL DEFAULT 5"),
+        )
+        with engine.begin() as connection:
+            for name, definition in additions:
+                if name not in site_columns:
+                    connection.execute(
+                        text(
+                            f"ALTER TABLE charge_planning_site "
+                            f"ADD COLUMN {name} {definition}"
+                        )
+                    )
+        revision = 15
     if revision != expected:
         raise BootstrapIncompatibleError(
             f"configuration schema revision {revision} has no registered upgrade path to {expected}"
@@ -651,6 +697,105 @@ def _drop_columns(engine, table_name: str, columns: set[str]) -> None:
         new.indexes.remove(index)
 
     keep = [column.name for column in old.c if column.name not in dropped]
+    child_rows: list[tuple[Table, list[dict[str, object]]]] = []
+    for child_name in inspector.get_table_names():
+        if child_name == table_name:
+            continue
+        child_foreign_keys = inspect(engine).get_foreign_keys(child_name)
+        if not any(item.get("referred_table") == table_name for item in child_foreign_keys):
+            continue
+        child_table = Table(child_name, MetaData(), autoload_with=engine)
+        with engine.connect() as connection:
+            rows = [dict(row) for row in connection.execute(select(child_table)).mappings()]
+        child_rows.append((child_table, rows))
+
+    with engine.begin() as connection:
+        connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+        try:
+            new.create(connection)
+            connection.execute(
+                new.insert().from_select(keep, select(*(old.c[name] for name in keep)))
+            )
+            old.drop(connection)
+            connection.exec_driver_sql(
+                f'ALTER TABLE "{temporary_name}" RENAME TO "{table_name}"'
+            )
+            rebuilt = Table(table_name, MetaData(), autoload_with=connection)
+            for name, unique, keys in index_specs:
+                Index(name, *(rebuilt.c[key] for key in keys), unique=unique).create(connection)
+            for child_table, rows in child_rows:
+                for row in rows:
+                    predicates = [
+                        child_table.c[key].is_(None)
+                        if value is None
+                        else child_table.c[key] == value
+                        for key, value in row.items()
+                    ]
+                    connection.execute(child_table.delete().where(*predicates))
+                if rows:
+                    connection.execute(child_table.insert(), rows)
+        finally:
+            connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+
+
+def _replace_automatic_plan_status_constraint(engine) -> None:
+    """Allow the canonical ``VALID`` and ``CONVERGING`` plan statuses.
+
+    The active-schema path is intentionally independent from Alembic. SQLite
+    has no portable in-place operation for changing a table CHECK constraint,
+    so mirror the existing table-rebuild strategy used by ``_drop_columns``
+    while preserving dependent slot rows and indexes.
+    """
+    table_name = "automatic_plan"
+    constraint_name = "ck_automatic_plan_status"
+    status_sql = (
+        "status IN ('VALID', 'CONVERGING', 'DEGRADED', 'INVALID', 'FEASIBLE', "
+        "'feasible', 'deficit', 'best_effort', 'preview')"
+    )
+    inspector = inspect(engine)
+    if not inspector.has_table(table_name):
+        return
+    existing_constraints = {
+        item.get("name")
+        for item in inspector.get_check_constraints(table_name)
+        if item.get("name")
+    }
+    if engine.dialect.name != "sqlite":
+        with engine.begin() as connection:
+            if constraint_name in existing_constraints:
+                connection.exec_driver_sql(
+                    f'ALTER TABLE "{table_name}" DROP CONSTRAINT "{constraint_name}"'
+                )
+            connection.exec_driver_sql(
+                f'ALTER TABLE "{table_name}" ADD CONSTRAINT "{constraint_name}" '
+                f"CHECK ({status_sql})"
+            )
+        return
+
+    old_metadata = MetaData()
+    with engine.connect() as connection:
+        old = Table(table_name, old_metadata, autoload_with=connection)
+    new_metadata = MetaData()
+    for foreign_key in old.foreign_keys:
+        referenced_name = foreign_key.target_fullname.split(".", 1)[0]
+        if referenced_name not in new_metadata.tables:
+            Table(referenced_name, new_metadata, autoload_with=engine)
+    temporary_name = f"{table_name}__status_new"
+    new = old.to_metadata(new_metadata, name=temporary_name)
+    for constraint in list(new.constraints):
+        if constraint.name == constraint_name:
+            new.constraints.remove(constraint)
+    from sqlalchemy import CheckConstraint
+
+    new.append_constraint(CheckConstraint(status_sql, name=constraint_name))
+
+    index_specs: list[tuple[str, bool, tuple[str, ...]]] = []
+    for index in list(new.indexes):
+        if index.name:
+            index_specs.append((index.name, bool(index.unique), tuple(index.columns.keys())))
+        new.indexes.remove(index)
+    keep = [column.name for column in old.c]
+
     child_rows: list[tuple[Table, list[dict[str, object]]]] = []
     for child_name in inspector.get_table_names():
         if child_name == table_name:
