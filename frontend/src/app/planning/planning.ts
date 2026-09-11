@@ -10,7 +10,7 @@ import type { ChartOptions, TooltipItem } from 'chart.js';
 
 import { Api } from '../core/api';
 import { Poller } from '../core/poll';
-import type { ApiErrorDto, HourlyForecastPointDto, PlanningCheckDto, TemperatureTargetRequest, PlanningDto, PlanningDeficitDto, PlanningPreviewDto, PlanningPreviewJobDto, PlanningSlotDto, PlanningTimelineSlotDto } from '../core/api.types';
+import type { ApiErrorDto, HourlyForecastPointDto, PlanExplanationDto, PlanHistoryDto, PlanningCheckDto, TemperatureTargetRequest, PlanningDto, PlanningDeficitDto, PlanningPreviewDto, PlanningPreviewJobDto, PlanningSlotDto, PlanningTimelineSlotDto } from '../core/api.types';
 import { type Explained, UNREACHABLE, explain, messageFor } from '../core/errors';
 import { formatDateOnly, formatInstant } from '../shared/age/age';
 import { formatTemperature, truncateTemperature } from '../shared/temperature/temperature';
@@ -25,13 +25,14 @@ import {
 } from '../shared/presentation/presentation';
 
 interface PlanningDetailDialogData {
-  kind: 'forecast' | 'planning' | 'failure' | 'problems' | 'preview' | 'planning-table' | 'chart';
+  kind: 'forecast' | 'planning' | 'explanation' | 'failure' | 'problems' | 'preview' | 'planning-table' | 'chart';
   planning?: PlanningDto;
   check?: PlanningCheckDto;
   job?: PlanningPreviewJobDto;
   preview?: PlanningPreviewDto;
   table?: PlanningTableDetail;
   chart?: ChartDetail;
+  explanation?: PlanExplanationDto;
 }
 
 interface PlanningTableDetail {
@@ -86,6 +87,23 @@ interface PreviewChartPoint {
   charge_energy_kwh: number;
 }
 
+interface ExplanationRow {
+  key: string;
+  start: string;
+  end: string;
+  heater: string;
+  power: number;
+  stored: number | null;
+  storedNext: number | null;
+  charge: number | null;
+  heat: number | null;
+  loss: number | null;
+  indoor: number | null;
+  indoorNext: number | null;
+  target: number | null;
+  shortfall: number | null;
+}
+
 function previewProblems(preview: PlanningPreviewDto): PlanningDeficitDto[] {
   return preview.deficits.length ? preview.deficits : preview.violations;
 }
@@ -118,9 +136,58 @@ function recommendedPlanningAction(cause: string): string | null {
   selector: 'dtc-planning-detail-dialog',
   imports: [MatButtonModule, MatDialogModule, MatTabsModule],
   template: `
-    <h2 mat-dialog-title>{{ data.kind === 'forecast' ? 'Detalle de la previsión' : data.kind === 'failure' ? 'Detalle del fallo de la vista previa' : data.kind === 'problems' ? 'Problemas de la vista previa' : data.kind === 'preview' ? 'Detalle de la vista previa' : data.kind === 'planning-table' ? data.table?.title : data.kind === 'chart' ? data.chart?.title : 'Detalle de la planificación' }}</h2>
+    <h2 mat-dialog-title>{{ data.kind === 'forecast' ? 'Detalle de la previsión' : data.kind === 'explanation' ? '¿Por qué este plan?' : data.kind === 'failure' ? 'Detalle del fallo de la vista previa' : data.kind === 'problems' ? 'Problemas de la vista previa' : data.kind === 'preview' ? 'Detalle de la vista previa' : data.kind === 'planning-table' ? data.table?.title : data.kind === 'chart' ? data.chart?.title : 'Detalle de la planificación' }}</h2>
     <mat-dialog-content>
-      @if (data.kind === 'failure') {
+      @if (data.kind === 'explanation' && data.explanation; as explanation) {
+        <section data-testid="plan-explanation-dialog">
+          <p><strong>{{ reasonText(explanation.plan['reason']) }}</strong> · {{ statusText(explanation.plan['status']) }} · creado {{ dateTime(explanation.plan['created_at']) }}</p>
+          @if (!explanation.evidence_available) {
+            <p class="problem" role="status">Este plan es anterior al registro de evidencia explicable. No se reconstruyen sus entradas usando la configuración actual.</p>
+          }
+          @for (item of explanation.operator_summary; track item.heater_id) {
+            <article class="problem operator-explanation" data-testid="plan-operator-summary">
+              <h3>{{ item.heater_name }}</h3>
+              <p>Partía de {{ temperature(item.initial_indoor_temperature_c) }} y {{ percent(item.initial_soc_percent) }} de carga. El plan asignó {{ duration(item.charge_minutes) }} de carga y proyectó {{ energy(item.total_heat_delivered_kwh) }} de calor entregado, {{ energy(item.total_thermal_loss_kwh) }} de pérdidas y una temperatura final de {{ temperature(item.final_indoor_temperature_c) }}.</p>
+              @if (item.maximum_temperature_shortfall_c && item.maximum_temperature_shortfall_c > 0) { <p><strong>Déficit térmico máximo: {{ temperature(item.maximum_temperature_shortfall_c) }}</strong></p> }
+            </article>
+          }
+          @if (explanation.audit.length) {
+            <h3>Motivo y auditoría</h3>
+            <dl class="detail-list">
+              @for (event of explanation.audit; track event.id) {
+                <div><dt>{{ dateTime(event.occurred_at) }}</dt><dd>{{ reasonText(event.reason) }}@if (event.details['deviation_reason']) { · {{ deviationText(event.details) }} }</dd></div>
+              }
+            </dl>
+          }
+          @if (explanation.comparison; as comparison) {
+            <h3>Qué cambió respecto al plan {{ comparison.predecessor_plan_id }}</h3>
+            <p>{{ comparison.replaced ? 'El nuevo plan reemplazó al anterior.' : comparison.predecessor_preserved ? 'El candidato no se activó y el plan anterior continuó gobernando las salidas.' : 'El candidato no se activó y el plan anterior dejó de gobernar las salidas.' }} Se añadieron {{ comparison.added_charge_intervals.length }} intervalos de carga y se eliminaron {{ comparison.removed_charge_intervals.length }}. Los déficits pasaron de {{ comparison.deficits_before }} a {{ comparison.deficits_after }}.</p>
+            <p>{{ inputChangesText(comparison) }}</p>
+            <p>{{ finalComparisonText(comparison) }}</p>
+          } @else {
+            <h3>Comparación</h3><p>No existe un plan activo anterior conservado para comparar.</p>
+          }
+          @if (explanation.plan['slots']?.length) {
+            <h3>Balance por intervalo</h3>
+            <div class="table-scroll planning-detail-table-scroll">
+              <table class="planning-detail-table" data-testid="plan-explanation-intervals"><thead><tr><th>Intervalo</th><th>Acumulador</th><th>Potencia</th><th>Energía inicio</th><th>+ carga</th><th>- calor</th><th>- pérdidas</th><th>Energía final</th><th>Interior</th><th>Objetivo</th><th>Déficit</th></tr></thead><tbody>
+                @for (row of explanationRows(explanation); track row.key) {
+                  <tr><th>{{ dateTime(row.start) }}–{{ dateTime(row.end) }}</th><td>{{ row.heater }}</td><td>{{ row.power }} W</td><td>{{ energy(row.stored) }}</td><td>{{ energy(row.charge) }}</td><td>{{ energy(row.heat) }}</td><td>{{ energy(row.loss) }}</td><td>{{ energy(row.storedNext) }}</td><td>{{ temperature(row.indoor) }} → {{ temperature(row.indoorNext) }}</td><td>{{ temperature(row.target) }}</td><td>{{ temperature(row.shortfall) }}</td></tr>
+                }
+              </tbody></table>
+            </div>
+          }
+          @if (evidence(explanation); as inputs) {
+            <h3>Entradas conservadas</h3>
+            <dl class="detail-list">
+              <div><dt>Telemetría</dt><dd>{{ telemetryText(inputs) }}</dd></div>
+              <div><dt>Límites</dt><dd>{{ limitsText(inputs) }}</dd></div>
+              <div><dt>Previsión</dt><dd>{{ forecastEvidenceText(inputs) }}</dd></div>
+              <div><dt>Consignas</dt><dd>{{ count(inputs['temperature_targets']) }} reglas</dd></div>
+            </dl>
+          }
+        </section>
+      } @else if (data.kind === 'failure') {
         <dl class="detail-list">
           <div><dt>Paso</dt><dd>{{ data.check ? checkText(data.check.name) : 'Trabajo de vista previa' }}</dd></div>
           <div><dt>Estado</dt><dd>{{ data.check ? checkStatusText(data.check.status) : 'error' }}</dd></div>
@@ -232,6 +299,7 @@ function recommendedPlanningAction(cause: string): string | null {
       }
     </mat-dialog-content>
     <mat-dialog-actions align="end">
+      @if (data.kind === 'explanation' && data.explanation) { <button mat-stroked-button type="button" (click)="downloadDiagnostic()" data-testid="download-plan-diagnostic">Descargar diagnóstico</button> }
       <button mat-button mat-dialog-close type="button" data-testid="detail-dialog-close">Cerrar</button>
     </mat-dialog-actions>
   `,
@@ -264,6 +332,7 @@ function recommendedPlanningAction(cause: string): string | null {
 })
 export class PlanningDetailDialog implements AfterViewInit, OnDestroy {
   readonly data = inject<PlanningDetailDialogData>(MAT_DIALOG_DATA);
+  private readonly api = inject(Api);
   @ViewChild('detailChart') private detailCanvas?: ElementRef<HTMLCanvasElement>;
   private detailChart?: Chart;
 
@@ -289,6 +358,120 @@ export class PlanningDetailDialog implements AfterViewInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.detailChart?.destroy();
+  }
+
+  reasonText(value: unknown): string {
+    return planReasonLabel(typeof value === 'string' ? value : null);
+  }
+
+  statusText(value: unknown): string {
+    return planStatusLabel(typeof value === 'string' ? value : null);
+  }
+
+  percent(value: number | null | undefined): string {
+    return value === null || value === undefined ? 'no disponible' : `${value.toFixed(1)} %`;
+  }
+
+  duration(minutes: number): string {
+    if (minutes < 60) return `${minutes} min`;
+    const hours = Math.floor(minutes / 60);
+    const remainder = minutes % 60;
+    return remainder ? `${hours} h ${remainder} min` : `${hours} h`;
+  }
+
+  evidence(explanation: PlanExplanationDto): Record<string, unknown> | null {
+    const value = explanation.plan['evidence'];
+    return value && typeof value === 'object' ? value as Record<string, unknown> : null;
+  }
+
+  count(value: unknown): number {
+    return Array.isArray(value) ? value.length : 0;
+  }
+
+  telemetryText(inputs: Record<string, unknown>): string {
+    const telemetry = inputs['telemetry'];
+    if (!telemetry || typeof telemetry !== 'object') return 'no disponible';
+    const entries = Object.entries(telemetry as Record<string, Record<string, unknown>>);
+    return entries.length ? entries.map(([heater, value]) => `${heater}: ${this.temperature(value['indoor_temperature_c'] as number | null)} y ${this.percent(value['stored_soc_percent'] as number | null)} SOC`).join(' · ') : 'no disponible';
+  }
+
+  limitsText(inputs: Record<string, unknown>): string {
+    const limits = inputs['limits'] as Record<string, unknown> | undefined;
+    if (!limits) return 'no disponible';
+    return `contratada ${limits['contracted_power_w']} W · calefacción ${limits['max_heating_power_w']} W · base ${limits['base_load_w']} W`;
+  }
+
+  forecastEvidenceText(inputs: Record<string, unknown>): string {
+    const points = inputs['forecast'];
+    const eligible = inputs['forecast_automatic_eligible'];
+    return `${Array.isArray(points) ? points.length : 0} puntos horarios · ${eligible === true ? 'apta para control automático' : 'no apta para control automático'}`;
+  }
+
+  deviationText(details: Record<string, unknown>): string {
+    const heater = details['heater_id'] ? ` en ${details['heater_id']}` : '';
+    return `${planReasonLabel(details['deviation_reason'])}${heater}: previsto ${details['planned_value'] ?? '—'}, proyectado ${details['projected_value'] ?? '—'}`;
+  }
+
+  inputChangesText(comparison: NonNullable<PlanExplanationDto['comparison']>): string {
+    if (!comparison.input_changes.length) return 'No hay cambios de entrada conservados o comparables.';
+    const labels = comparison.input_changes.map((item) => item.kind === 'telemetry' ? `telemetría de ${item.heater_id}` : item.kind === 'limits' ? 'límites de potencia' : item.kind === 'temperature_targets' ? 'consignas' : item.kind === 'forecast_status' ? 'estado de previsión' : item.kind);
+    return `Cambios de entrada: ${labels.join(', ')}.`;
+  }
+
+  finalComparisonText(comparison: NonNullable<PlanExplanationDto['comparison']>): string {
+    const heaters = new Set([...Object.keys(comparison.final_values_before), ...Object.keys(comparison.final_values_after)]);
+    if (!heaters.size) return 'No hay magnitudes finales comparables.';
+    return [...heaters].map((heater) => {
+      const before = comparison.final_values_before[heater] ?? {};
+      const after = comparison.final_values_after[heater] ?? {};
+      const energyBefore = before['stored_energy_kwh']; const energyAfter = after['stored_energy_kwh'];
+      const temperatureBefore = before['indoor_temperature_c']; const temperatureAfter = after['indoor_temperature_c'];
+      return `${heater}: energía ${this.energy(energyBefore)} → ${this.energy(energyAfter)}; temperatura ${this.temperature(temperatureBefore)} → ${this.temperature(temperatureAfter)}`;
+    }).join(' · ');
+  }
+
+  explanationRows(explanation: PlanExplanationDto): ExplanationRow[] {
+    const rows: ExplanationRow[] = [];
+    const names = new Map(explanation.operator_summary.map((item) => [item.heater_id, item.heater_name]));
+    for (const slot of (explanation.plan['slots'] as Array<Record<string, unknown>> | undefined) ?? []) {
+      const heaterIds = new Set<string>([
+        ...((slot['heater_ids'] as string[] | undefined) ?? []),
+        ...Object.keys((slot['stored_energy_kwh'] as Record<string, number> | undefined) ?? {}),
+        ...Object.keys((slot['indoor_temperature_c'] as Record<string, number> | undefined) ?? {}),
+      ]);
+      for (const heaterId of heaterIds) {
+        const metric = (name: string): number | null => {
+          const value = (slot[name] as Record<string, number> | undefined)?.[heaterId];
+          return typeof value === 'number' ? value : null;
+        };
+        const active = ((slot['heater_ids'] as string[] | undefined) ?? []).includes(heaterId);
+        rows.push({
+          key: `${String(slot['start'])}-${heaterId}`,
+          start: String(slot['start']), end: String(slot['end']), heater: names.get(heaterId) ?? heaterId,
+          power: active ? metric('heater_power_w') ?? Number(slot['power_w'] ?? 0) : 0,
+          stored: metric('stored_energy_kwh'), storedNext: metric('stored_energy_next_kwh'),
+          charge: metric('charge_energy_kwh'), heat: metric('heat_delivered_kwh'), loss: metric('thermal_loss_kwh'),
+          indoor: metric('indoor_temperature_c'), indoorNext: metric('indoor_temperature_next_c'),
+          target: metric('target_temperature_c'), shortfall: metric('temperature_shortfall_c'),
+        });
+      }
+    }
+    return rows;
+  }
+
+  downloadDiagnostic(): void {
+    const explanation = this.data.explanation;
+    if (!explanation) return;
+    const source = explanation.source;
+    const planId = Number(explanation.plan['id']);
+    this.api.planDiagnostic(source, planId).subscribe((blob) => {
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `dtc-plan-${source}-${planId}-diagnostic.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+    });
   }
 
   previewProblems(preview: PlanningPreviewDto): PlanningDeficitDto[] {
@@ -474,6 +657,8 @@ export class Planning implements AfterViewInit, OnDestroy {
   readonly previewJob = signal<PlanningPreviewJobDto | null>(null);
   readonly selectedTab = signal(0);
   readonly selectedTargetIndex = signal<number | null>(null);
+  readonly planHistory = signal<PlanHistoryDto[]>([]);
+  readonly explanationError = signal('');
   readonly selectedTarget = computed<TemperatureTargetDraft | null>(() => {
     const targets = this.draftTargets();
     if (!targets.length) return null;
@@ -569,6 +754,25 @@ export class Planning implements AfterViewInit, OnDestroy {
         this.loading.set(false);
         this.failure.set(this.describe(error));
       },
+    });
+    this.api.plans({ limit: 10 }).subscribe({
+      next: (page) => this.planHistory.set(page.items),
+      error: () => this.explanationError.set('No se pudo cargar el historial de planificaciones.'),
+    });
+  }
+
+  openPlanExplanation(source: string | undefined, planId: number | undefined): void {
+    if (planId === undefined) return;
+    source = source || 'automatic';
+    this.explanationError.set('');
+    this.api.planExplanation(source, planId).subscribe({
+      next: (explanation) => this.dialog.open(PlanningDetailDialog, {
+        width: 'min(96vw, 86rem)',
+        data: { kind: 'explanation', explanation, planning: this.snapshot() ?? undefined },
+        ariaLabel: 'Explicación de la planificación',
+        ariaModal: true,
+      }),
+      error: () => this.explanationError.set('No se pudo cargar la explicación de esta planificación.'),
     });
   }
 
@@ -737,6 +941,10 @@ export class Planning implements AfterViewInit, OnDestroy {
 
   planStatus(status: string | null | undefined): string {
     return planStatusLabel(status);
+  }
+
+  planReason(reason: string | null | undefined): string {
+    return planReasonLabel(reason);
   }
 
   canActivateStatus(status: string | null | undefined): boolean {

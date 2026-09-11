@@ -38,6 +38,7 @@ from .charge_planning import (
     resolve_planning_telemetry,
 )
 from .plan_deviation import DeviationVerdict, SlotBoundaryGate, evaluate_plan_deviation
+from .planning_explanation import planning_evidence
 from .models import AppConfig
 from .persistence import ConfigStoreError
 from .persistence.active_plan import SqlActivePlanRepository
@@ -348,6 +349,7 @@ def _run_controller(
                             audit_details=(
                                 None if deviation is None else deviation.audit_details()
                             ),
+                            evidence=automatic[2],
                         )
                         logger.debug(
                             "Automatic plan persisted: status=%s slots=%d violations=%d",
@@ -586,10 +588,22 @@ def _build_automatic_runtime_plan(
         )
         for heater in config.heaters
     }
-    return plan, ScheduleResult(
-        legacy_slots,
-        allocated,
-        _aggregate_unmet_minutes(config, plan.deficits),
+    return (
+        plan,
+        ScheduleResult(
+            legacy_slots,
+            allocated,
+            _aggregate_unmet_minutes(config, plan.deficits),
+        ),
+        planning_evidence(
+            request,
+            planning_site=planning_site,
+            forecast_status=(
+                store.planning.forecast_cycle_status()
+                if hasattr(store.planning, "forecast_cycle_status")
+                else None
+            ),
+        ),
     )
 
 

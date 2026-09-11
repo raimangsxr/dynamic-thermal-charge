@@ -146,6 +146,36 @@ describe('Planning', () => {
     expect(element.querySelectorAll('[data-testid$="-card"]')).toHaveLength(4);
   });
 
+  it('opens a deterministic explanation and recent plan history', async () => {
+    backend.expectOne('/api/v1/planning').flush({
+      ...PLANNING,
+      plan: { ...PLANNING.plan!, id: 7, source: 'automatic' },
+    });
+    backend.expectOne((request) => request.url === '/api/v1/history/plans').flush({
+      items: [{ id: 7, source: 'automatic', created_at: PLANNING.observed_at, window_start: PLANNING.plan!.window_start, window_end: PLANNING.plan!.window_end, slot_minutes: 30, installation_revision: 4, forecast_id: 2, status: 'VALID', reason: 'deviation', active: true }],
+      limit_applied: 10, has_more: false, next_cursor: null,
+    });
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('[data-testid="plan-history"]')?.textContent).toContain('Replanificación');
+    (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('[data-testid="plan-explanation-button"]')?.click();
+    const request = backend.expectOne('/api/v1/history/plans/automatic/7/explanation');
+    request.flush({
+      source: 'automatic', evidence_available: true,
+      plan: { id: 7, reason: 'deviation', status: 'VALID', created_at: PLANNING.observed_at, evidence: { telemetry: { salon: { indoor_temperature_c: 18, stored_soc_percent: 50 } }, limits: { contracted_power_w: 5200, max_heating_power_w: 4000, base_load_w: 500 }, forecast: [{ timestamp: PLANNING.observed_at, temperature_c: 4 }], forecast_automatic_eligible: true, temperature_targets: [{}] }, slots: [] },
+      predecessor: null,
+      operator_summary: [{ heater_id: 'salon', heater_name: 'Salón', initial_indoor_temperature_c: 18, initial_soc_percent: 50, total_demand_kwh: 1, total_heat_delivered_kwh: 0.4, total_thermal_loss_kwh: 0.2, final_indoor_temperature_c: 19, maximum_temperature_shortfall_c: 0, charge_periods: [], charge_minutes: 30 }],
+      comparison: null,
+      audit: [{ id: 1, event: 'activated', reason: 'deviation', details: { deviation_reason: 'projected_deficit', heater_id: 'salon', planned_value: 0, projected_value: 1 }, occurred_at: PLANNING.observed_at }],
+      transitions: [],
+    });
+    fixture.detectChanges();
+    await fixture.whenStable();
+    const dialog = document.querySelector('[data-testid="plan-explanation-dialog"]');
+    expect(dialog?.textContent).toContain('Salón');
+    expect(dialog?.textContent).toContain('Déficit térmico no previsto');
+    expect(document.querySelector('[data-testid="download-plan-diagnostic"]')).not.toBeNull();
+  });
+
   it('creates active charts initially and renders forecast charts when its tab is selected', async () => {
     backend.expectOne('/api/v1/planning').flush(PLANNING);
     await fixture.whenStable();

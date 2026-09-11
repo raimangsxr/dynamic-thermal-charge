@@ -32,6 +32,7 @@ from ...charge_planning import (
     resolve_planning_telemetry,
 )
 from ...models import TemperatureTarget, validate_temperature_targets
+from ...planning_explanation import planning_evidence
 from ...persistence import ConfigValidationError
 from ...scheduler import advance_real
 from ..dependencies import usable_store
@@ -399,7 +400,12 @@ def get_planning(
         timezone=timezone_name,
         max_total_power_w=int(planning_site.get("contracted_power_w", config.site.max_total_power_w)),
         plan=PlanningPlanView(
-            **{**plan_data, "window_start": horizon_start, "window_end": visible_window_end},
+            **{
+                **plan_data,
+                "source": "legacy",
+                "window_start": horizon_start,
+                "window_end": visible_window_end,
+            },
             slots=slots,
         ),
         forecast=forecast_view,
@@ -544,7 +550,18 @@ def activate_planning(
         if temperature_targets
         else int(site["revision"])
     )
-    store.planning.save_plan(plan, configuration_revision=configuration_revision, constraints_revision=new_revision, reason="activated", active=True)
+    store.planning.save_plan(
+        plan,
+        configuration_revision=configuration_revision,
+        constraints_revision=new_revision,
+        reason="activated",
+        active=True,
+        evidence=planning_evidence(
+            planning_request,
+            planning_site=site,
+            forecast_status=forecast_cycle_context(store.planning),
+        ),
+    )
     forecast = SqlStatusReader(
         store.application_engine or store.engine,
         store.repository.installation_id(),
@@ -686,6 +703,8 @@ def _automatic_planning_response(
         automatic, planning_window_hours, timezone_name
     )
     automatic_plan = PlanningPlanView(
+        id=automatic["id"],
+        source="automatic",
         window_start=automatic["horizon_start"],
         window_end=window_end,
         slot_minutes=automatic["slot_minutes"],

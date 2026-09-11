@@ -44,7 +44,10 @@
             <section class="summary-card" data-testid="planning-summary" aria-labelledby="planning-summary-title">
               <div class="card-header">
                 <div><h3 id="planning-summary-title">Resumen del plan</h3><p class="hint">Plan aceptado por el controlador.</p></div>
-                <button mat-stroked-button type="button" (click)="openPlanningDetails()" data-testid="planning-detail-button">Ver detalle</button>
+                <div class="card-actions">
+                  @if (data.plan?.id) { <button mat-flat-button color="primary" type="button" (click)="openPlanExplanation(data.plan?.source, data.plan?.id)" data-testid="plan-explanation-button">¿Por qué este plan?</button> }
+                  <button mat-stroked-button type="button" (click)="openPlanningDetails()" data-testid="planning-detail-button">Ver detalle</button>
+                </div>
               </div>
               @if (data.plan; as plan) {
                 <dl class="summary-list">
@@ -61,6 +64,18 @@
               }
             </section>
           </div>
+
+          <section class="card plan-history" data-testid="plan-history">
+            <div class="card-header"><div><h3>Planificaciones recientes</h3><p class="hint">Cada cálculo conserva su motivo y, para los nuevos planes, las entradas exactas que utilizó.</p></div></div>
+            @if (planHistory().length) {
+              <div class="table-scroll"><table><thead><tr><th>Creado</th><th>Motivo</th><th>Estado</th><th>Resultado</th><th></th></tr></thead><tbody>
+                @for (item of planHistory(); track item.source + '-' + item.id) {
+                  <tr><th scope="row">{{ dateTime(item.created_at) }}</th><td>{{ planReason(item.reason) }}</td><td>{{ planStatus(item.status) }}</td><td>{{ item.active === true ? 'Activo' : item.active === false ? 'No activo' : 'Histórico' }}</td><td><button mat-stroked-button type="button" (click)="openPlanExplanation(item.source || 'legacy', item.id)">Explicar</button></td></tr>
+                }
+              </tbody></table></div>
+            } @else { <p class="empty">Todavía no hay planificaciones conservadas.</p> }
+            @if (explanationError()) { <p class="field-error" role="alert">{{ explanationError() }}</p> }
+          </section>
 
           @if (isConvergingStatus(data.plan_status)) {
             <div class="banner warn" role="status" data-testid="planning-converging">

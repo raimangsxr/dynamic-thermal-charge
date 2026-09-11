@@ -537,6 +537,19 @@ inicial mayor. Si todas las consignas siguen cubiertas, también se recalcula
 cuando la energía final prevista supera la del plan por encima de la tolerancia,
 incluido después de reiniciar el controlador.
 
+En `Planificación → Planificación activa`, el botón **¿Por qué este plan?**
+muestra una explicación determinista por acumulador, el balance de energía y
+temperatura de cada intervalo, la causa registrada y la comparación con el plan
+que gobernaba las salidas antes del cálculo. La misma pantalla lista los cálculos
+recientes, incluidos resultados degradados o no activados. Los planes nuevos
+conservan una copia inmutable y sin secretos de la telemetría, consignas, límites
+y previsión realmente entregados al optimizador; los planes anteriores indican
+que esa evidencia no está disponible en vez de reconstruirla con valores
+actuales. El detalle se obtiene en
+`GET /api/v1/history/plans/{source}/{plan_id}/explanation` y el botón **Descargar
+diagnóstico** genera un JSON de soporte mediante
+`GET /api/v1/history/plans/{source}/{plan_id}/diagnostic`.
+
 La ventana y el horizonte se cuentan en horas de reloj de pared, y los límites de
 slot caen siempre en múltiplos de la duración de slot configurada. Los dos días
 del año en que cambia la hora, un horizonte de 24 horas cubre por tanto 25 horas
