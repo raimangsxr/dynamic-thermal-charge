@@ -168,6 +168,38 @@ Los planes históricos con `FEASIBLE` se leen y exponen como `VALID`.
 - **THEN** se devuelve como `VALID` sin perder sus slots, explicaciones ni
   auditoría
 
+### Requirement: Replanificación por desviación medida
+
+En cada límite de slot, con control automático y un plan activo, el controlador
+debe reproyectar todos sus intervalos restantes desde la temperatura interior y
+el SOC medidos, conservando sus decisiones de carga y sin resolver el MILP. Los
+déficits se comparan por acumulador y borde temporal contra la serie física
+persistida del plan: un déficit nuevo o agravado por encima de la tolerancia
+solicita un recálculo inmediato. Si no hay déficits y la energía final
+reproyectada supera la prevista por más de la tolerancia de SOC, también debe
+recalcularse para evitar carga innecesaria.
+
+Solo puede solicitarse un recálculo por desviación en cada slot. Un acumulador
+sin ambas medidas recientes se omite sin impedir que otro acumulador comprobable
+dispare el recálculo. El motivo, el acumulador, el borde y los valores comparados
+quedan en la auditoría. Un resultado `INVALID` de esta comprobación se guarda
+sin sustituir el plan activo; un `INVALID` periódico conserva su tratamiento
+seguro habitual.
+
+#### Scenario: Déficit nuevo tras una convergencia inicial
+
+- **WHEN** un plan `CONVERGING` ya preveía un déficit inicial mayor, pero la
+  reproyección descubre un déficit nuevo en un borde posterior
+- **THEN** la comparación de ese borde solicita un recálculo aunque el máximo
+  global del horizonte no haya aumentado
+
+#### Scenario: Excedente tras recargar un plan persistido
+
+- **WHEN** la reproyección cumple todas las consignas y termina por encima de la
+  energía final guardada en la serie física del plan
+- **THEN** solicita un recálculo si la diferencia supera la tolerancia de SOC,
+  incluso después de reiniciar el proceso
+
 ### Requirement: Accionamiento de la descarga por MQTT
 
 El plan activo debe accionar la descarga de cada acumulador. Cuando el plan

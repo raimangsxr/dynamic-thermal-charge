@@ -20,6 +20,11 @@ from dynamic_thermal_charge.plan_deviation import (
     SlotBoundaryGate,
     evaluate_plan_deviation,
 )
+from dynamic_thermal_charge.charge_planning import (
+    AutomaticPlan,
+    AutomaticPlanSlot,
+    RoomEnergyInterval,
+)
 from dynamic_thermal_charge.weather import HourlyForecastPoint
 
 
@@ -112,8 +117,11 @@ def test_colder_measured_room_triggers_replanning():
 
 def test_a_deficit_already_foreseen_by_the_plan_is_not_new():
     heater = _heater()
+    plan = _plan(shortfall=10.0)
+    for slot in plan["slots"]:
+        slot["temperature_shortfall_start_c"]["salon"] = 10.0
     verdict = _evaluate(
-        _plan(shortfall=10.0),
+        plan,
         heaters=(heater,),
         telemetry={"salon": _telemetry("salon", indoor=15.0, soc=5.0)},
     )
@@ -133,6 +141,142 @@ def test_surplus_stored_energy_triggers_replanning_after_comfort_check():
     assert verdict.replan is True
     assert verdict.reason == SURPLUS_STORED_ENERGY
     assert verdict.projected_value > verdict.planned_value
+
+
+def test_persisted_physical_series_supplies_the_planned_final_store():
+    heater = _heater(target=15.0)
+    plan = _plan(stored_next=1.0)
+    for slot in plan["slots"]:
+        slot.pop("stored_energy_next_kwh")
+    plan["demand"] = [
+        {
+            "heater_id": "salon",
+            "start": slot["start"].isoformat(),
+            "end": slot["end"].isoformat(),
+            "temperature_shortfall_start_c": 0.0,
+            "temperature_shortfall_c": 0.0,
+            "stored_energy_next_kwh": 1.0,
+        }
+        for slot in plan["slots"]
+    ]
+
+    verdict = _evaluate(
+        plan,
+        heaters=(heater,),
+        outdoor=15.0,
+        telemetry={"salon": _telemetry("salon", indoor=15.0, soc=100.0)},
+    )
+
+    assert verdict.replan is True
+    assert verdict.reason == SURPLUS_STORED_ENERGY
+
+
+def test_a_reloaded_active_plan_can_trigger_on_surplus(initialised_store, monkeypatch):
+    heater = _heater(target=15.0)
+    planned_interval = RoomEnergyInterval(
+        "salon", NOW, NOW + SLOT, 15.0, 15.0, 15.0, 15.0,
+        2.0, 1.0, 10.0, 5.0, 0.0, 1.0, 0.0, 0.0,
+    )
+    plan = AutomaticPlan(
+        NOW,
+        NOW + SLOT,
+        60,
+        (
+            AutomaticPlanSlot(
+                NOW,
+                NOW + SLOT,
+                (),
+                0,
+                {"salon": 10.0},
+                {},
+                stored_energy_kwh={"salon": 2.0},
+                temperature_shortfall_c={"salon": 0.0},
+            ),
+        ),
+        (),
+        "VALID",
+        (),
+        "persisted-surplus",
+        NOW,
+        demand=(planned_interval,),
+    )
+    initialised_store.planning.save_plan(
+        plan,
+        configuration_revision=1,
+        constraints_revision=initialised_store.planning.site()["revision"],
+        reason="activated",
+        active=True,
+    )
+    projected_interval = replace(
+        planned_interval,
+        stored_energy_next_kwh=10.0,
+        stored_soc_next_percent=50.0,
+    )
+    monkeypatch.setattr(
+        "dynamic_thermal_charge.plan_deviation.RoomEnergyDemandEstimator.estimate",
+        lambda *_args, **_kwargs: (projected_interval,),
+    )
+
+    verdict = _evaluate(
+        initialised_store.planning.active_plan(),
+        heaters=(heater,),
+        telemetry={"salon": _telemetry("salon", indoor=15.0, soc=50.0)},
+    )
+
+    assert verdict.replan is True
+    assert verdict.reason == SURPLUS_STORED_ENERGY
+
+
+def test_a_later_new_deficit_is_not_hidden_by_a_larger_initial_deficit(monkeypatch):
+    heater = _heater()
+    plan = _plan(status="CONVERGING")
+    for slot in plan["slots"]:
+        slot.pop("temperature_shortfall_start_c")
+    plan["demand"] = [
+        {
+            "heater_id": "salon",
+            "start": NOW.isoformat(),
+            "end": (NOW + SLOT).isoformat(),
+            "temperature_shortfall_start_c": 5.0,
+            "temperature_shortfall_c": 0.0,
+            "stored_energy_next_kwh": 11.2,
+        },
+        {
+            "heater_id": "salon",
+            "start": (NOW + SLOT).isoformat(),
+            "end": (NOW + 2 * SLOT).isoformat(),
+            "temperature_shortfall_start_c": 0.0,
+            "temperature_shortfall_c": 0.0,
+            "stored_energy_next_kwh": 11.2,
+        },
+    ]
+    projected = (
+        RoomEnergyInterval(
+            "salon", NOW, NOW + SLOT, 5.0, 21.0, 16.0, 21.0,
+            10.0, 10.0, 50.0, 50.0, 0.0, 0.0, 0.0, 0.0, 5.0,
+        ),
+        RoomEnergyInterval(
+            "salon", NOW + SLOT, NOW + 2 * SLOT, 5.0, 21.0, 21.0, 20.0,
+            10.0, 10.0, 50.0, 50.0, 0.0, 0.0, 0.0, 1.0, 0.0,
+        ),
+    )
+    monkeypatch.setattr(
+        "dynamic_thermal_charge.plan_deviation.RoomEnergyDemandEstimator.estimate",
+        lambda *_args, **_kwargs: projected,
+    )
+
+    verdict = _evaluate(
+        plan,
+        heaters=(heater,),
+        telemetry={"salon": _telemetry("salon", indoor=16.0, soc=50.0)},
+    )
+
+    assert verdict.replan is True
+    assert verdict.reason == PROJECTED_DEFICIT
+    assert verdict.planned_value == 0.0
+    assert verdict.projected_value == 1.0
+    assert verdict.at == NOW + 2 * SLOT
+    assert verdict.audit_details()["deviation_at"] == NOW + 2 * SLOT
 
 
 def test_comfort_deviation_takes_precedence_over_surplus_energy():

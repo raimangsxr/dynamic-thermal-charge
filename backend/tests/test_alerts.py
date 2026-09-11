@@ -50,6 +50,13 @@ class FakeRepository:
     def set_episode(self, alert_type, *, active, at):
         self.episodes[alert_type] = active
 
+    def open_episode(self, alert_type, *, subject, body, at):
+        if self.episode_active(alert_type):
+            return False
+        self.enqueue(alert_type, subject=subject, body=body, at=at)
+        self.set_episode(alert_type, active=True, at=at)
+        return True
+
     def enqueue(self, alert_type, *, subject, body, at):
         item = {
             "id": self.next_id, "alert_type": alert_type, "subject": subject,
@@ -323,6 +330,24 @@ def test_the_queue_and_its_episode_survive_a_restart(initialised_store):
 
     reopened.set_episode(PLAN_RECALCULATION_INVALID, active=False, at=NOW)
     assert reopened.episode_active(PLAN_RECALCULATION_INVALID) is False
+
+
+def test_opening_an_episode_atomically_queues_only_its_first_delivery(initialised_store):
+    repository = SqlAlertRepository(
+        initialised_store.configuration_engine or initialised_store.engine,
+        initialised_store.application_engine or initialised_store.engine,
+        initialised_store.repository.installation_id(),
+    )
+
+    assert repository.open_episode(
+        PLAN_RECALCULATION_INVALID, subject="primero", body="cuerpo", at=NOW
+    ) is True
+    assert repository.open_episode(
+        PLAN_RECALCULATION_INVALID, subject="duplicado", body="cuerpo", at=NOW
+    ) is False
+
+    assert [item.subject for item in repository.due(NOW)] == ["primero"]
+    assert repository.episode_active(PLAN_RECALCULATION_INVALID) is True
 
 
 def test_the_stored_catalogue_only_records_deviations(initialised_store):
