@@ -98,6 +98,8 @@ vuelve a avisar. El estado de rearme se persiste, de modo que un reinicio no
 reenvíe el aviso de una condición ya notificada. Un tipo desactivado o una
 configuración de correo no operativa no abren episodio, así que habilitar
 cualquiera de los dos más tarde sigue avisando de la siguiente ocurrencia.
+La primera entrega y la apertura del episodio deben confirmarse en una sola
+transacción, de modo que un fallo entre ambas no deje un mensaje duplicable.
 
 #### Scenario: Condición sostenida
 

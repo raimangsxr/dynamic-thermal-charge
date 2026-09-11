@@ -32,6 +32,7 @@ class DeviationVerdict:
     heater_id: str | None = None
     planned_value: float | None = None
     projected_value: float | None = None
+    at: datetime | None = None
     detail: str | None = None
 
     def audit_details(self) -> dict[str, Any]:
@@ -40,6 +41,7 @@ class DeviationVerdict:
             "heater_id": self.heater_id,
             "planned_value": self.planned_value,
             "projected_value": self.projected_value,
+            "deviation_at": self.at,
             "detail": self.detail,
         }
 
@@ -65,6 +67,22 @@ def _instant(value: datetime) -> datetime:
     return value if value.tzinfo is None else value.astimezone(timezone.utc)
 
 
+def _datetime(value: object) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _time_key(value: object) -> datetime | None:
+    parsed = _datetime(value)
+    return None if parsed is None else _instant(parsed)
+
+
 def _remaining_slots(
     slots: Sequence[Mapping[str, Any]], at: datetime
 ) -> list[Mapping[str, Any]]:
@@ -78,21 +96,65 @@ def _remaining_slots(
     ]
 
 
-def _worst_planned_shortfall(
-    slots: Sequence[Mapping[str, Any]], heater_id: str
-) -> float:
-    worst = 0.0
+def _planned_shortfall_by_boundary(
+    plan: Mapping[str, Any],
+    slots: Sequence[Mapping[str, Any]],
+    heater_id: str,
+) -> dict[datetime, float]:
+    """Read planned border values, including the persisted physical series."""
+    remaining_starts = {
+        key for slot in slots if (key := _time_key(slot.get("start"))) is not None
+    }
+    observations: dict[datetime, float] = {}
+
+    def record(at: object, value: object) -> None:
+        key = _time_key(at)
+        if key is not None and value is not None:
+            observations[key] = max(observations.get(key, 0.0), float(value))
+
     for slot in slots:
-        for field in ("temperature_shortfall_c", "temperature_shortfall_start_c"):
-            value = (slot.get(field) or {}).get(heater_id)
-            if value is not None:
-                worst = max(worst, float(value))
-    return worst
+        record(
+            slot.get("start"),
+            (slot.get("temperature_shortfall_start_c") or {}).get(heater_id),
+        )
+        record(
+            slot.get("end"),
+            (slot.get("temperature_shortfall_c") or {}).get(heater_id),
+        )
+
+    # ``automatic_plan_slot`` predates explicit boundary fields. The complete
+    # physical intervals are nevertheless durable in ``inputs_json.demand``;
+    # use them so a plan read after commit/restart compares the same evidence
+    # that the optimiser produced.
+    for interval in plan.get("demand") or ():
+        if not isinstance(interval, Mapping) or interval.get("heater_id") != heater_id:
+            continue
+        if _time_key(interval.get("start")) not in remaining_starts:
+            continue
+        record(interval.get("start"), interval.get("temperature_shortfall_start_c"))
+        record(interval.get("end"), interval.get("temperature_shortfall_c"))
+    return observations
 
 
 def _planned_final_stored_kwh(
-    slots: Sequence[Mapping[str, Any]], heater_id: str
+    plan: Mapping[str, Any],
+    slots: Sequence[Mapping[str, Any]],
+    heater_id: str,
 ) -> float | None:
+    remaining_starts = {
+        key for slot in slots if (key := _time_key(slot.get("start"))) is not None
+    }
+    physical = [
+        interval
+        for interval in (plan.get("demand") or ())
+        if isinstance(interval, Mapping)
+        and interval.get("heater_id") == heater_id
+        and _time_key(interval.get("start")) in remaining_starts
+        and interval.get("stored_energy_next_kwh") is not None
+    ]
+    if physical:
+        last = max(physical, key=lambda item: _time_key(item.get("start")) or datetime.min)
+        return float(last["stored_energy_next_kwh"])
     for slot in reversed(slots):
         value = (slot.get("stored_energy_next_kwh") or {}).get(heater_id)
         if value is not None:
@@ -176,26 +238,36 @@ def evaluate_plan_deviation(
         projected = by_heater.get(heater.id, [])
         if not projected:
             continue
-        projected_shortfall = max(
-            max(item.temperature_shortfall_c, item.temperature_shortfall_start_c)
-            for item in projected
-        )
-        planned_shortfall = _worst_planned_shortfall(slots, heater.id)
-        excess = projected_shortfall - planned_shortfall
-        if excess > shortfall_tolerance_c and excess > worst_excess:
-            worst_excess = excess
-            worst = DeviationVerdict(
-                replan=True,
-                reason=PROJECTED_DEFICIT,
-                heater_id=heater.id,
-                planned_value=round(planned_shortfall, 6),
-                projected_value=round(projected_shortfall, 6),
-                detail=(
-                    "La reproyección con la telemetría medida revela un déficit "
-                    f"de {projected_shortfall:.2f} °C donde el plan preveía "
-                    f"{planned_shortfall:.2f} °C."
-                ),
-            )
+        planned = _planned_shortfall_by_boundary(plan, slots, heater.id)
+        projected_by_boundary: dict[datetime, tuple[datetime, float]] = {}
+        for interval in projected:
+            for boundary, shortfall in (
+                (interval.start, interval.temperature_shortfall_start_c),
+                (interval.end, interval.temperature_shortfall_c),
+            ):
+                key = _instant(boundary)
+                previous = projected_by_boundary.get(key)
+                if previous is None or shortfall > previous[1]:
+                    projected_by_boundary[key] = (boundary, shortfall)
+        for key, (boundary, projected_shortfall) in projected_by_boundary.items():
+            planned_shortfall = planned.get(key, 0.0)
+            excess = projected_shortfall - planned_shortfall
+            if excess > shortfall_tolerance_c and excess > worst_excess:
+                worst_excess = excess
+                worst = DeviationVerdict(
+                    replan=True,
+                    reason=PROJECTED_DEFICIT,
+                    heater_id=heater.id,
+                    planned_value=round(planned_shortfall, 6),
+                    projected_value=round(projected_shortfall, 6),
+                    at=boundary,
+                    detail=(
+                        "La reproyección con la telemetría medida revela en "
+                        f"{boundary.isoformat()} un déficit de "
+                        f"{projected_shortfall:.2f} °C donde el plan preveía "
+                        f"{planned_shortfall:.2f} °C."
+                    ),
+                )
     if worst is not None:
         return worst
 
@@ -203,7 +275,7 @@ def evaluate_plan_deviation(
     # original plan is charging more than the measured conditions require.
     for heater in checkable:
         projected = by_heater.get(heater.id, [])
-        planned_final = _planned_final_stored_kwh(slots, heater.id)
+        planned_final = _planned_final_stored_kwh(plan, slots, heater.id)
         if not projected or planned_final is None or heater.capacity_kwh <= 0:
             continue
         projected_final = projected[-1].stored_energy_next_kwh

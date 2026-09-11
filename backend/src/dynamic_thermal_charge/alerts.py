@@ -85,6 +85,10 @@ class AlertRepository(Protocol):
 
     def episode_active(self, alert_type: str) -> bool: ...
 
+    def open_episode(
+        self, alert_type: str, *, subject: str, body: str, at: datetime
+    ) -> bool: ...
+
     def set_episode(self, alert_type: str, *, active: bool, at: datetime) -> None: ...
 
     def enqueue(
@@ -188,12 +192,12 @@ class AlertService:
         if not self._repository.type_enabled(alert_type):
             logger.debug("Alert %s is disabled in the catalogue", alert_type)
             return False
-        if self._repository.episode_active(alert_type):
+        now = self._clock()
+        if not self._repository.open_episode(
+            alert_type, subject=subject, body=body, at=now
+        ):
             logger.debug("Alert %s already has an open episode", alert_type)
             return False
-        now = self._clock()
-        self._repository.enqueue(alert_type, subject=subject, body=body, at=now)
-        self._repository.set_episode(alert_type, active=True, at=now)
         logger.info("Alert %s queued for delivery", alert_type)
         return True
 

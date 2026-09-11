@@ -529,7 +529,13 @@ Los históricos que usaban `FEASIBLE` se leen como `VALID`. La configuración
 incluye `deviation_shortfall_tolerance_c` (por defecto 0,1 °C) y
 `deviation_surplus_soc_percent` (por defecto 5 %) para solicitar un recálculo
 inmediato cuando la telemetría se desvía de la proyección; ambos valores deben
-ser positivos.
+ser positivos. En cada límite de slot se reproyecta el resto del plan con la
+temperatura interior y el SOC medidos, conservando las decisiones de carga. La
+comparación se hace por acumulador y por borde contra la serie física guardada:
+un déficit nuevo o agravado dispara el recálculo aunque exista otro déficit
+inicial mayor. Si todas las consignas siguen cubiertas, también se recalcula
+cuando la energía final prevista supera la del plan por encima de la tolerancia,
+incluido después de reiniciar el controlador.
 
 La ventana y el horizonte se cuentan en horas de reloj de pared, y los límites de
 slot caen siempre en múltiplos de la duración de slot configurada. Los dos días

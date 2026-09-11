@@ -89,6 +89,55 @@ class SqlAlertRepository:
                 ).first()
         return bool(row[0]) if row is not None else False
 
+    def open_episode(
+        self, alert_type: str, *, subject: str, body: str, at: datetime
+    ) -> bool:
+        """Atomically enqueue the first delivery and latch its episode."""
+        moment = to_utc(at)
+        with transaction(self._application, self._application_location) as connection:
+            existing = connection.execute(
+                select(alert_episode.c.id, alert_episode.c.active).where(
+                    and_(
+                        alert_episode.c.installation_id == self._installation_id,
+                        alert_episode.c.alert_type == alert_type,
+                    )
+                )
+            ).first()
+            if existing is not None and bool(existing.active):
+                return False
+            connection.execute(
+                insert(alert_delivery).values(
+                    installation_id=self._installation_id,
+                    alert_type=alert_type,
+                    subject=subject[:512],
+                    body=body,
+                    status="pending",
+                    attempts=0,
+                    next_attempt_at=moment,
+                    created_at=moment,
+                )
+            )
+            values = {
+                "active": True,
+                "since": moment,
+                "last_enqueued_at": moment,
+            }
+            if existing is None:
+                connection.execute(
+                    insert(alert_episode).values(
+                        installation_id=self._installation_id,
+                        alert_type=alert_type,
+                        **values,
+                    )
+                )
+            else:
+                connection.execute(
+                    update(alert_episode)
+                    .where(alert_episode.c.id == existing.id)
+                    .values(**values)
+                )
+        return True
+
     def set_episode(self, alert_type: str, *, active: bool, at: datetime) -> None:
         moment = to_utc(at)
         with transaction(self._application, self._application_location) as connection:
