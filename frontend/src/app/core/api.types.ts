@@ -113,6 +113,8 @@ export interface PlanningTimelineSlotDto {
 }
 
 export interface PlanningPlanDto {
+  id?: number;
+  source?: 'automatic' | 'legacy' | string;
   window_start: string;
   window_end: string;
   slot_minutes: number;
@@ -369,6 +371,44 @@ export interface PlanHistoryDto {
   status?: string | null;
   reason?: string | null;
   active?: boolean | null;
+}
+
+export interface PlanOperatorSummaryDto {
+  heater_id: string;
+  heater_name: string;
+  initial_indoor_temperature_c: number | null;
+  initial_soc_percent: number | null;
+  total_demand_kwh: number | null;
+  total_heat_delivered_kwh: number | null;
+  total_thermal_loss_kwh: number | null;
+  final_indoor_temperature_c: number | null;
+  maximum_temperature_shortfall_c: number | null;
+  charge_periods: string[][];
+  charge_minutes: number;
+}
+
+export interface PlanComparisonDto {
+  predecessor_plan_id: number;
+  replaced: boolean;
+  predecessor_preserved: boolean;
+  input_changes: Array<{ kind: string; heater_id?: string; before?: unknown; after?: unknown }>;
+  added_charge_intervals: Array<{ start: string; end: string; heater_id: string }>;
+  removed_charge_intervals: Array<{ start: string; end: string; heater_id: string }>;
+  final_values_before: Record<string, Record<string, number>>;
+  final_values_after: Record<string, Record<string, number>>;
+  deficits_before: number;
+  deficits_after: number;
+}
+
+export interface PlanExplanationDto {
+  source: string;
+  evidence_available: boolean;
+  plan: Record<string, any>;
+  predecessor: Record<string, any> | null;
+  operator_summary: PlanOperatorSummaryDto[];
+  comparison: PlanComparisonDto | null;
+  audit: Array<{ id: number; event: string; reason: string; details: Record<string, any>; occurred_at: string }>;
+  transitions: Array<{ id: number; heater_id: string; state: boolean; occurred_at: string }>;
 }
 
 export interface ForecastHistoryDto {

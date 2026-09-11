@@ -14,6 +14,7 @@ decision.
 from __future__ import annotations
 
 from datetime import date, datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 
@@ -202,6 +203,8 @@ class PlanningHeaterView(BaseModel):
 
 
 class PlanningPlanView(BaseModel):
+    id: int
+    source: str = "automatic"
     window_start: datetime
     window_end: datetime
     slot_minutes: int
@@ -681,6 +684,17 @@ class PlanPage(BaseModel):
     next_cursor: str | None = None
 
 
+class PlanExplanationResponse(BaseModel):
+    source: str
+    evidence_available: bool
+    plan: dict[str, Any]
+    predecessor: dict[str, Any] | None = None
+    operator_summary: list[dict[str, Any]] = Field(default_factory=list)
+    comparison: dict[str, Any] | None = None
+    audit: list[dict[str, Any]] = Field(default_factory=list)
+    transitions: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class ForecastPage(BaseModel):
     items: list[ForecastHistoryItem]
     limit_applied: int
@@ -762,6 +776,7 @@ __all__ = [
     "HeaterResponse",
     "HeaterState",
     "PlanPage",
+    "PlanExplanationResponse",
     "PlanSummary",
     "PlanningForecastView",
     "PlanningCheckView",

@@ -60,6 +60,7 @@ export function forecastNextRunLabel(kind: unknown): string {
 const PLAN_REASON_LABELS: Record<string, string> = {
   activated: 'Plan activado',
   periodic: 'Replanificación periódica',
+  deviation: 'Replanificación por desviación',
   startup: 'Arranque del controlador',
   manual: 'Solicitud manual',
   invalid_configuration: 'Configuración no válida',

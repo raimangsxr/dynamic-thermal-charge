@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 
 from ...persistence.bootstrap import Store
 from ...persistence.history import (
@@ -14,13 +16,15 @@ from ...persistence.history import (
     SqlHistoryReader,
     SqlHistoryRecorder,
 )
+from ...planning_explanation import diagnostic_report
 from ..dependencies import usable_store
-from ..errors import bad_request
+from ..errors import bad_request, not_found
 from ..schemas import (
     ERROR_RESPONSES,
     READ_RESPONSES,
     ForecastPage,
     PlanPage,
+    PlanExplanationResponse,
     PruneResponse,
     RelayTestHistoryPage,
     TransitionPage,
@@ -85,6 +89,59 @@ def get_plans(
         limit_applied=page.limit_applied,
         has_more=page.has_more,
         next_cursor=page.next_cursor,
+    )
+
+
+def _plan_explanation(store: Store, source: str, plan_id: int) -> dict:
+    if source == "automatic":
+        detail = store.planning.plan_explanation(plan_id)
+    elif source == "legacy":
+        detail = _reader(store).legacy_plan_explanation(plan_id)
+    else:
+        raise bad_request("plan source must be automatic or legacy", field="source")
+    if detail is None:
+        raise not_found("plan does not exist", field="plan_id")
+    return detail
+
+
+@router.get(
+    "/history/plans/{source}/{plan_id}/explanation",
+    response_model=PlanExplanationResponse,
+    responses={**READ_RESPONSES, 400: ERROR_RESPONSES[404], 404: ERROR_RESPONSES[404]},
+    summary="Explain one persisted plan",
+)
+def get_plan_explanation(
+    source: str,
+    plan_id: int,
+    store: Store = Depends(usable_store),
+) -> PlanExplanationResponse:
+    return PlanExplanationResponse(**_plan_explanation(store, source, plan_id))
+
+
+@router.get(
+    "/history/plans/{source}/{plan_id}/diagnostic",
+    responses={**READ_RESPONSES, 400: ERROR_RESPONSES[404], 404: ERROR_RESPONSES[404]},
+    summary="Download a secret-free plan diagnostic",
+)
+def get_plan_diagnostic(
+    source: str,
+    plan_id: int,
+    store: Store = Depends(usable_store),
+) -> JSONResponse:
+    detail = _plan_explanation(store, source, plan_id)
+    payload = (
+        store.planning.plan_diagnostic(plan_id)
+        if source == "automatic"
+        else diagnostic_report(detail)
+    )
+    assert payload is not None
+    return JSONResponse(
+        content=jsonable_encoder(payload),
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="dtc-plan-{source}-{plan_id}-diagnostic.json"'
+            )
+        },
     )
 
 

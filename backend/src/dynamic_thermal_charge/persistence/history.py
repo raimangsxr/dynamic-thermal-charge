@@ -472,6 +472,62 @@ class SqlHistoryReader:
     def plans(self, since=None, until=None, limit=None, cursor=None) -> HistoryPage:
         return self._plan_page(since, until, limit, cursor)
 
+    def legacy_plan_explanation(self, plan_id: int) -> dict[str, Any] | None:
+        """Expose honest minimal evidence for plans predating explainability."""
+        from .engine import store_errors
+
+        with store_errors(self._location):
+            with self._engine.connect() as connection:
+                row = connection.execute(
+                    select(plan_table).where(
+                        (plan_table.c.installation_id == self._installation_id)
+                        & (plan_table.c.id == plan_id)
+                    )
+                ).mappings().first()
+                if row is None:
+                    return None
+                slots = connection.execute(
+                    select(plan_slot)
+                    .where(plan_slot.c.plan_id == plan_id)
+                    .order_by(plan_slot.c.slot_start, plan_slot.c.heater_id)
+                ).mappings().all()
+                transitions = connection.execute(
+                    select(output_transition)
+                    .where(
+                        (output_transition.c.installation_id == self._installation_id)
+                        & (output_transition.c.plan_id == plan_id)
+                    )
+                    .order_by(output_transition.c.occurred_at, output_transition.c.id)
+                ).mappings().all()
+        plan = _plan_history_item(dict(row), "legacy")
+        plan["slots"] = [
+            {
+                "start": from_utc(item["slot_start"]),
+                "end": from_utc(item["slot_end"]),
+                "heater_ids": [str(item["heater_id"])],
+                "outdoor_temperature_c": item["temperature_c"],
+            }
+            for item in slots
+        ]
+        return {
+            "source": "legacy",
+            "evidence_available": False,
+            "plan": plan,
+            "predecessor": None,
+            "operator_summary": [],
+            "comparison": None,
+            "audit": [],
+            "transitions": [
+                {
+                    "id": int(item["id"]),
+                    "heater_id": str(item["heater_id"]),
+                    "state": bool(item["state"]),
+                    "occurred_at": from_utc(item["occurred_at"]),
+                }
+                for item in transitions
+            ],
+        }
+
     def forecasts(self, since=None, until=None, limit=None, cursor=None) -> HistoryPage:
         return self._page(
             forecast_table,
@@ -782,6 +838,7 @@ class SqlStatusReader:
 
         return {
             "plan": {
+                "id": int(plan_row["id"]),
                 "window_start": from_utc(plan_row["window_start"]),
                 "window_end": from_utc(plan_row["window_end"]),
                 "slot_minutes": int(plan_row["slot_minutes"]),

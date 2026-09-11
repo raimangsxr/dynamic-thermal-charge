@@ -284,6 +284,33 @@ SOC relativo de cada acumulador.
   carga, calor entregado, límite de emisión aplicado, intercambio térmico,
   interior, objetivo y déficit sin inferir temperatura a partir del SOC
 
+### Requirement: Explicación durable de la planificación
+
+Cada cálculo debe conservar la evidencia estructurada que empleó, sin secretos,
+y relacionarse con el plan que gobernaba las salidas al comenzar. La explicación
+del plan activo o histórico debe derivarse de esa evidencia mediante reglas
+deterministas, mostrar el balance físico por intervalo y permitir descargar un
+diagnóstico con su comparación, auditoría y transiciones. Nunca debe reconstruir
+datos ausentes a partir del estado actual.
+
+#### Scenario: Replanificación frente al plan gobernante
+
+- **WHEN** un nuevo cálculo sucede a un plan que gobernaba las salidas
+- **THEN** la explicación compara entradas, carga, estado final y déficits contra
+  ese plan, e indica si lo reemplazó o si el candidato no llegó a activarse
+
+#### Scenario: Plan anterior sin evidencia conservada
+
+- **WHEN** el operador consulta un plan creado antes de conservar snapshots
+- **THEN** el plan sigue siendo consultable y la evidencia ausente figura como
+  no disponible, sin inferirse de la configuración, telemetría o previsión vigente
+
+#### Scenario: Descarga de diagnóstico
+
+- **WHEN** el operador descarga el diagnóstico de un plan
+- **THEN** recibe un documento legible por máquina con la evidencia conservada,
+  comparación y eventos relacionados, sin credenciales ni secretos
+
 ### Requirement: Ciclo de previsión AEMET durable
 
 La consulta AEMET debe ejecutarse a la hora local configurada y conservar su

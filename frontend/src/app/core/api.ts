@@ -24,6 +24,7 @@ import type {
   HeaterDto,
   PageDto,
   PlanHistoryDto,
+  PlanExplanationDto,
   PruneDto,
   SetFieldRequest,
   StatusDto,
@@ -156,6 +157,14 @@ export class Api {
     return this.http.get<PageDto<PlanHistoryDto>>(`${BASE}/history/plans`, {
       params: this.historyParams(query),
     });
+  }
+
+  planExplanation(source: string, planId: number): Observable<PlanExplanationDto> {
+    return this.http.get<PlanExplanationDto>(`${BASE}/history/plans/${encodeURIComponent(source)}/${planId}/explanation`);
+  }
+
+  planDiagnostic(source: string, planId: number): Observable<Blob> {
+    return this.http.get(`${BASE}/history/plans/${encodeURIComponent(source)}/${planId}/diagnostic`, { responseType: 'blob' });
   }
 
   forecasts(query: HistoryQuery = {}): Observable<PageDto<ForecastHistoryDto>> {

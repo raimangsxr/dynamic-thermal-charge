@@ -13,6 +13,7 @@ from sqlalchemy.engine import Engine
 
 from ..charge_planning import CONVERGING, DEGRADED, INVALID, VALID, AutomaticPlan
 from ..models import ChargeTelemetry, TemperatureTarget, validate_temperature_targets
+from ..planning_explanation import compare_plans, diagnostic_report, operator_summary
 from ..weather import ForecastCycleState, HourlyForecastPoint, future_forecast_points
 from . import ConfigConflictError, ConfigValidationError, ForecastRef
 from .engine import store_errors, transaction
@@ -498,6 +499,7 @@ class SqlPlanningRepository:
         forecast_ref: ForecastRef | None = None,
         preserve_active: bool = False,
         audit_details: Mapping[str, Any] | None = None,
+        evidence: Mapping[str, Any] | None = None,
     ) -> int:
         now = datetime.now(timezone.utc)
         status = _canonical_plan_status(plan.status)
@@ -515,8 +517,24 @@ class SqlPlanningRepository:
             "convergence_by_heater": _json_ready(dict(plan.convergence_by_heater)),
             "convergence_at": _json_ready(plan.convergence_at),
             "guaranteed_until": _json_ready(plan.guaranteed_until),
+            "evidence": _json_ready(dict(evidence or {})),
         }
         with transaction(self._application, self._application_location) as connection:
+            predecessor_plan_id = connection.execute(
+                select(automatic_plan.c.id)
+                .where(
+                    (automatic_plan.c.installation_id == self._installation_id)
+                    & automatic_plan.c.active.is_(True)
+                )
+                .order_by(automatic_plan.c.created_at.desc(), automatic_plan.c.id.desc())
+                .limit(1)
+            ).scalar()
+            inputs["predecessor_plan_id"] = (
+                None if predecessor_plan_id is None else int(predecessor_plan_id)
+            )
+            inputs["predecessor_preserved"] = bool(
+                predecessor_plan_id is not None and preserve_active
+            )
             if active or (status == INVALID and not preserve_active):
                 connection.execute(update(automatic_plan).where((automatic_plan.c.installation_id == self._installation_id) & automatic_plan.c.active.is_(True)).values(active=False))
             forecast_id = (
@@ -757,6 +775,9 @@ class SqlPlanningRepository:
     def active_plan(self) -> dict[str, Any] | None:
         return self._plan_by_condition(automatic_plan.c.active.is_(True))
 
+    def plan(self, plan_id: int) -> dict[str, Any] | None:
+        return self._plan_by_condition(automatic_plan.c.id == plan_id)
+
     def latest_plan(self) -> dict[str, Any] | None:
         """Return the newest automatic plan, including an invalid one.
 
@@ -783,13 +804,16 @@ class SqlPlanningRepository:
                 if row is None:
                     return None
                 slots = connection.execute(select(automatic_plan_slot).where(automatic_plan_slot.c.plan_id == row["id"]).order_by(automatic_plan_slot.c.slot_start)).mappings().all()
+        return self._decode_plan(row, slots)
+
+    def _decode_plan(self, row, slots) -> dict[str, Any]:
         inputs = json.loads(row["inputs_json"])
         status = _canonical_plan_status(row["status"])
         convergence_by_heater = {
             str(heater_id): _datetime_or_none(value)
             for heater_id, value in (inputs.get("convergence_by_heater") or {}).items()
         }
-        return {
+        decoded = {
             "id": int(row["id"]),
             "configuration_revision": int(row["configuration_revision"]),
             "constraints_revision": int(row["constraints_revision"]),
@@ -809,6 +833,9 @@ class SqlPlanningRepository:
             "convergence_by_heater": convergence_by_heater,
             "convergence_at": _datetime_or_none(inputs.get("convergence_at")),
             "guaranteed_until": _datetime_or_none(inputs.get("guaranteed_until")),
+            "evidence": inputs.get("evidence") or None,
+            "predecessor_plan_id": inputs.get("predecessor_plan_id"),
+            "predecessor_preserved": bool(inputs.get("predecessor_preserved", False)),
             "slots": [
                 {
                     "start": from_utc(item["slot_start"]),
@@ -833,6 +860,85 @@ class SqlPlanningRepository:
                 for item in slots
             ],
         }
+        slots_by_start = {
+            _datetime_or_none(slot["start"]): slot for slot in decoded["slots"]
+        }
+        for item in decoded["demand"]:
+            if not isinstance(item, dict):
+                continue
+            slot = slots_by_start.get(_datetime_or_none(item.get("start")))
+            heater_id = item.get("heater_id")
+            if slot is None or heater_id is None:
+                continue
+            for source, target in (
+                ("stored_energy_next_kwh", "stored_energy_next_kwh"),
+                ("indoor_temperature_next_c", "indoor_temperature_next_c"),
+                ("temperature_shortfall_start_c", "temperature_shortfall_start_c"),
+            ):
+                if item.get(source) is not None:
+                    slot.setdefault(target, {})[str(heater_id)] = float(item[source])
+        return decoded
+
+    def plan_explanation(self, plan_id: int) -> dict[str, Any] | None:
+        plan = self.plan(plan_id)
+        if plan is None:
+            return None
+        predecessor_id = plan.get("predecessor_plan_id")
+        predecessor = (
+            self.plan(int(predecessor_id)) if predecessor_id is not None else None
+        )
+        with store_errors(self._application_location):
+            with self._application.connect() as connection:
+                audits = connection.execute(
+                    select(plan_audit)
+                    .where(
+                        (plan_audit.c.installation_id == self._installation_id)
+                        & (plan_audit.c.plan_id == plan_id)
+                    )
+                    .order_by(plan_audit.c.occurred_at, plan_audit.c.id)
+                ).mappings().all()
+                from .schema import output_transition
+
+                transitions = connection.execute(
+                    select(output_transition)
+                    .where(
+                        (output_transition.c.installation_id == self._installation_id)
+                        & (output_transition.c.plan_id == plan_id)
+                    )
+                    .order_by(output_transition.c.occurred_at, output_transition.c.id)
+                ).mappings().all()
+        detail = {
+            "source": "automatic",
+            "evidence_available": plan.get("evidence") is not None,
+            "plan": plan,
+            "predecessor": predecessor,
+            "operator_summary": operator_summary(plan),
+            "comparison": compare_plans(plan, predecessor),
+            "audit": [
+                {
+                    "id": int(item["id"]),
+                    "event": str(item["event"]),
+                    "reason": str(item["reason"]),
+                    "details": json.loads(item["details_json"]),
+                    "occurred_at": from_utc(item["occurred_at"]),
+                }
+                for item in audits
+            ],
+            "transitions": [
+                {
+                    "id": int(item["id"]),
+                    "heater_id": str(item["heater_id"]),
+                    "state": bool(item["state"]),
+                    "occurred_at": from_utc(item["occurred_at"]),
+                }
+                for item in transitions
+            ],
+        }
+        return detail
+
+    def plan_diagnostic(self, plan_id: int) -> dict[str, Any] | None:
+        detail = self.plan_explanation(plan_id)
+        return None if detail is None else diagnostic_report(detail)
 
     def latest_forecast(
         self, at: datetime | None = None
