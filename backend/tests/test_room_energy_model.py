@@ -572,6 +572,57 @@ def test_missing_or_stale_room_telemetry_is_explicitly_invalid():
     assert all(item.requirement == "safe_planning_input" for item in missing.violations)
 
 
+def test_room_planner_rejects_future_telemetry_but_accepts_readings_inside_the_limit():
+    fresh = RoomEnergyPlanner().build(
+        replace(
+            _request(),
+            telemetry={
+                "salon": ChargeTelemetry(
+                    "salon",
+                    indoor_temperature_c=20.0,
+                    stored_soc_percent=50.0,
+                    indoor_received_at=START - timedelta(minutes=16),
+                    stored_soc_received_at=START - timedelta(minutes=16),
+                )
+            },
+            telemetry_max_age_seconds=30 * 60,
+        )
+    )
+    future = RoomEnergyPlanner().build(
+        replace(
+            _request(),
+            telemetry={
+                "salon": ChargeTelemetry(
+                    "salon",
+                    indoor_temperature_c=20.0,
+                    stored_soc_percent=50.0,
+                    indoor_received_at=START + timedelta(seconds=1),
+                    stored_soc_received_at=START + timedelta(seconds=1),
+                )
+            },
+            telemetry_max_age_seconds=30 * 60,
+        )
+    )
+
+    assert fresh.status != INVALID
+    assert future.status == INVALID
+    assert future.violations[0].reason == "missing_required_state"
+
+
+def test_room_planner_marks_a_persisted_non_aligned_target_invalid():
+    heater = replace(
+        _heater(),
+        temperature_targets=(TemperatureTarget(21.0, time(0, 15), time(1, 15)),),
+    )
+
+    result = RoomEnergyPlanner().build(_request(heaters=(heater,), slot_minutes=30))
+
+    assert result.status == INVALID
+    assert result.violations[0].heater_id == "salon"
+    assert "non-aligned" in result.violations[0].reason
+    assert "00:15-01:15" in result.violations[0].reason
+
+
 def test_disabled_temperature_targets_are_explicitly_missing_schedule():
     heater = replace(
         _heater(),

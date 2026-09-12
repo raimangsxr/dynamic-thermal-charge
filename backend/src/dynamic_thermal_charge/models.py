@@ -187,6 +187,38 @@ def validate_temperature_targets(
                 )
 
 
+def validate_temperature_target_alignment(
+    targets: tuple[TemperatureTarget, ...] | list[TemperatureTarget] | tuple,
+    slot_minutes: int,
+    *,
+    heater_id: str | None = None,
+) -> None:
+    """Reject enabled target boundaries that cannot be represented by a slot.
+
+    ``24:00`` is normalised to ``00:00`` when request payloads enter the
+    domain, so both spellings of midnight naturally pass the same boundary
+    check.
+    """
+    if slot_minutes <= 0:
+        raise ValueError("slot_minutes must be positive")
+    for index, target in enumerate(tuple(targets)):
+        if not isinstance(target, TemperatureTarget) or not target.enabled:
+            continue
+        for field_name, value in (
+            ("start_time", target.start_time),
+            ("end_time", target.end_time),
+        ):
+            minutes = _time_minutes(value)
+            if minutes % slot_minutes:
+                owner = "" if heater_id is None else f" for heater {heater_id}"
+                raise ValueError(
+                    f"temperature target {index}{owner} has a non-aligned "
+                    f"{field_name} in schedule "
+                    f"{target.start_time:%H:%M}-{target.end_time:%H:%M}; "
+                    f"boundaries must align with {slot_minutes}-minute slots"
+                )
+
+
 # The longer name is useful at integration boundaries and keeps the model
 # discoverable for callers that do not know the compact UI name.
 WeeklyTemperatureTarget = TemperatureTarget

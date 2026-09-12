@@ -247,10 +247,14 @@ def _input_changes(current: Any, previous: Any) -> list[dict[str, Any]]:
     return changes
 
 
-def diagnostic_report(detail: Mapping[str, Any]) -> dict[str, Any]:
+def diagnostic_report(
+    detail: Mapping[str, Any],
+    *,
+    forecast: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Return the deliberately allow-listed support bundle."""
     return {
-        "format": "dynamic-thermal-charge-plan-diagnostic-v1",
+        "format": "dynamic-thermal-charge-plan-diagnostic-v2",
         "generated_from_persisted_evidence": True,
         "plan": detail.get("plan"),
         "evidence_available": detail.get("evidence_available"),
@@ -258,6 +262,17 @@ def diagnostic_report(detail: Mapping[str, Any]) -> dict[str, Any]:
         "comparison": detail.get("comparison"),
         "audit": detail.get("audit"),
         "transitions": detail.get("transitions"),
+        "forecast": dict(forecast or {
+            "available": False,
+            "status": "unavailable",
+            "reason": "forecast_context_not_loaded",
+            "forecast_id": None,
+            "requested_interval": None,
+            "available_interval": None,
+            "leading_context_incomplete": True,
+            "trailing_context_incomplete": True,
+            "hourly_points": [],
+        }),
     }
 
 

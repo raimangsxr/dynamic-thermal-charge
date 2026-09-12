@@ -8,6 +8,7 @@ from sqlalchemy import func, insert, select
 
 from dynamic_thermal_charge.persistence.mapping import to_utc
 from dynamic_thermal_charge.persistence.schema import (
+    automatic_plan,
     config_change,
     forecast as forecast_table,
     output_transition,
@@ -174,6 +175,83 @@ def test_a_live_plan_survives_however_old_it_looks(initialised_store, recorder):
     report = recorder.prune(NOW, retention_days=1)
     assert _count(initialised_store, plan_table) == 1, "the running plan was pruned"
     assert "plan" not in report.deleted
+
+
+def test_forecasts_referenced_by_either_plan_table_survive_until_both_plans_go(
+    initialised_store, recorder
+):
+    installation_id = initialised_store.repository.installation_id()
+    old = NOW - timedelta(days=30)
+    with initialised_store.engine.begin() as connection:
+        legacy_forecast_id = connection.execute(
+            insert(forecast_table).values(
+                installation_id=installation_id,
+                forecast_date=old.date(),
+                average_temperature_c=7.0,
+                minimum_temperature_c=2.0,
+                maximum_temperature_c=12.0,
+                source="aemet",
+                retrieved_at=to_utc(old),
+            )
+        ).inserted_primary_key[0]
+        automatic_forecast_id = connection.execute(
+            insert(forecast_table).values(
+                installation_id=installation_id,
+                forecast_date=old.date(),
+                average_temperature_c=8.0,
+                minimum_temperature_c=3.0,
+                maximum_temperature_c=13.0,
+                source="fallback",
+                retrieved_at=to_utc(old),
+            )
+        ).inserted_primary_key[0]
+        legacy_plan_id = connection.execute(
+            insert(plan_table).values(
+                installation_id=installation_id,
+                installation_revision=1,
+                forecast_id=legacy_forecast_id,
+                window_start=to_utc(old),
+                window_end=to_utc(old + timedelta(hours=1)),
+                slot_minutes=30,
+                created_at=to_utc(NOW),
+            )
+        ).inserted_primary_key[0]
+        automatic_plan_id = connection.execute(
+            insert(automatic_plan).values(
+                installation_id=installation_id,
+                configuration_revision=1,
+                constraints_revision=1,
+                forecast_id=automatic_forecast_id,
+                horizon_start=to_utc(old),
+                horizon_end=to_utc(old + timedelta(hours=1)),
+                slot_minutes=30,
+                status="VALID",
+                reason="test",
+                input_token="retention-test",
+                score_json="[]",
+                deficits_json="[]",
+                inputs_json="{}",
+                active=False,
+                created_at=to_utc(NOW),
+            )
+        ).inserted_primary_key[0]
+
+    first = recorder.prune(NOW, retention_days=1)
+
+    assert "forecast" not in first.deleted
+    with initialised_store.engine.connect() as connection:
+        assert connection.execute(select(forecast_table.c.id)).all()
+
+    with initialised_store.engine.begin() as connection:
+        connection.execute(plan_table.delete().where(plan_table.c.id == legacy_plan_id))
+        connection.execute(
+            automatic_plan.delete().where(automatic_plan.c.id == automatic_plan_id)
+        )
+
+    second = recorder.prune(NOW, retention_days=1)
+
+    assert second.deleted["forecast"] == 2
+    assert _count(initialised_store, forecast_table) == 0
 
 
 def test_a_future_plan_survives_too(initialised_store, recorder):

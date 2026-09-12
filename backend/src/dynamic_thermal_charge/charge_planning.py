@@ -17,6 +17,7 @@ from .models import (
     ChargeTelemetry,
     Heater,
     TemperatureTarget,
+    validate_temperature_target_alignment,
     validate_temperature_targets,
 )
 from .scheduler import _normalize, advance_real, align_to_slot, next_slot_boundary
@@ -82,7 +83,8 @@ def resolve_planning_telemetry(
             continue
         stamps = (value.temperature_received_at, value.stored_charge_received_at)
         if all(
-            item is not None and (observed_at - item).total_seconds() <= max_age_seconds
+            item is not None
+            and 0 <= (observed_at - item).total_seconds() <= max_age_seconds
             for item in stamps
         ):
             valid[heater.id] = value
@@ -256,6 +258,7 @@ class PlanningInput:
         default_factory=dict
     )
     room_energy_model: bool = False
+    telemetry_max_age_seconds: float = 900.0
 
 
 class DegreeHoursDemandEstimator:
@@ -676,6 +679,7 @@ def input_token(request: PlanningInput) -> str:
         "timezone_name": request.timezone_name,
         "forecast_automatic_eligible": request.forecast_automatic_eligible,
         "solver_time_limit_seconds": request.solver_time_limit_seconds or SOLVER_TIME_LIMIT_SECONDS,
+        "telemetry_max_age_seconds": request.telemetry_max_age_seconds,
     }
     if room_energy:
         payload["room_energy_model"] = True
@@ -757,6 +761,11 @@ def _validate_input(request: PlanningInput) -> None:
         raise ValueError("solver_time_limit_seconds must be a positive integer")
     if request.max_total_power_w <= 0 or request.base_load_w < 0 or (request.max_heating_power_w is not None and request.max_heating_power_w <= 0):
         raise ValueError("power limits must be positive")
+    if (
+        not math.isfinite(float(request.telemetry_max_age_seconds))
+        or request.telemetry_max_age_seconds <= 0
+    ):
+        raise ValueError("telemetry_max_age_seconds must be positive")
     if not _is_room_energy_request(request):
         if request.design_indoor_temperature_c <= request.design_outdoor_temperature_c:
             raise ValueError("design indoor temperature must exceed design outdoor temperature")
@@ -1555,6 +1564,27 @@ def _build_room_energy_plan(request: PlanningInput) -> AutomaticPlan:
         horizon_start, request.forecast, request.horizon_hours, request.slot_minutes
     )
     starts = boundaries[:-1] if boundaries else ()
+    for heater in request.heaters:
+        if not heater.enabled:
+            continue
+        try:
+            targets = _room_targets(request, heater)
+            validate_temperature_targets(targets)
+            validate_temperature_target_alignment(
+                targets,
+                request.slot_minutes,
+                heater_id=heater.id,
+            )
+        except ValueError as exc:
+            return _invalid_room_plan(
+                request,
+                horizon_start,
+                starts,
+                str(exc),
+                f"invalid_temperature_schedule: {exc}",
+                generated_at,
+                (heater.id,),
+            )
     if not starts or not request.forecast_automatic_eligible:
         reason = "forecast_not_eligible" if not request.forecast_automatic_eligible else "missing_forecast_coverage"
         return _invalid_room_plan(request, horizon_start, starts, reason, reason, generated_at)
@@ -1562,7 +1592,9 @@ def _build_room_energy_plan(request: PlanningInput) -> AutomaticPlan:
         heater.id
         for heater in request.heaters
         if heater.enabled and not _room_telemetry_fresh(
-            request.telemetry.get(heater.id), request.horizon_start
+            request.telemetry.get(heater.id),
+            request.horizon_start,
+            request.telemetry_max_age_seconds,
         )
     ]
     if missing_telemetry:
@@ -1590,19 +1622,6 @@ def _build_room_energy_plan(request: PlanningInput) -> AutomaticPlan:
             "missing_temperature_schedule",
             generated_at,
             missing_targets,
-        )
-    try:
-        for heater in request.heaters:
-            if heater.enabled:
-                validate_temperature_targets(_room_targets(request, heater))
-    except ValueError as exc:
-        return _invalid_room_plan(
-            request,
-            horizon_start,
-            starts,
-            str(exc),
-            "invalid_temperature_schedule",
-            generated_at,
         )
     _notify(request, "telemetry")
     _notify(request, "room_model")

@@ -19,7 +19,13 @@ from sqlalchemy import MetaData, Table, delete, insert, inspect, select, update
 from sqlalchemy.engine import Connection, Engine
 
 from ..config import validate_config
-from ..models import AppConfig, Heater, IndoorReading, validate_temperature_targets
+from ..models import (
+    AppConfig,
+    Heater,
+    IndoorReading,
+    validate_temperature_target_alignment,
+    validate_temperature_targets,
+)
 from . import (
     ConfigChange,
     ConfigConflictError,
@@ -395,7 +401,18 @@ class SqlConfigRepository:
         if not inspect(connection).has_table(temperature_target.name):
             return
         try:
-            validate_temperature_targets(tuple(targets))
+            normalized = tuple(targets)
+            validate_temperature_targets(normalized)
+            slot_minutes = connection.execute(
+                select(installation_table.c.slot_minutes).where(
+                    installation_table.c.id == installation_id
+                )
+            ).scalar_one()
+            validate_temperature_target_alignment(
+                normalized,
+                int(slot_minutes),
+                heater_id=heater_id,
+            )
         except ValueError as exc:
             raise ConfigValidationError(
                 str(exc), field="temperature_targets", heater_id=heater_id

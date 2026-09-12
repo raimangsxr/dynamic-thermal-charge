@@ -522,8 +522,10 @@ slot que no haya pasado (el límite exacto se conserva y los instantes
 intermedios avanzan al siguiente). Sin cobertura AEMET horaria continua para todo el
 horizonte no se publica un plan parcial. La
 telemetría MQTT de cada acumulador se valida por separado y una muestra
-incompleta o de más de 15 minutos se marca como caducada y deja ese acumulador
-fuera del plan.
+incompleta, futura o cuya antigüedad supera `indoor_max_age_minutes` (30 minutos
+por defecto) se marca como caducada y deja ese acumulador fuera del plan. Los
+extremos de las consignas habilitadas deben coincidir con los límites de
+`slot_minutes`; `24:00` se trata como medianoche.
 
 La planificación usa los estados públicos `VALID`, `CONVERGING`, `DEGRADED` e
 `INVALID`. Solo `VALID` y `CONVERGING` pueden sustituir el plan activo; un
@@ -555,7 +557,11 @@ que esa evidencia no está disponible en vez de reconstruirla con valores
 actuales. El detalle se obtiene en
 `GET /api/v1/history/plans/{source}/{plan_id}/explanation` y el botón **Descargar
 diagnóstico** genera un JSON de soporte mediante
-`GET /api/v1/history/plans/{source}/{plan_id}/diagnostic`.
+`GET /api/v1/history/plans/{source}/{plan_id}/diagnostic`. El JSON usa el formato
+`dynamic-thermal-charge-plan-diagnostic-v2` e incluye el snapshot meteorológico
+persistido por el plan y sus puntos horarios en el intervalo acotado a 12 horas
+antes del inicio y 12 horas después del fin; un snapshot ausente se informa como
+no disponible y nunca se sustituye por el más reciente.
 
 La ventana y el horizonte se cuentan en horas de reloj de pared, y los límites de
 slot caen siempre en múltiplos de la duración de slot configurada. Los dos días

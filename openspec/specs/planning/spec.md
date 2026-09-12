@@ -94,6 +94,11 @@ medianoche sin alterar el payload. El inicio se muestra como incluido y el fin
 como excluido; los cambios no inician una vista previa hasta que el operador la
 solicita.
 
+Cada extremo de una consigna habilitada debe coincidir con un límite de
+`slot_minutes`. `00:00` y `24:00` representan el mismo borde de medianoche;
+una consigna ya persistida que viole esta regla produce `INVALID` identificando
+el acumulador y su horario, sin redondear el intervalo.
+
 #### Scenario: Intervalo activo durante la semana
 
 - **WHEN** llega una hora local incluida entre el inicio y el fin de una regla
@@ -163,6 +168,13 @@ solicita.
 - **THEN** la configuración se rechaza con el acumulador y las reglas
   identificados, sin guardar cambios parciales
 
+#### Scenario: Extremo no alineado con el slot
+
+- **WHEN** una consigna habilitada usa `10:15–11:15` con slots de 30 minutos
+- **THEN** preview, activación y configuración la rechazan sin persistir una
+  sustitución parcial, y una configuración histórica equivalente produce
+  `INVALID` con el horario original
+
 ### Requirement: Entradas físicas frescas y resultado explícito
 
 La planificación automática requiere temperatura interior y SOC recientes para
@@ -172,11 +184,30 @@ son inválidos o la configuración eléctrica es inviable, el resultado debe ser
 explícitamente `INVALID` o `DEGRADED` con la causa; nunca debe volver al cálculo
 basado en porcentajes.
 
+La antigüedad máxima de la temperatura interior y del SOC es la misma y la
+define `indoor_max_age_minutes` de la instalación. Una lectura futura tampoco
+es válida. Preview, planificación periódica, vistas de estado y desviación
+aplican ese límite a las dos medidas antes de considerarlas utilizables.
+
 #### Scenario: Telemetría incompleta
 
 - **WHEN** un acumulador no tiene temperatura interior o SOC reciente
 - **THEN** el resultado identifica la entrada ausente y no publica un plan
   automático basado en un valor supuesto
+
+#### Scenario: Lectura dentro del límite de antigüedad
+
+- **WHEN** la temperatura interior y el SOC tienen una antigüedad no superior a
+  `indoor_max_age_minutes`
+- **THEN** preview, planificación periódica y desviación pueden usar ambas
+  medidas con el mismo criterio
+
+#### Scenario: Lectura futura o caducada
+
+- **WHEN** cualquiera de las dos medidas es futura o supera el límite de
+  antigüedad
+- **THEN** la planificación la rechaza como estado requerido no fresco y no
+  inventa el valor que correspondería al siguiente slot
 
 ### Requirement: Estados canónicos y convergencia continuada
 
@@ -226,6 +257,10 @@ quedan en la auditoría. Un resultado `INVALID` de esta comprobación se guarda
 sin sustituir el plan activo; un `INVALID` periódico conserva su tratamiento
 seguro habitual.
 
+La reproyección conserva el slot que ya comenzó cuando el sondeo llega después
+de su límite. Ese slot se evalúa una sola vez desde la telemetría observada y
+con su decisión de carga persistida antes de comparar los slots posteriores.
+
 #### Scenario: Déficit nuevo tras una convergencia inicial
 
 - **WHEN** un plan `CONVERGING` ya preveía un déficit inicial mayor, pero la
@@ -239,6 +274,13 @@ seguro habitual.
   energía final guardada en la serie física del plan
 - **THEN** solicita un recálculo si la diferencia supera la tolerancia de SOC,
   incluso después de reiniciar el proceso
+
+#### Scenario: Sondeo retrasado tras un límite de slot
+
+- **WHEN** el primer sondeo del controlador llega unos segundos después de un
+  límite de slot
+- **THEN** la desviación incluye el slot que acaba de comenzar una sola vez y
+  no desplaza sus medidas al inicio del slot posterior
 
 ### Requirement: Accionamiento de la descarga por MQTT
 
@@ -340,6 +382,15 @@ deterministas, mostrar el balance físico por intervalo y permitir descargar un
 diagnóstico con su comparación, auditoría y transiciones. Nunca debe reconstruir
 datos ausentes a partir del estado actual.
 
+El diagnóstico descargable añade un bloque `forecast` al formato
+`dynamic-thermal-charge-plan-diagnostic-v2`. Ese bloque identifica únicamente el
+snapshot referenciado por `forecast_id`, incluye sus metadatos y puntos horarios
+en el intervalo acotado a 12 horas antes del inicio y 12 horas después del fin
+del plan, e indica los extremos cuya cobertura está incompleta. Un vínculo nulo
+o desaparecido se informa como no disponible; no se sustituye por el forecast
+más reciente ni por una nueva consulta al proveedor. La respuesta normal de
+explicación no cambia.
+
 #### Scenario: Replanificación frente al plan gobernante
 
 - **WHEN** un nuevo cálculo sucede a un plan que gobernaba las salidas
@@ -351,6 +402,14 @@ datos ausentes a partir del estado actual.
 - **WHEN** el operador consulta un plan creado antes de conservar snapshots
 - **THEN** el plan sigue siendo consultable y la evidencia ausente figura como
   no disponible, sin inferirse de la configuración, telemetría o previsión vigente
+
+#### Scenario: Diagnóstico reproducible con contexto meteorológico parcial
+
+- **WHEN** un plan automático o legacy conserva un `forecast_id` y el snapshot
+  solo cubre parte del contexto solicitado
+- **THEN** la descarga mantiene sus metadatos y todos los puntos persistidos
+  dentro del intervalo, marca el extremo incompleto y no consulta el forecast
+  actual
 
 #### Scenario: Métrica ausente frente a cero físico
 

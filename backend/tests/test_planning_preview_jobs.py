@@ -75,6 +75,35 @@ def test_explicitly_empty_temperature_targets_are_not_replaced_by_saved_defaults
     assert result["violations"][0]["reason"] == "missing_temperature_schedule"
 
 
+def test_preview_rejects_non_aligned_temperature_targets_without_persisting(
+    client, initialised_store
+):
+    _configuration_revision, constraints_revision = _seed_valid_preview_inputs(initialised_store)
+    before = client.get("/api/v1/config/heaters/salon", headers=AUTH).json()
+
+    response = client.post(
+        "/api/v1/planning/preview",
+        headers=AUTH,
+        json={
+            "expected_revision": constraints_revision,
+            "temperature_targets": [
+                {
+                    "heater_id": "salon",
+                    "target_temperature_c": 21.0,
+                    "start_time": "10:15",
+                    "end_time": "11:15",
+                    "weekdays": [0],
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    assert response.json()["field"] == "temperature_targets"
+    assert "non-aligned" in response.json()["message"]
+    assert client.get("/api/v1/config/heaters/salon", headers=AUTH).json() == before
+
+
 def test_preview_job_cancel_is_visible_and_cannot_produce_a_result(initialised_store):
     from dynamic_thermal_charge.api.routes.planning import PREVIEW_STEP_NAMES, PreviewJobRunner
 

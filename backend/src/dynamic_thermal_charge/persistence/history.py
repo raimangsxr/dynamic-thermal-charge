@@ -21,8 +21,10 @@ from sqlalchemy import and_, delete, func, insert, or_, select
 from sqlalchemy.engine import Engine
 
 from . import ForecastRef, HistoryPage, PlanRef, PruneReport
+from ..planning_explanation import diagnostic_report
 from ..weather import HourlyForecastPoint, future_forecast_points
 from .mapping import from_utc, to_utc
+from .forecast_context import persisted_forecast_context
 from .schema import (
     RETAINED_TABLES,
     automatic_plan,
@@ -210,18 +212,28 @@ class SqlHistoryRecorder:
             now_utc = to_utc(now)
             deleted: dict[str, int] = {}
             with self._engine.begin() as connection:
-                for table, timestamp_column in RETAINED_TABLES:
+                # Forecasts are checked after both plan tables.  A plan that
+                # survives its own age policy must be able to keep its linked
+                # snapshot alive during this same pruning pass.
+                retained_tables = tuple(
+                    (table, timestamp_column)
+                    for table, timestamp_column in RETAINED_TABLES
+                    if table is not forecast_table
+                ) + ((forecast_table, "retrieved_at"),)
+                for table, timestamp_column in retained_tables:
                     condition = table.c[timestamp_column] < cutoff
                     if table is plan_table:
                         # Live and future plans survive regardless of age.
                         condition = condition & (plan_table.c.window_end <= now_utc)
                     if table is forecast_table:
-                        # Do not orphan a forecast a surviving plan still cites.
-                        condition = condition & ~forecast_table.c.id.in_(
-                            select(plan_table.c.forecast_id).where(
-                                plan_table.c.forecast_id.is_not(None)
+                        # Do not remove a snapshot still cited by either
+                        # historical plan representation.
+                        for plan_table_ref in (plan_table, automatic_plan):
+                            condition = condition & ~forecast_table.c.id.in_(
+                                select(plan_table_ref.c.forecast_id).where(
+                                    plan_table_ref.c.forecast_id.is_not(None)
+                                )
                             )
-                        )
                     count = connection.execute(delete(table).where(condition)).rowcount
                     if count:
                         deleted[table.name] = int(count)
@@ -527,6 +539,25 @@ class SqlHistoryReader:
                 for item in transitions
             ],
         }
+
+    def legacy_plan_diagnostic(self, plan_id: int) -> dict[str, Any] | None:
+        """Return a secret-free legacy diagnostic with its linked forecast."""
+        detail = self.legacy_plan_explanation(plan_id)
+        if detail is None:
+            return None
+        plan = detail["plan"]
+        from .engine import store_errors
+
+        with store_errors(self._location):
+            with self._engine.connect() as connection:
+                forecast_context = persisted_forecast_context(
+                    connection,
+                    installation_id=self._installation_id,
+                    forecast_id=plan.get("forecast_id"),
+                    plan_start=plan["window_start"],
+                    plan_end=plan["window_end"],
+                )
+        return diagnostic_report(detail, forecast=forecast_context)
 
     def forecasts(self, since=None, until=None, limit=None, cursor=None) -> HistoryPage:
         return self._page(

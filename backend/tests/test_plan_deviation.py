@@ -24,6 +24,7 @@ from dynamic_thermal_charge.charge_planning import (
     AutomaticPlan,
     AutomaticPlanSlot,
     RoomEnergyInterval,
+    RoomEnergyDemandEstimator,
 )
 from dynamic_thermal_charge.weather import HourlyForecastPoint
 
@@ -334,6 +335,70 @@ def test_a_slot_already_under_way_is_not_reprojected():
     )
 
     assert verdict.replan is False
+
+
+def test_delayed_poll_reprojects_the_newly_active_slot_once(monkeypatch):
+    heater = _heater()
+    captured = {}
+
+    def record_projection(
+        _self,
+        _heaters,
+        _telemetry,
+        _forecast,
+        starts,
+        _slot_minutes,
+        **kwargs,
+    ):
+        captured["starts"] = starts
+        captured["charge_on"] = kwargs["charge_on"]
+        return ()
+
+    monkeypatch.setattr(RoomEnergyDemandEstimator, "estimate", record_projection)
+    delayed = NOW + timedelta(seconds=5)
+    telemetry = replace(
+        _telemetry("salon", indoor=20.0, soc=50.0),
+        indoor_received_at=delayed,
+        stored_soc_received_at=delayed,
+    )
+
+    verdict = evaluate_plan_deviation(
+        _plan(),
+        heaters=(heater,),
+        telemetry={"salon": telemetry},
+        forecast=tuple(
+            HourlyForecastPoint(NOW + timedelta(hours=offset), 5.0)
+            for offset in range(4)
+        ),
+        targets={"salon": heater.temperature_targets},
+        at=delayed,
+        slot_minutes=60,
+    )
+
+    assert verdict.replan is False
+    assert captured["starts"] == (NOW, NOW + SLOT)
+    assert captured["charge_on"] == {"salon": (True, True)}
+
+
+def test_deviation_rejects_expired_and_future_telemetry_at_the_configured_limit():
+    heater = _heater()
+    for stamp, expected_replan in (
+        (NOW - timedelta(minutes=16), True),
+        (NOW - timedelta(minutes=31), False),
+        (NOW + timedelta(seconds=1), False),
+    ):
+        telemetry = replace(
+            _telemetry("salon", indoor=15.0, soc=5.0),
+            indoor_received_at=stamp,
+            stored_soc_received_at=stamp,
+        )
+        verdict = _evaluate(
+            _plan(),
+            heaters=(heater,),
+            telemetry={"salon": telemetry},
+            max_age_seconds=30 * 60,
+        )
+        assert verdict.replan is expected_replan
 
 
 def test_missing_forecast_coverage_is_not_a_deviation():

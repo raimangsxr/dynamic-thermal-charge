@@ -11,7 +11,7 @@ from dynamic_thermal_charge.models import ChargeTelemetry, TemperatureTarget
 from dynamic_thermal_charge.planning_explanation import operator_summary, planning_evidence
 from dynamic_thermal_charge.persistence.seed import example_installation
 from dynamic_thermal_charge.scheduler import ChargeScheduler
-from dynamic_thermal_charge.weather import HourlyForecastPoint
+from dynamic_thermal_charge.weather import HourlyForecastPoint, OutdoorForecast
 from tests.conftest import AUTH
 
 
@@ -256,6 +256,102 @@ def test_diagnostic_download_is_json_and_contains_no_credentials(
     assert response.json()["plan"]["id"] == plan_id
 
 
+def test_automatic_diagnostic_uses_only_the_linked_forecast_context(
+    client, initialised_store, recorder
+):
+    forecast = OutdoorForecast(
+        date=NOW.date(),
+        average_temperature_c=4.0,
+        minimum_temperature_c=0.0,
+        maximum_temperature_c=8.0,
+        source="aemet",
+        location="Madrid",
+        hourly_points=(
+            HourlyForecastPoint(NOW - timedelta(hours=13), -1.0),
+            HourlyForecastPoint(NOW - timedelta(hours=12), 0.0),
+            HourlyForecastPoint(NOW, 1.0),
+            HourlyForecastPoint(NOW + timedelta(hours=12, minutes=30), 2.0, True),
+            HourlyForecastPoint(NOW + timedelta(hours=13, minutes=30), 3.0),
+        ),
+    )
+    linked = recorder.record_forecast(forecast)
+    assert linked is not None
+    plan_id = initialised_store.planning.save_plan(
+        _plan(),
+        configuration_revision=1,
+        constraints_revision=1,
+        reason="periodic",
+        active=True,
+        forecast_ref=linked,
+        evidence=_evidence(),
+    )
+    # A newer snapshot must not replace the plan's persisted reference.
+    recorder.record_forecast(
+        OutdoorForecast(
+            date=NOW.date(),
+            average_temperature_c=99.0,
+            minimum_temperature_c=99.0,
+            maximum_temperature_c=99.0,
+            source="simulated",
+            hourly_points=(HourlyForecastPoint(NOW, 99.0),),
+        )
+    )
+
+    response = client.get(
+        f"/api/v1/history/plans/automatic/{plan_id}/diagnostic", headers=AUTH
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    context = body["forecast"]
+    assert body["format"] == "dynamic-thermal-charge-plan-diagnostic-v2"
+    assert context["forecast_id"] == linked.id
+    assert context["source"] == "aemet"
+    assert context["municipality"] == "Madrid"
+    assert [item["temperature_c"] for item in context["hourly_points"]] == [0.0, 1.0, 2.0]
+    assert [item["interpolated"] for item in context["hourly_points"]] == [False, False, True]
+    assert context["leading_context_incomplete"] is False
+    assert context["trailing_context_incomplete"] is False
+
+
+def test_legacy_diagnostic_uses_its_linked_forecast_and_explanation_stays_unchanged(
+    client, initialised_store, recorder
+):
+    forecast = OutdoorForecast(
+        date=NOW.date(),
+        average_temperature_c=4.0,
+        minimum_temperature_c=0.0,
+        maximum_temperature_c=8.0,
+        source="fallback",
+        hourly_points=tuple(
+            HourlyForecastPoint(NOW - timedelta(hours=24) + timedelta(hours=index), 2.0)
+            for index in range(72)
+        ),
+    )
+    linked = recorder.record_forecast(forecast)
+    assert linked is not None
+    config, revision = initialised_store.repository.current()
+    reference = recorder.record_plan(
+        ChargeScheduler().build(config.site, config.heaters, NOW),
+        linked,
+        revision,
+    )
+    assert reference is not None
+
+    diagnostic = client.get(
+        f"/api/v1/history/plans/legacy/{reference.id}/diagnostic", headers=AUTH
+    )
+    explanation = client.get(
+        f"/api/v1/history/plans/legacy/{reference.id}/explanation", headers=AUTH
+    )
+
+    assert diagnostic.status_code == 200, diagnostic.text
+    assert diagnostic.json()["forecast"]["forecast_id"] == linked.id
+    assert diagnostic.json()["forecast"]["source"] == "fallback"
+    assert explanation.status_code == 200, explanation.text
+    assert "forecast" not in explanation.json()
+
+
 def test_unknown_plan_and_source_are_explicit(client):
     missing = client.get(
         "/api/v1/history/plans/automatic/999999/explanation", headers=AUTH
@@ -283,3 +379,13 @@ def test_legacy_plan_is_explainable_without_inventing_missing_evidence(
     assert body["evidence_available"] is False
     assert body["operator_summary"] == []
     assert body["plan"]["slots"]
+    diagnostic = client.get(
+        f"/api/v1/history/plans/legacy/{reference.id}/diagnostic", headers=AUTH
+    )
+    assert diagnostic.status_code == 200, diagnostic.text
+    context = diagnostic.json()["forecast"]
+    assert context["available"] is False
+    assert context["status"] == "unavailable"
+    assert context["reason"] == "no_linked_forecast"
+    assert context["forecast_id"] is None
+    assert context["hourly_points"] == []

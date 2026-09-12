@@ -31,7 +31,11 @@ from ...charge_planning import (
     input_token,
     resolve_planning_telemetry,
 )
-from ...models import TemperatureTarget, validate_temperature_targets
+from ...models import (
+    TemperatureTarget,
+    validate_temperature_target_alignment,
+    validate_temperature_targets,
+)
 from ...planning_explanation import operator_summary as persisted_operator_summary
 from ...planning_explanation import planning_evidence
 from ...persistence import ConfigValidationError
@@ -893,6 +897,8 @@ def _enrich(response: PlanningResponse, store: Store, observed_at: datetime) -> 
 
 def _parse_temperature_targets(
     items: list[TemperatureTargetRequest],
+    *,
+    slot_minutes: int | None = None,
 ) -> dict[str, tuple[TemperatureTarget, ...]]:
     result: dict[str, list[TemperatureTarget]] = {}
 
@@ -928,6 +934,12 @@ def _parse_temperature_targets(
         )
         try:
             validate_temperature_targets(normalized_targets)
+            if slot_minutes is not None:
+                validate_temperature_target_alignment(
+                    normalized_targets,
+                    slot_minutes,
+                    heater_id=heater_id,
+                )
         except ValueError as exc:
             raise ConfigValidationError(
                 str(exc), field="temperature_targets", heater_id=heater_id
@@ -943,9 +955,9 @@ def _resolve_temperature_targets(
     """Resolve an omitted schedule separately from an explicitly empty one."""
     if items is None:
         return _configured_temperature_targets(store)
-    parsed = _parse_temperature_targets(items)
-    _validate_temperature_target_heaters(store, parsed)
     config, _revision = store.repository.current()
+    parsed = _parse_temperature_targets(items, slot_minutes=config.site.slot_minutes)
+    _validate_temperature_target_heaters(store, parsed)
     return {
         heater.id: tuple(parsed.get(heater.id, ()))
         for heater in config.heaters
@@ -1004,6 +1016,7 @@ def _build_automatic_request(
             persisted,
             observed_at,
             mqtt=mqtt,
+            max_age_seconds=config.site.indoor_max_age_minutes * 60,
         ),
         constraints=(),
         temperature_targets=(
@@ -1027,6 +1040,7 @@ def _build_automatic_request(
         progress_callback=progress_callback,
         cancellation_probe=cancellation_probe,
         room_energy_model=True,
+        telemetry_max_age_seconds=config.site.indoor_max_age_minutes * 60,
     )
     return request
 

@@ -16,7 +16,6 @@ from ...persistence.history import (
     SqlHistoryReader,
     SqlHistoryRecorder,
 )
-from ...planning_explanation import diagnostic_report
 from ..dependencies import usable_store
 from ..errors import bad_request, not_found
 from ..schemas import (
@@ -128,13 +127,14 @@ def get_plan_diagnostic(
     plan_id: int,
     store: Store = Depends(usable_store),
 ) -> JSONResponse:
-    detail = _plan_explanation(store, source, plan_id)
-    payload = (
-        store.planning.plan_diagnostic(plan_id)
-        if source == "automatic"
-        else diagnostic_report(detail)
-    )
-    assert payload is not None
+    if source == "automatic":
+        payload = store.planning.plan_diagnostic(plan_id)
+    elif source == "legacy":
+        payload = _reader(store).legacy_plan_diagnostic(plan_id)
+    else:
+        raise bad_request("plan source must be automatic or legacy", field="source")
+    if payload is None:
+        raise not_found("plan does not exist", field="plan_id")
     return JSONResponse(
         content=jsonable_encoder(payload),
         headers={

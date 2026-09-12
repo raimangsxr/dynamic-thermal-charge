@@ -86,14 +86,42 @@ def _time_key(value: object) -> datetime | None:
 def _remaining_slots(
     slots: Sequence[Mapping[str, Any]], at: datetime
 ) -> list[Mapping[str, Any]]:
-    """Return intervals whose start has not passed yet."""
+    """Return the active interval and every interval after it.
+
+    A poll normally arrives a few seconds after a wall-clock boundary.  The
+    interval that began at that boundary is still the state being measured; it
+    must be reprojection's first interval rather than being discarded because
+    its start is just before ``at``.
+    """
     moment = _instant(at)
-    return [
-        slot
-        for slot in slots
-        if isinstance(slot.get("start"), datetime)
-        and _instant(slot["start"]) >= moment
-    ]
+    result: list[Mapping[str, Any]] = []
+    for slot in slots:
+        start = _time_key(slot.get("start"))
+        end = _time_key(slot.get("end"))
+        if start is None:
+            continue
+        if start >= moment or (end is not None and start <= moment < end):
+            result.append(slot)
+    return result
+
+
+def _telemetry_fresh(
+    value: ChargeTelemetry | None,
+    at: datetime,
+    max_age_seconds: float,
+) -> bool:
+    if (
+        value is None
+        or value.indoor_temperature_c is None
+        or value.stored_soc_percent is None
+    ):
+        return False
+    stamps = (value.indoor_received_at, value.stored_soc_received_at)
+    return all(
+        stamp is not None
+        and 0 <= (_instant(at) - _instant(stamp)).total_seconds() <= max_age_seconds
+        for stamp in stamps
+    )
 
 
 def _planned_shortfall_by_boundary(
@@ -178,6 +206,7 @@ def evaluate_plan_deviation(
     at: datetime,
     slot_minutes: int,
     timezone_name: str = "UTC",
+    max_age_seconds: float = 900.0,
     shortfall_tolerance_c: float = 0.1,
     surplus_soc_percent: float = 5.0,
 ) -> DeviationVerdict:
@@ -205,7 +234,10 @@ def evaluate_plan_deviation(
     checkable = tuple(
         heater
         for heater in heaters
-        if heater.enabled and heater.id in telemetry and heater.id in targets
+        if heater.enabled
+        and heater.id in telemetry
+        and heater.id in targets
+        and _telemetry_fresh(telemetry.get(heater.id), at, max_age_seconds)
     )
     if not checkable:
         return NO_DEVIATION
