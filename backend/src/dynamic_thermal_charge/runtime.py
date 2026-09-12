@@ -223,7 +223,11 @@ def _run_controller(
                     else store.planning.telemetry()
                 )
                 telemetry = resolve_planning_telemetry(
-                    live_config.heaters, persisted, now, mqtt=live_mqtt
+                    live_config.heaters,
+                    persisted,
+                    now,
+                    mqtt=live_mqtt,
+                    max_age_seconds=live_config.site.indoor_max_age_minutes * 60,
                 )
                 control = (
                     control_repository.control_state()
@@ -238,6 +242,7 @@ def _run_controller(
                     targets=_room_energy_targets(store, live_config, control),
                     at=now,
                     slot_minutes=slot_minutes,
+                    max_age_seconds=live_config.site.indoor_max_age_minutes * 60,
                     timezone_name=(
                         live_config.schedule.timezone
                         if live_config.schedule is not None
@@ -542,6 +547,7 @@ def _build_automatic_runtime_plan(
         persisted,
         now,
         mqtt=mqtt_settings,
+        max_age_seconds=config.site.indoor_max_age_minutes * 60,
     )
     target_map = temperature_targets
     if target_map is None:
@@ -572,6 +578,7 @@ def _build_automatic_runtime_plan(
         timezone_name=timezone_name,
         temperature_targets=target_map,
         room_energy_model=True,
+        telemetry_max_age_seconds=config.site.indoor_max_age_minutes * 60,
     )
     plan = DeterministicChargeOptimizer().build(request)
     legacy_slots = tuple(

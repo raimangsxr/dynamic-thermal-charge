@@ -12,11 +12,17 @@ from sqlalchemy import delete, insert, select, update
 from sqlalchemy.engine import Engine
 
 from ..charge_planning import CONVERGING, DEGRADED, INVALID, VALID, AutomaticPlan
-from ..models import ChargeTelemetry, TemperatureTarget, validate_temperature_targets
+from ..models import (
+    ChargeTelemetry,
+    TemperatureTarget,
+    validate_temperature_target_alignment,
+    validate_temperature_targets,
+)
 from ..planning_explanation import compare_plans, diagnostic_report, operator_summary
 from ..weather import ForecastCycleState, HourlyForecastPoint, future_forecast_points
 from . import ConfigConflictError, ConfigValidationError, ForecastRef
 from .engine import store_errors, transaction
+from .forecast_context import persisted_forecast_context
 from .mapping import (
     format_temperature_target_end_time,
     from_utc,
@@ -31,6 +37,7 @@ from .schema import (
     charge_planning_site,
     forecast,
     heater_telemetry,
+    installation,
     plan_audit,
     preview_job,
     preview_job_step,
@@ -373,7 +380,13 @@ class SqlPlanningRepository:
         """Persist a heater's weekly targets with an optimistic lock."""
         from .schema import temperature_target
         try:
-            validate_temperature_targets(tuple(targets))
+            normalized = tuple(targets)
+            validate_temperature_targets(normalized)
+            validate_temperature_target_alignment(
+                normalized,
+                self._slot_minutes(),
+                heater_id=heater_id,
+            )
         except ValueError as exc:
             raise ConfigValidationError(
                 str(exc), field="temperature_targets", heater_id=heater_id
@@ -436,6 +449,11 @@ class SqlPlanningRepository:
             normalized = tuple(targets)
             try:
                 validate_temperature_targets(normalized)
+                validate_temperature_target_alignment(
+                    normalized,
+                    self._slot_minutes(),
+                    heater_id=heater_id,
+                )
             except ValueError as exc:
                 raise ConfigValidationError(
                     str(exc), field="temperature_targets", heater_id=heater_id
@@ -487,6 +505,16 @@ class SqlPlanningRepository:
                     **site_values,
                 ))
         return expected_revision + 1
+
+    def _slot_minutes(self) -> int:
+        with store_errors(self._configuration_location):
+            with self._configuration.connect() as connection:
+                value = connection.execute(
+                    select(installation.c.slot_minutes).where(
+                        installation.c.id == self._installation_id
+                    )
+                ).scalar_one()
+        return int(value)
 
     def save_plan(
         self,
@@ -938,7 +966,19 @@ class SqlPlanningRepository:
 
     def plan_diagnostic(self, plan_id: int) -> dict[str, Any] | None:
         detail = self.plan_explanation(plan_id)
-        return None if detail is None else diagnostic_report(detail)
+        if detail is None:
+            return None
+        plan = detail["plan"]
+        with store_errors(self._application_location):
+            with self._application.connect() as connection:
+                forecast_context = persisted_forecast_context(
+                    connection,
+                    installation_id=self._installation_id,
+                    forecast_id=plan.get("forecast_id"),
+                    plan_start=plan["horizon_start"],
+                    plan_end=plan["horizon_end"],
+                )
+        return diagnostic_report(detail, forecast=forecast_context)
 
     def latest_forecast(
         self, at: datetime | None = None

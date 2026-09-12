@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import time
+
 import pytest
 
 from dynamic_thermal_charge.models import (
@@ -11,6 +13,8 @@ from dynamic_thermal_charge.models import (
     IndoorReading,
     OutputConfig,
     SiteConfig,
+    TemperatureTarget,
+    validate_temperature_target_alignment,
 )
 
 
@@ -99,6 +103,17 @@ def test_indoor_plausible_range_must_be_ordered():
             indoor_min_plausible_c=25,
             indoor_max_plausible_c=20,
         )
+
+
+def test_temperature_target_alignment_accepts_slot_edges_and_midnight():
+    validate_temperature_target_alignment(
+        (TemperatureTarget(21.0, time(10, 0), time(11, 30)),),
+        30,
+    )
+    validate_temperature_target_alignment(
+        (TemperatureTarget(21.0, time(0, 0), time(0, 0)),),
+        30,
+    )
 
 
 def test_indoor_reading_requires_an_aware_received_at():

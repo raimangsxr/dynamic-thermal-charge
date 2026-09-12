@@ -17,6 +17,7 @@ from ...models import (
     OutputConfig,
     TemperatureTarget,
     ThermalProfile,
+    validate_temperature_target_alignment,
     validate_temperature_targets,
 )
 from ...persistence import ConfigChange, ConfigValidationError
@@ -88,7 +89,12 @@ def _heater_view(heater: Heater) -> HeaterResponse:
     )
 
 
-def _targets_for_heater(heater_id: str, payload_targets) -> tuple[TemperatureTarget, ...]:
+def _targets_for_heater(
+    heater_id: str,
+    payload_targets,
+    *,
+    slot_minutes: int | None = None,
+) -> tuple[TemperatureTarget, ...]:
     try:
         targets = tuple(
             TemperatureTarget(
@@ -102,6 +108,12 @@ def _targets_for_heater(heater_id: str, payload_targets) -> tuple[TemperatureTar
             if not item.heater_id or item.heater_id == heater_id
         )
         validate_temperature_targets(targets)
+        if slot_minutes is not None:
+            validate_temperature_target_alignment(
+                targets,
+                slot_minutes,
+                heater_id=heater_id,
+            )
         return targets
     except (TypeError, ValueError) as exc:
         raise ConfigValidationError(
@@ -333,7 +345,11 @@ def update_heater(
             temperature_targets=(
                 current.temperature_targets
                 if payload.temperature_targets is None
-                else _targets_for_heater(heater_id, payload.temperature_targets)
+                else _targets_for_heater(
+                    heater_id,
+                    payload.temperature_targets,
+                    slot_minutes=config.site.slot_minutes,
+                )
             ),
         )
         change = store.repository.update_heater(payload.revision, heater)
@@ -355,6 +371,7 @@ def update_heater(
 def post_heater(
     payload: AddHeaterRequest, store: Store = Depends(usable_store)
 ) -> ChangeResponse:
+    config, _revision = store.repository.current()
     thermal = ThermalProfile(
         room_thermal_capacity_kwh_per_c=payload.room_thermal_capacity_kwh_per_c,
         room_heat_loss_kw_per_c=payload.room_heat_loss_kw_per_c,
@@ -371,7 +388,11 @@ def post_heater(
         enabled=payload.enabled,
         telemetry_topic=payload.telemetry_topic,
         thermal=thermal,
-        temperature_targets=_targets_for_heater(payload.id, payload.temperature_targets)
+        temperature_targets=_targets_for_heater(
+            payload.id,
+            payload.temperature_targets,
+            slot_minutes=config.site.slot_minutes,
+        )
         or (TemperatureTarget(21.0, time(0, 0), time(0, 0)),),
         output=OutputConfig(
             kind=payload.output, pin=payload.pin, active_high=payload.active_high
