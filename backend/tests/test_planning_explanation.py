@@ -8,7 +8,7 @@ from dynamic_thermal_charge.charge_planning import (
     VALID,
 )
 from dynamic_thermal_charge.models import ChargeTelemetry, TemperatureTarget
-from dynamic_thermal_charge.planning_explanation import planning_evidence
+from dynamic_thermal_charge.planning_explanation import operator_summary, planning_evidence
 from dynamic_thermal_charge.persistence.seed import example_installation
 from dynamic_thermal_charge.scheduler import ChargeScheduler
 from dynamic_thermal_charge.weather import HourlyForecastPoint
@@ -135,6 +135,43 @@ def test_planning_evidence_allow_lists_the_real_solver_inputs():
     assert evidence["forecast_status"]["forecast_status"] == "success"
     assert "password" not in encoded
     assert "token" not in encoded
+
+
+def test_operator_summary_preserves_physical_zeroes_and_missing_historical_values():
+    explanation = _plan().explanations[0]
+    encoded = dict(explanation.__dict__)
+    encoded.update(
+        {
+            "initial_stored_energy_kwh": 0.0,
+            "final_stored_energy_kwh": 0.0,
+            "total_charge_energy_kwh": 0.0,
+            "forecast_contribution_kwh": 0.0,
+            "terminal_surplus_energy_kwh": 0.0,
+            "charge_reasons": (),
+        }
+    )
+    summary = operator_summary({"explanations": [encoded]})[0]
+
+    assert summary["initial_stored_energy_kwh"] == 0.0
+    assert summary["final_stored_energy_kwh"] == 0.0
+    assert summary["total_charge_energy_kwh"] == 0.0
+    assert summary["forecast_contribution_kwh"] == 0.0
+    assert summary["terminal_surplus_energy_kwh"] == 0.0
+    assert summary["charge_reasons"] == ()
+
+    historical = dict(encoded)
+    for key in (
+        "initial_stored_energy_kwh",
+        "final_stored_energy_kwh",
+        "total_charge_energy_kwh",
+        "forecast_contribution_kwh",
+        "terminal_surplus_energy_kwh",
+        "charge_reasons",
+    ):
+        historical.pop(key)
+    historical_summary = operator_summary({"explanations": [historical]})[0]
+    assert historical_summary["total_charge_energy_kwh"] is None
+    assert historical_summary["charge_reasons"] is None
 
 
 def test_explanation_keeps_immutable_evidence_and_predecessor(initialised_store):

@@ -32,6 +32,7 @@ from ...charge_planning import (
     resolve_planning_telemetry,
 )
 from ...models import TemperatureTarget, validate_temperature_targets
+from ...planning_explanation import operator_summary as persisted_operator_summary
 from ...planning_explanation import planning_evidence
 from ...persistence import ConfigValidationError
 from ...scheduler import advance_real
@@ -158,6 +159,7 @@ class PreviewJobRunner:
                 reason = plan.violations[0].reason.split(":", 1)[0]
                 failed_step = {
                     "missing_aemet_coverage": "aemet_coverage",
+                    "missing_guard_forecast_coverage": "aemet_coverage",
                     "forecast_not_eligible": "aemet_coverage",
                     "missing_required_state": "telemetry",
                     "invalid_configuration": "input_validation",
@@ -453,6 +455,14 @@ def preview_planning(
         store, app_request.app.state.clock(), site,
         temperature_targets=temperature_targets,
     )
+    if plan.status in {VALID, CONVERGING}:
+        preview_cache = getattr(app_request.app.state, "preview_plan_cache", None)
+        if preview_cache is None:
+            preview_cache = {}
+            app_request.app.state.preview_plan_cache = preview_cache
+        preview_cache[plan.input_token] = plan
+        while len(preview_cache) > 8:
+            preview_cache.pop(next(iter(preview_cache)))
     logger.info("Planning preview completed: status=%s violations=%d", plan.status, len(plan.violations))
     forecast = SqlStatusReader(
         store.application_engine or store.engine,
@@ -539,12 +549,17 @@ def activate_planning(
     if input_token(planning_request) != request.token:
         raise ConfigValidationError("the preview inputs changed; recalculate before activating")
     _config, configuration_revision = store.repository.current()
-    plan = _cached_preview_plan(
-        store,
-        planning_request,
-        configuration_revision=configuration_revision,
-        constraints_revision=int(site["revision"]),
-    )
+    preview_cache = getattr(app_request.app.state, "preview_plan_cache", {})
+    plan = preview_cache.pop(request.token, None)
+    if plan is not None and plan.input_token != input_token(planning_request):
+        plan = None
+    if plan is None:
+        plan = _cached_preview_plan(
+            store,
+            planning_request,
+            configuration_revision=configuration_revision,
+            constraints_revision=int(site["revision"]),
+        )
     if plan is None:
         plan = DeterministicChargeOptimizer().build(planning_request)
     if plan.status not in {VALID, CONVERGING}:
@@ -1111,14 +1126,36 @@ def _automatic_plan_from_preview_payload(payload: dict[str, Any]) -> AutomaticPl
             str(item["heater_id"]),
             float(item.get("actual_soc_percent", 0.0)),
             float(item.get("total_demand_kwh", item.get("total_heat_delivered_kwh", 0.0))),
-            1.0,
-            0.0,
-            None,
+            float(item.get("demand_factor", 1.0)),
+            float(item.get("reserve_percent", 0.0)),
+            _preview_optional_datetime(item.get("next_constraint_at")),
             tuple(
                 (_preview_datetime(period[0]), _preview_datetime(period[1]))
                 for period in item.get("charge_periods", [])
             ),
             float(item.get("capacity_kwh", 0.0)),
+            _preview_optional_float(item.get("initial_indoor_temperature_c")),
+            _preview_optional_float(item.get("final_indoor_temperature_c")),
+            float(item.get("total_heat_delivered_kwh", 0.0)),
+            float(item.get("total_thermal_loss_kwh", 0.0)),
+            float(item.get("maximum_temperature_shortfall_c", 0.0)),
+            _preview_optional_float(item.get("initial_stored_energy_kwh")),
+            _preview_optional_float(item.get("final_stored_energy_kwh")),
+            _preview_optional_float(item.get("total_charge_energy_kwh")),
+            _preview_optional_float(item.get("forecast_contribution_kwh")),
+            _preview_optional_float(item.get("terminal_surplus_energy_kwh")),
+            _preview_optional_float(item.get("next_target_temperature_c")),
+            _preview_optional_datetime(item.get("next_target_start")),
+            _preview_optional_datetime(item.get("next_target_end")),
+            (
+                None
+                if item.get("charge_reasons") is None
+                else tuple(
+                    dict(reason)
+                    for reason in item.get("charge_reasons", [])
+                    if isinstance(reason, dict)
+                )
+            ),
         )
         for item in _preview_dict_list(payload.get("explanations"))
     )
@@ -1273,8 +1310,8 @@ def _room_boundary_projection(demand: Any) -> dict[tuple[datetime, str], dict[st
                 "indoor_temperature_c": _preview_optional_float(item.get("indoor_temperature_c")),
                 "indoor_temperature_next_c": _preview_optional_float(item.get("indoor_temperature_next_c")),
                 "target_temperature_c": _preview_optional_float(item.get("target_temperature_c")),
-                "temperature_shortfall_start_c": _preview_optional_float(item.get("temperature_shortfall_start_c")) or 0.0,
-                "temperature_shortfall_c": _preview_optional_float(item.get("temperature_shortfall_c")) or 0.0,
+                "temperature_shortfall_start_c": _preview_optional_float(item.get("temperature_shortfall_start_c")),
+                "temperature_shortfall_c": _preview_optional_float(item.get("temperature_shortfall_c")),
             }
         else:
             continue
@@ -1374,6 +1411,7 @@ def _preview_response(
     room_energy_model = bool(
         plan.demand and isinstance(plan.demand[0], RoomEnergyInterval)
     )
+    explanation_payload = [dict(item.__dict__) for item in plan.explanations]
     operator_summary = {
         "window": {"start": plan.horizon_start, "end": window_end, "hours": planning_window_hours},
         "horizon": {"start": plan.horizon_start, "end": plan.horizon_end, "hours": horizon_hours},
@@ -1385,6 +1423,9 @@ def _preview_response(
             )
             for heater_id in sorted({item.heater_id for item in plan.demand})
         } if room_energy_model else {},
+        "heater_summaries": persisted_operator_summary(
+            {"explanations": explanation_payload}
+        ),
         "room_energy_model": room_energy_model,
         "warnings": warnings,
         "deficit_groups": [item.model_dump(mode="json") for item in grouped_violations],
@@ -1403,17 +1444,22 @@ def _preview_response(
                 "heater_ids": list(item.heater_ids),
                 "power_w": item.power_w,
                 "outdoor_temperature_c": item.outdoor_temperature_c,
-                "stored_energy_kwh": item.stored_energy_kwh or {},
-                "stored_energy_next_kwh": item.stored_energy_next_kwh or {},
-                "indoor_temperature_c": item.indoor_temperature_c or {},
-                "indoor_temperature_next_c": item.indoor_temperature_next_c or {},
-                "target_temperature_c": item.target_temperature_c or {},
-                "heat_delivered_kwh": item.heat_delivered_kwh or {},
-                "thermal_loss_kwh": item.thermal_loss_kwh or {},
-                "temperature_shortfall_start_c": item.temperature_shortfall_start_c or {},
-                "temperature_shortfall_c": item.temperature_shortfall_c or {},
-                "charge_energy_kwh": item.charge_energy_kwh or {},
-                "heat_delivery_limit_kwh": item.heat_delivery_limit_kwh or {},
+                "stored_charge_percent": item.stored_charge_percent,
+                "required_charge_percent": item.required_charge_percent,
+                "initial_soc_percent": item.initial_soc_percent,
+                "demand_kwh": item.demand_kwh,
+                "heater_power_w": item.heater_power_w,
+                "stored_energy_kwh": item.stored_energy_kwh,
+                "stored_energy_next_kwh": item.stored_energy_next_kwh,
+                "indoor_temperature_c": item.indoor_temperature_c,
+                "indoor_temperature_next_c": item.indoor_temperature_next_c,
+                "target_temperature_c": item.target_temperature_c,
+                "heat_delivered_kwh": item.heat_delivered_kwh,
+                "thermal_loss_kwh": item.thermal_loss_kwh,
+                "temperature_shortfall_start_c": item.temperature_shortfall_start_c,
+                "temperature_shortfall_c": item.temperature_shortfall_c,
+                "charge_energy_kwh": item.charge_energy_kwh,
+                "heat_delivery_limit_kwh": item.heat_delivery_limit_kwh,
             }
             for item in plan.slots
         ],
@@ -1430,19 +1476,7 @@ def _preview_response(
         convergence_by_heater=dict(plan.convergence_by_heater),
         convergence_at=plan.convergence_at,
         guaranteed_until=plan.guaranteed_until,
-        explanations=[
-            {
-                "heater_id": item.heater_id,
-                "capacity_kwh": item.capacity_kwh,
-                "initial_indoor_temperature_c": item.initial_indoor_temperature_c,
-                "final_indoor_temperature_c": item.final_indoor_temperature_c,
-                "total_heat_delivered_kwh": item.total_heat_delivered_kwh,
-                "total_thermal_loss_kwh": item.total_thermal_loss_kwh,
-                "maximum_temperature_shortfall_c": item.maximum_temperature_shortfall_c,
-                "charge_periods": item.charge_periods,
-            }
-            for item in plan.explanations
-        ],
+        explanations=explanation_payload,
         demand=[item.__dict__ for item in plan.demand],
         temperature_targets=[
             TemperatureTargetView(
