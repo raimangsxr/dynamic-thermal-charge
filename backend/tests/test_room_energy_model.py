@@ -28,6 +28,7 @@ def _heater(
     *,
     power_w: int = 2800,
     full_charge_minutes: int = 480,
+    full_discharge_minutes: int = 600,
     priority: int = 1,
     target: float = 21.0,
 ) -> Heater:
@@ -36,6 +37,7 @@ def _heater(
         name=heater_id,
         power_w=power_w,
         full_charge_minutes=full_charge_minutes,
+        full_discharge_minutes=full_discharge_minutes,
         priority=priority,
         output=OutputConfig(),
         thermal=ThermalProfile(
@@ -243,6 +245,97 @@ def test_sufficient_storage_reaches_target_without_charging():
     assert interval.indoor_temperature_next_c == pytest.approx(21.0)
     assert interval.charge_energy_kwh == pytest.approx(0.0)
     assert interval.temperature_shortfall_c == pytest.approx(0.0)
+
+
+def test_warm_forecast_needs_no_residual_charge_for_a_later_target():
+    heater = replace(
+        _heater(),
+        temperature_targets=(TemperatureTarget(22.0, time(15, 0), time(23, 0)),),
+    )
+
+    result = RoomEnergyPlanner().build(
+        _request(
+            heaters=(heater,),
+            outdoor=30.0,
+            horizon_hours=24,
+            telemetry={"salon": _telemetry("salon", indoor=20.0, soc=0.0)},
+        )
+    )
+
+    assert result.status == FEASIBLE
+    assert all(not slot.heater_ids for slot in result.slots)
+    assert all(interval.charge_energy_kwh == pytest.approx(0.0) for interval in result.demand)
+
+
+def test_equal_comfort_and_energy_uses_the_latest_physically_viable_slot():
+    heater = replace(
+        _heater(full_charge_minutes=480, full_discharge_minutes=60),
+        temperature_targets=(TemperatureTarget(20.15, time(2, 0), time(3, 0)),),
+    )
+    request = _request(
+        heaters=(heater,),
+        outdoor=20.0,
+        horizon_hours=4,
+        telemetry={"salon": _telemetry("salon", indoor=20.0, soc=0.0)},
+    )
+
+    first = RoomEnergyPlanner().build(request)
+    second = RoomEnergyPlanner().build(request)
+
+    assert first.status == FEASIBLE
+    assert [index for index, slot in enumerate(first.slots) if slot.heater_ids] == [1]
+    assert [slot.heater_ids for slot in first.slots] == [slot.heater_ids for slot in second.slots]
+    assert first.explanations[0].charge_reasons[0]["reason"] == "preheating_for_next_target"
+
+
+def test_power_contention_is_resolved_deterministically_without_exceeding_limit():
+    heaters = tuple(
+        replace(
+            _heater(heater_id),
+            full_discharge_minutes=60,
+            temperature_targets=(TemperatureTarget(20.15, time(2, 0), time(3, 0)),),
+        )
+        for heater_id in ("a", "b")
+    )
+    request = _request(
+        heaters=heaters,
+        outdoor=20.0,
+        horizon_hours=4,
+        max_total_power_w=2800,
+        telemetry={
+            heater.id: _telemetry(heater.id, indoor=20.0, soc=0.0)
+            for heater in heaters
+        },
+    )
+
+    first = RoomEnergyPlanner().build(request)
+    second = RoomEnergyPlanner().build(request)
+
+    assert first.status == FEASIBLE
+    assert [slot.heater_ids for slot in first.slots] == [slot.heater_ids for slot in second.slots]
+    assert all(slot.power_w <= 2800 for slot in first.slots)
+    assert {interval.heater_id for interval in first.demand if interval.charge_energy_kwh > 0} == {"a", "b"}
+
+
+def test_terminal_objective_discharges_new_charge_when_the_dynamics_allow_it():
+    heater = replace(
+        _heater(full_discharge_minutes=60),
+        temperature_targets=(TemperatureTarget(20.15, time(2, 0), time(3, 0)),),
+    )
+
+    result = RoomEnergyPlanner().build(
+        _request(
+            heaters=(heater,),
+            outdoor=20.0,
+            horizon_hours=4,
+            telemetry={"salon": _telemetry("salon", indoor=20.0, soc=0.0)},
+        )
+    )
+
+    explanation = result.explanations[0]
+    assert explanation.total_charge_energy_kwh == pytest.approx(2.8)
+    assert explanation.final_stored_energy_kwh == pytest.approx(0.0)
+    assert explanation.terminal_surplus_energy_kwh == pytest.approx(0.0)
 
 
 def test_preheating_satisfies_the_start_and_end_of_a_later_target():

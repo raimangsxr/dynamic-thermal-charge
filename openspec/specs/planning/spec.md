@@ -117,6 +117,20 @@ solicita.
 - **THEN** se conserva el déficit inicial con `at` igual al inicio del horizonte,
   aunque el plan consiga alcanzar el objetivo al terminar ese slot
 
+#### Scenario: Orden lexicográfico de la optimización
+
+- **WHEN** existen varias decisiones que cubren las mismas consignas
+- **THEN** se conserva primero la seguridad y el confort por prioridad, después
+  se minimiza la energía eléctrica cargada, el excedente terminal y el calor
+  fuera de consigna, y finalmente se eligen los slots más tardíos con un
+  desempate determinista
+
+#### Scenario: Evolución exterior suficiente
+
+- **WHEN** la previsión exterior y el modelo térmico mantienen todos los bordes
+  de una consigna dentro de sus límites sin cargar
+- **THEN** no se asigna carga eléctrica anticipada ni residual
+
 #### Scenario: Solape de consignas
 
 - **WHEN** dos reglas del mismo acumulador ocupan el mismo tramo de un día
@@ -284,6 +298,13 @@ SOC relativo de cada acumulador.
   carga, calor entregado, límite de emisión aplicado, intercambio térmico,
   interior, objetivo y déficit sin inferir temperatura a partir del SOC
 
+#### Scenario: Balance físico de la vista previa activada
+
+- **WHEN** se activa una vista previa con telemetría y balances físicos
+- **THEN** el detalle de la vista previa y la explicación persistida muestran la
+  misma serie de inicio, carga, calor, intercambio, fin y déficit, y sus totales
+  se reconcilian con los intervalos
+
 ### Requirement: Explicación durable de la planificación
 
 Cada cálculo debe conservar la evidencia estructurada que empleó, sin secretos,
@@ -304,6 +325,20 @@ datos ausentes a partir del estado actual.
 - **WHEN** el operador consulta un plan creado antes de conservar snapshots
 - **THEN** el plan sigue siendo consultable y la evidencia ausente figura como
   no disponible, sin inferirse de la configuración, telemetría o previsión vigente
+
+#### Scenario: Métrica ausente frente a cero físico
+
+- **WHEN** una métrica no fue guardada en un plan histórico o su cálculo físico
+  es exactamente cero
+- **THEN** la primera se muestra como no disponible y la segunda permanece como
+  cero en la explicación y el detalle por intervalo
+
+#### Scenario: Motivo de cada carga
+
+- **WHEN** el planificador asigna energía a un acumulador
+- **THEN** la explicación identifica la próxima consigna y su límite, la
+  contribución del intercambio exterior y la energía terminal, distinguiendo
+  carga necesaria, precalentamiento y residual
 
 #### Scenario: Descarga de diagnóstico
 

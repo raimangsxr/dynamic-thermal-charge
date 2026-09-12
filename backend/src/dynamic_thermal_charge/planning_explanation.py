@@ -12,6 +12,20 @@ def _instant(value: datetime | None) -> str | None:
     return None if value is None else value.isoformat()
 
 
+def _stable_summary_value(value: Any) -> Any:
+    """Make solver-derived presentation values stable across preview reloads."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        if isinstance(value, Mapping):
+            return {key: _stable_summary_value(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [_stable_summary_value(item) for item in value]
+        if isinstance(value, tuple):
+            return tuple(_stable_summary_value(item) for item in value)
+        return value
+    rounded = round(float(value), 6)
+    return 0.0 if rounded == 0.0 else rounded
+
+
 def planning_evidence(
     request: PlanningInput,
     *,
@@ -125,14 +139,24 @@ def operator_summary(plan: Mapping[str, Any]) -> list[dict[str, Any]]:
             {
                 "heater_id": heater_id,
                 "heater_name": names.get(heater_id, heater_id),
-                "initial_indoor_temperature_c": item.get("initial_indoor_temperature_c"),
-                "initial_soc_percent": item.get("actual_soc_percent"),
-                "total_demand_kwh": item.get("total_demand_kwh"),
-                "total_heat_delivered_kwh": item.get("total_heat_delivered_kwh"),
-                "total_thermal_loss_kwh": item.get("total_thermal_loss_kwh"),
-                "final_indoor_temperature_c": item.get("final_indoor_temperature_c"),
-                "maximum_temperature_shortfall_c": item.get("maximum_temperature_shortfall_c"),
+                "initial_indoor_temperature_c": _stable_summary_value(item.get("initial_indoor_temperature_c")),
+                "initial_soc_percent": _stable_summary_value(item.get("actual_soc_percent")),
+                "total_demand_kwh": _stable_summary_value(item.get("total_demand_kwh")),
+                "total_heat_delivered_kwh": _stable_summary_value(item.get("total_heat_delivered_kwh")),
+                "total_thermal_loss_kwh": _stable_summary_value(item.get("total_thermal_loss_kwh")),
+                "final_indoor_temperature_c": _stable_summary_value(item.get("final_indoor_temperature_c")),
+                "maximum_temperature_shortfall_c": _stable_summary_value(item.get("maximum_temperature_shortfall_c")),
+                "initial_stored_energy_kwh": _stable_summary_value(item.get("initial_stored_energy_kwh")),
+                "final_stored_energy_kwh": _stable_summary_value(item.get("final_stored_energy_kwh")),
+                "total_charge_energy_kwh": _stable_summary_value(item.get("total_charge_energy_kwh")),
+                "forecast_contribution_kwh": _stable_summary_value(item.get("forecast_contribution_kwh")),
+                "terminal_surplus_energy_kwh": _stable_summary_value(item.get("terminal_surplus_energy_kwh")),
+                "next_constraint_at": item.get("next_constraint_at"),
+                "next_target_temperature_c": _stable_summary_value(item.get("next_target_temperature_c")),
+                "next_target_start": item.get("next_target_start"),
+                "next_target_end": item.get("next_target_end"),
                 "charge_periods": periods,
+                "charge_reasons": _stable_summary_value(item.get("charge_reasons")),
                 "charge_minutes": sum(
                     max(
                         0,

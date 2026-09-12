@@ -382,6 +382,16 @@ def test_preview_activation_persists_room_energy_snapshot(client, initialised_st
     assert preview.status_code == 200, preview.text
     body = preview.json()
     assert body["status"] == FEASIBLE
+    first_preview_slot = body["slots"][0]
+    assert first_preview_slot["initial_soc_percent"]
+    assert first_preview_slot["stored_energy_kwh"]
+    assert first_preview_slot["stored_energy_next_kwh"]
+    assert first_preview_slot["indoor_temperature_c"]
+    assert first_preview_slot["indoor_temperature_next_c"]
+    assert first_preview_slot["heat_delivered_kwh"]
+    assert first_preview_slot["thermal_loss_kwh"]
+    assert first_preview_slot["charge_energy_kwh"]
+    assert body["operator_summary"]["heater_summaries"]
     api_clock.advance(minutes=4)
     activated = client.post(
         "/api/v1/planning/activate", headers=AUTH,
@@ -392,6 +402,8 @@ def test_preview_activation_persists_room_energy_snapshot(client, initialised_st
         },
     )
     assert activated.status_code == 200, activated.text
+    assert activated.json()["slots"] == body["slots"]
+    assert activated.json()["operator_summary"]["heater_summaries"] == body["operator_summary"]["heater_summaries"]
     stored = initialised_store.planning.active_plan()
     assert stored is not None
     assert stored["slots"][0]["stored_energy_kwh"]

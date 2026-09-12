@@ -192,6 +192,17 @@ class HeaterExplanation:
     total_heat_delivered_kwh: float = 0.0
     total_thermal_loss_kwh: float = 0.0
     maximum_temperature_shortfall_c: float = 0.0
+    initial_stored_energy_kwh: float | None = None
+    final_stored_energy_kwh: float | None = None
+    total_charge_energy_kwh: float | None = None
+    forecast_contribution_kwh: float | None = None
+    terminal_surplus_energy_kwh: float | None = None
+    next_target_temperature_c: float | None = None
+    next_target_start: datetime | None = None
+    next_target_end: datetime | None = None
+    # ``None`` means this evidence was not recorded by an older persisted
+    # preview; an empty tuple is a measured/calculated zero-charge result.
+    charge_reasons: tuple[dict[str, Any], ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -641,7 +652,15 @@ def input_token(request: PlanningInput) -> str:
     payload = {
         "heaters": (
             [
-                (h.id, h.power_w, h.full_charge_minutes, h.enabled, h.priority)
+                (
+                    h.id,
+                    h.power_w,
+                    h.full_charge_minutes,
+                    h.full_discharge_minutes,
+                    h.static_emission_percent,
+                    h.enabled,
+                    h.priority,
+                )
                 for h in request.heaters
             ]
             if room_energy
@@ -829,6 +848,7 @@ def _cbc_solver(
     *,
     time_limit_seconds: float | None = None,
     gap_relative: float | None = None,
+    warm_start: bool = False,
 ):
     import shutil
     kwargs = {
@@ -836,6 +856,7 @@ def _cbc_solver(
         "threads": 1,
         "options": ["randomSeed 0"],
         "timeLimit": time_limit_seconds,
+        "warmStart": warm_start,
     }
     if gap_relative is not None:
         kwargs["gapRel"] = gap_relative
@@ -851,6 +872,11 @@ def _required_solver_value(value, label: str) -> float:
     if not math.isfinite(numeric):
         raise ValueError(f"solver assigned a non-finite value to {label}")
     return numeric
+
+
+def _clean_solver_energy(value: float) -> float:
+    """Remove sub-tolerance energy residue from the public physical trace."""
+    return 0.0 if abs(value) <= 1e-6 else value
 
 
 def _require_solution_values(*variable_groups) -> None:
@@ -1051,6 +1077,53 @@ def _target_window_for_at(
                 datetime.combine(local_date, target.end_time, tzinfo=zone),
             )
     return None
+
+
+def _target_occurrence_for_at(
+    targets: Sequence[TemperatureTarget], at: datetime, timezone_name: str
+) -> tuple[TemperatureTarget, datetime, datetime] | None:
+    """Return the weekly target rule and concrete window active at ``at``."""
+    for target in targets:
+        if not target.enabled:
+            continue
+        if active_temperature_target((target,), at, timezone_name) is None:
+            continue
+        window = _target_window_for_at((target,), at, timezone_name)
+        if window is not None:
+            return target, window[0], window[1]
+    return None
+
+
+def _next_target_occurrence(
+    targets: Sequence[TemperatureTarget], at: datetime, timezone_name: str
+) -> tuple[TemperatureTarget, datetime, datetime] | None:
+    """Return the next concrete weekly target occurrence after ``at``."""
+    if not targets:
+        return None
+    validate_temperature_targets(tuple(targets))
+    zone = ZoneInfo(timezone_name)
+    local = at.astimezone(zone)
+    candidates: list[tuple[TemperatureTarget, datetime, datetime]] = []
+    # The planning horizon is at most 48 hours, but two weeks also covers the
+    # next occurrence of a rule on any weekday without relying on that limit.
+    for day_offset in range(-1, 15):
+        local_date = local.date() + timedelta(days=day_offset)
+        weekday = local_date.weekday()
+        for target in targets:
+            if not target.enabled or weekday not in target.weekdays:
+                continue
+            start = datetime.combine(local_date, target.start_time, tzinfo=zone)
+            end_time = target.end_time
+            end_date = local_date
+            if target.start_time == end_time or end_time <= target.start_time:
+                end_date += timedelta(days=1)
+            end = datetime.combine(end_date, end_time, tzinfo=zone)
+            if _key(start) < _key(at) or _key(end) <= _key(at):
+                continue
+            candidates.append((target, start, end))
+    if not candidates:
+        return None
+    return min(candidates, key=lambda item: (_key(item[1]), _target_sort_key(item[0])))
 
 
 def _value_from_violation(
@@ -1530,6 +1603,111 @@ def _room_convergence_by_heater(
     return result
 
 
+def _room_heater_explanation(
+    heater: Heater,
+    intervals: Sequence[RoomEnergyInterval],
+    request: PlanningInput,
+) -> HeaterExplanation:
+    """Summarise a room plan from its persisted physical interval series."""
+    state = request.telemetry[heater.id]
+    targets = _room_targets(request, heater)
+    initial_indoor = float(state.indoor_temperature_c)
+    initial_stored = (
+        intervals[0].stored_energy_kwh
+        if intervals
+        else heater.capacity_kwh * float(state.stored_soc_percent) / 100
+    )
+    final_indoor = (
+        intervals[-1].indoor_temperature_next_c
+        if intervals
+        else initial_indoor
+    )
+    final_stored = (
+        intervals[-1].stored_energy_next_kwh
+        if intervals
+        else initial_stored
+    )
+    current_target = _target_occurrence_for_at(
+        targets, request.horizon_start, request.timezone_name
+    )
+    next_target = current_target or _next_target_occurrence(
+        targets, request.horizon_start, request.timezone_name
+    )
+    charge_reasons: list[dict[str, Any]] = []
+    charge_periods: list[tuple[datetime, datetime]] = []
+    for interval in intervals:
+        if interval.charge_energy_kwh <= 1e-6:
+            continue
+        charge_periods.append((interval.start, interval.end))
+        active_target = _target_occurrence_for_at(
+            targets, interval.start, request.timezone_name
+        )
+        target_occurrence = active_target or _next_target_occurrence(
+            targets, interval.start, request.timezone_name
+        )
+        reason = (
+            "necessary_for_target"
+            if active_target is not None
+            else "preheating_for_next_target"
+            if target_occurrence is not None
+            else "residual_storage"
+        )
+        charge_reasons.append(
+            {
+                "start": interval.start,
+                "end": interval.end,
+                "reason": reason,
+                "target_temperature_c": (
+                    None
+                    if target_occurrence is None
+                    else float(target_occurrence[0].target_temperature_c)
+                ),
+                "target_window_start": (
+                    None if target_occurrence is None else target_occurrence[1]
+                ),
+                "target_window_end": (
+                    None if target_occurrence is None else target_occurrence[2]
+                ),
+                "charge_energy_kwh": interval.charge_energy_kwh,
+                "heat_delivered_kwh": interval.heat_delivered_kwh,
+            }
+        )
+    return HeaterExplanation(
+        heater_id=heater.id,
+        actual_soc_percent=float(state.stored_soc_percent),
+        total_demand_kwh=sum(item.heat_delivered_kwh for item in intervals),
+        demand_factor=1.0,
+        reserve_percent=0.0,
+        next_constraint_at=None if next_target is None else next_target[1],
+        charge_periods=tuple(charge_periods),
+        capacity_kwh=heater.capacity_kwh,
+        initial_indoor_temperature_c=initial_indoor,
+        final_indoor_temperature_c=final_indoor,
+        total_heat_delivered_kwh=sum(item.heat_delivered_kwh for item in intervals),
+        total_thermal_loss_kwh=sum(item.thermal_loss_kwh for item in intervals),
+        maximum_temperature_shortfall_c=max(
+            (
+                max(item.temperature_shortfall_c, item.temperature_shortfall_start_c)
+                for item in intervals
+            ),
+            default=0.0,
+        ),
+        initial_stored_energy_kwh=initial_stored,
+        final_stored_energy_kwh=final_stored,
+        total_charge_energy_kwh=sum(item.charge_energy_kwh for item in intervals),
+        forecast_contribution_kwh=-sum(item.thermal_loss_kwh for item in intervals),
+        terminal_surplus_energy_kwh=max(0.0, final_stored - initial_stored),
+        next_target_temperature_c=(
+            None
+            if next_target is None
+            else float(next_target[0].target_temperature_c)
+        ),
+        next_target_start=None if next_target is None else next_target[1],
+        next_target_end=None if next_target is None else next_target[2],
+        charge_reasons=tuple(charge_reasons),
+    )
+
+
 def _solve_room_energy(
     request: PlanningInput, boundaries: Sequence[datetime], generated_at: datetime
 ) -> AutomaticPlan:
@@ -1667,85 +1845,221 @@ def _solve_room_energy(
     for index in range(len(starts)):
         model += sum(heater.power_w * on[(heater.id, index)] for heater in heaters) <= limit_w
 
-    total_charge = sum(charge.values())
-    total_heat = sum(heat.values())
-    deterministic = sum(
+    initial_energy = {
+        heater.id: heater.capacity_kwh
+        * float(request.telemetry[heater.id].stored_soc_percent)
+        / 100
+        for heater in heaters
+    }
+    terminal_surplus = {
+        heater.id: pulp.LpVariable(
+            f"terminal_surplus_{heater.id}", lowBound=0
+        )
+        for heater in heaters
+    }
+    for heater in heaters:
+        # Only energy added by this plan is eligible for the terminal-surplus
+        # tie-breaker. Existing stored energy is a real input, not an implicit
+        # reserve that the optimiser may discharge merely to improve its score.
+        model += terminal_surplus[heater.id] >= (
+            stored[(heater.id, len(starts))] - initial_energy[heater.id]
+        )
+
+    total_charge = pulp.lpSum(charge.values())
+    total_heat = pulp.lpSum(heat.values())
+    premature_heat = pulp.lpSum(
+        heat[(heater.id, index)]
+        for heater in heaters
+        for index in range(len(starts))
+        if target_values[(heater.id, index)] is None
+    )
+    latest_charge = pulp.lpSum(
+        (len(starts) - index)
+        * charge[(heater.id, index)]
+        for heater in heaters
+        for index in range(len(starts))
+    )
+    deterministic = pulp.lpSum(
         on[(heater.id, index)] * (index + 1) * (position + 1)
         for position, heater in enumerate(heaters)
         for index in range(len(starts))
     )
-    # Encode comfort and priority into one deterministic objective. A single
-    # solve is important here: the rolling horizon may contain four rooms and
-    # 48 slots, and repeated lexicographic MILP solves would consume the entire
-    # planning budget before producing an actionable plan. Priority weights
-    # make a higher-priority room dominate an equivalent lower-priority demand,
-    # while charge, delivered heat, and ON/OFF order are tie-breakers.
-    comfort_objective = sum(
-        max(1.0, float(heater.priority))
-        * (shortfall[(heater.id, index)] + start_shortfall[(heater.id, index)])
-        for heater in heaters
+    heat_timing = pulp.lpSum(
+        (len(starts) - index) * (position + 1) * heat[(heater.id, index)]
+        for position, heater in enumerate(heaters)
         for index in range(len(starts))
     )
-    charge_bound = max(
-        1.0,
-        sum(
-            heater.capacity_kwh
-            + heater.charge_power_kw * slot_hours * len(starts)
+    # Keep the objectives genuinely lexicographic for compact decision spaces.
+    # A weighted sum can trade a measurable comfort deficit for a cheaper
+    # schedule when CBC's tolerances are larger than the secondary
+    # coefficients. Solving and locking each phase makes priority, comfort,
+    # energy, terminal state and recency explicit. Full rolling-horizon
+    # installations can contain hundreds of binary decisions, however; a
+    # repeated MILP solve there exhausts the planning budget before returning
+    # an actionable plan. The bounded scalar fallback below keeps the same
+    # order of terms and uses CBC's fast incumbent search for that case.
+    comfort_phases = [
+        pulp.lpSum(
+            shortfall[(heater.id, index)] + start_shortfall[(heater.id, index)]
             for heater in heaters
-        ),
-    )
-    heat_bound = charge_bound
-    deterministic_bound = max(
-        1.0,
-        sum(
-            (index + 1) * (position + 1)
-            for position in range(len(heaters))
+            if heater.priority == priority
             for index in range(len(starts))
-        ),
+        )
+        for priority in sorted({heater.priority for heater in heaters}, reverse=True)
+    ]
+    secondary_phases = (
+        total_charge,
+        pulp.lpSum(terminal_surplus.values()),
+        total_heat,
+        premature_heat,
+        latest_charge,
+        deterministic,
+        heat_timing,
     )
-    # Comfort is the primary objective.  Keep the secondary terms large enough
-    # to survive CBC's feasibility tolerances: otherwise a plan can satisfy a
-    # target while needlessly overshooting it because the heat tie-breaker is
-    # numerically invisible.  The comfort scale still dominates the complete
-    # range of the energy terms, so a measurable comfort deficit is never
-    # traded for a cheaper plan.
-    objective = (
-        1000.0 * comfort_objective
-        + 1e-6 * total_charge / charge_bound
-        + 1e-3 * total_heat / heat_bound
-        + 1e-12 * deterministic / deterministic_bound
-    )
+    lexicographic_model = len(on) <= 96
+    if lexicographic_model:
+        phases = comfort_phases + list(secondary_phases)
+        solver_gap_relative = None
+    else:
+        priorities = sorted({heater.priority for heater in heaters}, reverse=True)
+        comfort_bounds = {
+            priority: float(400 * len(starts) * max(
+                1, sum(heater.priority == priority for heater in heaters)
+            ))
+            for priority in priorities
+        }
+        weighted_comfort = pulp.lpSum(
+            (2 ** (len(priorities) - rank - 1))
+            * objective
+            / comfort_bounds[priority]
+            for rank, (priority, objective) in enumerate(zip(priorities, comfort_phases))
+        )
+        charge_bound = max(
+            1.0,
+            sum(
+                heater.capacity_kwh
+                + heater.charge_power_kw * slot_hours * len(starts)
+                for heater in heaters
+            ),
+        )
+        heat_bound = charge_bound
+        terminal_bound = max(1.0, sum(heater.capacity_kwh for heater in heaters))
+        latest_bound = max(1.0, charge_bound * len(starts))
+        deterministic_bound = max(
+            1.0,
+            sum(
+                (index + 1) * (position + 1)
+                for position in range(len(heaters))
+                for index in range(len(starts))
+            ),
+        )
+        heat_timing_bound = max(
+            1.0, heat_bound * len(starts) * max(1, len(heaters))
+        )
+        weighted_objective = (
+            1e13 * weighted_comfort
+            + 1e6 * total_charge / charge_bound
+            + 1e3 * pulp.lpSum(terminal_surplus.values()) / terminal_bound
+            + total_heat / heat_bound
+            + 1e-3 * premature_heat / heat_bound
+            + 1e-6 * latest_charge / latest_bound
+            + 1e-9 * heat_timing / heat_timing_bound
+            + 1e-12 * deterministic / deterministic_bound
+        )
+        phases = [weighted_objective]
+        solver_gap_relative = 1.0
     score: list[float] = []
-    started = monotonic()
+    solver_started = monotonic()
     time_limit = float(request.solver_time_limit_seconds or SOLVER_TIME_LIMIT_SECONDS)
+    solver_deadline = solver_started + time_limit
     time_limited = False
     _notify(request, "solver")
-    _check_cancelled(request)
-    model.setObjective(objective)
-    status = model.solve(
-        _cbc_solver(pulp, time_limit_seconds=time_limit, gap_relative=1.0)
-    )
     logger.debug(
-        "Room-energy solver status=%s duration_seconds=%.6g "
-        "total_elapsed_seconds=%.6g budget_seconds=%.6g variables=%d constraints=%d",
-        pulp.LpStatus[status],
-        monotonic() - started,
-        monotonic() - started,
-        time_limit,
+        "Room-energy solver model built: variables=%d constraints=%d phases=%d "
+        "budget_seconds=%.6g",
         len(model.variables()),
         len(model.constraints),
+        len(phases),
+        time_limit,
     )
-    if status == pulp.LpStatusNotSolved:
-        if not _model_solution_is_feasible(model, pulp, on):
-            return _invalid_room_plan(
-                request, starts[0], starts, "solver did not return a feasible room-energy plan", "solver_failure", generated_at
+    for phase_index, objective in enumerate(phases):
+        _notify(request, f"solver_phase_{phase_index + 1}")
+        _check_cancelled(request)
+        remaining_seconds = solver_deadline - monotonic()
+        if remaining_seconds <= 0:
+            if not _model_solution_is_feasible(model, pulp, on):
+                return _invalid_room_plan(
+                    request,
+                    starts[0],
+                    starts,
+                    "solver reached its total time limit without a verified feasible room-energy plan",
+                    "solver_failure",
+                    generated_at,
+                )
+            time_limited = True
+            break
+        phase_started = monotonic()
+        model.setObjective(objective)
+        status = model.solve(
+            _cbc_solver(
+                pulp,
+                time_limit_seconds=remaining_seconds,
+                gap_relative=solver_gap_relative,
+                warm_start=phase_index > 0,
             )
-        time_limited = True
-    elif status != pulp.LpStatusOptimal:
-        return _invalid_room_plan(
-            request, starts[0], starts, f"solver status {pulp.LpStatus[status]}", "solver_failure", generated_at
         )
-    score.append(_required_solver_value(pulp.value(objective), "room-energy objective"))
+        phase_duration = monotonic() - phase_started
+        _check_cancelled(request)
+        logger.debug(
+            "Room-energy solver phase=%d/%d status=%s duration_seconds=%.6g "
+            "total_elapsed_seconds=%.6g budget_seconds=%.6g variables=%d constraints=%d",
+            phase_index + 1,
+            len(phases),
+            pulp.LpStatus[status],
+            phase_duration,
+            monotonic() - solver_started,
+            time_limit,
+            len(model.variables()),
+            len(model.constraints),
+        )
+        if status == pulp.LpStatusNotSolved:
+            if not _model_solution_is_feasible(model, pulp, on):
+                return _invalid_room_plan(
+                    request,
+                    starts[0],
+                    starts,
+                    "solver reached its time limit without a verified feasible room-energy plan",
+                    "solver_failure",
+                    generated_at,
+                )
+            time_limited = True
+            break
+        if status != pulp.LpStatusOptimal:
+            return _invalid_room_plan(
+                request,
+                starts[0],
+                starts,
+                f"solver status {pulp.LpStatus[status]}",
+                "solver_failure",
+                generated_at,
+            )
+        objective_value = pulp.value(objective)
+        if objective_value is None:
+            # PuLP returns ``None`` for a constant zero expression (for
+            # example, premature heat when every slot is already targeted).
+            # That is a valid optimum and must not invalidate the plan.
+            objective_value = getattr(objective, "constant", objective)
+        optimum = _required_solver_value(
+            objective_value, f"room-energy phase {phase_index + 1} objective"
+        )
+        score.append(optimum)
+        logger.debug(
+            "Room-energy solver phase=%d optimum=%.9g",
+            phase_index + 1,
+            optimum,
+        )
+        if phase_index < len(phases) - 1 and list(objective.items()):
+            model += objective <= optimum + 1e-7
 
     violations: list[PlanningViolation] = []
     for heater in heaters:
@@ -1781,11 +2095,19 @@ def _solve_room_energy(
         for heater in heaters:
             state = request.telemetry[heater.id]
             on_value = float(on[(heater.id, index)].value() or 0)
-            stored_value = _required_solver_value(stored[(heater.id, index)].value(), "stored energy")
-            next_stored_value = _required_solver_value(stored[(heater.id, index + 1)].value(), "next stored energy")
+            stored_value = _clean_solver_energy(
+                _required_solver_value(stored[(heater.id, index)].value(), "stored energy")
+            )
+            next_stored_value = _clean_solver_energy(
+                _required_solver_value(
+                    stored[(heater.id, index + 1)].value(), "next stored energy"
+                )
+            )
             indoor_value = _required_solver_value(indoor[(heater.id, index)].value(), "indoor temperature")
             next_indoor_value = _required_solver_value(indoor[(heater.id, index + 1)].value(), "next indoor temperature")
-            heat_value = _required_solver_value(heat[(heater.id, index)].value(), "heat delivered")
+            heat_value = _clean_solver_energy(
+                _required_solver_value(heat[(heater.id, index)].value(), "heat delivered")
+            )
             target = target_values[(heater.id, index)]
             outdoor = outdoor_values[(heater.id, index)]
             target_window = (
@@ -1893,27 +2215,7 @@ def _solve_room_energy(
         )
     by_heater = {heater.id: [item for item in room_intervals if item.heater_id == heater.id] for heater in heaters}
     explanations = tuple(
-        HeaterExplanation(
-            heater.id,
-            float(request.telemetry[heater.id].stored_soc_percent),
-            sum(item.heat_delivered_kwh for item in by_heater[heater.id]),
-            1.0,
-            0.0,
-            None,
-            tuple((slot.start, slot.end) for slot in plan_slots if heater.id in slot.heater_ids),
-            heater.capacity_kwh,
-            float(request.telemetry[heater.id].indoor_temperature_c),
-            by_heater[heater.id][-1].indoor_temperature_next_c if by_heater[heater.id] else float(request.telemetry[heater.id].indoor_temperature_c),
-            sum(item.heat_delivered_kwh for item in by_heater[heater.id]),
-            sum(item.thermal_loss_kwh for item in by_heater[heater.id]),
-            max(
-                (
-                    max(item.temperature_shortfall_c, item.temperature_shortfall_start_c)
-                    for item in by_heater[heater.id]
-                ),
-                default=0.0,
-            ),
-        )
+        _room_heater_explanation(heater, by_heater[heater.id], request)
         for heater in heaters
     )
     if time_limited:
