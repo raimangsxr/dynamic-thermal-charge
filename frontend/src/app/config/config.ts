@@ -89,7 +89,6 @@ export interface HeaterForm {
   room_heat_loss_kw_per_c: string;
   priority: string;
   enabled: boolean;
-  telemetry_topic: string;
   output: 'simulated' | 'gpio';
   pin: string;
   active_high: boolean;
@@ -98,7 +97,7 @@ export interface HeaterForm {
 const HEATER_EDIT_FIELDS = [
   'name', 'model', 'power_kw', 'full_charge_hours', 'full_discharge_hours', 'static_emission_percent',
   'room_thermal_capacity_kwh_per_c', 'room_heat_loss_kw_per_c', 'priority',
-  'enabled', 'telemetry_topic',
+  'enabled',
   'output_type', 'pin', 'active_high',
 ] as const;
 
@@ -167,13 +166,12 @@ const HEATER_FORM_FIELDS: readonly HeaterFormFieldMeta[] = [
     key: 'active_high', label: 'Nivel activo', type: 'select',
     selectOptions: [{ value: true, label: 'Alto' }, { value: false, label: 'Bajo' }],
   },
-  { key: 'telemetry_topic', label: 'Tópico JSON de telemetría', type: 'text' },
 ];
 
 const HEATER_FORM_GROUPS = [
   { title: 'Identificación y acumulador', fields: ['id', 'name', 'model', 'power_kw', 'full_charge_hours', 'full_discharge_hours', 'static_emission_percent'] },
   { title: 'Modelo térmico y prioridad', fields: ['room_thermal_capacity_kwh_per_c', 'room_heat_loss_kw_per_c', 'priority', 'enabled'] },
-  { title: 'Salida y telemetría', fields: ['output', 'pin', 'active_high', 'telemetry_topic'] },
+  { title: 'Salida', fields: ['output', 'pin', 'active_high'] },
 ] as const;
 
 const EMAIL_SECURITY_MODES: readonly Option[] = [
@@ -210,7 +208,6 @@ const PLANNING_FIELDS: readonly FieldDefinition[] = [
   { name: 'mqtt_simulation_enabled', label: 'Activar simulación MQTT', type: 'boolean' },
   { name: 'mqtt_simulation_initial_temperature_c', label: 'Temperatura inicial simulada (°C)', type: 'number', step: '0.1' },
   { name: 'mqtt_simulation_publish_seconds', label: 'Publicación simulada (s)', type: 'number', min: '1', step: '1' },
-  { name: 'mqtt_simulation_topic_prefix', label: 'Prefijo de tópicos simulados', type: 'text' },
   { name: 'mqtt_simulation_thermal_loss_c_per_hour', label: 'Pérdida térmica simulada (°C/h)', type: 'number', min: '0', step: '0.1' },
 ];
 
@@ -646,14 +643,14 @@ export class Config {
     this.activeArea.set('heaters');
     this.heaterFormMode.set('add');
     this.heaterFormError.set('');
-    this.heaterForm.set({ id: '', name: '', model: '', power_kw: '1', full_charge_hours: '8', full_discharge_hours: '10', static_emission_percent: '20', room_thermal_capacity_kwh_per_c: '2.5', room_heat_loss_kw_per_c: '0.12', priority: '0', enabled: true, telemetry_topic: '', output: 'simulated', pin: '', active_high: true });
+    this.heaterForm.set({ id: '', name: '', model: '', power_kw: '1', full_charge_hours: '8', full_discharge_hours: '10', static_emission_percent: '20', room_thermal_capacity_kwh_per_c: '2.5', room_heat_loss_kw_per_c: '0.12', priority: '0', enabled: true, output: 'simulated', pin: '', active_high: true });
   }
   openEditHeater(heater: ConfigDto['heaters'][number]): void {
     this.activeArea.set('heaters');
     this.heaterFormMode.set('edit');
     this.heaterFormError.set('');
     this.heaterForm.set({
-      id: heater.id, name: heater.name, model: heater.model ?? '', power_kw: String(heater.power_kw), full_charge_hours: String(heater.full_charge_hours), full_discharge_hours: String(heater.full_discharge_hours), static_emission_percent: String(heater.static_emission_percent), room_thermal_capacity_kwh_per_c: String(heater.room_thermal_capacity_kwh_per_c), room_heat_loss_kw_per_c: String(heater.room_heat_loss_kw_per_c), priority: String(heater.priority), enabled: heater.enabled, telemetry_topic: heater.telemetry_topic ?? '', output: heater.output.kind, pin: heater.output.pin === null ? '' : String(heater.output.pin), active_high: heater.output.active_high,
+      id: heater.id, name: heater.name, model: heater.model ?? '', power_kw: String(heater.power_kw), full_charge_hours: String(heater.full_charge_hours), full_discharge_hours: String(heater.full_discharge_hours), static_emission_percent: String(heater.static_emission_percent), room_thermal_capacity_kwh_per_c: String(heater.room_thermal_capacity_kwh_per_c), room_heat_loss_kw_per_c: String(heater.room_heat_loss_kw_per_c), priority: String(heater.priority), enabled: heater.enabled, output: heater.output.kind, pin: heater.output.pin === null ? '' : String(heater.output.pin), active_high: heater.output.active_high,
     });
   }
   cancelHeaterForm(): void { this.heaterForm.set(null); this.heaterFormMode.set(null); this.heaterFormError.set(''); }
@@ -684,7 +681,7 @@ export class Config {
       const payload: AddHeaterRequest = {
         revision: snapshot.config_revision, id: form.id.trim(), name: form.name.trim() || undefined, model: form.model.trim() || undefined,
         power_kw: Number(form.power_kw), full_charge_hours: Number(form.full_charge_hours), full_discharge_hours: Number(form.full_discharge_hours), static_emission_percent: Number(form.static_emission_percent), room_thermal_capacity_kwh_per_c: Number(form.room_thermal_capacity_kwh_per_c), room_heat_loss_kw_per_c: Number(form.room_heat_loss_kw_per_c), priority: Number(form.priority), enabled: form.enabled,
-        telemetry_topic: form.telemetry_topic.trim() || null, output: form.output, pin: form.pin.trim() ? Number(form.pin) : null, active_high: form.active_high,
+        output: form.output, pin: form.pin.trim() ? Number(form.pin) : null, active_high: form.active_high,
         temperature_targets: [],
       };
       this.api.addHeater(payload).subscribe({ next: (change) => this.finishHeaterSave(`Acumulador creado: ${change.entity_key ?? form.id}`), error: (error: unknown) => this.rejectHeater(error) });
@@ -772,7 +769,7 @@ export class Config {
     if (!form || revision === undefined) return;
     const payload: UpdateHeaterRequest = {
       revision, name: form.name.trim(), model: form.model.trim() || null, power_kw: Number(form.power_kw), full_charge_hours: Number(form.full_charge_hours), full_discharge_hours: Number(form.full_discharge_hours), static_emission_percent: Number(form.static_emission_percent), room_thermal_capacity_kwh_per_c: Number(form.room_thermal_capacity_kwh_per_c), room_heat_loss_kw_per_c: Number(form.room_heat_loss_kw_per_c), priority: Number(form.priority), enabled: form.enabled,
-      telemetry_topic: form.telemetry_topic.trim() || null, output: form.output, pin: form.pin.trim() ? Number(form.pin) : null, active_high: form.active_high,
+      output: form.output, pin: form.pin.trim() ? Number(form.pin) : null, active_high: form.active_high,
     };
     this.heaterSaving.set(true);
     this.api.updateHeater(heaterId, payload).subscribe({
@@ -807,7 +804,7 @@ export class Config {
     const values = {
       replan_minutes: number('replan_minutes'), planning_window_hours: number('planning_window_hours'), forecast_horizon_hours: number('forecast_horizon_hours'), aemet_query_hour: number('aemet_query_hour'), solver_time_limit_seconds: number('solver_time_limit_seconds'),
       contracted_power_w: number('contracted_power_w'), max_heating_power_w: number('max_heating_power_w'), base_load_w: number('base_load_w'), deviation_shortfall_tolerance_c: number('deviation_shortfall_tolerance_c'), deviation_surplus_soc_percent: number('deviation_surplus_soc_percent'),
-      mqtt_simulation_enabled: this.planningValue('mqtt_simulation_enabled') === true || this.planningValue('mqtt_simulation_enabled') === 'true', mqtt_simulation_initial_temperature_c: number('mqtt_simulation_initial_temperature_c'), mqtt_simulation_publish_seconds: number('mqtt_simulation_publish_seconds'), mqtt_simulation_topic_prefix: String(this.planningValue('mqtt_simulation_topic_prefix')), mqtt_simulation_thermal_loss_c_per_hour: number('mqtt_simulation_thermal_loss_c_per_hour'),
+      mqtt_simulation_enabled: this.planningValue('mqtt_simulation_enabled') === true || this.planningValue('mqtt_simulation_enabled') === 'true', mqtt_simulation_initial_temperature_c: number('mqtt_simulation_initial_temperature_c'), mqtt_simulation_publish_seconds: number('mqtt_simulation_publish_seconds'), mqtt_simulation_topic_prefix: snapshot.mqtt_simulation_topic_prefix, mqtt_simulation_thermal_loss_c_per_hour: number('mqtt_simulation_thermal_loss_c_per_hour'),
     };
     this.planningSaving.set(true);
     this.api.patchPlanningConfig(snapshot.revision, values).subscribe({

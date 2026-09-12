@@ -19,6 +19,28 @@ class MqttSettings:
     publish_seconds: float = 15.0
 
 
+def mqtt_runtime_signature(snapshot) -> tuple[object, ...]:
+    """Return the persisted MQTT inputs that require a fresh client."""
+    mqtt = snapshot.configuration.mqtt
+    secrets = getattr(snapshot, "secrets", {}) or {}
+
+    def secret_value(name: str) -> object:
+        value = secrets.get(name)
+        return getattr(value, "value", value)
+
+    return (
+        getattr(mqtt, "enabled", False),
+        getattr(mqtt, "host", None),
+        getattr(mqtt, "port", 1883),
+        getattr(mqtt, "tls", False),
+        getattr(mqtt, "prefix", "dtc"),
+        getattr(mqtt, "discovery_prefix", "homeassistant"),
+        getattr(mqtt, "publish_seconds", 15.0),
+        secret_value("mqtt_username"),
+        secret_value("mqtt_password"),
+    )
+
+
 def settings_from_repository(repository) -> MqttSettings:
     snapshot = repository.current()
     configured = snapshot.configuration.mqtt
@@ -42,4 +64,4 @@ def settings_from_repository(repository) -> MqttSettings:
     )
 
 
-__all__ = ["MqttSettings", "settings_from_repository"]
+__all__ = ["MqttSettings", "mqtt_runtime_signature", "settings_from_repository"]

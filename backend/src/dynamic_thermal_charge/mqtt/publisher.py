@@ -20,7 +20,7 @@ from . import MqttClient, MqttError
 from .discharge import DischargeCommand, NO_SETPOINT, resolve_discharge_commands
 from .discovery import DiscoveryEntity
 from .discovery import discovery_entities
-from .topics import TopicLayout
+from .topics import TopicLayout, resolve_accumulator_topics
 
 
 logger = logging.getLogger(__name__)
@@ -374,8 +374,11 @@ class StoreSnapshotReader:
         result: list[str] = []
         for heater in self._config.heaters:
             result.append(topics.command(heater.id, "enabled"))
-            if heater.telemetry_topic is not None:
-                result.append(heater.telemetry_topic)
+            result.append(
+                resolve_accumulator_topics(
+                    heater.id, telemetry_topic=heater.telemetry_topic
+                ).telemetry
+            )
         return tuple(result)
 
     @staticmethod

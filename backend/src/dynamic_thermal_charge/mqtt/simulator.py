@@ -12,6 +12,8 @@ from datetime import datetime, timedelta, timezone
 
 from ..models import Heater
 from . import MqttClient
+from .settings import mqtt_runtime_signature
+from .topics import resolve_accumulator_topics
 
 
 logger = logging.getLogger(__name__)
@@ -67,9 +69,15 @@ def simulation_topics(
     *,
     topic_prefix: str,
 ) -> str:
-    """Resolve the grouped JSON telemetry topic for one heater."""
-    prefix = topic_prefix.strip("/")
-    return heater.telemetry_topic or f"{prefix}/{heater.id}/telemetry"
+    """Resolve the grouped JSON telemetry topic for one heater.
+
+    ``topic_prefix`` remains in the call signature for persisted/API
+    compatibility; accumulator telemetry now has one standard namespace.
+    """
+    del topic_prefix
+    return resolve_accumulator_topics(
+        heater.id, telemetry_topic=heater.telemetry_topic
+    ).telemetry
 
 
 def heater_telemetry_topics(
@@ -78,18 +86,11 @@ def heater_telemetry_topics(
     simulation: MqttSimulationConfig | None,
 ) -> dict[str, str]:
     """Return the one grouped MQTT topic accepted for one heater."""
-    if simulation is not None and simulation.enabled:
-        topic = simulation_topics(
-            heater,
-            topic_prefix=simulation.topic_prefix,
-        )
-        return {topic: "telemetry"}
-    else:
-        return (
-            {heater.telemetry_topic: "telemetry"}
-            if heater.telemetry_topic is not None
-            else {}
-        )
+    topic = simulation_topics(
+        heater,
+        topic_prefix=simulation.topic_prefix if simulation is not None else "",
+    )
+    return {topic: "telemetry"}
 
 
 def simulation_subscription_topics(
@@ -187,9 +188,8 @@ class MqttPlanningSimulator:
         self._last_advanced_at = now
         if published_heaters:
             logger.info(
-                "Published simulated telemetry for %d heater(s) on prefix %s: %s",
+                "Published simulated telemetry for %d heater(s): %s",
                 published_heaters,
-                config.topic_prefix,
                 ", ".join(published_messages),
             )
 
@@ -221,6 +221,7 @@ class MqttSimulationSupervisor:
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._service: MqttSimulationService | None = None
         self._next_publish_at: datetime | None = None
+        self._runtime_signature: tuple[object, ...] | None = None
 
     def run(self, *, max_cycles: int | None = None) -> None:
         cycles = 0
@@ -240,10 +241,13 @@ class MqttSimulationSupervisor:
                 self._service.client.loop_stop()
         self._service = None
         self._next_publish_at = None
+        self._runtime_signature = None
 
     def _reconcile(self, now: datetime) -> None:
         site = self._planning_repository.site()
-        mqtt = self._system_configuration_repository.current().configuration.mqtt
+        snapshot = self._system_configuration_repository.current()
+        mqtt = snapshot.configuration.mqtt
+        runtime_signature = mqtt_runtime_signature(snapshot)
         should_run = bool(site.get("mqtt_simulation_enabled")) and mqtt.enabled
         if not should_run:
             if self._service is not None:
@@ -251,11 +255,17 @@ class MqttSimulationSupervisor:
             return
 
         publish_seconds = float(site["mqtt_simulation_publish_seconds"])
+        if (
+            self._service is not None
+            and runtime_signature != self._runtime_signature
+        ):
+            self.stop()
         if self._service is None:
             self._service = self._service_factory()
             self._service.simulator.reset()
             self._service.client.connect_async(mqtt.host, mqtt.port)
             self._service.client.loop_start()
+            self._runtime_signature = runtime_signature
             self._next_publish_at = now
 
         due = self._next_publish_at is None or now >= self._next_publish_at

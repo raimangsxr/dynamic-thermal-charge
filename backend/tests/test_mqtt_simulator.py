@@ -70,9 +70,11 @@ def test_temperature_to_stored_charge_percent_maps_between_bounds():
     assert temperature_to_stored_charge_percent(45.0) == 50.0
 
 
-def test_simulation_topics_use_prefix_when_heater_topics_missing():
+def test_simulation_topics_use_the_standard_topic_when_heater_topic_is_missing():
     heater = _heater()
-    assert simulation_topics(heater, topic_prefix="dtc/sim") == "dtc/sim/salon/telemetry"
+    assert simulation_topics(heater, topic_prefix="dtc/sim") == (
+        "telemetria/acumuladores/salon/telemetry"
+    )
 
 
 def test_simulation_topics_prefer_configured_heater_topics():
@@ -80,7 +82,7 @@ def test_simulation_topics_prefer_configured_heater_topics():
     assert simulation_topics(heater, topic_prefix="dtc/sim") == "custom/telemetry"
 
 
-def test_heater_telemetry_topics_use_simulation_prefix_when_enabled():
+def test_heater_telemetry_topics_use_the_standard_topic_when_simulation_is_enabled():
     heater = _heater()
     config = MqttSimulationConfig(
         enabled=True,
@@ -90,7 +92,7 @@ def test_heater_telemetry_topics_use_simulation_prefix_when_enabled():
         thermal_loss_c_per_hour=2.0,
     )
     topics = heater_telemetry_topics(heater, simulation=config)
-    assert topics == {"dtc/sim/salon/telemetry": "telemetry"}
+    assert topics == {"telemetria/acumuladores/salon/telemetry": "telemetry"}
 
 
 def test_simulation_subscription_topics_include_all_enabled_heaters():
@@ -104,8 +106,8 @@ def test_simulation_subscription_topics_include_all_enabled_heaters():
         mqtt_enabled=True,
     )
     assert topics == (
-        "dtc/sim/salon/telemetry",
-        "dtc/sim/entrada/telemetry",
+        "telemetria/acumuladores/salon/telemetry",
+        "telemetria/acumuladores/entrada/telemetry",
     )
 
 
@@ -132,9 +134,9 @@ def test_simulator_logs_and_publishes_one_grouped_topic_per_heater(caplog):
     )
     simulator.publish_cycle()
     topics = {topic for topic, _payload in client.publications}
-    assert topics == {"dtc/sim/salon/telemetry"}
+    assert topics == {"telemetria/acumuladores/salon/telemetry"}
     assert "Published simulated telemetry for 1 heater(s)" in caplog.text
-    assert 'dtc/sim/salon/telemetry={"indoor_temperature_c":45.0,"stored_soc_percent":50.0}' in caplog.text
+    assert 'telemetria/acumuladores/salon/telemetry={"indoor_temperature_c":45.0,"stored_soc_percent":50.0}' in caplog.text
     assert client.publications[0][1] == (
         '{"indoor_temperature_c":45.0,"stored_soc_percent":50.0}'
     )
@@ -205,3 +207,70 @@ def test_simulator_supervisor_connects_when_enabled():
     supervisor.stop()
     assert ("disconnect",) in client.events
     assert ("loop_stop",) in client.events
+
+
+def test_simulator_supervisor_recreates_client_when_mqtt_settings_change():
+    client = RecordingClient()
+    site = {
+        "mqtt_simulation_enabled": True,
+        "mqtt_simulation_publish_seconds": 30.0,
+    }
+    mqtt = SimpleNamespace(
+        enabled=True,
+        host="broker",
+        port=1883,
+        tls=False,
+        prefix="dtc",
+        discovery_prefix="homeassistant",
+        publish_seconds=15.0,
+    )
+    system = SimpleNamespace(
+        configuration=SimpleNamespace(mqtt=mqtt),
+        secrets={},
+    )
+    repository = SimpleNamespace(current=lambda: system)
+    planning = SimpleNamespace(site=lambda: site)
+    services = []
+
+    def build_service():
+        simulator = MqttPlanningSimulator(
+            client,
+            config_provider=lambda: MqttSimulationConfig(
+                enabled=True,
+                initial_temperature_c=45.0,
+                publish_seconds=30.0,
+                topic_prefix="dtc/sim",
+                thermal_loss_c_per_hour=2.0,
+            ),
+            heaters_provider=lambda: (),
+            charging_state_provider=lambda: {},
+        )
+        service = MqttSimulationService(client=client, simulator=simulator)
+        services.append(service)
+        return service
+
+    waits = 0
+
+    def wait(_seconds):
+        nonlocal waits
+        waits += 1
+        if waits == 1:
+            system.configuration.mqtt = SimpleNamespace(
+                enabled=True,
+                host="new-broker",
+                port=1883,
+                tls=False,
+                prefix="dtc",
+                discovery_prefix="homeassistant",
+                publish_seconds=15.0,
+            )
+
+    supervisor = MqttSimulationSupervisor(
+        repository, planning, build_service, wait=wait
+    )
+    supervisor.run(max_cycles=2)
+
+    assert len(services) == 2
+    assert ("connect", "broker", 1883) in client.events
+    assert ("connect", "new-broker", 1883) in client.events
+    assert client.events.count(("disconnect",)) == 1

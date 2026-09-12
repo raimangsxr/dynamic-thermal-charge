@@ -1,6 +1,30 @@
 """Stable MQTT transport topics and Home Assistant identities."""
 
-from dynamic_thermal_charge.mqtt.topics import TopicLayout
+from dynamic_thermal_charge.mqtt.topics import (
+    TopicLayout,
+    accumulator_topics,
+    resolve_accumulator_topics,
+)
+
+
+def test_accumulator_topics_use_the_fixed_namespace_and_existing_slug_rule():
+    topics = accumulator_topics("Salón principal")
+
+    assert topics.telemetry == "telemetria/acumuladores/salon_principal/telemetry"
+    assert topics.discharge == "telemetria/acumuladores/salon_principal/discharge"
+    assert topics.setpoint == "telemetria/acumuladores/salon_principal/setpoint"
+
+
+def test_accumulator_topic_overrides_are_used_independently():
+    topics = resolve_accumulator_topics(
+        "salon",
+        telemetry_topic=" custom/telemetry ",
+        setpoint_topic="custom/setpoint",
+    )
+
+    assert topics.telemetry == "custom/telemetry"
+    assert topics.discharge == "telemetria/acumuladores/salon/discharge"
+    assert topics.setpoint == "custom/setpoint"
 
 
 def test_transport_topics_use_the_fixed_installation_segment():

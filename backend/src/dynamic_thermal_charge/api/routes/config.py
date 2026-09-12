@@ -27,6 +27,7 @@ from ...persistence.mapping import (
     parse_temperature_target_end_time,
     parse_time,
 )
+from ...mqtt.topics import resolve_accumulator_topics
 from ..dependencies import usable_store
 from ..errors import ApiError, CODE_ALREADY_EXISTS, not_found
 from ..schemas import (
@@ -60,7 +61,9 @@ def _heater_view(heater: Heater) -> HeaterResponse:
         static_emission_percent=heater.static_emission_percent,
         priority=heater.priority,
         enabled=heater.enabled,
-        telemetry_topic=heater.telemetry_topic,
+        telemetry_topic=resolve_accumulator_topics(
+            heater.id, telemetry_topic=heater.telemetry_topic
+        ).telemetry,
         output=OutputView(
             kind=heater.output.kind,
             pin=heater.output.pin,
@@ -305,6 +308,12 @@ def update_heater(
             room_heat_loss_kw_per_c=payload.room_heat_loss_kw_per_c,
         )
 
+    telemetry_topic = (
+        payload.telemetry_topic
+        if "telemetry_topic" in payload.model_fields_set
+        else current.telemetry_topic
+    )
+
     try:
         heater = Heater(
             id=heater_id,
@@ -316,7 +325,7 @@ def update_heater(
             static_emission_percent=payload.static_emission_percent,
             priority=payload.priority,
             enabled=payload.enabled,
-            telemetry_topic=payload.telemetry_topic,
+            telemetry_topic=telemetry_topic,
             output=OutputConfig(
                 kind=payload.output, pin=payload.pin, active_high=payload.active_high
             ),

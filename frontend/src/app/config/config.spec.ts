@@ -309,11 +309,11 @@ describe('Config', () => {
     backend.expectOne('/api/v1/config').flush(configDto());
   });
 
-  it('renders all indoor policy fields and the grouped telemetry topic', () => {
+  it('renders the effective grouped telemetry topic without an editor', () => {
     const element = load(
       configDto({
         heaters: [
-          { ...configDto().heaters[0], telemetry_topic: 'ha/salon/telemetry' },
+          { ...configDto().heaters[0], telemetry_topic: 'telemetria/acumuladores/salon/telemetry' },
         ],
       }),
     );
@@ -328,32 +328,24 @@ describe('Config', () => {
     }
     fixture.componentInstance.chooseArea('heaters');
     fixture.detectChanges();
+    expect(element.querySelector('[data-heater="salon"] code')?.textContent).toContain(
+      'telemetria/acumuladores/salon/telemetry',
+    );
     fixture.componentInstance.openEditHeater(fixture.componentInstance.config()!.heaters[0]);
     fixture.detectChanges();
-    const topic = (fixture.nativeElement as HTMLElement).querySelector<HTMLInputElement>('[name="telemetry_topic"]');
-    expect(topic).not.toBeNull();
-    expect(
-      fixture.componentInstance.heaterText(
-        fixture.componentInstance.config()!.heaters[0],
-        'telemetry_topic',
-      ),
-    ).toBe('ha/salon/telemetry');
+    expect(element.querySelector('[name="telemetry_topic"]')).toBeNull();
   });
 
-  it('sends an empty telemetry topic and keeps it on rejection', () => {
+  it('does not send a telemetry topic when saving the accumulator form', () => {
     load(configDto({ heaters: [{ ...configDto().heaters[0], telemetry_topic: 'ha/old' }] }));
     fixture.componentInstance.openEditHeater(fixture.componentInstance.config()!.heaters[0]);
-    fixture.componentInstance.updateHeaterForm('telemetry_topic', '');
+    fixture.componentInstance.updateHeaterForm('name', 'Salón actualizado');
     fixture.componentInstance.saveHeater();
     const request = backend.expectOne('/api/v1/config/heaters/salon');
     expect(request.request.body).toMatchObject({
       revision: 3,
-      telemetry_topic: null,
     });
-    const { body, options } = apiError('validation_failed', 'invalid topic', 422);
-    request.flush(body, options);
-    expect(fixture.componentInstance.heaterForm()).not.toBeNull();
-    expect(el().querySelector('[data-testid="heater-form-error"]')).not.toBeNull();
+    expect(request.request.body).not.toHaveProperty('telemetry_topic');
   });
 
   /* ------------------------------------------------- electrical confirmation */

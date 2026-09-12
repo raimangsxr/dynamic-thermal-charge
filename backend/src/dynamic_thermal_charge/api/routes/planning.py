@@ -35,6 +35,7 @@ from ...models import TemperatureTarget, validate_temperature_targets
 from ...planning_explanation import planning_evidence
 from ...persistence import ConfigValidationError
 from ...scheduler import advance_real
+from ...mqtt.topics import resolve_accumulator_topics
 from ..dependencies import usable_store
 from ..schemas import (
     ERROR_RESPONSES,
@@ -76,6 +77,15 @@ PREVIEW_STEP_NAMES = (
     "input_validation", "telemetry", "aemet_coverage", "room_model",
     "resolution", "safety_validation", "operator_summary",
 )
+
+
+def _planning_topics(heater, charge_config):
+    configured = charge_config.get(heater.id, {})
+    return resolve_accumulator_topics(
+        heater.id,
+        damper_topic=configured.get("damper_topic"),
+        setpoint_topic=configured.get("setpoint_topic"),
+    )
 
 
 class PreviewJobRunner:
@@ -201,8 +211,8 @@ def get_planning(
             capacity_kwh=heater.capacity_kwh,
             priority=heater.priority,
             enabled=heater.enabled,
-            damper_topic=charge_config.get(heater.id, {}).get("damper_topic"),
-            setpoint_topic=charge_config.get(heater.id, {}).get("setpoint_topic"),
+            damper_topic=_planning_topics(heater, charge_config).discharge,
+            setpoint_topic=_planning_topics(heater, charge_config).setpoint,
         )
         for heater in config.heaters
     ]

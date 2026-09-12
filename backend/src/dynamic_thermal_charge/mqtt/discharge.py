@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
 
+from .topics import resolve_accumulator_topics
+
 
 # Below this the projected heat is solver noise, not an intention to emit.
 HEAT_EPSILON_KWH = 1e-6
@@ -62,13 +64,6 @@ def _float_or_none(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return result
-
-
-def _topic_or_none(value: Any) -> str | None:
-    if value is None:
-        return None
-    topic = str(value).strip()
-    return topic or None
 
 
 def _slot_index_at(slots: Sequence[Mapping[str, Any]], at: datetime) -> int | None:
@@ -118,12 +113,17 @@ def resolve_discharge_commands(
         heater_id: str, enabled: bool, setpoint: float | None
     ) -> DischargeCommand:
         topics = config.get(heater_id, {})
+        effective_topics = resolve_accumulator_topics(
+            heater_id,
+            damper_topic=topics.get("damper_topic"),
+            setpoint_topic=topics.get("setpoint_topic"),
+        )
         return DischargeCommand(
             heater_id=heater_id,
             enabled=enabled,
             setpoint_c=setpoint if enabled else None,
-            damper_topic=_topic_or_none(topics.get("damper_topic")),
-            setpoint_topic=_topic_or_none(topics.get("setpoint_topic")),
+            damper_topic=effective_topics.discharge,
+            setpoint_topic=effective_topics.setpoint,
         )
 
     governed = (

@@ -34,6 +34,16 @@ procesos.
 - **WHEN** `mqtt.enabled` cambia entre falso y verdadero, o de verdadero a falso
 - **THEN** el proceso inicia o detiene la conexión MQTT en el siguiente ciclo de reconciliación
 
+#### Scenario: Cambia una configuración MQTT activa
+
+- **WHEN** se guarda un cambio en host, puerto, TLS, prefijos, cadencia o en las credenciales MQTT mientras la integración está activa
+- **THEN** el proceso detiene el cliente anterior y crea un único cliente nuevo con la configuración vigente en el siguiente ciclo, sin duplicar bucles ni suscripciones
+
+#### Scenario: Cambia una sección no MQTT
+
+- **WHEN** se guarda una sección que no modifica la configuración MQTT ni sus credenciales
+- **THEN** el cliente MQTT activo continúa sin reinicializarse
+
 ### Requirement: Telemetría física fija sin broker
 
 Mientras la integración está deshabilitada, el controlador usa temperatura
@@ -57,8 +67,14 @@ recibidas por MQTT.
 
 ### Requirement: Telemetría agrupada por acumulador
 
-Cada acumulador puede declarar un único `telemetry_topic`. Los mensajes que
-llegan a ese topic son objetos JSON con claves numéricas opcionales
+Cada acumulador tiene tres topics estándar bajo
+`telemetria/acumuladores/<id-normalizado>`: `telemetry`, `discharge` y
+`setpoint`. El identificador usa el mismo slug seguro que la identidad MQTT.
+Los campos persistidos `telemetry_topic`, `damper_topic` y `setpoint_topic` se
+conservan como overrides de compatibilidad: un valor no vacío sustituye solo a
+su topic correspondiente y un valor vacío usa el estándar. Nunca se publican ni
+se suscriben ambos. Los mensajes que llegan al topic efectivo de telemetría son
+objetos JSON con claves numéricas opcionales
 `indoor_temperature_c`, `stored_soc_percent` y `damper_position_percent`.
 Cada clave presente se valida y persiste de forma independiente; una clave
 ausente conserva el valor y la marca temporal válidos anteriores. La
@@ -80,10 +96,10 @@ telemetría recibida no se retiene al publicarla en la simulación.
 
 #### Scenario: Simulación agrupada
 
-- **WHEN** la simulación MQTT está activa para un acumulador habilitado sin
-  topic configurado
+- **WHEN** la simulación MQTT está activa para un acumulador habilitado
 - **THEN** publica un único objeto JSON en
-  `<simulation_prefix>/<id>/telemetry` en cada intervalo configurado
+  `telemetria/acumuladores/<id-normalizado>/telemetry`, o en el override
+  `telemetry_topic` si existe, en cada intervalo configurado
 
 ### Requirement: Descubrimiento de dispositivos agrupado
 
