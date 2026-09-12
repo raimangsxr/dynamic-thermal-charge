@@ -163,7 +163,7 @@ describe('Planning', () => {
       source: 'automatic', evidence_available: true,
       plan: { id: 7, reason: 'deviation', status: 'VALID', created_at: PLANNING.observed_at, evidence: { telemetry: { salon: { indoor_temperature_c: 18, stored_soc_percent: 50 } }, limits: { contracted_power_w: 5200, max_heating_power_w: 4000, base_load_w: 500 }, forecast: [{ timestamp: PLANNING.observed_at, temperature_c: 4 }], forecast_automatic_eligible: true, temperature_targets: [{}] }, slots: [] },
       predecessor: null,
-      operator_summary: [{ heater_id: 'salon', heater_name: 'Salón', initial_indoor_temperature_c: 18, initial_soc_percent: 50, total_demand_kwh: 1, total_heat_delivered_kwh: 0.4, total_thermal_loss_kwh: 0.2, final_indoor_temperature_c: 19, maximum_temperature_shortfall_c: 0, charge_periods: [], charge_minutes: 30 }],
+      operator_summary: [{ heater_id: 'salon', heater_name: 'Salón', initial_indoor_temperature_c: 18, initial_soc_percent: 50, total_demand_kwh: 1, total_heat_delivered_kwh: 0.4, total_thermal_loss_kwh: 0.2, final_indoor_temperature_c: 19, maximum_temperature_shortfall_c: 0, charge_periods: [], charge_minutes: 30, charge_reasons: [{ reason: 'preheating_for_next_target', start: PLANNING.observed_at, end: '2026-01-16T00:30:00Z', target_temperature_c: 21, target_window_start: '2026-01-16T08:00:00Z', target_window_end: '2026-01-16T10:00:00Z', charge_energy_kwh: 1.4 }] }],
       comparison: null,
       audit: [{ id: 1, event: 'activated', reason: 'deviation', details: { deviation_reason: 'projected_deficit', heater_id: 'salon', planned_value: 0, projected_value: 1 }, occurred_at: PLANNING.observed_at }],
       transitions: [],
@@ -173,6 +173,8 @@ describe('Planning', () => {
     const dialog = document.querySelector('[data-testid="plan-explanation-dialog"]');
     expect(dialog?.textContent).toContain('Salón');
     expect(dialog?.textContent).toContain('Déficit térmico no previsto');
+    expect(dialog?.querySelector('[data-testid="charge-reasons"]')?.textContent).toContain('Precalentamiento para la siguiente consigna');
+    expect(dialog?.querySelector('[data-testid="charge-reasons"]')?.textContent).toContain('1.40 kWh eléctricos');
     expect(document.querySelector('[data-testid="download-plan-diagnostic"]')).not.toBeNull();
   });
 
@@ -717,6 +719,18 @@ describe('Planning', () => {
     expect(fixture.componentInstance.storedEnergyKwh(PLANNING, 'salon', 1)).toBe(10.5);
     expect(fixture.componentInstance.storedEnergyNextKwh(PLANNING, 'salon', 1)).toBe(9.8);
     expect(fixture.componentInstance.storedEnergyPercent(PLANNING, 'salon', 0)).toBeCloseTo(10.9 / 22.4 * 100);
+  });
+
+  it('does not turn missing preview physical values into zero', () => {
+    const slot = { heater_ids: ['salon'], power_w: 0 };
+
+    expect(fixture.componentInstance.previewSlotMetric(slot, 'stored_energy_kwh', 'salon')).toBeNull();
+    expect(fixture.componentInstance.previewSlotMetric(slot, 'heat_delivered_kwh', 'salon')).toBeNull();
+    expect(fixture.componentInstance.previewChartPoint(slot, 'salon')).toMatchObject({
+      stored_energy_kwh: null,
+      heat_delivered_kwh: null,
+      indoor_temperature_c: null,
+    });
   });
 
   it('shows only charging intervals in the preview slots table', () => {

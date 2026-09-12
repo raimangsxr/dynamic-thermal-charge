@@ -38,6 +38,15 @@ precalentar, pero un déficit en cualquiera de esos bordes conserva la
 observación y deja el plan como `DEGRADED` salvo que pueda demostrar una
 convergencia posterior continuada en todos los bordes con consigna activa.
 
+Si una consigna sigue activa en el borde final del horizonte y durante el slot
+siguiente, el optimizador modela una única guarda privada de ese slot, con
+carga eléctrica desactivada. La guarda reutiliza el mismo balance del recinto,
+la capacidad de emisión y la previsión exterior, y comprueba la consigna en
+ambos bordes. Solo el estado terminal del horizonte queda condicionado por esa
+guarda: no añade decisiones, intervalos, totales ni explicaciones al horizonte
+publicado. La falta de previsión para su inicio hace que el resultado sea
+`INVALID` por cobertura insuficiente.
+
 #### Scenario: Exterior más cálido que el interior
 
 - **WHEN** la temperatura exterior supera la interior durante un intervalo
@@ -110,12 +119,43 @@ solicita.
 - **THEN** se comprueba el objetivo en el borde final del último slot activo y no
   se exige en el slot posterior salvo que otra regla esté activa
 
+#### Scenario: Reserva terminal para una consigna que continúa
+
+- **WHEN** una consigna está activa en el borde final y continúa durante el
+  siguiente slot
+- **THEN** la reserva terminal es la mínima energía física que permite cumplir
+  los dos bordes de esa guarda sin carga adicional, sin publicar la guarda como
+  una decisión del plan
+
+#### Scenario: Cobertura insuficiente de la guarda terminal
+
+- **WHEN** una consigna continúa después del horizonte pero la previsión no
+  cubre el inicio del slot de guarda
+- **THEN** el resultado es `INVALID` por cobertura meteorológica insuficiente y
+  no publica un slot adicional
+
 #### Scenario: Déficit al comienzo del horizonte
 
 - **WHEN** una consigna está activa en el primer borde del horizonte y la
   temperatura medida está por debajo del objetivo
 - **THEN** se conserva el déficit inicial con `at` igual al inicio del horizonte,
   aunque el plan consiga alcanzar el objetivo al terminar ese slot
+
+#### Scenario: Orden lexicográfico de la optimización
+
+- **WHEN** existen varias decisiones que cubren las mismas consignas
+- **THEN** se conserva primero la seguridad y el confort por prioridad, después
+  se minimizan sucesivamente la energía eléctrica cargada, el excedente
+  terminal necesario, el calor entregado, el calor fuera de consigna y la
+  anticipación de la carga, y finalmente se aplican desempates deterministas.
+  El orden y el bloqueo del óptimo son iguales aunque el modelo supere 96
+  decisiones binarias.
+
+#### Scenario: Evolución exterior suficiente
+
+- **WHEN** la previsión exterior y el modelo térmico mantienen todos los bordes
+  de una consigna dentro de sus límites sin cargar
+- **THEN** no se asigna carga eléctrica anticipada ni residual
 
 #### Scenario: Solape de consignas
 
@@ -284,6 +324,13 @@ SOC relativo de cada acumulador.
   carga, calor entregado, límite de emisión aplicado, intercambio térmico,
   interior, objetivo y déficit sin inferir temperatura a partir del SOC
 
+#### Scenario: Balance físico de la vista previa activada
+
+- **WHEN** se activa una vista previa con telemetría y balances físicos
+- **THEN** el detalle de la vista previa y la explicación persistida muestran la
+  misma serie de inicio, carga, calor, intercambio, fin y déficit, y sus totales
+  se reconcilian con los intervalos
+
 ### Requirement: Explicación durable de la planificación
 
 Cada cálculo debe conservar la evidencia estructurada que empleó, sin secretos,
@@ -304,6 +351,20 @@ datos ausentes a partir del estado actual.
 - **WHEN** el operador consulta un plan creado antes de conservar snapshots
 - **THEN** el plan sigue siendo consultable y la evidencia ausente figura como
   no disponible, sin inferirse de la configuración, telemetría o previsión vigente
+
+#### Scenario: Métrica ausente frente a cero físico
+
+- **WHEN** una métrica no fue guardada en un plan histórico o su cálculo físico
+  es exactamente cero
+- **THEN** la primera se muestra como no disponible y la segunda permanece como
+  cero en la explicación y el detalle por intervalo
+
+#### Scenario: Motivo de cada carga
+
+- **WHEN** el planificador asigna energía a un acumulador
+- **THEN** la explicación identifica la próxima consigna y su límite, la
+  contribución del intercambio exterior y la energía terminal, distinguiendo
+  carga necesaria, precalentamiento y residual
 
 #### Scenario: Descarga de diagnóstico
 

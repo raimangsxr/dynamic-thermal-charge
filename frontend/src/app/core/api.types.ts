@@ -385,6 +385,16 @@ export interface PlanOperatorSummaryDto {
   maximum_temperature_shortfall_c: number | null;
   charge_periods: string[][];
   charge_minutes: number;
+  initial_stored_energy_kwh?: number | null;
+  final_stored_energy_kwh?: number | null;
+  total_charge_energy_kwh?: number | null;
+  forecast_contribution_kwh?: number | null;
+  terminal_surplus_energy_kwh?: number | null;
+  next_constraint_at?: string | null;
+  next_target_temperature_c?: number | null;
+  next_target_start?: string | null;
+  next_target_end?: string | null;
+  charge_reasons?: Array<Record<string, unknown>> | null;
 }
 
 export interface PlanComparisonDto {
