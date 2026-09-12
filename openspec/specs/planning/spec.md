@@ -38,6 +38,15 @@ precalentar, pero un déficit en cualquiera de esos bordes conserva la
 observación y deja el plan como `DEGRADED` salvo que pueda demostrar una
 convergencia posterior continuada en todos los bordes con consigna activa.
 
+Si una consigna sigue activa en el borde final del horizonte y durante el slot
+siguiente, el optimizador modela una única guarda privada de ese slot, con
+carga eléctrica desactivada. La guarda reutiliza el mismo balance del recinto,
+la capacidad de emisión y la previsión exterior, y comprueba la consigna en
+ambos bordes. Solo el estado terminal del horizonte queda condicionado por esa
+guarda: no añade decisiones, intervalos, totales ni explicaciones al horizonte
+publicado. La falta de previsión para su inicio hace que el resultado sea
+`INVALID` por cobertura insuficiente.
+
 #### Scenario: Exterior más cálido que el interior
 
 - **WHEN** la temperatura exterior supera la interior durante un intervalo
@@ -110,6 +119,21 @@ solicita.
 - **THEN** se comprueba el objetivo en el borde final del último slot activo y no
   se exige en el slot posterior salvo que otra regla esté activa
 
+#### Scenario: Reserva terminal para una consigna que continúa
+
+- **WHEN** una consigna está activa en el borde final y continúa durante el
+  siguiente slot
+- **THEN** la reserva terminal es la mínima energía física que permite cumplir
+  los dos bordes de esa guarda sin carga adicional, sin publicar la guarda como
+  una decisión del plan
+
+#### Scenario: Cobertura insuficiente de la guarda terminal
+
+- **WHEN** una consigna continúa después del horizonte pero la previsión no
+  cubre el inicio del slot de guarda
+- **THEN** el resultado es `INVALID` por cobertura meteorológica insuficiente y
+  no publica un slot adicional
+
 #### Scenario: Déficit al comienzo del horizonte
 
 - **WHEN** una consigna está activa en el primer borde del horizonte y la
@@ -121,9 +145,11 @@ solicita.
 
 - **WHEN** existen varias decisiones que cubren las mismas consignas
 - **THEN** se conserva primero la seguridad y el confort por prioridad, después
-  se minimiza la energía eléctrica cargada, el excedente terminal y el calor
-  fuera de consigna, y finalmente se eligen los slots más tardíos con un
-  desempate determinista
+  se minimizan sucesivamente la energía eléctrica cargada, el excedente
+  terminal necesario, el calor entregado, el calor fuera de consigna y la
+  anticipación de la carga, y finalmente se aplican desempates deterministas.
+  El orden y el bloqueo del óptimo son iguales aunque el modelo supere 96
+  decisiones binarias.
 
 #### Scenario: Evolución exterior suficiente
 

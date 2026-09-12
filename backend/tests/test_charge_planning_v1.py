@@ -329,8 +329,19 @@ def test_preview_uses_mqtt_fixed_telemetry_when_broker_disabled(client, initiali
             },
         },
     )
-    config, revision = initialised_store.repository.current()
-    points = forecast(API_NOW, 24, 4)
+    site = initialised_store.planning.site()
+    initialised_store.planning.update_site(
+        {
+            "planning_window_hours": 2,
+            "forecast_horizon_hours": 2,
+            "solver_time_limit_seconds": 10,
+        },
+        site["revision"],
+    )
+    revision = initialised_store.planning.site()["revision"]
+    # The room-energy terminal guard needs the forecast covering the first
+    # instant after the two-hour planning horizon as well.
+    points = forecast(API_NOW, 3, 4)
     record = SimpleNamespace(
         date=API_NOW.date(), average_temperature_c=4, minimum_temperature_c=4,
         maximum_temperature_c=4, source="aemet", location="test",
@@ -345,7 +356,10 @@ def test_preview_uses_mqtt_fixed_telemetry_when_broker_disabled(client, initiali
         json={"expected_revision": revision},
     )
     assert preview.status_code == 200, preview.text
-    assert preview.json()["status"] != INVALID
+    body = preview.json()
+    assert body["status"] != INVALID, [
+        item.get("reason") for item in body.get("violations", [])
+    ]
 
 
 def test_preview_activation_persists_room_energy_snapshot(client, initialised_store, api_clock):

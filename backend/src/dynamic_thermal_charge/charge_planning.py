@@ -491,12 +491,15 @@ class MilpChargePlanner:
             solver_time_limit_seconds,
         )
         time_limited = False
+        last_verified_solution: dict[str, float] | None = None
         for phase_index, objective in enumerate(phases):
             _notify(request, f"solver_phase_{phase_index + 1}")
             _check_cancelled(request)
             remaining_seconds = solver_deadline - monotonic()
             if remaining_seconds <= 0:
-                if not _model_solution_is_feasible(model, pulp, on):
+                if not _model_solution_is_feasible(model, pulp, on) and not _restore_verified_model_solution(
+                    model, pulp, on, last_verified_solution
+                ):
                     return _invalid_plan(
                         request, starts[0], starts,
                         "solver reached its total time limit without a verified feasible solution",
@@ -527,24 +530,17 @@ class MilpChargePlanner:
                 len(model.variables()),
                 len(model.constraints),
             )
-            if status == pulp.LpStatusNotSolved:
-                if not _model_solution_is_feasible(model, pulp, on):
+            if status != pulp.LpStatusOptimal:
+                if not _model_solution_is_feasible(model, pulp, on) and not _restore_verified_model_solution(
+                    model, pulp, on, last_verified_solution
+                ):
                     return _invalid_plan(
                         request, starts[0], starts,
-                        "solver reached its time limit without a verified feasible solution",
+                        "solver did not prove the next phase optimal and no verified feasible solution was available",
                         "solver_failure", generated_at,
                     )
                 time_limited = True
                 break
-            if status != pulp.LpStatusOptimal:
-                return _invalid_plan(
-                    request,
-                    starts[0],
-                    starts,
-                    f"solver status {pulp.LpStatus[status]}",
-                    "solver_failure",
-                    generated_at,
-                )
             try:
                 optimum = _required_solver_value(pulp.value(objective), "objective")
             except ValueError as exc:
@@ -557,6 +553,9 @@ class MilpChargePlanner:
                 phase_index + 1,
                 optimum,
             )
+            verified_solution = _snapshot_verified_model_solution(model, pulp, on)
+            if verified_solution is not None:
+                last_verified_solution = verified_solution
             if phase_index < len(phases) - 1:
                 model += objective <= optimum + 1e-7
         try:
@@ -680,9 +679,9 @@ def input_token(request: PlanningInput) -> str:
     }
     if room_energy:
         payload["room_energy_model"] = True
-        # A preview from the previous end-only model must not be reused for
-        # activation after the boundary semantics change.
-        payload["room_energy_model_version"] = "boundary_targets_v2"
+        # A preview from before the terminal-guard model must not be reused for
+        # activation after the optimization semantics change.
+        payload["room_energy_model_version"] = "terminal_guard_v3"
         payload["room_coefficients"] = {
             heater.id: {
                 "capacity_kwh_per_c": heater.room_thermal_capacity_kwh_per_c,
@@ -890,6 +889,8 @@ def _model_solution_is_feasible(
 ) -> bool:
     """Accept a time-limited candidate only after checking every constraint."""
     try:
+        for variable in model.variables():
+            _required_solver_value(variable.value(), "model variable")
         for variable in binary_variables.values():
             value = _required_solver_value(variable.value(), "binary variable")
             if abs(value - round(value)) > tolerance:
@@ -905,6 +906,34 @@ def _model_solution_is_feasible(
     except ValueError:
         return False
     return True
+
+
+def _snapshot_verified_model_solution(
+    model, pulp, binary_variables
+) -> dict[str, float] | None:
+    """Keep the last complete incumbent available across a timed-out phase."""
+    if not _model_solution_is_feasible(model, pulp, binary_variables):
+        return None
+    return {
+        variable.name: _required_solver_value(variable.value(), "model variable")
+        for variable in model.variables()
+    }
+
+
+def _restore_verified_model_solution(
+    model, pulp, binary_variables, snapshot: Mapping[str, float] | None
+) -> bool:
+    """Restore a previously verified incumbent after an incomplete solve."""
+    if snapshot is None:
+        return False
+    try:
+        for variable in model.variables():
+            variable.varValue = _required_solver_value(
+                snapshot.get(variable.name), "saved model variable"
+            )
+    except ValueError:
+        return False
+    return _model_solution_is_feasible(model, pulp, binary_variables)
 
 
 def _invalid_plan(request: PlanningInput, start: datetime, starts: Sequence[datetime], detail: str, reason: str, generated_at: datetime, heater_ids: Sequence[str] = ()) -> AutomaticPlan:
@@ -1124,6 +1153,53 @@ def _next_target_occurrence(
     if not candidates:
         return None
     return min(candidates, key=lambda item: (_key(item[1]), _target_sort_key(item[0])))
+
+
+@dataclass(frozen=True)
+class _RoomEnergyGuard:
+    """The private continuation slot used to size a terminal reserve."""
+
+    start: datetime
+    end: datetime
+    target_temperature_c: float
+    target_window_start: datetime
+    target_window_end: datetime
+
+
+def _terminal_guard_requirements(
+    request: PlanningInput, horizon_end: datetime
+) -> dict[str, _RoomEnergyGuard]:
+    """Return targets that remain active for the complete slot after the horizon.
+
+    The guard is deliberately not part of the public horizon.  It only exists
+    when the target active at the final boundary is still active at the next
+    boundary, which is the case where the terminal state must carry a physical
+    reserve across that unseen slot.
+    """
+    guard_end = advance_real(horizon_end, request.slot_minutes)
+    result: dict[str, _RoomEnergyGuard] = {}
+    for heater in request.heaters:
+        if not heater.enabled:
+            continue
+        targets = _room_targets(request, heater)
+        occurrence = _target_occurrence_for_at(
+            targets, horizon_end, request.timezone_name
+        )
+        if occurrence is None or _key(occurrence[2]) <= _key(guard_end):
+            continue
+        end_occurrence = _target_occurrence_for_at(
+            targets, guard_end, request.timezone_name
+        )
+        if end_occurrence is None or end_occurrence[0] != occurrence[0]:
+            continue
+        result[heater.id] = _RoomEnergyGuard(
+            start=horizon_end,
+            end=guard_end,
+            target_temperature_c=float(occurrence[0].target_temperature_c),
+            target_window_start=occurrence[1],
+            target_window_end=occurrence[2],
+        )
+    return result
 
 
 def _value_from_violation(
@@ -1728,6 +1804,19 @@ def _solve_room_energy(
         return _invalid_room_plan(
             request, starts[0], starts, "no electrical power remains for heating", "infeasible_power_configuration", generated_at
         )
+    terminal_guards = _terminal_guard_requirements(request, boundaries[-1])
+    guard_outdoor_temperature = None
+    if terminal_guards:
+        guard_outdoor_temperature = _weather_at(boundaries[-1], request.forecast)
+        if guard_outdoor_temperature is None:
+            return _invalid_room_plan(
+                request,
+                starts[0],
+                starts,
+                "missing forecast coverage for the terminal guard slot",
+                "missing_guard_forecast_coverage",
+                generated_at,
+            )
     model = pulp.LpProblem("dynamic_room_energy", pulp.LpMinimize)
     on = {
         (heater.id, index): pulp.LpVariable(f"room_on_{heater.id}_{index:03d}", cat="Binary")
@@ -1782,6 +1871,11 @@ def _solve_room_energy(
     }
     target_values: dict[tuple[str, int], float | None] = {}
     outdoor_values: dict[tuple[str, int], float] = {}
+    guard_stored_next: dict[str, Any] = {}
+    guard_indoor_next: dict[str, Any] = {}
+    guard_heat: dict[str, Any] = {}
+    guard_start_shortfall: dict[str, Any] = {}
+    guard_end_shortfall: dict[str, Any] = {}
     for heater in heaters:
         state = request.telemetry[heater.id]
         model += stored[(heater.id, 0)] == heater.capacity_kwh * float(state.stored_soc_percent) / 100
@@ -1800,7 +1894,7 @@ def _solve_room_energy(
         # target may still emit, which is what lets the plan preheat towards
         # the starting edge of that target.
         emission_allowed: list[bool] = []
-        target_ahead = False
+        target_ahead = heater.id in terminal_guards
         for index in reversed(range(len(starts))):
             target_ahead = target_ahead or target_values[(heater.id, index)] is not None
             emission_allowed.append(target_ahead)
@@ -1842,6 +1936,55 @@ def _solve_room_energy(
                 # untargeted slots when that is necessary.
                 model += start_shortfall[(heater.id, index)] >= target - indoor[(heater.id, index)]
                 model += shortfall[(heater.id, index)] >= target - indoor[(heater.id, index + 1)]
+        guard = terminal_guards.get(heater.id)
+        if guard is not None:
+            assert guard_outdoor_temperature is not None
+            guard_stored_next[heater.id] = pulp.LpVariable(
+                f"guard_stored_energy_{heater.id}",
+                lowBound=0,
+                upBound=heater.capacity_kwh,
+            )
+            guard_indoor_next[heater.id] = pulp.LpVariable(
+                f"guard_indoor_temperature_{heater.id}",
+                lowBound=-100,
+                upBound=100,
+            )
+            guard_heat[heater.id] = pulp.LpVariable(
+                f"guard_heat_delivered_{heater.id}", lowBound=0
+            )
+            guard_end_shortfall[heater.id] = pulp.LpVariable(
+                f"guard_temperature_shortfall_{heater.id}",
+                lowBound=0,
+                upBound=200,
+            )
+            model += guard_heat[heater.id] <= stored[(heater.id, len(starts))]
+            model += guard_heat[heater.id] <= (
+                emission_floor_kwh
+                + emission_span_kwh * stored[(heater.id, len(starts))] / heater.capacity_kwh
+            )
+            model += guard_stored_next[heater.id] == (
+                stored[(heater.id, len(starts))] - guard_heat[heater.id]
+            )
+            model += guard_indoor_next[heater.id] == (
+                (1 - loss_factor / capacity) * indoor[(heater.id, len(starts))]
+                + guard_heat[heater.id] / capacity
+                + loss_factor * guard_outdoor_temperature / capacity
+            )
+            last_target = target_values[(heater.id, len(starts) - 1)]
+            if last_target is None or not math.isclose(
+                last_target, guard.target_temperature_c, abs_tol=1e-9
+            ):
+                guard_start_shortfall[heater.id] = pulp.LpVariable(
+                    f"guard_start_temperature_shortfall_{heater.id}",
+                    lowBound=0,
+                    upBound=200,
+                )
+                model += guard_start_shortfall[heater.id] >= (
+                    guard.target_temperature_c - indoor[(heater.id, len(starts))]
+                )
+            model += guard_end_shortfall[heater.id] >= (
+                guard.target_temperature_c - guard_indoor_next[heater.id]
+            )
     for index in range(len(starts)):
         model += sum(heater.power_w * on[(heater.id, index)] for heater in heaters) <= limit_w
 
@@ -1889,90 +2032,46 @@ def _solve_room_energy(
         for position, heater in enumerate(heaters)
         for index in range(len(starts))
     )
-    # Keep the objectives genuinely lexicographic for compact decision spaces.
-    # A weighted sum can trade a measurable comfort deficit for a cheaper
-    # schedule when CBC's tolerances are larger than the secondary
-    # coefficients. Solving and locking each phase makes priority, comfort,
-    # energy, terminal state and recency explicit. Full rolling-horizon
-    # installations can contain hundreds of binary decisions, however; a
-    # repeated MILP solve there exhausts the planning budget before returning
-    # an actionable plan. The bounded scalar fallback below keeps the same
-    # order of terms and uses CBC's fast incumbent search for that case.
-    comfort_phases = [
-        pulp.lpSum(
+    priorities = sorted({heater.priority for heater in heaters}, reverse=True)
+    comfort_phases = []
+    for priority in priorities:
+        terms = [
             shortfall[(heater.id, index)] + start_shortfall[(heater.id, index)]
             for heater in heaters
             if heater.priority == priority
             for index in range(len(starts))
+        ]
+        terms.extend(
+            guard_start_shortfall[heater.id]
+            for heater in heaters
+            if heater.priority == priority and heater.id in guard_start_shortfall
         )
-        for priority in sorted({heater.priority for heater in heaters}, reverse=True)
-    ]
+        terms.extend(
+            guard_end_shortfall[heater.id]
+            for heater in heaters
+            if heater.priority == priority and heater.id in guard_end_shortfall
+        )
+        comfort_phases.append(pulp.lpSum(terms))
     secondary_phases = (
         total_charge,
         pulp.lpSum(terminal_surplus.values()),
         total_heat,
         premature_heat,
         latest_charge,
-        deterministic,
         heat_timing,
+        deterministic,
     )
-    lexicographic_model = len(on) <= 96
-    if lexicographic_model:
-        phases = comfort_phases + list(secondary_phases)
-        solver_gap_relative = None
-    else:
-        priorities = sorted({heater.priority for heater in heaters}, reverse=True)
-        comfort_bounds = {
-            priority: float(400 * len(starts) * max(
-                1, sum(heater.priority == priority for heater in heaters)
-            ))
-            for priority in priorities
-        }
-        weighted_comfort = pulp.lpSum(
-            (2 ** (len(priorities) - rank - 1))
-            * objective
-            / comfort_bounds[priority]
-            for rank, (priority, objective) in enumerate(zip(priorities, comfort_phases))
-        )
-        charge_bound = max(
-            1.0,
-            sum(
-                heater.capacity_kwh
-                + heater.charge_power_kw * slot_hours * len(starts)
-                for heater in heaters
-            ),
-        )
-        heat_bound = charge_bound
-        terminal_bound = max(1.0, sum(heater.capacity_kwh for heater in heaters))
-        latest_bound = max(1.0, charge_bound * len(starts))
-        deterministic_bound = max(
-            1.0,
-            sum(
-                (index + 1) * (position + 1)
-                for position in range(len(heaters))
-                for index in range(len(starts))
-            ),
-        )
-        heat_timing_bound = max(
-            1.0, heat_bound * len(starts) * max(1, len(heaters))
-        )
-        weighted_objective = (
-            1e13 * weighted_comfort
-            + 1e6 * total_charge / charge_bound
-            + 1e3 * pulp.lpSum(terminal_surplus.values()) / terminal_bound
-            + total_heat / heat_bound
-            + 1e-3 * premature_heat / heat_bound
-            + 1e-6 * latest_charge / latest_bound
-            + 1e-9 * heat_timing / heat_timing_bound
-            + 1e-12 * deterministic / deterministic_bound
-        )
-        phases = [weighted_objective]
-        solver_gap_relative = 1.0
+    # Every model uses the same successive solves. A scalar weighted fallback
+    # is not equivalent: CBC can accept a cheaper schedule while leaving a
+    # higher-priority comfort deficit within its numerical tolerances.
+    phases = comfort_phases + list(secondary_phases)
+    solver_gap_relative = None
     score: list[float] = []
     solver_started = monotonic()
     time_limit = float(request.solver_time_limit_seconds or SOLVER_TIME_LIMIT_SECONDS)
     solver_deadline = solver_started + time_limit
     time_limited = False
+    last_verified_solution: dict[str, float] | None = None
     _notify(request, "solver")
     logger.debug(
         "Room-energy solver model built: variables=%d constraints=%d phases=%d "
@@ -1987,7 +2086,9 @@ def _solve_room_energy(
         _check_cancelled(request)
         remaining_seconds = solver_deadline - monotonic()
         if remaining_seconds <= 0:
-            if not _model_solution_is_feasible(model, pulp, on):
+            if not _model_solution_is_feasible(model, pulp, on) and not _restore_verified_model_solution(
+                model, pulp, on, last_verified_solution
+            ):
                 return _invalid_room_plan(
                     request,
                     starts[0],
@@ -2022,27 +2123,20 @@ def _solve_room_energy(
             len(model.variables()),
             len(model.constraints),
         )
-        if status == pulp.LpStatusNotSolved:
-            if not _model_solution_is_feasible(model, pulp, on):
+        if status != pulp.LpStatusOptimal:
+            if not _model_solution_is_feasible(model, pulp, on) and not _restore_verified_model_solution(
+                model, pulp, on, last_verified_solution
+            ):
                 return _invalid_room_plan(
                     request,
                     starts[0],
                     starts,
-                    "solver reached its time limit without a verified feasible room-energy plan",
+                    "solver did not prove the next phase optimal and no verified feasible room-energy plan was available",
                     "solver_failure",
                     generated_at,
                 )
             time_limited = True
             break
-        if status != pulp.LpStatusOptimal:
-            return _invalid_room_plan(
-                request,
-                starts[0],
-                starts,
-                f"solver status {pulp.LpStatus[status]}",
-                "solver_failure",
-                generated_at,
-            )
         objective_value = pulp.value(objective)
         if objective_value is None:
             # PuLP returns ``None`` for a constant zero expression (for
@@ -2058,7 +2152,10 @@ def _solve_room_energy(
             phase_index + 1,
             optimum,
         )
-        if phase_index < len(phases) - 1 and list(objective.items()):
+        verified_solution = _snapshot_verified_model_solution(model, pulp, on)
+        if verified_solution is not None:
+            last_verified_solution = verified_solution
+        if phase_index < len(phases) - 1:
             model += objective <= optimum + 1e-7
 
     violations: list[PlanningViolation] = []
@@ -2213,6 +2310,52 @@ def _solve_room_energy(
                 interval_heat_limit,
             )
         )
+    for heater in heaters:
+        guard = terminal_guards.get(heater.id)
+        if guard is None:
+            continue
+        target_window = (guard.target_window_start, guard.target_window_end)
+        start_shortfall_value = guard_start_shortfall.get(heater.id)
+        if start_shortfall_value is not None:
+            start_shortfall = _required_solver_value(
+                start_shortfall_value.value(), "guard start temperature shortfall"
+            )
+            if start_shortfall > 1e-6:
+                achieved = _required_solver_value(
+                    indoor[(heater.id, len(starts))].value(),
+                    "terminal indoor temperature",
+                )
+                violations.append(
+                    PlanningViolation(
+                        heater.id,
+                        "temperature_comfort",
+                        achieved,
+                        start_shortfall,
+                        guard.start,
+                        "insufficient_stored_energy_or_power",
+                        *target_window,
+                    )
+                )
+        end_shortfall = _required_solver_value(
+            guard_end_shortfall[heater.id].value(),
+            "guard end temperature shortfall",
+        )
+        if end_shortfall > 1e-6:
+            achieved = _required_solver_value(
+                guard_indoor_next[heater.id].value(),
+                "guard end indoor temperature",
+            )
+            violations.append(
+                PlanningViolation(
+                    heater.id,
+                    "temperature_comfort",
+                    achieved,
+                    end_shortfall,
+                    guard.end,
+                    "insufficient_stored_energy_or_power",
+                    *target_window,
+                )
+            )
     by_heater = {heater.id: [item for item in room_intervals if item.heater_id == heater.id] for heater in heaters}
     explanations = tuple(
         _room_heater_explanation(heater, by_heater[heater.id], request)

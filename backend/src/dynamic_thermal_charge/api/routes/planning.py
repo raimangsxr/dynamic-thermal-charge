@@ -159,6 +159,7 @@ class PreviewJobRunner:
                 reason = plan.violations[0].reason.split(":", 1)[0]
                 failed_step = {
                     "missing_aemet_coverage": "aemet_coverage",
+                    "missing_guard_forecast_coverage": "aemet_coverage",
                     "forecast_not_eligible": "aemet_coverage",
                     "missing_required_state": "telemetry",
                     "invalid_configuration": "input_validation",

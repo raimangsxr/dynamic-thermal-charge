@@ -69,7 +69,7 @@ def _request(
 ) -> PlanningInput:
     points = tuple(
         HourlyForecastPoint(START + timedelta(hours=offset), outdoor)
-        for offset in range(horizon_hours)
+        for offset in range(horizon_hours + 1)
     )
     return PlanningInput(
         heaters=heaters,
@@ -649,3 +649,199 @@ def test_emission_capability_bounds_the_plan_at_every_state_of_charge():
         assert 0.0 <= interval.stored_energy_kwh <= heater.capacity_kwh + 1e-9
         assert 0.0 <= interval.stored_energy_next_kwh <= heater.capacity_kwh + 1e-9
     assert any(item.requirement == "temperature_comfort" for item in result.violations)
+
+
+def test_terminal_guard_keeps_only_energy_needed_by_a_continuing_target():
+    heater = replace(
+        _heater(power_w=1000, full_charge_minutes=60, full_discharge_minutes=60),
+        temperature_targets=(TemperatureTarget(20.5, time(1, 0), time(4, 0)),),
+    )
+    crossing = RoomEnergyPlanner().build(
+        _request(
+            heaters=(heater,),
+            outdoor=13.9,
+            horizon_hours=2,
+            telemetry={"salon": _telemetry("salon", indoor=20.75, soc=0.0)},
+        )
+    )
+
+    assert crossing.status == FEASIBLE
+    assert len(crossing.slots) == 2
+    assert len(crossing.demand) == 2
+    assert crossing.explanations[0].final_stored_energy_kwh > 0.0
+    guard = room_energy_step(
+        heater,
+        start=START + timedelta(hours=2),
+        outdoor_temperature_c=13.9,
+        target_temperature_c=20.5,
+        indoor_temperature_c=crossing.demand[-1].indoor_temperature_next_c,
+        stored_energy_kwh=crossing.explanations[0].final_stored_energy_kwh,
+        slot_minutes=60,
+        charge_on=False,
+    )
+    assert guard.temperature_shortfall_start_c == pytest.approx(0.0)
+    assert guard.temperature_shortfall_c == pytest.approx(0.0)
+
+
+def test_target_ending_at_the_horizon_does_not_add_a_terminal_guard():
+    heater = replace(
+        _heater(power_w=1000, full_charge_minutes=60, full_discharge_minutes=60),
+        temperature_targets=(TemperatureTarget(20.5, time(1, 0), time(2, 0)),),
+    )
+    request = replace(
+        _request(
+            heaters=(heater,),
+            outdoor=13.9,
+            horizon_hours=2,
+            telemetry={"salon": _telemetry("salon", indoor=20.75, soc=0.0)},
+        ),
+        forecast=tuple(
+            HourlyForecastPoint(START + timedelta(hours=offset), 13.9)
+            for offset in range(2)
+        ),
+    )
+    result = RoomEnergyPlanner().build(request)
+
+    assert result.status == FEASIBLE
+    assert len(result.slots) == 2
+    assert result.explanations[0].final_stored_energy_kwh == pytest.approx(0.0)
+
+
+def test_missing_terminal_guard_forecast_is_explicitly_invalid():
+    heater = replace(
+        _heater(),
+        temperature_targets=(TemperatureTarget(20.5, time(1, 0), time(4, 0)),),
+    )
+    request = replace(
+        _request(
+            heaters=(heater,),
+            horizon_hours=2,
+            telemetry={"salon": _telemetry("salon", indoor=20.5, soc=100.0)},
+        ),
+        forecast=(HourlyForecastPoint(START, 20.0), HourlyForecastPoint(START + timedelta(hours=1), 20.0)),
+    )
+
+    result = RoomEnergyPlanner().build(request)
+
+    assert result.status == INVALID
+    assert result.violations[0].reason.startswith("missing_guard_forecast_coverage")
+    assert len(result.slots) == 2
+
+
+def test_room_time_limited_candidate_is_degraded_until_all_phases_are_optimal(monkeypatch):
+    import pulp
+
+    original_solve = pulp.LpProblem.solve
+    calls = 0
+
+    def solve_with_timeout(model, solver):
+        nonlocal calls
+        calls += 1
+        status = original_solve(model, solver)
+        if calls == 2:
+            for variable in model.variables():
+                variable.varValue = None
+            return pulp.LpStatusNotSolved
+        return status
+
+    monkeypatch.setattr(pulp.LpProblem, "solve", solve_with_timeout)
+    result = RoomEnergyPlanner().build(
+        _request(telemetry={"salon": _telemetry("salon", indoor=21.0, soc=100.0)})
+    )
+
+    assert result.status == DEGRADED
+    assert len(result.score) < 8
+    assert any(item.requirement == "solver_time_limit" for item in result.violations)
+
+
+def test_large_room_model_keeps_priority_lexicographic():
+    heaters = tuple(
+        replace(
+            _heater(
+                heater_id,
+                power_w=1000,
+                full_charge_minutes=60,
+                full_discharge_minutes=60,
+                priority=100 if heater_id == "high" else 1,
+                target=20.15,
+            ),
+            temperature_targets=(TemperatureTarget(20.15, time(1, 0), time(2, 0)),),
+            static_emission_percent=100.0,
+        )
+        for heater_id in ("high", "low", "spare", "fourth")
+    )
+    telemetry = {
+        heater.id: _telemetry(
+            heater.id, indoor=20.0, soc=0.0
+        )
+        for heater in heaters
+    }
+    request = _request(
+        heaters=heaters,
+        outdoor=20.0,
+        horizon_hours=13,
+        telemetry=telemetry,
+        max_total_power_w=1000,
+        slot_minutes=30,
+    )
+
+    first = RoomEnergyPlanner().build(request)
+    second = RoomEnergyPlanner().build(request)
+
+    assert len(first.slots) * len(heaters) > 96
+    assert first.status in {FEASIBLE, DEGRADED}
+    assert len(first.score) == 9
+    assert not any(item.requirement == "solver_time_limit" for item in first.violations)
+    high_shortfall = sum(
+        item.shortfall or 0.0 for item in first.violations if item.heater_id == "high"
+    )
+    low_shortfall = sum(
+        item.shortfall or 0.0 for item in first.violations if item.heater_id == "low"
+    )
+    assert high_shortfall < low_shortfall
+    assert [slot.heater_ids for slot in first.slots] == [slot.heater_ids for slot in second.slots]
+
+
+def test_large_room_model_places_charge_in_the_latest_viable_slot():
+    heaters = tuple(
+        replace(
+            _heater(
+                heater_id,
+                power_w=1000,
+                full_charge_minutes=60,
+                full_discharge_minutes=60,
+                target=20.0,
+            ),
+            temperature_targets=(
+                (
+                    TemperatureTarget(20.15, time(10, 0), time(12, 0))
+                    if heater_id == "late"
+                    else TemperatureTarget(20.0, time(1, 0), time(2, 0))
+                ),
+            ),
+        )
+        for heater_id in ("late", "idle", "spare", "fourth")
+    )
+    request = _request(
+        heaters=heaters,
+        outdoor=20.0,
+        horizon_hours=26,
+        telemetry={heater.id: _telemetry(heater.id, indoor=20.0, soc=0.0) for heater in heaters},
+        max_total_power_w=1000,
+        slot_minutes=60,
+    )
+
+    first = RoomEnergyPlanner().build(request)
+    second = RoomEnergyPlanner().build(request)
+
+    assert len(first.slots) * len(heaters) > 96
+    assert first.status == FEASIBLE
+    assert len(first.score) == 8
+    assert not any(item.requirement == "solver_time_limit" for item in first.violations)
+    assert [slot.heater_ids for slot in first.slots] == [slot.heater_ids for slot in second.slots]
+    late_charge_starts = [
+        round((interval.start - START).total_seconds() / 3600)
+        for interval in first.demand
+        if interval.heater_id == "late" and interval.charge_energy_kwh > 1e-6
+    ]
+    assert late_charge_starts == [8]
