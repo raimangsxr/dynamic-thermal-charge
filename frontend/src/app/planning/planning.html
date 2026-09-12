@@ -139,19 +139,16 @@
           </div>
 
           <section class="constraints" aria-labelledby="discharge-topics-title" data-testid="discharge-topics">
-            <div class="section-header"><div><h3 id="discharge-topics-title">Mandos de descarga</h3><p class="hint">Topic MQTT en el que cada acumulador recibe la activación de su descarga y el topic en el que recibe la consigna que su termostato usa para modular la compuerta. Un acumulador sin topic de activación no recibe mando.</p></div></div>
+            <div class="section-header"><div><h3 id="discharge-topics-title">Mandos de descarga</h3><p class="hint">Estos son los topics MQTT efectivos de cada acumulador. Se usa el namespace estándar y solo se muestra un override antiguo cuando existe.</p></div></div>
             @for (heater of data.heaters; track heater.id) {
               <div class="topic-row">
                 <span class="heater-name">{{ heater.name }}</span>
-                <label [for]="'damper-topic-' + heater.id">Topic de activación</label>
-                <input [id]="'damper-topic-' + heater.id" type="text" [ngModel]="topicDraft(heater.id).damper_topic" (ngModelChange)="editTopic(heater.id, 'damper_topic', $event)" [attr.data-testid]="'damper-topic-input-' + heater.id" />
-                <label [for]="'setpoint-topic-' + heater.id">Topic de consigna</label>
-                <input [id]="'setpoint-topic-' + heater.id" type="text" [ngModel]="topicDraft(heater.id).setpoint_topic" (ngModelChange)="editTopic(heater.id, 'setpoint_topic', $event)" [attr.data-testid]="'setpoint-topic-input-' + heater.id" />
-                <button mat-stroked-button type="button" (click)="saveTopics(heater.id)" [disabled]="topicSaving() === heater.id" [attr.data-testid]="'save-topics-button-' + heater.id">{{ topicSaving() === heater.id ? 'Guardando…' : 'Guardar mandos' }}</button>
+                <dl class="topic-values">
+                  <div><dt>Topic de activación</dt><dd><code [attr.data-testid]="'damper-topic-value-' + heater.id">{{ heater.damper_topic ?? 'No disponible' }}</code></dd></div>
+                  <div><dt>Topic de consigna</dt><dd><code [attr.data-testid]="'setpoint-topic-value-' + heater.id">{{ heater.setpoint_topic ?? 'No disponible' }}</code></dd></div>
+                </dl>
               </div>
             }
-            @if (topicMessage()) { <p class="saved" role="status">{{ topicMessage() }}</p> }
-            @if (topicError()) { <p class="field-error" role="alert">{{ topicError() }}</p> }
           </section>
 
           <section class="constraints" aria-labelledby="targets-title">

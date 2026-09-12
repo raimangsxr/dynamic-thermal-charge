@@ -67,6 +67,7 @@ def test_one_heater_is_readable(client):
     assert body["room_heat_loss_kw_per_c"] == 0.12
     assert body["full_discharge_hours"] == 10.0
     assert body["static_emission_percent"] == 20.0
+    assert body["telemetry_topic"] == "telemetria/acumuladores/salon/telemetry"
     assert body["temperature_targets"] == [
         {
             "id": body["temperature_targets"][0]["id"],
@@ -237,6 +238,40 @@ def test_a_heater_can_be_replaced_in_one_revisioned_request(client):
     assert updated["temperature_targets"][0]["start_time"] == "07:00"
 
 
+def test_replacing_a_heater_without_the_legacy_topic_field_preserves_its_override(client):
+    changed = _patch(client, "telemetry_topic", "ha/old", heater="salon")
+    assert changed.status_code == 200
+    before = _config(client)
+    heater = before["heaters"][0]
+    payload = {
+        "revision": before["config_revision"],
+        "name": heater["name"],
+        "model": heater["model"],
+        "power_kw": heater["power_kw"],
+        "full_charge_hours": heater["full_charge_hours"],
+        "full_discharge_hours": heater["full_discharge_hours"],
+        "static_emission_percent": heater["static_emission_percent"],
+        "priority": heater["priority"],
+        "enabled": heater["enabled"],
+        "output": heater["output"]["kind"],
+        "pin": heater["output"]["pin"],
+        "active_high": heater["output"]["active_high"],
+        "room_thermal_capacity_kwh_per_c": heater[
+            "room_thermal_capacity_kwh_per_c"
+        ],
+        "room_heat_loss_kw_per_c": heater["room_heat_loss_kw_per_c"],
+    }
+
+    response = client.put(
+        "/api/v1/config/heaters/salon", headers=AUTH, json=payload
+    )
+
+    assert response.status_code == 200, response.text
+    assert client.get("/api/v1/config/heaters/salon", headers=AUTH).json()[
+        "telemetry_topic"
+    ] == "ha/old"
+
+
 def test_overlapping_temperature_targets_are_rejected_without_partial_save(client):
     before = _config(client)
     revision = before["config_revision"]
@@ -281,7 +316,7 @@ def test_overlapping_temperature_targets_are_rejected_without_partial_save(clien
     assert _config(client) == before
 
 
-def test_indoor_policy_and_telemetry_topic_round_trip_with_empty_topic_as_null(client):
+def test_indoor_policy_and_telemetry_topic_override_falls_back_to_standard(client):
     for field, value, expected in (
         ("indoor_max_age_minutes", "45", 45),
         ("indoor_min_plausible_c", "-15", -15.0),
@@ -294,7 +329,9 @@ def test_indoor_policy_and_telemetry_topic_round_trip_with_empty_topic_as_null(c
     cleared = _patch(client, "telemetry_topic", "", heater="salon")
     assert cleared.status_code == 200
     assert cleared.json()["new_value"] is None
-    assert _config(client)["heaters"][0]["telemetry_topic"] is None
+    assert _config(client)["heaters"][0]["telemetry_topic"] == (
+        "telemetria/acumuladores/salon/telemetry"
+    )
 
 
 def test_retired_thermal_fields_are_rejected(client):

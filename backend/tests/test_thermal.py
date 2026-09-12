@@ -88,7 +88,7 @@ def test_falls_back_to_static_target_without_thermal_profile() -> None:
     assert result == {"static": 120}
 
 
-def test_selects_only_configured_fresh_plausible_readings_at_explicit_time():
+def test_selects_fresh_plausible_readings_using_standard_topics_too():
     at = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
     heaters = (
         replace(thermal_heater(), id="fresh", telemetry_topic="ha/fresh"),
@@ -96,18 +96,20 @@ def test_selects_only_configured_fresh_plausible_readings_at_explicit_time():
         replace(thermal_heater(), id="old", telemetry_topic="ha/old"),
         replace(thermal_heater(), id="absurd", telemetry_topic="ha/absurd"),
         replace(thermal_heater(), id="missing", telemetry_topic="ha/missing"),
+        replace(thermal_heater(), id="default"),
     )
     readings = {
         "fresh": IndoorReading("fresh", 19, at - timedelta(minutes=1)),
         "edge": IndoorReading("edge", 20, at - timedelta(minutes=30)),
         "old": IndoorReading("old", 18, at - timedelta(minutes=30, seconds=1)),
         "absurd": IndoorReading("absurd", 85, at),
+        "default": IndoorReading("default", 19.5, at),
     }
     selection = select_indoor_temperatures(
         heaters, readings, at=at, max_age_minutes=30,
         min_plausible_c=-20, max_plausible_c=50,
     )
-    assert selection.temperatures == {"fresh": 19, "edge": 20}
+    assert selection.temperatures == {"fresh": 19, "edge": 20, "default": 19.5}
     assert selection.fallback_reasons == {
         "old": "stale", "absurd": "implausible", "missing": "missing"
     }

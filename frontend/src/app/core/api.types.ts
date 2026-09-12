@@ -322,7 +322,7 @@ export interface UpdateHeaterRequest {
   static_emission_percent?: number;
   priority: number;
   enabled: boolean;
-  telemetry_topic: string | null;
+  telemetry_topic?: string | null;
   output: 'simulated' | 'gpio';
   pin: number | null;
   active_high: boolean;

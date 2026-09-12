@@ -10,13 +10,18 @@ import pytest
 
 from dynamic_thermal_charge.api.liveness import evaluate
 from dynamic_thermal_charge.mqtt.discovery import discovery_entities
-from dynamic_thermal_charge.mqtt.publisher import MqttPublisher, project_state
+from dynamic_thermal_charge.mqtt.publisher import (
+    MqttPublisher,
+    StoreSnapshotReader,
+    project_state,
+)
 from dynamic_thermal_charge.mqtt.service import MqttService
 from dynamic_thermal_charge.mqtt.topics import TopicLayout
 from dynamic_thermal_charge.persistence import (
     ConfigStoreUnavailableError,
     Heartbeat,
     SchemaVersionError,
+    SchemaStatus,
 )
 from dynamic_thermal_charge.persistence.seed import example_installation
 
@@ -349,3 +354,72 @@ def test_declared_command_and_grouped_telemetry_topics_are_subscribed_after_disc
     assert len([event for event in mqtt_client.events if event[0] == "subscribe"]) == (
         subscribe_count * 2
     )
+
+
+def test_snapshot_reader_subscribes_to_standard_telemetry_topic_without_override():
+    config = example_installation()
+    reader = StoreSnapshotReader(
+        config_repository=type(
+            "Repository",
+            (),
+            {"current": lambda _self: (config, 1)},
+        )(),
+        schema_gate=type(
+            "SchemaGate",
+            (),
+            {"check": lambda _self: SchemaStatus.OK},
+        )(),
+        heartbeat_reader=lambda: None,
+        status_reader=type(
+            "StatusReader",
+            (),
+            {
+                "last_output_states": lambda _self: {},
+                "plan_in_progress": lambda _self, _now: None,
+            },
+        )(),
+        clock=lambda: NOW,
+    )
+
+    subscriptions = reader.subscriptions(TopicLayout())
+
+    assert "telemetria/acumuladores/salon/telemetry" in subscriptions
+
+
+def test_snapshot_reader_subscribes_only_to_an_explicit_telemetry_override():
+    config = replace(
+        example_installation(),
+        heaters=(
+            replace(
+                example_installation().heaters[0],
+                telemetry_topic="ha/salon/telemetry",
+            ),
+        ),
+    )
+    reader = StoreSnapshotReader(
+        config_repository=type(
+            "Repository",
+            (),
+            {"current": lambda _self: (config, 1)},
+        )(),
+        schema_gate=type(
+            "SchemaGate",
+            (),
+            {"check": lambda _self: SchemaStatus.OK},
+        )(),
+        heartbeat_reader=lambda: None,
+        status_reader=type(
+            "StatusReader",
+            (),
+            {
+                "last_output_states": lambda _self: {},
+                "plan_in_progress": lambda _self, _now: None,
+            },
+        )(),
+        clock=lambda: NOW,
+    )
+
+    subscriptions = reader.subscriptions(TopicLayout())
+
+    assert "ha/salon/telemetry" in subscriptions
+    assert "telemetria/acumuladores/salon/telemetry" not in subscriptions

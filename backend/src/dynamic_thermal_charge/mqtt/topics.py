@@ -9,11 +9,59 @@ import unicodedata
 
 INSTALLATION_SEGMENT = "installation"
 IDENTITY_NAMESPACE = "dynamic_thermal_charge"
+ACCUMULATOR_NAMESPACE = "telemetria/acumuladores"
+
+
+def mqtt_identifier(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-z0-9]+", "_", normalized.lower()).strip("_")
 
 
 def _slug(value: str) -> str:
-    normalized = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode()
-    return re.sub(r"[^a-z0-9]+", "_", normalized.lower()).strip("_")
+    """Keep the existing private name available to local callers."""
+    return mqtt_identifier(value)
+
+
+@dataclass(frozen=True)
+class AccumulatorTopics:
+    """The effective MQTT topics for one accumulator."""
+
+    telemetry: str
+    discharge: str
+    setpoint: str
+
+
+def accumulator_topics(heater_id: str) -> AccumulatorTopics:
+    identifier = mqtt_identifier(heater_id)
+    base = f"{ACCUMULATOR_NAMESPACE}/{identifier}"
+    return AccumulatorTopics(
+        telemetry=f"{base}/telemetry",
+        discharge=f"{base}/discharge",
+        setpoint=f"{base}/setpoint",
+    )
+
+
+def _configured_topic(value: str | None) -> str | None:
+    if value is None:
+        return None
+    topic = str(value).strip()
+    return topic or None
+
+
+def resolve_accumulator_topics(
+    heater_id: str,
+    *,
+    telemetry_topic: str | None = None,
+    damper_topic: str | None = None,
+    setpoint_topic: str | None = None,
+) -> AccumulatorTopics:
+    """Use a persisted override when present, otherwise the standard topic."""
+    standard = accumulator_topics(heater_id)
+    return AccumulatorTopics(
+        telemetry=_configured_topic(telemetry_topic) or standard.telemetry,
+        discharge=_configured_topic(damper_topic) or standard.discharge,
+        setpoint=_configured_topic(setpoint_topic) or standard.setpoint,
+    )
 
 
 @dataclass(frozen=True)
@@ -38,23 +86,23 @@ class TopicLayout:
         return f"{self.base}/state"
 
     def heater_state(self, heater_id: str) -> str:
-        return f"{self.base}/heater/{_slug(heater_id)}/state"
+        return f"{self.base}/heater/{mqtt_identifier(heater_id)}/state"
 
     def command(self, heater_id: str, field: str) -> str:
-        return f"{self.base}/heater/{_slug(heater_id)}/set/{field}"
+        return f"{self.base}/heater/{mqtt_identifier(heater_id)}/set/{field}"
 
     @property
     def installation_device_id(self) -> str:
         return f"{IDENTITY_NAMESPACE}_{INSTALLATION_SEGMENT}"
 
     def heater_device_id(self, heater_id: str) -> str:
-        return f"{self.installation_device_id}_{_slug(heater_id)}"
+        return f"{self.installation_device_id}_{mqtt_identifier(heater_id)}"
 
     def unique_id(self, heater_id: str | None, entity: str) -> str:
         parts = [IDENTITY_NAMESPACE, INSTALLATION_SEGMENT]
         if heater_id is not None:
-            parts.append(_slug(heater_id))
-        parts.append(_slug(entity))
+            parts.append(mqtt_identifier(heater_id))
+        parts.append(mqtt_identifier(entity))
         return "_".join(parts)
 
     def discovery_topic(
@@ -71,4 +119,13 @@ class TopicLayout:
         return f"{self.discovery_prefix}/device/{device_id}/config"
 
 
-__all__ = ["IDENTITY_NAMESPACE", "INSTALLATION_SEGMENT", "TopicLayout"]
+__all__ = [
+    "ACCUMULATOR_NAMESPACE",
+    "AccumulatorTopics",
+    "IDENTITY_NAMESPACE",
+    "INSTALLATION_SEGMENT",
+    "TopicLayout",
+    "accumulator_topics",
+    "mqtt_identifier",
+    "resolve_accumulator_topics",
+]

@@ -35,6 +35,25 @@ def _configured(initialised_store):
     )
 
 
+def test_standard_topic_accepts_grouped_payload_without_persisted_topic(initialised_store):
+    processor = ChargeTelemetryMessageProcessor(
+        initialised_store.repository,
+        initialised_store.planning,
+        readings=initialised_store.indoor_readings,
+        clock=lambda: NOW,
+    )
+
+    assert processor.handle(
+        IncomingMessage(
+            "telemetria/acumuladores/salon/telemetry",
+            b'{"indoor_temperature_c":19.5,"stored_soc_percent":60}',
+        )
+    )
+    telemetry = initialised_store.planning.telemetry()["salon"]
+    assert telemetry.indoor_temperature_c == 19.5
+    assert telemetry.stored_soc_percent == 60
+
+
 def test_valid_grouped_payload_updates_temperature_and_soc(initialised_store):
     processor = _configured(initialised_store)
     message = IncomingMessage(
@@ -51,6 +70,18 @@ def test_valid_grouped_payload_updates_temperature_and_soc(initialised_store):
     reading = initialised_store.indoor_readings.read_all()["salon"]
     assert reading.celsius == 19.5
     assert reading.received_at == NOW
+
+
+def test_explicit_topic_does_not_also_accept_the_standard_topic(initialised_store):
+    processor = _configured(initialised_store)
+
+    assert not processor.handle(
+        IncomingMessage(
+            "telemetria/acumuladores/salon/telemetry",
+            b'{"indoor_temperature_c":19.5,"stored_soc_percent":60}',
+        )
+    )
+    assert initialised_store.planning.telemetry() == {}
 
 
 def test_absent_field_preserves_last_valid_value_and_timestamp(initialised_store):

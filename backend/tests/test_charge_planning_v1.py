@@ -398,8 +398,8 @@ def test_preview_activation_persists_room_energy_snapshot(client, initialised_st
     assert stored["explanations"] and stored["demand"]
 
 
-def test_the_discharge_command_topics_round_trip_through_the_api(client):
-    """R9: both topics are readable and writable for the panel."""
+def test_the_discharge_command_topics_keep_legacy_overrides_and_standard_defaults(client):
+    """The API accepts old overrides but returns effective topics."""
     response = client.patch(
         "/api/v1/planning/heaters/salon",
         headers=AUTH,
@@ -413,7 +413,9 @@ def test_the_discharge_command_topics_round_trip_through_the_api(client):
     heaters = {item["id"]: item for item in response.json()["heaters"]}
     assert heaters["salon"]["damper_topic"] == "ha/salon/discharge"
     assert heaters["salon"]["setpoint_topic"] == "ha/salon/setpoint"
-    assert heaters["entrada"]["damper_topic"] is None
+    assert heaters["entrada"]["damper_topic"] == (
+        "telemetria/acumuladores/entrada/discharge"
+    )
 
 
 def test_editing_one_topic_leaves_the_other_untouched(client):
@@ -450,7 +452,9 @@ def test_a_blank_topic_is_stored_as_absent(client):
     )
 
     heaters = {item["id"]: item for item in response.json()["heaters"]}
-    assert heaters["salon"]["damper_topic"] is None
+    assert heaters["salon"]["damper_topic"] == (
+        "telemetria/acumuladores/salon/discharge"
+    )
 
 
 def test_an_unknown_heater_cannot_receive_command_topics(client):

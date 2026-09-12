@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 from . import MqttClient, MqttError
 from . import IncomingMessage
+from .settings import mqtt_runtime_signature
 from .topics import TopicLayout
 
 
@@ -179,6 +180,7 @@ class MqttSupervisor:
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._service: MqttService | None = None
         self._next_publish_at: datetime | None = None
+        self._runtime_signature: tuple[object, ...] | None = None
 
     @property
     def service(self) -> MqttService | None:
@@ -188,12 +190,23 @@ class MqttSupervisor:
         cycles = 0
         while max_cycles is None or cycles < max_cycles:
             now = self._clock()
-            enabled = self._configuration_repository.current().configuration.mqtt.enabled
+            snapshot = self._configuration_repository.current()
+            enabled = snapshot.configuration.mqtt.enabled
+            runtime_signature = mqtt_runtime_signature(snapshot)
             if enabled:
+                if (
+                    self._service is not None
+                    and runtime_signature != self._runtime_signature
+                ):
+                    self._service.stop()
+                    self._service = None
+                    self._next_publish_at = None
+                    self._runtime_signature = None
                 if self._service is None:
                     service = self._service_factory()
                     service.start()
                     self._service = service
+                    self._runtime_signature = runtime_signature
                     self._next_publish_at = now
                 due = self._next_publish_at is None or now >= self._next_publish_at
                 self._service.process_cycle(publish=due)
@@ -205,6 +218,7 @@ class MqttSupervisor:
                 self._service.stop()
                 self._service = None
                 self._next_publish_at = None
+                self._runtime_signature = None
 
             cycles += 1
             if max_cycles is not None and cycles >= max_cycles:
@@ -216,6 +230,7 @@ class MqttSupervisor:
             self._service.stop()
             self._service = None
             self._next_publish_at = None
+        self._runtime_signature = None
 
 
 __all__ = ["MqttService", "MqttSupervisor"]

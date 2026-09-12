@@ -101,7 +101,7 @@ def test_solver_noise_outside_a_window_does_not_enable_the_discharge():
     assert _commands(plan)["salon"] == (False, None)
 
 
-def test_blank_command_topics_are_treated_as_absent():
+def test_blank_command_topics_use_the_standard_topics():
     commands = resolve_discharge_commands(
         ("salon",),
         plan=_plan([_slot(0, targets={"salon": 21.0})]),
@@ -109,8 +109,8 @@ def test_blank_command_topics_are_treated_as_absent():
         charge_config={"salon": {"damper_topic": "  ", "setpoint_topic": " "}},
     )
 
-    assert commands[0].damper_topic is None
-    assert commands[0].setpoint_topic is None
+    assert commands[0].damper_topic == "telemetria/acumuladores/salon/discharge"
+    assert commands[0].setpoint_topic == "telemetria/acumuladores/salon/setpoint"
 
 
 # --------------------------------------------------------------------------- #
@@ -189,6 +189,10 @@ def test_the_command_and_its_setpoint_are_published_without_retention(mqtt_clien
     assert _published(mqtt_client, "ha/salon/setpoint") == [
         ("ha/salon/setpoint", "21.0", 1, False)
     ]
+    assert _published(
+        mqtt_client, "telemetria/acumuladores/salon/discharge"
+    ) == []
+    assert _published(mqtt_client, "telemetria/acumuladores/salon/setpoint") == []
 
 
 def test_a_disabled_discharge_publishes_off_and_clears_the_setpoint(mqtt_client):
@@ -232,7 +236,7 @@ def test_the_published_heater_state_carries_the_commanded_discharge(mqtt_client)
     assert '"discharge_enabled":true' in state[1]
 
 
-def test_a_heater_without_a_damper_topic_is_skipped_and_the_others_are_not(
+def test_a_heater_without_a_damper_topic_uses_the_standard_topic(
     mqtt_client, caplog
 ):
     caplog.set_level("WARNING")
@@ -247,8 +251,17 @@ def test_a_heater_without_a_damper_topic_is_skipped_and_the_others_are_not(
     assert _published(mqtt_client, "ha/entrada/discharge") == [
         ("ha/entrada/discharge", "ON", 1, False)
     ]
-    assert not [item for item in mqtt_client.publications if "salon/discharge" in item[0]]
-    assert "No damper topic is configured for ['salon']" in caplog.text
+    assert _published(
+        mqtt_client, "telemetria/acumuladores/salon/discharge"
+    ) == [
+        (
+            "telemetria/acumuladores/salon/discharge",
+            "ON",
+            1,
+            False,
+        )
+    ]
+    assert "No damper topic is configured" not in caplog.text
 
 
 def test_a_publication_failure_keeps_the_cycle_and_logs_once_per_transition(

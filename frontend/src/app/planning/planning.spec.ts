@@ -209,10 +209,14 @@ describe('Planning', () => {
     expect(chartState.configs[0].data.datasets[0].data).toEqual([3, 4]);
   });
 
-  it('edits and saves the discharge command topics of one accumulator', async () => {
+  it('renders effective discharge topics without an editor', async () => {
     backend.expectOne('/api/v1/planning').flush({
       ...PLANNING,
-      heaters: [{ ...PLANNING.heaters[0], damper_topic: 'ha/salon/discharge', setpoint_topic: null }],
+      heaters: [{
+        ...PLANNING.heaters[0],
+        damper_topic: 'telemetria/acumuladores/salon/discharge',
+        setpoint_topic: 'telemetria/acumuladores/salon/setpoint',
+      }],
     });
     await fixture.whenStable();
     fixture.detectChanges();
@@ -220,45 +224,14 @@ describe('Planning', () => {
     await selectPlanningTab(fixture, 1);
     const element = fixture.nativeElement as HTMLElement;
     expect(element.querySelector('[data-testid="discharge-topics"]')).not.toBeNull();
-    expect(fixture.componentInstance.topicDraft('salon')).toEqual({
-      damper_topic: 'ha/salon/discharge',
-      setpoint_topic: '',
-    });
-
-    fixture.componentInstance.editTopic('salon', 'setpoint_topic', ' ha/salon/setpoint ');
-    fixture.componentInstance.saveTopics('salon');
-    const request = backend.expectOne('/api/v1/planning/heaters/salon');
-    expect(request.request.method).toBe('PATCH');
-    expect(request.request.body).toEqual({
-      damper_topic: 'ha/salon/discharge',
-      setpoint_topic: 'ha/salon/setpoint',
-    });
-    request.flush({
-      ...PLANNING,
-      heaters: [{ ...PLANNING.heaters[0], damper_topic: 'ha/salon/discharge', setpoint_topic: 'ha/salon/setpoint' }],
-    });
-    await fixture.whenStable();
-
-    expect(fixture.componentInstance.topicDraft('salon').setpoint_topic).toBe('ha/salon/setpoint');
-    expect(fixture.componentInstance.topicMessage()).toContain('Salón');
-  });
-
-  it('blanks a discharge topic to absent instead of sending an empty string', async () => {
-    backend.expectOne('/api/v1/planning').flush({
-      ...PLANNING,
-      heaters: [{ ...PLANNING.heaters[0], damper_topic: 'ha/salon/discharge', setpoint_topic: 'ha/salon/setpoint' }],
-    });
-    await fixture.whenStable();
-    fixture.detectChanges();
-
-    fixture.componentInstance.editTopic('salon', 'damper_topic', '   ');
-    fixture.componentInstance.saveTopics('salon');
-    const request = backend.expectOne('/api/v1/planning/heaters/salon');
-
-    expect(request.request.body).toEqual({
-      damper_topic: null,
-      setpoint_topic: 'ha/salon/setpoint',
-    });
+    expect(element.querySelector('[data-testid="damper-topic-value-salon"]')?.textContent).toContain(
+      'telemetria/acumuladores/salon/discharge',
+    );
+    expect(element.querySelector('[data-testid="setpoint-topic-value-salon"]')?.textContent).toContain(
+      'telemetria/acumuladores/salon/setpoint',
+    );
+    expect(element.querySelector('[data-testid="damper-topic-input-salon"]')).toBeNull();
+    expect(element.querySelector('[data-testid="save-topics-button-salon"]')).toBeNull();
   });
 
   it('renders one compact preview chart and keeps preview tables in the detail dialog', async () => {

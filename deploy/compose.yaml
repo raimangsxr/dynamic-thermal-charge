@@ -35,11 +35,12 @@ services:
     <<: *backend-runtime
     image: ${DOCKERHUB_USERNAME:?set DOCKERHUB_USERNAME}/dynamic-thermal-charge-backend:${APP_VERSION:?set APP_VERSION}
     restart: unless-stopped
-    # Nginx runs in frontend, so the API must bind the container interface.
+    # Nginx runs in frontend, and native Home Assistant integrations also need
+    # to reach the API directly from the host network.
     command: ["python", "-c", "from dynamic_thermal_charge.entrypoints import run_api; run_api(bind_host='0.0.0.0', bind_port=8080)"]
     env_file: [{ path: /etc/app/app.env, required: false }]
     volumes: ["/srv/app/data:/var/lib/dynamic-thermal-charge"]
-    expose: ["8080"]
+    ports: ["8080:8080"]
     healthcheck: { test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')"], interval: 5s, timeout: 5s, start_period: 15s, retries: 12 }
     logging: { driver: json-file, options: { max-size: 10m, max-file: "3" } }
   backend-mqtt:

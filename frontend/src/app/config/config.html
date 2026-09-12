@@ -113,7 +113,7 @@
   @if (areaIs('heaters') && config(); as data) {
     <section class="workspace-panel" aria-labelledby="heaters-title">
       <div class="section-heading">
-        <div><p class="eyebrow">Equipos</p><h2 id="heaters-title">Acumuladores</h2><p class="section-lead">Define la potencia, la capacidad térmica de la sala y las conexiones de telemetría. Las consignas semanales se gestionan en Planificación.</p></div>
+        <div><p class="eyebrow">Equipos</p><h2 id="heaters-title">Acumuladores</h2><p class="section-lead">Define la potencia y la capacidad térmica de la sala. Los topics MQTT estándar se calculan automáticamente y se muestran como información. Las consignas semanales se gestionan en Planificación.</p></div>
         <button mat-flat-button color="primary" type="button" (click)="openAddHeater()" [disabled]="!writable()" data-testid="add-heater"><mat-icon aria-hidden="true">add</mat-icon> Nuevo acumulador</button>
       </div>
 
@@ -155,6 +155,7 @@
                 <div><dt class="summary-term">Capacidad térmica<dtc-param-help field="room_thermal_capacity_kwh_per_c" label="Capacidad térmica" /></dt><dd>{{ heater.room_thermal_capacity_kwh_per_c }} kWh/°C</dd></div>
                 <div><dt class="summary-term">Pérdida térmica<dtc-param-help field="room_heat_loss_kw_per_c" label="Pérdida térmica" /></dt><dd>{{ heater.room_heat_loss_kw_per_c }} kW/°C</dd></div>
                 <div><dt class="summary-term">Prioridad<dtc-param-help field="priority" label="Prioridad" /></dt><dd>{{ heater.priority }}</dd></div>
+                <div><dt class="summary-term">Telemetría MQTT</dt><dd><code>{{ heater.telemetry_topic }}</code></dd></div>
               </dl>
             </mat-card-content>
             <mat-card-actions align="end"><button mat-button type="button" (click)="openEditHeater(heater)" [disabled]="!writable()" [attr.data-edit-heater]="heater.id"><mat-icon aria-hidden="true">edit</mat-icon> Editar acumulador</button><button mat-button color="warn" type="button" (click)="requestRemoveHeater(heater)" [disabled]="!writable()" [attr.data-delete-heater]="heater.id"><mat-icon aria-hidden="true">delete</mat-icon> Eliminar</button></mat-card-actions>
