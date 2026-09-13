@@ -20,7 +20,7 @@ from . import MqttClient, MqttError
 from .discharge import DischargeCommand, NO_SETPOINT, resolve_discharge_commands
 from .discovery import DiscoveryEntity
 from .discovery import discovery_entities
-from .topics import TopicLayout, resolve_accumulator_topics
+from .topics import TopicLayout
 
 
 logger = logging.getLogger(__name__)
@@ -118,7 +118,6 @@ class MqttPublisher:
         self._inventory: set[str] = set()
         self._failure: str | None = None
         self._discharge_failures: set[str] = set()
-        self._missing_damper_topic: set[str] = set()
 
     def refresh(self, *, force_discovery: bool = False) -> bool:
         try:
@@ -164,16 +163,12 @@ class MqttPublisher:
     def _publish_discharge(self, commands: Iterable[DischargeCommand]) -> None:
         """Reassert every discharge command, one failure at a time."""
         failures: set[str] = set()
-        missing: set[str] = set()
         for command in commands:
-            if command.damper_topic is None:
-                missing.add(command.heater_id)
-                continue
-            setpoint = command.setpoint_payload
             try:
-                self._publish_command(command.damper_topic, command.payload)
-                if setpoint is not None and command.setpoint_topic is not None:
-                    self._publish_command(command.setpoint_topic, setpoint)
+                self._publish_command(command.discharge_topic, command.payload)
+                self._publish_command(
+                    command.setpoint_topic, command.setpoint_payload
+                )
             except MqttError:
                 failures.add(command.heater_id)
         if failures != self._discharge_failures:
@@ -186,15 +181,6 @@ class MqttPublisher:
             else:
                 logger.info("Every discharge command was published again")
             self._discharge_failures = failures
-        if missing != self._missing_damper_topic:
-            if missing:
-                logger.warning(
-                    "No damper topic is configured for %s, so their discharge "
-                    "is not commanded",
-                    sorted(missing),
-                )
-            self._missing_damper_topic = missing
-
     def subscription_topics(self) -> tuple[str, ...]:
         return tuple(dict.fromkeys(self._subscriptions()))
 
@@ -226,12 +212,9 @@ class MqttPublisher:
             return
         failures: set[str] = set()
         for command in commands:
-            if command.damper_topic is None:
-                continue
             try:
-                self._publish_command(command.damper_topic, "OFF")
-                if command.setpoint_topic is not None:
-                    self._publish_command(command.setpoint_topic, NO_SETPOINT)
+                self._publish_command(command.discharge_topic, "OFF")
+                self._publish_command(command.setpoint_topic, NO_SETPOINT)
             except MqttError:
                 failures.add(command.heater_id)
         if failures:
@@ -281,7 +264,7 @@ class StoreSnapshotReader:
         heartbeat_reader: Callable[[], Heartbeat | None],
         status_reader,
         clock: Callable[[], Any],
-        charge_config_provider: Callable[[], Mapping[str, Mapping[str, Any]]] | None = None,
+        topics: TopicLayout | None = None,
         plan_provider: Callable[[], Mapping[str, Any] | None] | None = None,
         control_state_provider: Callable[[], Any] | None = None,
         relay_test_provider: Callable[[], Mapping[str, Any] | None] | None = None,
@@ -291,7 +274,7 @@ class StoreSnapshotReader:
         self._heartbeat_reader = heartbeat_reader
         self._status_reader = status_reader
         self._clock = clock
-        self._charge_config_provider = charge_config_provider or (lambda: {})
+        self._topics = topics or TopicLayout()
         self._plan_provider = plan_provider or (lambda: None)
         self._control_state_provider = control_state_provider or (lambda: None)
         self._relay_test_provider = relay_test_provider or (lambda: None)
@@ -342,7 +325,7 @@ class StoreSnapshotReader:
             heater_ids,
             plan=self._plan_provider(),
             at=self._clock(),
-            charge_config=self._charge_config_provider(),
+            topic_prefix=self._topics.prefix,
             automatic_control_enabled=(
                 True
                 if control is None
@@ -374,11 +357,7 @@ class StoreSnapshotReader:
         result: list[str] = []
         for heater in self._config.heaters:
             result.append(topics.command(heater.id, "enabled"))
-            result.append(
-                resolve_accumulator_topics(
-                    heater.id, telemetry_topic=heater.telemetry_topic
-                ).telemetry
-            )
+            result.append(topics.accumulator_topics(heater.id).telemetry)
         return tuple(result)
 
     @staticmethod

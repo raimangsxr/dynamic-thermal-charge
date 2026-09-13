@@ -138,19 +138,6 @@
             @if (preview(); as candidate) { <span class="status-chip" [attr.data-status]="candidate.status">Vista previa: {{ planStatus(candidate.status) }}</span> }
           </div>
 
-          <section class="constraints" aria-labelledby="discharge-topics-title" data-testid="discharge-topics">
-            <div class="section-header"><div><h3 id="discharge-topics-title">Mandos de descarga</h3><p class="hint">Estos son los topics MQTT efectivos de cada acumulador. Se usa el namespace estándar y solo se muestra un override antiguo cuando existe.</p></div></div>
-            @for (heater of data.heaters; track heater.id) {
-              <div class="topic-row">
-                <span class="heater-name">{{ heater.name }}</span>
-                <dl class="topic-values">
-                  <div><dt>Topic de activación</dt><dd><code [attr.data-testid]="'damper-topic-value-' + heater.id">{{ heater.damper_topic ?? 'No disponible' }}</code></dd></div>
-                  <div><dt>Topic de consigna</dt><dd><code [attr.data-testid]="'setpoint-topic-value-' + heater.id">{{ heater.setpoint_topic ?? 'No disponible' }}</code></dd></div>
-                </dl>
-              </div>
-            }
-          </section>
-
           <section class="constraints" aria-labelledby="targets-title">
             <div class="section-header">
               <div>
@@ -368,7 +355,6 @@
                 <div><dt>Estado de consulta</dt><dd>{{ forecastStatusText(data.forecast_status) }}</dd></div>
                 <div><dt>Última consulta</dt><dd>{{ dateTime(data.forecast_last_attempt_at) }}</dd></div>
                 <div><dt>{{ forecastNextText(data.forecast_next_run_kind) }}</dt><dd>{{ dateTime(data.forecast_next_run_at) }}</dd></div>
-                @if (data.forecast?.source === 'fallback') { <div><dt>Advertencia</dt><dd class="warning">Es un valor de reserva, no una previsión actual del proveedor.</dd></div> }
                 @if (data.forecast_stale) { <div><dt>Antigüedad</dt><dd class="warning">La previsión está marcada como antigua.</dd></div> }
               </dl>
             </section>

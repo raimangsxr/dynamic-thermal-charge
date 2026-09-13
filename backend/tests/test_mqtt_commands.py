@@ -70,7 +70,7 @@ def _processor(repository=None, republished=None):
 def test_valid_commands_update_only_the_requested_configuration(field, payload, expected):
     processor, repository, _ = _processor()
     assert processor.handle(
-        IncomingMessage(f"dtc/installation/heater/salon/set/{field}", payload.encode())
+        IncomingMessage(f"telemetria/installation/heater/salon/set/{field}", payload.encode())
     )
     heater = next(h for h in repository.config.heaters if h.id == "salon")
     assert getattr(heater, field) is expected
@@ -86,13 +86,13 @@ def test_valid_commands_update_only_the_requested_configuration(field, payload, 
 def test_invalid_payload_or_unknown_heater_is_rejected_and_republished(field, payload):
     processor, repository, republished = _processor()
     assert not processor.handle(
-        IncomingMessage(f"dtc/installation/heater/salon/set/{field}", payload.encode())
+        IncomingMessage(f"telemetria/installation/heater/salon/set/{field}", payload.encode())
     )
     assert repository.set_calls == []
     assert republished == ["salon"]
 
     assert not processor.handle(
-        IncomingMessage(f"dtc/installation/heater/no-existe/set/{field}", b"ON")
+        IncomingMessage(f"telemetria/installation/heater/no-existe/set/{field}", b"ON")
     )
     assert repository.set_calls == []
     assert republished[-1] == "no-existe"
@@ -102,7 +102,7 @@ def test_invalid_payload_or_unknown_heater_is_rejected_and_republished(field, pa
 def test_structural_allowlist_rejects_every_other_field(field):
     processor, repository, _ = _processor()
     assert not processor.handle(
-        IncomingMessage(f"dtc/installation/heater/salon/set/{field}", b"1")
+        IncomingMessage(f"telemetria/installation/heater/salon/set/{field}", b"1")
     )
     assert repository.set_calls == []
 
@@ -110,13 +110,13 @@ def test_structural_allowlist_rejects_every_other_field(field):
 def test_one_conflict_is_retried_once_and_a_second_conflict_stops():
     processor, repository, _ = _processor(CommandRepository(conflicts=1))
     assert processor.handle(
-        IncomingMessage("dtc/installation/heater/salon/set/enabled", b"OFF")
+        IncomingMessage("telemetria/installation/heater/salon/set/enabled", b"OFF")
     )
     assert len(repository.set_calls) == 2
 
     processor, repository, _ = _processor(CommandRepository(conflicts=2))
     assert not processor.handle(
-        IncomingMessage("dtc/installation/heater/salon/set/enabled", b"OFF")
+        IncomingMessage("telemetria/installation/heater/salon/set/enabled", b"OFF")
     )
     assert len(repository.set_calls) == 2
 
@@ -125,7 +125,7 @@ def test_retained_command_is_rejected_before_payload_parsing():
     processor, repository, republished = _processor()
     assert not processor.handle(
         IncomingMessage(
-            "dtc/installation/heater/salon/set/enabled", b"\xff", retain=True
+            "telemetria/installation/heater/salon/set/enabled", b"\xff", retain=True
         )
     )
     assert repository.set_calls == []
@@ -139,8 +139,8 @@ def test_contradictory_commands_are_applied_in_arrival_order_through_service(mqt
         command_handler=processor.handle,
     )
     service.start()
-    mqtt_client.inject("dtc/installation/heater/salon/set/enabled", "OFF")
-    mqtt_client.inject("dtc/installation/heater/salon/set/enabled", "ON")
+    mqtt_client.inject("telemetria/installation/heater/salon/set/enabled", "OFF")
+    mqtt_client.inject("telemetria/installation/heater/salon/set/enabled", "ON")
     service.process_events()
     assert [call[-1] for call in repository.set_calls] == ["false", "true"]
 
@@ -171,7 +171,7 @@ def test_accepted_enabled_command_is_visible_to_the_next_state_snapshot():
     processor, repository, _ = _processor()
     assert processor.handle(
         IncomingMessage(
-            "dtc/installation/heater/salon/set/enabled", b"OFF"
+            "telemetria/installation/heater/salon/set/enabled", b"OFF"
         )
     )
     heater = next(h for h in repository.current()[0].heaters if h.id == "salon")

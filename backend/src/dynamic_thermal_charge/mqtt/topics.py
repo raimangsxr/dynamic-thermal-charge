@@ -9,7 +9,7 @@ import unicodedata
 
 INSTALLATION_SEGMENT = "installation"
 IDENTITY_NAMESPACE = "dynamic_thermal_charge"
-ACCUMULATOR_NAMESPACE = "telemetria/acumuladores"
+ACCUMULATOR_NAMESPACE = "acumuladores"
 
 
 def mqtt_identifier(value: str) -> str:
@@ -31,9 +31,10 @@ class AccumulatorTopics:
     setpoint: str
 
 
-def accumulator_topics(heater_id: str) -> AccumulatorTopics:
+def accumulator_topics(heater_id: str, prefix: str = "telemetria") -> AccumulatorTopics:
+    """Return the only supported telemetry and command topics for a heater."""
     identifier = mqtt_identifier(heater_id)
-    base = f"{ACCUMULATOR_NAMESPACE}/{identifier}"
+    base = f"{prefix.rstrip('/')}/{ACCUMULATOR_NAMESPACE}/{identifier}"
     return AccumulatorTopics(
         telemetry=f"{base}/telemetry",
         discharge=f"{base}/discharge",
@@ -41,33 +42,19 @@ def accumulator_topics(heater_id: str) -> AccumulatorTopics:
     )
 
 
-def _configured_topic(value: str | None) -> str | None:
-    if value is None:
-        return None
-    topic = str(value).strip()
-    return topic or None
-
-
-def resolve_accumulator_topics(
-    heater_id: str,
-    *,
-    telemetry_topic: str | None = None,
-    damper_topic: str | None = None,
-    setpoint_topic: str | None = None,
-) -> AccumulatorTopics:
-    """Use a persisted override when present, otherwise the standard topic."""
-    standard = accumulator_topics(heater_id)
-    return AccumulatorTopics(
-        telemetry=_configured_topic(telemetry_topic) or standard.telemetry,
-        discharge=_configured_topic(damper_topic) or standard.discharge,
-        setpoint=_configured_topic(setpoint_topic) or standard.setpoint,
-    )
-
-
 @dataclass(frozen=True)
 class TopicLayout:
-    prefix: str = "dtc"
+    prefix: str = "telemetria"
     discovery_prefix: str = "homeassistant"
+
+    def __post_init__(self) -> None:
+        if not self.prefix.strip("/"):
+            raise ValueError("MQTT prefix cannot be empty")
+        if not self.discovery_prefix.strip("/"):
+            raise ValueError("MQTT discovery prefix cannot be empty")
+
+    def accumulator_topics(self, heater_id: str) -> AccumulatorTopics:
+        return accumulator_topics(heater_id, self.prefix)
 
     @property
     def base(self) -> str:
@@ -127,5 +114,4 @@ __all__ = [
     "TopicLayout",
     "accumulator_topics",
     "mqtt_identifier",
-    "resolve_accumulator_topics",
 ]

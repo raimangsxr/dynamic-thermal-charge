@@ -45,14 +45,6 @@ from .schema import (
 from .url import StoreLocation
 
 
-def _normalised_topic(value: Any) -> str | None:
-    """Blank is absent: an empty topic must not be published to."""
-    if value is None:
-        return None
-    topic = str(value).strip()
-    return topic or None
-
-
 class SqlPlanningRepository:
     """Own planning-specific records while preserving the legacy repositories."""
 
@@ -91,11 +83,6 @@ class SqlPlanningRepository:
                 "base_load_w": 0,
                 "deviation_shortfall_tolerance_c": 0.1,
                 "deviation_surplus_soc_percent": 5.0,
-                "mqtt_simulation_enabled": False,
-                "mqtt_simulation_initial_temperature_c": 45.0,
-                "mqtt_simulation_publish_seconds": 30.0,
-                "mqtt_simulation_topic_prefix": "dtc/sim",
-                "mqtt_simulation_thermal_loss_c_per_hour": 2.0,
             }
         integers = (
             "revision",
@@ -111,12 +98,9 @@ class SqlPlanningRepository:
         floats = (
             "deviation_shortfall_tolerance_c",
             "deviation_surplus_soc_percent",
-            "mqtt_simulation_initial_temperature_c",
-            "mqtt_simulation_publish_seconds",
-            "mqtt_simulation_thermal_loss_c_per_hour",
         )
-        booleans = ("mqtt_simulation_enabled",)
-        strings = ("mqtt_simulation_topic_prefix",)
+        booleans = ()
+        strings = ()
         values = {
             **{key: int(row[key]) for key in integers},
             **{key: float(row[key]) for key in floats},
@@ -124,30 +108,6 @@ class SqlPlanningRepository:
             **{key: str(row[key]) for key in strings},
         }
         return values
-
-    def heater_charge_config(self) -> dict[str, dict[str, Any]]:
-        from .schema import heater_charge_config
-        with store_errors(self._configuration_location):
-            with self._configuration.connect() as connection:
-                rows = connection.execute(select(heater_charge_config).where(heater_charge_config.c.installation_id == self._installation_id)).mappings().all()
-        return {str(row["heater_id"]): dict(row) for row in rows}
-
-    def update_heater_charge_config(self, heater_id: str, values: Mapping[str, Any]) -> None:
-        from .schema import heater_charge_config
-        allowed = {
-            key: _normalised_topic(values[key])
-            for key in (
-                "damper_topic",
-                "setpoint_topic",
-            )
-            if key in values
-        }
-        with transaction(self._configuration, self._configuration_location) as connection:
-            existing = connection.execute(select(heater_charge_config).where((heater_charge_config.c.installation_id == self._installation_id) & (heater_charge_config.c.heater_id == heater_id))).first()
-            if existing is None:
-                connection.execute(insert(heater_charge_config).values(installation_id=self._installation_id, heater_id=heater_id, **allowed))
-            else:
-                connection.execute(update(heater_charge_config).where((heater_charge_config.c.installation_id == self._installation_id) & (heater_charge_config.c.heater_id == heater_id)).values(**allowed))
 
     def update_site(self, values: Mapping[str, int | float], expected_revision: int) -> int:
         current = self.site()
@@ -166,12 +126,9 @@ class SqlPlanningRepository:
         float_fields = {
             "deviation_shortfall_tolerance_c",
             "deviation_surplus_soc_percent",
-            "mqtt_simulation_initial_temperature_c",
-            "mqtt_simulation_publish_seconds",
-            "mqtt_simulation_thermal_loss_c_per_hour",
         }
-        boolean_fields = {"mqtt_simulation_enabled"}
-        string_fields = {"mqtt_simulation_topic_prefix"}
+        boolean_fields: set[str] = set()
+        string_fields: set[str] = set()
         allowed = {}
         for key, value in values.items():
             if key in integer_fields:
@@ -210,26 +167,6 @@ class SqlPlanningRepository:
             raise ConfigValidationError(
                 "deviation_surplus_soc_percent must be positive",
                 field="deviation_surplus_soc_percent",
-            )
-        if not -50 <= float(combined["mqtt_simulation_initial_temperature_c"]) <= 80:
-            raise ConfigValidationError(
-                "mqtt_simulation_initial_temperature_c must be between -50 and 80",
-                field="mqtt_simulation_initial_temperature_c",
-            )
-        if float(combined["mqtt_simulation_publish_seconds"]) <= 0:
-            raise ConfigValidationError(
-                "mqtt_simulation_publish_seconds must be positive",
-                field="mqtt_simulation_publish_seconds",
-            )
-        if not str(combined["mqtt_simulation_topic_prefix"]).strip():
-            raise ConfigValidationError(
-                "mqtt_simulation_topic_prefix cannot be empty",
-                field="mqtt_simulation_topic_prefix",
-            )
-        if float(combined["mqtt_simulation_thermal_loss_c_per_hour"]) < 0:
-            raise ConfigValidationError(
-                "mqtt_simulation_thermal_loss_c_per_hour must be non-negative",
-                field="mqtt_simulation_thermal_loss_c_per_hour",
             )
         next_revision = expected_revision + 1
         with transaction(self._configuration, self._configuration_location) as connection:

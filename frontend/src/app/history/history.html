@@ -106,7 +106,7 @@
               <thead><tr><th scope="col">Fecha</th><th scope="col">Origen</th><th scope="col">Media</th><th scope="col">Mín.</th><th scope="col">Máx.</th><th scope="col">Obtenida</th></tr></thead>
               <tbody>
                 @for (item of forecasts()?.items ?? []; track item.id) {
-                  <tr><td>{{ dateOnly(item.forecast_date) }}</td><td [attr.data-source]="item.source"><span class="source-chip" [class.source-fallback]="item.source === 'fallback'"><mat-icon aria-hidden="true">{{ item.source === 'fallback' ? 'cloud_off' : 'cloud' }}</mat-icon>{{ sourceText(item.source) }}</span></td><td>{{ temperature(item.average_temperature_c) }}</td><td>{{ temperature(item.minimum_temperature_c) }}</td><td>{{ temperature(item.maximum_temperature_c) }}</td><td>{{ instant(item.retrieved_at) }}</td></tr>
+                  <tr><td>{{ dateOnly(item.forecast_date) }}</td><td [attr.data-source]="item.source"><span class="source-chip"><mat-icon aria-hidden="true">cloud</mat-icon>{{ sourceText(item.source) }}</span></td><td>{{ temperature(item.average_temperature_c) }}</td><td>{{ temperature(item.minimum_temperature_c) }}</td><td>{{ temperature(item.maximum_temperature_c) }}</td><td>{{ instant(item.retrieved_at) }}</td></tr>
                 }
               </tbody>
             </table>

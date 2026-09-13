@@ -32,12 +32,9 @@ export function planStatusLabel(value: unknown): string {
 }
 
 export function forecastSourceLabel(value: unknown): string {
-  switch (String(value ?? '').trim().toLowerCase()) {
-    case 'aemet': return 'proveedor real (AEMET)';
-    case 'fallback': return 'valor de reserva (último dato válido)';
-    case 'simulated': return 'simulación local';
-    default: return 'Origen no disponible';
-  }
+  return String(value ?? '').trim().toLowerCase() === 'aemet'
+    ? 'proveedor real (AEMET)'
+    : 'Origen no disponible';
 }
 
 export function forecastStatusLabel(value: unknown): string {

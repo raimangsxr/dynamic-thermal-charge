@@ -27,7 +27,7 @@ from dynamic_thermal_charge.weather import OutdoorForecast
 WINDOW_START = datetime(2026, 1, 16, 0, 0, tzinfo=timezone.utc)
 
 
-def _forecast(source: str = "aemet", from_fallback: bool = False) -> OutdoorForecast:
+def _forecast(source: str = "aemet") -> OutdoorForecast:
     return OutdoorForecast(
         date=date(2026, 1, 16),
         average_temperature_c=6.5,
@@ -35,7 +35,6 @@ def _forecast(source: str = "aemet", from_fallback: bool = False) -> OutdoorFore
         maximum_temperature_c=11.0,
         source=source,
         location="A Coruña, A Coruña",
-        from_fallback=from_fallback,
     )
 
 
@@ -71,16 +70,9 @@ def test_a_forecast_is_recorded_with_its_temperatures_and_source(
     assert row["forecast_date"] == date(2026, 1, 16)
 
 
-def test_a_fallback_forecast_is_recorded_as_fallback(initialised_store, recorder):
-    recorder.record_forecast(_forecast(source="simulated", from_fallback=True))
-    assert _rows(initialised_store, forecast_table)[0]["source"] == "fallback"
-
-
-def test_a_simulated_forecast_that_is_not_a_fallback_says_simulated(
-    initialised_store, recorder
-):
-    recorder.record_forecast(_forecast(source="simulated"))
-    assert _rows(initialised_store, forecast_table)[0]["source"] == "simulated"
+def test_non_aemet_forecast_is_not_recorded(initialised_store, recorder):
+    assert recorder.record_forecast(_forecast(source="simulated")) is None
+    assert _rows(initialised_store, forecast_table) == []
 
 
 # --------------------------------------------------------------------------- #
@@ -185,7 +177,7 @@ def test_a_night_can_be_reconstructed_from_history_alone(initialised_store, reco
     plan = ChargeScheduler().build(
         config.site, config.heaters, WINDOW_START, requested_charge_minutes=requested
     )
-    forecast_ref = recorder.record_forecast(_forecast(source="simulated", from_fallback=True))
+    forecast_ref = recorder.record_forecast(_forecast())
     plan_ref = recorder.record_plan(
         plan, forecast_ref, installation_revision=revision, requested_minutes=requested
     )
@@ -215,8 +207,8 @@ def test_a_night_can_be_reconstructed_from_history_alone(initialised_store, reco
 
     # Which configuration produced it.
     assert stored_plan["installation_revision"] == revision
-    # Which forecast, and whether the real provider worked.
-    assert stored_forecast["source"] == "fallback"
+    # Which real provider supplied the forecast.
+    assert stored_forecast["source"] == "aemet"
     assert stored_forecast["average_temperature_c"] == 6.5
     # What each heater got, and what it did not get.
     assert {row["heater_id"] for row in allocations} == set(requested)

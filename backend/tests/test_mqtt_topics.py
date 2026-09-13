@@ -3,11 +3,10 @@
 from dynamic_thermal_charge.mqtt.topics import (
     TopicLayout,
     accumulator_topics,
-    resolve_accumulator_topics,
 )
 
 
-def test_accumulator_topics_use_the_fixed_namespace_and_existing_slug_rule():
+def test_accumulator_topics_use_the_shared_prefix_and_slug_rule():
     topics = accumulator_topics("Salón principal")
 
     assert topics.telemetry == "telemetria/acumuladores/salon_principal/telemetry"
@@ -15,26 +14,22 @@ def test_accumulator_topics_use_the_fixed_namespace_and_existing_slug_rule():
     assert topics.setpoint == "telemetria/acumuladores/salon_principal/setpoint"
 
 
-def test_accumulator_topic_overrides_are_used_independently():
-    topics = resolve_accumulator_topics(
-        "salon",
-        telemetry_topic=" custom/telemetry ",
-        setpoint_topic="custom/setpoint",
-    )
+def test_accumulator_topics_follow_a_custom_prefix_without_legacy_overrides():
+    topics = accumulator_topics("salon", prefix="casa")
 
-    assert topics.telemetry == "custom/telemetry"
-    assert topics.discharge == "telemetria/acumuladores/salon/discharge"
-    assert topics.setpoint == "custom/setpoint"
+    assert topics.telemetry == "casa/acumuladores/salon/telemetry"
+    assert topics.discharge == "casa/acumuladores/salon/discharge"
+    assert topics.setpoint == "casa/acumuladores/salon/setpoint"
 
 
-def test_transport_topics_use_the_fixed_installation_segment():
+def test_transport_topics_use_the_shared_prefix_and_installation_segment():
     topics = TopicLayout(prefix="custom", discovery_prefix="ha")
     assert topics.availability == "custom/installation/availability"
     assert topics.heater_state("salon") == "custom/installation/heater/salon/state"
 
 
 def test_home_assistant_ids_ignore_visible_name_prefix_pk_and_order():
-    first = TopicLayout(prefix="dtc", discovery_prefix="homeassistant")
+    first = TopicLayout(prefix="telemetria", discovery_prefix="homeassistant")
     moved = TopicLayout(prefix="other", discovery_prefix="ha")
     assert first.installation_device_id == moved.installation_device_id
     assert first.heater_device_id("salon") == moved.heater_device_id("salon")

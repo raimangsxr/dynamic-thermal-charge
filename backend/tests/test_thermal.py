@@ -91,11 +91,11 @@ def test_falls_back_to_static_target_without_thermal_profile() -> None:
 def test_selects_fresh_plausible_readings_using_standard_topics_too():
     at = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
     heaters = (
-        replace(thermal_heater(), id="fresh", telemetry_topic="ha/fresh"),
-        replace(thermal_heater(), id="edge", telemetry_topic="ha/edge"),
-        replace(thermal_heater(), id="old", telemetry_topic="ha/old"),
-        replace(thermal_heater(), id="absurd", telemetry_topic="ha/absurd"),
-        replace(thermal_heater(), id="missing", telemetry_topic="ha/missing"),
+        replace(thermal_heater(), id="fresh"),
+        replace(thermal_heater(), id="edge"),
+        replace(thermal_heater(), id="old"),
+        replace(thermal_heater(), id="absurd"),
+        replace(thermal_heater(), id="missing"),
         replace(thermal_heater(), id="default"),
     )
     readings = {

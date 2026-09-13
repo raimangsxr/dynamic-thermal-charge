@@ -211,29 +211,16 @@ describe('Planning', () => {
     expect(chartState.configs[0].data.datasets[0].data).toEqual([3, 4]);
   });
 
-  it('renders effective discharge topics without an editor', async () => {
-    backend.expectOne('/api/v1/planning').flush({
-      ...PLANNING,
-      heaters: [{
-        ...PLANNING.heaters[0],
-        damper_topic: 'telemetria/acumuladores/salon/discharge',
-        setpoint_topic: 'telemetria/acumuladores/salon/setpoint',
-      }],
-    });
+  it('does not expose per-accumulator discharge topic configuration', async () => {
+    backend.expectOne('/api/v1/planning').flush(PLANNING);
     await fixture.whenStable();
     fixture.detectChanges();
 
     await selectPlanningTab(fixture, 1);
     const element = fixture.nativeElement as HTMLElement;
-    expect(element.querySelector('[data-testid="discharge-topics"]')).not.toBeNull();
-    expect(element.querySelector('[data-testid="damper-topic-value-salon"]')?.textContent).toContain(
-      'telemetria/acumuladores/salon/discharge',
-    );
-    expect(element.querySelector('[data-testid="setpoint-topic-value-salon"]')?.textContent).toContain(
-      'telemetria/acumuladores/salon/setpoint',
-    );
+    expect(element.querySelector('[data-testid="discharge-topics"]')).toBeNull();
     expect(element.querySelector('[data-testid="damper-topic-input-salon"]')).toBeNull();
-    expect(element.querySelector('[data-testid="save-topics-button-salon"]')).toBeNull();
+    expect(element.querySelector('[data-testid="setpoint-topic-value-salon"]')).toBeNull();
   });
 
   it('renders one compact preview chart and keeps preview tables in the detail dialog', async () => {

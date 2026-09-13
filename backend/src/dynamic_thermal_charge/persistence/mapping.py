@@ -24,7 +24,6 @@ from ..models import (
     OutputConfig,
     RuntimeConfig,
     ScheduleConfig,
-    SimulatedForecastConfig,
     SiteConfig,
     TemperatureTarget,
     ThermalProfile,
@@ -183,8 +182,6 @@ def weather_from_row(row: Mapping[str, Any] | None) -> WeatherConfig | None:
         return None
     provider = str(row["provider"])
     with _domain_error("weather"):
-        simulated = _forecast_values(row, "simulated")
-        fallback = _forecast_values(row, "fallback")
         aemet = None
         if row.get("aemet_municipality_code") is not None:
             aemet = AemetConfig(
@@ -194,32 +191,12 @@ def weather_from_row(row: Mapping[str, Any] | None) -> WeatherConfig | None:
             )
         return WeatherConfig(
             provider=provider,
-            simulated=simulated,
             aemet=aemet,
-            fallback=fallback,
             watchdog=WeatherWatchdogConfig(
                 retry_minutes=int(row["watchdog_retry_minutes"]),
                 refresh_minutes=int(row["watchdog_refresh_minutes"]),
             ),
         )
-
-
-def _forecast_values(
-    row: Mapping[str, Any], prefix: str
-) -> SimulatedForecastConfig | None:
-    average = row.get(f"{prefix}_average_temperature_c")
-    minimum = row.get(f"{prefix}_minimum_temperature_c")
-    if average is None and minimum is None:
-        return None
-    if average is None or minimum is None:
-        raise ConfigValidationError(
-            f"{prefix} forecast needs both an average and a minimum temperature",
-            field=f"{prefix}_average_temperature_c",
-        )
-    return SimulatedForecastConfig(
-        average_temperature_c=float(average),
-        minimum_temperature_c=float(minimum),
-    )
 
 
 def heater_from_rows(
@@ -284,11 +261,6 @@ def heater_from_rows(
             thermal=thermal,
             temperature_targets=targets,
             output=output,
-            telemetry_topic=(
-                None
-                if heater_row.get("telemetry_topic") is None
-                else str(heater_row["telemetry_topic"])
-            ),
         )
 
 
@@ -383,18 +355,6 @@ def weather_params(config: WeatherConfig, installation_id: int) -> dict[str, Any
         "aemet_timeout_seconds": (
             None if config.aemet is None else config.aemet.timeout_seconds
         ),
-        "simulated_average_temperature_c": (
-            None if config.simulated is None else config.simulated.average_temperature_c
-        ),
-        "simulated_minimum_temperature_c": (
-            None if config.simulated is None else config.simulated.minimum_temperature_c
-        ),
-        "fallback_average_temperature_c": (
-            None if config.fallback is None else config.fallback.average_temperature_c
-        ),
-        "fallback_minimum_temperature_c": (
-            None if config.fallback is None else config.fallback.minimum_temperature_c
-        ),
         "watchdog_retry_minutes": config.watchdog.retry_minutes,
         "watchdog_refresh_minutes": config.watchdog.refresh_minutes,
     }
@@ -412,7 +372,6 @@ def heater_params(heater: Heater, installation_id: int, position: int) -> dict[s
         "static_emission_percent": heater.static_emission_percent,
         "priority": heater.priority,
         "enabled": heater.enabled,
-        "telemetry_topic": heater.telemetry_topic,
         "position": position,
     }
 

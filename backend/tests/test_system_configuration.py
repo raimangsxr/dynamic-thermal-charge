@@ -63,16 +63,14 @@ def test_typed_defaults_and_cross_field_validation():
     assert config.api == ApiSystemSettings()
     assert config.mqtt == MqttSystemSettings()
     assert config.operations == OperationsSystemSettings()
-    assert config.mqtt.fixed_stored_soc_percent == 50.0
-    assert config.mqtt.fixed_indoor_temperature_c == 20.0
+    assert config.mqtt.prefix == "telemetria"
     with pytest.raises(ValueError, match="host and database"):
         DatabaseSettings(driver="postgresql")
     with pytest.raises(ValueError, match="trusted-network"):
         DatabaseSettings(
             driver="postgresql", host="db", database="dtc", tls=False
         )
-    with pytest.raises(ValueError, match="required"):
-        WeatherSystemSettings(provider="aemet")
+    assert WeatherSystemSettings(provider="aemet").municipality_code is None
     with pytest.raises(ValueError, match="5 digits"):
         WeatherSystemSettings(provider="aemet", municipality_code="123")
     with pytest.raises(ValueError, match="renewal"):
@@ -81,40 +79,22 @@ def test_typed_defaults_and_cross_field_validation():
         )
 
 
-@pytest.mark.parametrize(
-    "field,value",
-    [
-        ("fixed_indoor_temperature_c", float("nan")),
-        ("fixed_indoor_temperature_c", -50.1),
-        ("fixed_indoor_temperature_c", 80.1),
-        ("fixed_stored_soc_percent", -0.1),
-        ("fixed_stored_soc_percent", 100.1),
-    ],
-)
-def test_mqtt_fixed_values_use_telemetry_safety_bounds(field, value):
-    with pytest.raises(ValueError):
-        MqttSystemSettings(**{field: value})
-
-
-def test_mqtt_fixed_values_round_trip_in_the_mqtt_section(system_repository):
+def test_removed_mqtt_fixed_values_are_not_retained(system_repository):
     repository, _engines = system_repository
-    revision = repository.update_section(
-        "mqtt",
-        {
-            "fixed_indoor_temperature_c": 18.0,
-            "fixed_stored_soc_percent": 65.0,
-        },
-        expected_revision=1,
-        actor="admin",
-    )
+    with pytest.raises(ConfigValidationError, match="unknown fields in mqtt"):
+        repository.update_section(
+            "mqtt",
+            {
+                "fixed_indoor_temperature_c": 18.0,
+                "fixed_stored_soc_percent": 65.0,
+            },
+            expected_revision=1,
+            actor="admin",
+        )
     snapshot = repository.current()
-    assert revision == 2
-    assert snapshot.configuration.mqtt.fixed_indoor_temperature_c == 18.0
-    assert snapshot.configuration.mqtt.fixed_stored_soc_percent == 65.0
-    assert set(snapshot.configuration.documents()["mqtt"]) >= {
-        "fixed_indoor_temperature_c",
-        "fixed_stored_soc_percent",
-    }
+    assert snapshot.revision == 1
+    assert "fixed_indoor_temperature_c" not in snapshot.configuration.documents()["mqtt"]
+    assert "fixed_stored_soc_percent" not in snapshot.configuration.documents()["mqtt"]
 
 
 def test_initialise_is_idempotent_and_round_trips_typed_documents(system_repository):
@@ -220,10 +200,6 @@ def test_weather_settings_round_trip_and_runtime_projection(system_repository):
             "provider": "aemet",
             "municipality_code": "28079",
             "timeout_seconds": 12.5,
-            "simulated_average_temperature_c": 9.0,
-            "simulated_minimum_temperature_c": 4.0,
-            "fallback_average_temperature_c": 7.0,
-            "fallback_minimum_temperature_c": 1.0,
             "retry_minutes": 20,
             "refresh_minutes": 240,
         },
@@ -239,10 +215,6 @@ def test_weather_settings_round_trip_and_runtime_projection(system_repository):
         provider="aemet",
         municipality_code="28079",
         timeout_seconds=12.5,
-        simulated_average_temperature_c=9.0,
-        simulated_minimum_temperature_c=4.0,
-        fallback_average_temperature_c=7.0,
-        fallback_minimum_temperature_c=1.0,
         retry_minutes=20,
         refresh_minutes=240,
     )
@@ -251,8 +223,6 @@ def test_weather_settings_round_trip_and_runtime_projection(system_repository):
     assert runtime.aemet is not None
     assert runtime.aemet.municipality_code == "28079"
     assert runtime.aemet.timeout_seconds == 12.5
-    assert runtime.fallback is not None
-    assert runtime.fallback.average_temperature_c == 7.0
     assert runtime.watchdog.retry_minutes == 20
     public = repository.public_snapshot()
     assert public["sections"]["weather"]["municipality_code"] == "28079"

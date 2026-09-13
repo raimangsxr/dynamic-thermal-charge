@@ -15,7 +15,7 @@ import { ELECTRICAL_FIELDS, needsConfirmation } from './electrical-fields';
 function configDto(overrides: Partial<ConfigDto> = {}): ConfigDto {
   return {
     config_revision: 3,
-    schema_revision: '0015_temperature_target_intervals',
+    schema_revision: '0023_coherent_mqtt_topics',
     max_total_power_kw: 5.2,
     slot_minutes: 30,
     window_minutes: 480,
@@ -45,7 +45,6 @@ function configDto(overrides: Partial<ConfigDto> = {}): ConfigDto {
         room_heat_loss_kw_per_c: 0.12,
         priority: 90,
         enabled: true,
-        telemetry_topic: null,
         temperature_targets: [{ id: 1, heater_id: 'salon', target_temperature_c: 21, start_time: '00:00', end_time: '24:00', weekdays: [0, 1, 2, 3, 4, 5, 6], enabled: true }],
         output: { kind: 'gpio', pin: 17, active_high: false },
       },
@@ -61,8 +60,8 @@ function systemConfigurationDto(overrides: Partial<SystemConfigurationDto> = {})
     sections: {
       database: { driver: 'sqlite', host: null, port: null, database: null, tls: true, trusted_no_tls: false },
       api: { host: '127.0.0.1', port: 8080, cors_origins: [], stale_seconds: null },
-      mqtt: { enabled: false, host: null, port: 1883, tls: false, prefix: 'dtc', discovery_prefix: 'homeassistant', publish_seconds: 15, fixed_stored_soc_percent: 50, fixed_indoor_temperature_c: 20 },
-      weather: { provider: 'simulated', municipality_code: null, timeout_seconds: 10, simulated_average_temperature_c: 8, simulated_minimum_temperature_c: 3, fallback_average_temperature_c: 8, fallback_minimum_temperature_c: 3, retry_minutes: 15, refresh_minutes: 180 },
+      mqtt: { enabled: false, host: null, port: 1883, tls: false, prefix: 'telemetria', discovery_prefix: 'homeassistant', publish_seconds: 15 },
+      weather: { provider: 'aemet', municipality_code: null, timeout_seconds: 10, retry_minutes: 15, refresh_minutes: 180 },
       output: { driver: 'simulated' },
       logging: { level: 'INFO', max_events: 1000 },
       operations: { controller_poll_seconds: 5, heartbeat_stale_multiplier: 3, relay_test_lease_seconds: 30, relay_test_state_poll_seconds: 1, relay_test_lease_renew_seconds: 10, retention_days: 365, fallback_max_age_minutes: 1440 },
@@ -78,7 +77,6 @@ function planningConfigDto(overrides: Partial<PlanningSiteConfigDto> = {}): Plan
   return {
     revision: 2, replan_minutes: 30, planning_window_hours: 12, forecast_horizon_hours: 48, solver_time_limit_seconds: 120, aemet_query_hour: 12,
     contracted_power_w: 5200, max_heating_power_w: 5200, base_load_w: 0, deviation_shortfall_tolerance_c: 0.1, deviation_surplus_soc_percent: 5,
-    mqtt_simulation_enabled: false, mqtt_simulation_initial_temperature_c: 45, mqtt_simulation_publish_seconds: 30, mqtt_simulation_topic_prefix: 'dtc/sim', mqtt_simulation_thermal_loss_c_per_hour: 2,
     ...overrides,
   };
 }
@@ -221,7 +219,7 @@ describe('Config', () => {
     fixture.componentInstance.chooseArea('heaters');
     fixture.detectChanges();
     expect(element.textContent).toContain('rev. 3');
-    expect(element.textContent).toContain('0015_temperature_target_intervals');
+    expect(element.textContent).toContain('0023_coherent_mqtt_topics');
     expect(element.querySelector('[data-heater="salon"]')).not.toBeNull();
   });
 
@@ -309,14 +307,8 @@ describe('Config', () => {
     backend.expectOne('/api/v1/config').flush(configDto());
   });
 
-  it('renders the effective grouped telemetry topic without an editor', () => {
-    const element = load(
-      configDto({
-        heaters: [
-          { ...configDto().heaters[0], telemetry_topic: 'telemetria/acumuladores/salon/telemetry' },
-        ],
-      }),
-    );
+  it('does not expose a per-accumulator MQTT topic override', () => {
+    const element = load();
     fixture.componentInstance.chooseArea('installation');
     fixture.detectChanges();
     for (const field of [
@@ -328,24 +320,10 @@ describe('Config', () => {
     }
     fixture.componentInstance.chooseArea('heaters');
     fixture.detectChanges();
-    expect(element.querySelector('[data-heater="salon"] code')?.textContent).toContain(
-      'telemetria/acumuladores/salon/telemetry',
-    );
+    expect(element.querySelector('[data-heater="salon"] code')).toBeNull();
     fixture.componentInstance.openEditHeater(fixture.componentInstance.config()!.heaters[0]);
     fixture.detectChanges();
     expect(element.querySelector('[name="telemetry_topic"]')).toBeNull();
-  });
-
-  it('does not send a telemetry topic when saving the accumulator form', () => {
-    load(configDto({ heaters: [{ ...configDto().heaters[0], telemetry_topic: 'ha/old' }] }));
-    fixture.componentInstance.openEditHeater(fixture.componentInstance.config()!.heaters[0]);
-    fixture.componentInstance.updateHeaterForm('name', 'Salón actualizado');
-    fixture.componentInstance.saveHeater();
-    const request = backend.expectOne('/api/v1/config/heaters/salon');
-    expect(request.request.body).toMatchObject({
-      revision: 3,
-    });
-    expect(request.request.body).not.toHaveProperty('telemetry_topic');
   });
 
   /* ------------------------------------------------- electrical confirmation */

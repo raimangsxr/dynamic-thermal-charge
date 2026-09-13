@@ -45,8 +45,6 @@ const HEATER: Record<string, string> = {
   pin: 'Número de pin GPIO que controla el relé de este acumulador.',
   active_high:
     'Nivel lógico que energiza el relé: alto (3,3 V) o bajo (0 V). Debe coincidir con el cableado.',
-  telemetry_topic:
-    'Override MQTT antiguo para el topic de telemetría agrupada. Si está vacío, se usa telemetria/acumuladores/<id-normalizado>/telemetry; las claves indoor_temperature_c, stored_soc_percent y damper_position_percent son opcionales.',
 };
 
 const SYSTEM: Record<string, Record<string, string>> = {
@@ -70,31 +68,19 @@ const SYSTEM: Record<string, Record<string, string>> = {
   },
   mqtt: {
     enabled:
-      'Activa la conexión al broker MQTT para telemetría y publicación de estados. Si está desactivado, se usan los valores fijos de prueba.',
+      'Activa la conexión al broker MQTT para recibir telemetría y publicar estados. Si está desactivado, la planificación queda no válida hasta disponer de telemetría fresca.',
     host: 'Host del broker MQTT. Obligatorio cuando MQTT está habilitado.',
     port: 'Puerto del broker MQTT (1–65535).',
     tls: 'Usa TLS al conectar con el broker.',
     prefix: 'Prefijo base de los tópicos publicados por este sistema.',
     discovery_prefix: 'Prefijo de descubrimiento para integraciones tipo Home Assistant.',
     publish_seconds: 'Intervalo entre publicaciones periódicas de estado al broker.',
-    fixed_stored_soc_percent:
-      'SOC almacenado fijo (%) usado como telemetría simulada cuando MQTT está desactivado.',
-    fixed_indoor_temperature_c:
-      'Temperatura interior fija usada en el modelo de demanda cuando MQTT está desactivado.',
   },
   weather: {
-    provider: 'Fuente de previsión: AEMET (datos reales) o simulada (valores configurados aquí).',
+    provider: 'Fuente de previsión: AEMET. No se usan valores sintéticos ni de respaldo.',
     municipality_code:
       'Código INE de 5 dígitos del municipio para AEMET. Obligatorio con proveedor AEMET.',
     timeout_seconds: 'Tiempo máximo de espera de cada petición HTTP a la API meteorológica.',
-    simulated_average_temperature_c:
-      'Temperatura media diaria cuando el proveedor es simulado.',
-    simulated_minimum_temperature_c:
-      'Temperatura mínima diaria cuando el proveedor es simulado.',
-    fallback_average_temperature_c:
-      'Temperatura media de respaldo si falla la consulta AEMET.',
-    fallback_minimum_temperature_c:
-      'Temperatura mínima de respaldo si falla la consulta AEMET.',
     retry_minutes: 'Minutos entre reintentos tras un error de consulta meteorológica.',
     refresh_minutes: 'Minutos entre consultas automáticas de previsión.',
   },
@@ -111,16 +97,6 @@ const SYSTEM: Record<string, Record<string, string>> = {
       'Límite de potencia dedicada a calefacción/acumuladores (W) en el optimizador.',
     base_load_w:
       'Carga base simultánea de la vivienda (W), que se descuenta de la potencia contratada.',
-    mqtt_simulation_enabled:
-      'Activa un cliente MQTT que publica telemetría simulada de acumuladores. Requiere MQTT habilitado en Configuración → Integraciones.',
-    mqtt_simulation_initial_temperature_c:
-      'Temperatura inicial (°C) de todos los acumuladores al arrancar o reiniciar la simulación.',
-    mqtt_simulation_publish_seconds:
-      'Intervalo entre publicaciones MQTT de temperatura interior y SOC almacenado simulados.',
-    mqtt_simulation_topic_prefix:
-      'Campo antiguo conservado por compatibilidad. La simulación usa los topics estándar de cada acumulador.',
-    mqtt_simulation_thermal_loss_c_per_hour:
-      'Pérdida térmica general (°C/h) aplicada a todos los acumuladores en reposo. Se invierte mientras el acumulador está cargando.',
   },
   output: {
     driver: 'Driver de salida física: simulada (sin relés) o GPIO en el dispositivo controlador.',

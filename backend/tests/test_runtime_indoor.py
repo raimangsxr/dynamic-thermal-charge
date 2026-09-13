@@ -1,75 +1,93 @@
-"""Controller composition reads indoor state once per recalculation."""
+"""Automatic planning never fabricates missing MQTT telemetry."""
 
-from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from dynamic_thermal_charge import runtime
-from dynamic_thermal_charge.models import IndoorReading
-from dynamic_thermal_charge.persistence import ConfigStoreUnavailableError
+from dynamic_thermal_charge.models import ChargeTelemetry
 from dynamic_thermal_charge.persistence.seed import example_installation
+from dynamic_thermal_charge.system_settings import MqttSystemSettings
+from dynamic_thermal_charge.weather import HourlyForecastPoint
 
 
 NOW = datetime(2026, 1, 16, 1, tzinfo=timezone.utc)
 
 
-def _config():
-    config = example_installation()
-    return replace(
-        config,
-        heaters=(replace(config.heaters[0], telemetry_topic="ha/salon/telemetry"),),
-    )
-
-
-class Readings:
-    def __init__(self, values=None, error=None):
+class Planning:
+    def __init__(self, values=None):
         self.values = values or {}
-        self.error = error
-        self.calls = 0
 
-    def read_all(self):
-        self.calls += 1
-        if self.error:
-            raise self.error
+    def telemetry(self):
         return self.values
 
+    def latest_forecast(self, at=None):
+        del at
+        return tuple(
+            HourlyForecastPoint(NOW + timedelta(hours=index), 5.0)
+            for index in range(8)
+        )
 
-def test_each_recalculation_reads_once_and_returns_selected_temperatures():
-    readings = Readings({"salon": IndoorReading("salon", 19.0, NOW)})
-    tracker = runtime._IndoorFallbackTracker()
-    assert tracker.select(_config(), readings, NOW) == {"salon": 19.0}
-    assert tracker.select(_config(), readings, NOW) == {"salon": 19.0}
-    assert readings.calls == 2
-
-
-def test_store_failure_or_missing_reading_continues_with_fallback(caplog):
-    tracker = runtime._IndoorFallbackTracker()
-    failed = Readings(error=ConfigStoreUnavailableError("offline"))
-    assert tracker.select(_config(), failed, NOW) == {}
-    assert tracker.select(_config(), failed, NOW) == {}
-    assert caplog.text.count("Indoor reading store unavailable") == 1
+    def latest_forecast_automatic_eligible(self):
+        return True
 
 
-def test_fallback_and_recovery_are_logged_once_per_transition(caplog):
-    caplog.set_level("INFO")
-    readings = Readings()
-    tracker = runtime._IndoorFallbackTracker()
-    tracker.select(_config(), readings, NOW)
-    tracker.select(_config(), readings, NOW)
-    readings.values = {"salon": IndoorReading("salon", 20, NOW)}
-    tracker.select(_config(), readings, NOW)
-    tracker.select(_config(), readings, NOW)
-    assert caplog.text.count("using thermal fallback") == 1
-    assert caplog.text.count("recovered indoor temperature") == 1
+def _store(values=None):
+    return type(
+        "Store",
+        (),
+        {"planning": Planning(values), "home_assistant": None},
+    )()
 
 
-def test_disabled_mqtt_uses_one_global_indoor_value_for_every_enabled_heater():
-    config = example_installation()
-    tracker = runtime._IndoorFallbackTracker()
-    readings = Readings({"salon": IndoorReading("salon", 7.0, NOW)})
-    assert tracker.select(
-        config,
-        readings,
+def _planning_site():
+    return {
+        "forecast_horizon_hours": 2,
+        "contracted_power_w": 5200,
+        "base_load_w": 0,
+        "max_heating_power_w": 5200,
+        "solver_time_limit_seconds": 10,
+    }
+
+
+def test_disabled_mqtt_produces_an_invalid_plan_without_reading_or_fabricating_data():
+    planning = Planning()
+    store = type("Store", (), {"planning": planning, "home_assistant": None})()
+
+    plan, schedule, _evidence = runtime._build_automatic_runtime_plan(
+        store,
+        example_installation(),
         NOW,
-        fixed_temperature_c=19.5,
-    ) == {heater.id: 19.5 for heater in config.heaters if heater.enabled}
-    assert readings.calls == 0
+        (),
+        _planning_site(),
+        mqtt=MqttSystemSettings(enabled=False),
+    )
+
+    assert plan.status == "INVALID"
+    assert schedule.slots == ()
+    assert planning.values == {}
+    assert all(not slot.heater_ids for slot in plan.slots)
+    assert all(not slot.indoor_temperature_c for slot in plan.slots)
+    assert all(not slot.stored_energy_kwh for slot in plan.slots)
+
+
+def test_missing_or_stale_mqtt_telemetry_produces_an_invalid_plan():
+    stale = ChargeTelemetry(
+        heater_id="salon",
+        indoor_temperature_c=19.0,
+        stored_soc_percent=50.0,
+        indoor_received_at=NOW - timedelta(minutes=31),
+        stored_soc_received_at=NOW - timedelta(minutes=31),
+    )
+    plan, schedule, _evidence = runtime._build_automatic_runtime_plan(
+        _store({"salon": stale}),
+        example_installation(),
+        NOW,
+        (),
+        _planning_site(),
+        mqtt=MqttSystemSettings(enabled=True, host="broker"),
+    )
+
+    assert plan.status == "INVALID"
+    assert schedule.slots == ()
+    assert all(not slot.heater_ids for slot in plan.slots)
+    assert all(not slot.indoor_temperature_c for slot in plan.slots)
+    assert all(not slot.stored_energy_kwh for slot in plan.slots)

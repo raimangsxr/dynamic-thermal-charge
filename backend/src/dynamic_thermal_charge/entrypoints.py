@@ -6,10 +6,10 @@ no argument parser or user-facing command interface in the application.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 import logging
 import os
-from dataclasses import replace
 
 from .persistence.bootstrap import initialise_at, open_store
 from .persistence.paths import StorePaths
@@ -44,7 +44,6 @@ def initialise_storage() -> None:
 
 def initialise_dev_storage() -> None:
     """Initialise an isolated development store from environment settings."""
-    from .models import SimulatedForecastConfig
     from .api.settings import ApiSettings
     from .persistence.bootstrap_store import BootstrapRepository
     from .persistence.locator import DatabaseDriver
@@ -77,7 +76,7 @@ def initialise_dev_storage() -> None:
         )
         system = store.system_configuration.current()
         store.system_configuration.update_section(
-            "weather", {"provider": "simulated"}, expected_revision=system.revision, actor="dev-init"
+            "weather", {"provider": "aemet"}, expected_revision=system.revision, actor="dev-init"
         )
         system = store.system_configuration.current()
         store.system_configuration.update_section(
@@ -97,17 +96,6 @@ def initialise_dev_storage() -> None:
         )
     if store.repository.is_empty():
         config = example_installation()
-        config = replace(
-            config,
-            weather=replace(
-                config.weather,
-                provider="simulated",
-                simulated=SimulatedForecastConfig(
-                    average_temperature_c=8.0, minimum_temperature_c=3.0
-                ),
-                aemet=None,
-            ),
-        )
         store.repository.seed(config, "default")
     bootstrap.mark_configured()
 
@@ -205,8 +193,6 @@ def run_api(
 
 
 def run_mqtt() -> None:
-    import threading
-
     from .logging_config import configure_logging
     from .mqtt.client import PahoMqttClient
     from .mqtt.commands import CommandProcessor
@@ -214,13 +200,6 @@ def run_mqtt() -> None:
     from .mqtt.publisher import MqttPublisher, StoreSnapshotReader
     from .mqtt.service import MqttService, MqttSupervisor
     from .mqtt.settings import settings_from_repository
-    from .mqtt.simulator import (
-        MqttPlanningSimulator,
-        MqttSimulationService,
-        MqttSimulationSupervisor,
-        simulation_config_from_site,
-        simulation_subscription_topics,
-    )
     from .mqtt.topics import TopicLayout
     from .persistence.heartbeat import read_heartbeat
     from .persistence.history import SqlStatusReader
@@ -245,7 +224,7 @@ def run_mqtt() -> None:
             heartbeat_reader=lambda: read_heartbeat(application_engine, installation_id, store.location),
             status_reader=status_reader,
             clock=lambda: datetime.now(timezone.utc),
-            charge_config_provider=store.planning.heater_charge_config,
+            topics=topics,
             plan_provider=store.planning.active_plan,
             control_state_provider=(
                 None
@@ -261,14 +240,7 @@ def run_mqtt() -> None:
         transport = PahoMqttClient(settings)
 
         def all_subscriptions() -> tuple[str, ...]:
-            base = snapshots.subscriptions(topics)
-            config, _revision = store.repository.current()
-            simulated = simulation_subscription_topics(
-                config.heaters,
-                store.planning.site(),
-                mqtt_enabled=True,
-            )
-            return tuple(dict.fromkeys((*base, *simulated)))
+            return snapshots.subscriptions(topics)
 
         publisher = MqttPublisher(
             transport,
@@ -282,6 +254,7 @@ def run_mqtt() -> None:
         charge_telemetry = ChargeTelemetryMessageProcessor(
             store.repository,
             store.planning,
+            topics=topics,
             readings=store.indoor_readings,
             clock=lambda: datetime.now(timezone.utc),
         )
@@ -300,53 +273,12 @@ def run_mqtt() -> None:
             indoor_handler=handle_telemetry,
         )
 
-    def build_simulation_service() -> MqttSimulationService:
-        settings = settings_from_repository(store.system_configuration)
-        application_engine = store.application_engine or store.engine
-        installation_id = store.repository.installation_id()
-        status_reader = SqlStatusReader(
-            application_engine, installation_id, store.location
-        )
-
-        def config_provider():
-            return simulation_config_from_site(store.planning.site())
-
-        def heaters_provider():
-            config, _revision = store.repository.current()
-            return config.heaters
-
-        def charging_state_provider():
-            latest = status_reader.last_output_states()
-            return {heater_id: state for heater_id, (state, _at) in latest.items()}
-
-        client = PahoMqttClient(settings)
-        simulator = MqttPlanningSimulator(
-            client,
-            config_provider=config_provider,
-            heaters_provider=heaters_provider,
-            charging_state_provider=charging_state_provider,
-            clock=lambda: datetime.now(timezone.utc),
-        )
-        return MqttSimulationService(client=client, simulator=simulator)
-
     supervisor = MqttSupervisor(store.system_configuration, build_service)
-    simulation_supervisor = MqttSimulationSupervisor(
-        store.system_configuration,
-        store.planning,
-        build_simulation_service,
-    )
-    simulation_thread = threading.Thread(
-        target=simulation_supervisor.run,
-        name="mqtt-planning-simulation",
-        daemon=True,
-    )
-    simulation_thread.start()
     try:
         supervisor.run()
     except KeyboardInterrupt:
         logger.info("MQTT publisher stopped")
     finally:
-        simulation_supervisor.stop()
         supervisor.stop()
 
 

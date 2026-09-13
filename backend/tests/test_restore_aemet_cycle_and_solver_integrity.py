@@ -1,7 +1,6 @@
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
-import pytest
 import pulp
 
 from dynamic_thermal_charge.charge_planning import (
@@ -17,7 +16,6 @@ from dynamic_thermal_charge.models import ChargeTelemetry, Heater, OutputConfig
 from dynamic_thermal_charge.runtime import (
     _aggregate_unmet_minutes,
     _refresh_daily_aemet_forecast,
-    _require_real_telemetry_for_gpio,
     _seconds_to_next_replan,
 )
 from dynamic_thermal_charge.persistence.mapping import to_utc
@@ -28,7 +26,6 @@ from dynamic_thermal_charge.persistence.schema import (
     forecast_cycle,
     forecast_hour,
 )
-from dynamic_thermal_charge.system_settings import MqttSystemSettings
 from dynamic_thermal_charge.watchdog import DailyAemetForecastManager
 from dynamic_thermal_charge.weather import HourlyForecastPoint, OutdoorForecast
 from tests.conftest import API_NOW
@@ -93,17 +90,6 @@ def test_replan_cadence_waits_for_a_slot_boundary_and_never_underflows():
     now = datetime(2026, 1, 16, 1, 5, tzinfo=timezone.utc)
     assert _seconds_to_next_replan(now, replan_minutes=10, slot_minutes=30) == 55 * 60
     assert _seconds_to_next_replan(now, replan_minutes=45, slot_minutes=30) == 55 * 60
-
-
-def test_gpio_startup_allows_fixed_telemetry_without_mqtt_but_rejects_simulation(caplog):
-    _require_real_telemetry_for_gpio(
-        "gpio", MqttSystemSettings(enabled=False), {"mqtt_simulation_enabled": False}
-    )
-    with pytest.raises(RuntimeError, match="accumulator simulation"):
-        _require_real_telemetry_for_gpio(
-            "gpio", MqttSystemSettings(), {"mqtt_simulation_enabled": True}
-        )
-    assert "GPIO controller startup rejected" in caplog.text
 
 
 def test_base_load_and_heating_limit_both_restrict_the_automatic_plan():

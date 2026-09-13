@@ -315,18 +315,14 @@ def test_solver_logs_phase_runtime_and_model_size(caplog):
     assert "solver_total_elapsed_seconds=" in caplog.text
 
 
-def test_preview_uses_mqtt_fixed_telemetry_when_broker_disabled(client, initialised_store):
+def test_preview_without_mqtt_telemetry_is_invalid(client, initialised_store):
     system = client.get("/api/v1/system/configuration", headers=AUTH).json()
     client.patch(
         "/api/v1/system/configuration/mqtt",
         headers=AUTH,
         json={
             "expected_revision": system["revision"],
-            "values": {
-                "enabled": False,
-                "fixed_indoor_temperature_c": 18,
-                "fixed_stored_soc_percent": 80,
-            },
+            "values": {"enabled": False},
         },
     )
     site = initialised_store.planning.site()
@@ -357,12 +353,19 @@ def test_preview_uses_mqtt_fixed_telemetry_when_broker_disabled(client, initiali
     )
     assert preview.status_code == 200, preview.text
     body = preview.json()
-    assert body["status"] != INVALID, [
-        item.get("reason") for item in body.get("violations", [])
-    ]
+    assert body["status"] == INVALID
+    assert body["slots"] == []
 
 
 def test_preview_activation_persists_room_energy_snapshot(client, initialised_store, api_clock):
+    system = initialised_store.system_configuration
+    system_snapshot = system.current()
+    system.update_section(
+        "mqtt",
+        {"enabled": True, "host": "broker.test"},
+        expected_revision=system_snapshot.revision,
+        actor="test",
+    )
     config, revision = initialised_store.repository.current()
     points = forecast(API_NOW, 25, 4)
     record = SimpleNamespace(
@@ -424,70 +427,11 @@ def test_preview_activation_persists_room_energy_snapshot(client, initialised_st
     assert stored["explanations"] and stored["demand"]
 
 
-def test_the_discharge_command_topics_keep_legacy_overrides_and_standard_defaults(client):
-    """The API accepts old overrides but returns effective topics."""
-    response = client.patch(
-        "/api/v1/planning/heaters/salon",
-        headers=AUTH,
-        json={
-            "damper_topic": " ha/salon/discharge ",
-            "setpoint_topic": "ha/salon/setpoint",
-        },
-    )
-    assert response.status_code == 200, response.text
-
-    heaters = {item["id"]: item for item in response.json()["heaters"]}
-    assert heaters["salon"]["damper_topic"] == "ha/salon/discharge"
-    assert heaters["salon"]["setpoint_topic"] == "ha/salon/setpoint"
-    assert heaters["entrada"]["damper_topic"] == (
-        "telemetria/acumuladores/entrada/discharge"
-    )
-
-
-def test_editing_one_topic_leaves_the_other_untouched(client):
-    client.patch(
-        "/api/v1/planning/heaters/salon",
-        headers=AUTH,
-        json={
-            "damper_topic": "ha/salon/discharge",
-            "setpoint_topic": "ha/salon/setpoint",
-        },
-    )
-
-    response = client.patch(
-        "/api/v1/planning/heaters/salon",
-        headers=AUTH,
-        json={"damper_topic": "ha/salon/other"},
-    )
-
-    assert response.status_code == 200, response.text
-    heaters = {item["id"]: item for item in response.json()["heaters"]}
-    assert heaters["salon"]["damper_topic"] == "ha/salon/other"
-    assert heaters["salon"]["setpoint_topic"] == "ha/salon/setpoint"
-
-
-def test_a_blank_topic_is_stored_as_absent(client):
-    client.patch(
-        "/api/v1/planning/heaters/salon",
-        headers=AUTH,
-        json={"damper_topic": "ha/salon/discharge"},
-    )
-
-    response = client.patch(
-        "/api/v1/planning/heaters/salon", headers=AUTH, json={"damper_topic": "   "}
-    )
-
-    heaters = {item["id"]: item for item in response.json()["heaters"]}
-    assert heaters["salon"]["damper_topic"] == (
-        "telemetria/acumuladores/salon/discharge"
-    )
-
-
-def test_an_unknown_heater_cannot_receive_command_topics(client):
+def test_legacy_discharge_topic_endpoint_is_removed(client):
     response = client.patch(
         "/api/v1/planning/heaters/cocina",
         headers=AUTH,
         json={"damper_topic": "ha/cocina/discharge"},
     )
 
-    assert response.status_code == 422, response.text
+    assert response.status_code == 404, response.text

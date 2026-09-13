@@ -14,7 +14,7 @@ class MqttSettings:
     tls: bool = False
     username: str | None = None
     password: str | None = field(default=None, repr=False)
-    prefix: str = "dtc"
+    prefix: str = "telemetria"
     discovery_prefix: str = "homeassistant"
     publish_seconds: float = 15.0
 
@@ -33,7 +33,7 @@ def mqtt_runtime_signature(snapshot) -> tuple[object, ...]:
         getattr(mqtt, "host", None),
         getattr(mqtt, "port", 1883),
         getattr(mqtt, "tls", False),
-        getattr(mqtt, "prefix", "dtc"),
+        getattr(mqtt, "prefix", "telemetria"),
         getattr(mqtt, "discovery_prefix", "homeassistant"),
         getattr(mqtt, "publish_seconds", 15.0),
         secret_value("mqtt_username"),

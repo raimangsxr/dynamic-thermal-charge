@@ -175,7 +175,7 @@ def test_history_and_indoor_readings_use_application_engine(split_store):
         average_temperature_c=7.0,
         minimum_temperature_c=2.0,
         maximum_temperature_c=12.0,
-        source="simulated",
+        source="aemet",
         location=None,
         retrieved_at=NOW,
     )
@@ -228,7 +228,7 @@ def test_independent_schema_version_failure_does_not_modify_the_other_store(spli
         ).scalar_one() == APPLICATION_SCHEMA_REVISION
 
 
-def test_active_schema_groups_old_indoor_and_soc_topics_without_inventing_one(
+def test_active_schema_drops_old_topic_overrides_without_inventing_one(
     split_store,
 ):
     _paths, engines, repository = split_store
@@ -270,19 +270,23 @@ def test_active_schema_groups_old_indoor_and_soc_topics_without_inventing_one(
 
     upgrade_active_schemas(engines.configuration, engines.application)
     config, _revision = repository.current()
-    topics = {heater.id: heater.telemetry_topic for heater in config.heaters}
-    assert topics["salon"] == "ha/shared"
-    assert topics["entrada"] is None
-    assert "indoor_topic" not in {
+    assert all(not hasattr(heater, "telemetry_topic") for heater in config.heaters)
+    heater_columns = {
         column["name"]
         for column in inspect(engines.configuration).get_columns("heater")
     }
-    assert "stored_soc_topic" not in {
+    assert not heater_columns.intersection(
+        {"telemetry_topic", "indoor_topic", "temperature_topic"}
+    )
+    charge_columns = {
         column["name"]
         for column in inspect(engines.configuration).get_columns(
             "heater_charge_config"
         )
     }
+    assert not charge_columns.intersection(
+        {"stored_soc_topic", "damper_topic", "setpoint_topic"}
+    )
 
 
 def test_postgresql_namespace_names_are_fixed_not_user_controlled():

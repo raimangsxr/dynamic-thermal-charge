@@ -22,7 +22,6 @@ from ..models import (
     OutputConfig,
     RuntimeConfig,
     ScheduleConfig,
-    SimulatedForecastConfig,
     SiteConfig,
     TemperatureTarget,
     ThermalProfile,
@@ -124,10 +123,6 @@ def example_installation() -> AppConfig:
                 municipality_code="15057",
                 api_key_env="AEMET_API_KEY",
                 timeout_seconds=10.0,
-            ),
-            fallback=SimulatedForecastConfig(
-                average_temperature_c=8.0,
-                minimum_temperature_c=3.0,
             ),
             watchdog=WeatherWatchdogConfig(retry_minutes=15, refresh_minutes=180),
         ),

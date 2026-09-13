@@ -19,10 +19,6 @@ from dynamic_thermal_charge.persistence.seed import example_installation
 NOW = datetime(2026, 1, 16, 1, 0, tzinfo=timezone.utc)
 SLOT = timedelta(minutes=30)
 HEATERS = ("salon", "entrada")
-TOPICS = {
-    "salon": {"damper_topic": "ha/salon/discharge", "setpoint_topic": "ha/salon/setpoint"},
-    "entrada": {"damper_topic": "ha/entrada/discharge", "setpoint_topic": "ha/entrada/setpoint"},
-}
 
 
 def _heartbeat(*, age: int = 0) -> Heartbeat:
@@ -51,7 +47,7 @@ def _plan(slots, *, status: str = "FEASIBLE") -> dict:
 
 def _commands(plan, **kwargs) -> dict[str, tuple[bool, float | None]]:
     resolved = resolve_discharge_commands(
-        HEATERS, plan=plan, at=NOW, charge_config=TOPICS, **kwargs
+        HEATERS, plan=plan, at=NOW, **kwargs
     )
     return {item.heater_id: (item.enabled, item.setpoint_c) for item in resolved}
 
@@ -101,16 +97,16 @@ def test_solver_noise_outside_a_window_does_not_enable_the_discharge():
     assert _commands(plan)["salon"] == (False, None)
 
 
-def test_blank_command_topics_use_the_standard_topics():
+def test_custom_prefix_is_used_for_both_command_topics():
     commands = resolve_discharge_commands(
         ("salon",),
         plan=_plan([_slot(0, targets={"salon": 21.0})]),
         at=NOW,
-        charge_config={"salon": {"damper_topic": "  ", "setpoint_topic": " "}},
+        topic_prefix="casa",
     )
 
-    assert commands[0].damper_topic == "telemetria/acumuladores/salon/discharge"
-    assert commands[0].setpoint_topic == "telemetria/acumuladores/salon/setpoint"
+    assert commands[0].discharge_topic == "casa/acumuladores/salon/discharge"
+    assert commands[0].setpoint_topic == "casa/acumuladores/salon/setpoint"
 
 
 # --------------------------------------------------------------------------- #
@@ -179,33 +175,28 @@ def test_the_command_and_its_setpoint_are_published_without_retention(mqtt_clien
         ("salon",),
         plan=_plan([_slot(0, targets={"salon": 21.0})]),
         at=NOW,
-        charge_config=TOPICS,
     )
     _publisher(mqtt_client, commands).refresh()
 
-    assert _published(mqtt_client, "ha/salon/discharge") == [
-        ("ha/salon/discharge", "ON", 1, False)
+    assert _published(mqtt_client, "telemetria/acumuladores/salon/discharge") == [
+        ("telemetria/acumuladores/salon/discharge", "ON", 1, False)
     ]
-    assert _published(mqtt_client, "ha/salon/setpoint") == [
-        ("ha/salon/setpoint", "21.0", 1, False)
+    assert _published(mqtt_client, "telemetria/acumuladores/salon/setpoint") == [
+        ("telemetria/acumuladores/salon/setpoint", "21.0", 1, False)
     ]
-    assert _published(
-        mqtt_client, "telemetria/acumuladores/salon/discharge"
-    ) == []
-    assert _published(mqtt_client, "telemetria/acumuladores/salon/setpoint") == []
 
 
 def test_a_disabled_discharge_publishes_off_and_clears_the_setpoint(mqtt_client):
     commands = resolve_discharge_commands(
-        ("salon",), plan=None, at=NOW, charge_config=TOPICS
+        ("salon",), plan=None, at=NOW
     )
     _publisher(mqtt_client, commands).refresh()
 
-    assert _published(mqtt_client, "ha/salon/discharge") == [
-        ("ha/salon/discharge", "OFF", 1, False)
+    assert _published(mqtt_client, "telemetria/acumuladores/salon/discharge") == [
+        ("telemetria/acumuladores/salon/discharge", "OFF", 1, False)
     ]
-    assert _published(mqtt_client, "ha/salon/setpoint") == [
-        ("ha/salon/setpoint", "NULL", 1, False)
+    assert _published(mqtt_client, "telemetria/acumuladores/salon/setpoint") == [
+        ("telemetria/acumuladores/salon/setpoint", "NULL", 1, False)
     ]
 
 
@@ -214,13 +205,12 @@ def test_every_cycle_reasserts_the_command(mqtt_client):
         ("salon",),
         plan=_plan([_slot(0, targets={"salon": 21.0})]),
         at=NOW,
-        charge_config=TOPICS,
     )
     publisher = _publisher(mqtt_client, commands)
     publisher.refresh()
     publisher.refresh()
 
-    assert len(_published(mqtt_client, "ha/salon/discharge")) == 2
+    assert len(_published(mqtt_client, "telemetria/acumuladores/salon/discharge")) == 2
 
 
 def test_the_published_heater_state_carries_the_commanded_discharge(mqtt_client):
@@ -228,32 +218,26 @@ def test_the_published_heater_state_carries_the_commanded_discharge(mqtt_client)
         ("salon",),
         plan=_plan([_slot(0, targets={"salon": 21.0})]),
         at=NOW,
-        charge_config=TOPICS,
     )
     _publisher(mqtt_client, commands).refresh()
 
-    state = _published(mqtt_client, "dtc/installation/heater/salon/state")[-1]
+    state = _published(mqtt_client, "telemetria/installation/heater/salon/state")[-1]
     assert '"discharge_enabled":true' in state[1]
 
 
-def test_a_heater_without_a_damper_topic_uses_the_standard_topic(
-    mqtt_client, caplog
-):
+def test_every_heater_uses_its_standard_command_topics(mqtt_client, caplog):
     caplog.set_level("WARNING")
     commands = resolve_discharge_commands(
         HEATERS,
         plan=_plan([_slot(0, targets={"salon": 21.0, "entrada": 18.0})]),
         at=NOW,
-        charge_config={"entrada": TOPICS["entrada"]},
     )
     _publisher(mqtt_client, commands).refresh()
 
-    assert _published(mqtt_client, "ha/entrada/discharge") == [
-        ("ha/entrada/discharge", "ON", 1, False)
+    assert _published(mqtt_client, "telemetria/acumuladores/entrada/discharge") == [
+        ("telemetria/acumuladores/entrada/discharge", "ON", 1, False)
     ]
-    assert _published(
-        mqtt_client, "telemetria/acumuladores/salon/discharge"
-    ) == [
+    assert _published(mqtt_client, "telemetria/acumuladores/salon/discharge") == [
         (
             "telemetria/acumuladores/salon/discharge",
             "ON",
@@ -272,12 +256,11 @@ def test_a_publication_failure_keeps_the_cycle_and_logs_once_per_transition(
         HEATERS,
         plan=_plan([_slot(0, targets={"salon": 21.0, "entrada": 18.0})]),
         at=NOW,
-        charge_config=TOPICS,
     )
     original = mqtt_client.publish
 
     def failing(topic, payload, *, qos, retain):
-        if topic == "ha/salon/discharge":
+        if topic == "telemetria/acumuladores/salon/discharge":
             raise MqttError("broker refused the command")
         original(topic, payload, qos=qos, retain=retain)
 
@@ -287,7 +270,7 @@ def test_a_publication_failure_keeps_the_cycle_and_logs_once_per_transition(
     assert publisher.refresh() is True
     assert publisher.refresh() is True
     # The healthy accumulator still got both cycles.
-    assert len(_published(mqtt_client, "ha/entrada/discharge")) == 2
+    assert len(_published(mqtt_client, "telemetria/acumuladores/entrada/discharge")) == 2
     assert caplog.text.count("Could not publish the discharge command") == 1
 
     mqtt_client.publish = original
@@ -301,7 +284,6 @@ def test_a_closed_damper_while_enabled_is_not_a_discrepancy(mqtt_client):
         ("salon",),
         plan=_plan([_slot(0, targets={"salon": 21.0})]),
         at=NOW,
-        charge_config=TOPICS,
     )
 
     def snapshot():
@@ -316,11 +298,11 @@ def test_a_closed_damper_while_enabled_is_not_a_discrepancy(mqtt_client):
     )
     publisher.refresh()
 
-    state = _published(mqtt_client, "dtc/installation/heater/salon/state")[-1]
+    state = _published(mqtt_client, "telemetria/installation/heater/salon/state")[-1]
     assert '"discharge_enabled":true' in state[1]
     assert '"damper_position_percent":0.0' in state[1]
-    assert _published(mqtt_client, "ha/salon/discharge") == [
-        ("ha/salon/discharge", "ON", 1, False)
+    assert _published(mqtt_client, "telemetria/acumuladores/salon/discharge") == [
+        ("telemetria/acumuladores/salon/discharge", "ON", 1, False)
     ]
 
 
@@ -329,7 +311,6 @@ def test_orderly_service_stop_publishes_off_without_retention(mqtt_client):
         ("salon",),
         plan=_plan([_slot(0, targets={"salon": 21.0})]),
         at=NOW,
-        charge_config=TOPICS,
     )
     publisher = _publisher(mqtt_client, commands)
     service = MqttService(
@@ -342,9 +323,9 @@ def test_orderly_service_stop_publishes_off_without_retention(mqtt_client):
 
     service.stop()
 
-    assert _published(mqtt_client, "ha/salon/discharge") == [
-        ("ha/salon/discharge", "OFF", 1, False)
+    assert _published(mqtt_client, "telemetria/acumuladores/salon/discharge") == [
+        ("telemetria/acumuladores/salon/discharge", "OFF", 1, False)
     ]
-    assert _published(mqtt_client, "ha/salon/setpoint") == [
-        ("ha/salon/setpoint", "NULL", 1, False)
+    assert _published(mqtt_client, "telemetria/acumuladores/salon/setpoint") == [
+        ("telemetria/acumuladores/salon/setpoint", "NULL", 1, False)
     ]

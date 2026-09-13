@@ -54,7 +54,7 @@ export interface PlanDto {
   slots: PlanSlotDto[];
 }
 
-export type ForecastSource = 'aemet' | 'simulated' | 'fallback';
+export type ForecastSource = 'aemet';
 
 export interface ForecastDto {
   date: string;
@@ -130,8 +130,6 @@ export interface PlanningHeaterDto {
   capacity_kwh: number;
   priority: number;
   enabled: boolean;
-  damper_topic?: string | null;
-  setpoint_topic?: string | null;
 }
 
 export interface PlanningSiteConfigDto {
@@ -146,11 +144,6 @@ export interface PlanningSiteConfigDto {
   base_load_w: number;
   deviation_shortfall_tolerance_c: number;
   deviation_surplus_soc_percent: number;
-  mqtt_simulation_enabled: boolean;
-  mqtt_simulation_initial_temperature_c: number;
-  mqtt_simulation_publish_seconds: number;
-  mqtt_simulation_topic_prefix: string;
-  mqtt_simulation_thermal_loss_c_per_hour: number;
 }
 
 export interface PlanningDto {
@@ -254,7 +247,6 @@ export interface HeaterDto {
   static_emission_percent: number;
   priority: number;
   enabled: boolean;
-  telemetry_topic: string | null;
   room_thermal_capacity_kwh_per_c: number;
   room_heat_loss_kw_per_c: number;
   temperature_targets: TemperatureTargetDto[];
@@ -303,7 +295,6 @@ export interface AddHeaterRequest {
   model?: string;
   priority?: number;
   enabled?: boolean;
-  telemetry_topic?: string | null;
   output?: 'simulated' | 'gpio';
   pin?: number | null;
   active_high?: boolean;
@@ -322,7 +313,6 @@ export interface UpdateHeaterRequest {
   static_emission_percent?: number;
   priority: number;
   enabled: boolean;
-  telemetry_topic?: string | null;
   output: 'simulated' | 'gpio';
   pin: number | null;
   active_high: boolean;

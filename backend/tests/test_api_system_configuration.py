@@ -80,7 +80,7 @@ def test_system_sections_are_allow_listed_revisioned_and_secret_free(client):
     assert conflict.status_code == 409
 
 
-def test_mqtt_fixed_values_are_readable_writable_and_not_exposed_elsewhere(client):
+def test_removed_mqtt_fixed_values_are_rejected(client):
     snapshot = client.get("/api/v1/system/configuration", headers=AUTH).json()
     values = {
         "fixed_indoor_temperature_c": 18,
@@ -91,21 +91,10 @@ def test_mqtt_fixed_values_are_readable_writable_and_not_exposed_elsewhere(clien
         headers=AUTH,
         json={"expected_revision": snapshot["revision"], "values": values},
     )
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert {name: body["sections"]["mqtt"][name] for name in values} == values
-    assert all(name not in body["sections"]["weather"] for name in values)
-    assert all(name not in body["sections"]["api"] for name in values)
-
-    invalid = client.patch(
-        "/api/v1/system/configuration/mqtt",
-        headers=AUTH,
-        json={
-            "expected_revision": body["revision"],
-            "values": {"fixed_stored_soc_percent": 101},
-        },
-    )
-    assert invalid.status_code == 422
+    assert response.status_code == 422, response.text
+    current = client.get("/api/v1/system/configuration", headers=AUTH).json()
+    assert current["revision"] == snapshot["revision"]
+    assert all(name not in current["sections"]["mqtt"] for name in values)
 
 
 def test_weather_system_section_round_trips_all_fields_and_secret(client):
@@ -119,10 +108,6 @@ def test_weather_system_section_round_trips_all_fields_and_secret(client):
                 "provider": "aemet",
                 "municipality_code": "28079",
                 "timeout_seconds": 12.5,
-                "simulated_average_temperature_c": 9,
-                "simulated_minimum_temperature_c": 4,
-                "fallback_average_temperature_c": 7,
-                "fallback_minimum_temperature_c": 1,
                 "retry_minutes": 20,
                 "refresh_minutes": 240,
             },
@@ -150,7 +135,7 @@ def test_aemet_system_update_without_municipality_or_secret_is_atomic(client):
     assert response.status_code == 422
     current = client.get("/api/v1/system/configuration", headers=AUTH).json()
     assert current["revision"] == snapshot["revision"]
-    assert current["sections"]["weather"]["provider"] == "simulated"
+    assert current["sections"]["weather"]["provider"] == "aemet"
 
 
 def test_topology_and_catalog_never_expose_locator_credentials(client):

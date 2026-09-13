@@ -20,6 +20,8 @@ from dynamic_thermal_charge.persistence.schema import (
     indoor_reading,
     installation as installation_table,
     output_config as output_table,
+    forecast,
+    forecast_hour,
     plan,
     metadata,
 )
@@ -191,7 +193,7 @@ def test_indoor_reading_uses_the_integer_heater_identity_without_cross_store_fk(
 
 
 def test_indoor_configuration_columns_have_compatible_defaults():
-    assert heater_table.c.telemetry_topic.nullable
+    assert "telemetry_topic" not in heater_table.c
     assert installation_table.c.indoor_max_age_minutes.server_default.arg == "30"
     assert installation_table.c.indoor_min_plausible_c.server_default.arg == "-20"
     assert installation_table.c.indoor_max_plausible_c.server_default.arg == "50"
@@ -223,6 +225,79 @@ def test_migrating_from_0002_preserves_existing_configuration(sqlite_url):
     assert config_after == expected
     assert all(not heater.temperature_targets for heater in config_after.heaters)
     assert revision_after == revision_before
+
+
+def test_coherent_topics_migration_preserves_aemet_hourly_forecasts(sqlite_url):
+    from alembic import command
+
+    from dynamic_thermal_charge.persistence.bootstrap import initialise, open_legacy_store
+    from dynamic_thermal_charge.persistence.migrations import _config
+
+    store = open_legacy_store({"DTC_DATABASE_URL": sqlite_url})
+    initialise(store)
+    command.downgrade(_config(store.engine), "0022_canonical_plan_statuses")
+
+    observed_at = datetime(2026, 1, 15, 12, tzinfo=timezone.utc)
+    installation_id = store.repository.installation_id()
+    with store.engine.begin() as connection:
+        aemet_id = connection.execute(
+            insert(forecast).values(
+                installation_id=installation_id,
+                forecast_date=observed_at.date(),
+                average_temperature_c=8.0,
+                minimum_temperature_c=3.0,
+                maximum_temperature_c=13.0,
+                source="aemet",
+                municipality="Madrid",
+                retrieved_at=observed_at,
+            )
+        ).inserted_primary_key[0]
+        connection.execute(
+            insert(forecast_hour).values(
+                forecast_id=aemet_id,
+                observed_at=observed_at,
+                temperature_c=8.0,
+                interpolated=False,
+            )
+        )
+        simulated_id = connection.execute(
+            insert(forecast).values(
+                installation_id=installation_id,
+                forecast_date=observed_at.date(),
+                average_temperature_c=99.0,
+                minimum_temperature_c=99.0,
+                maximum_temperature_c=99.0,
+                source="simulated",
+                municipality=None,
+                retrieved_at=observed_at,
+            )
+        ).inserted_primary_key[0]
+        connection.execute(
+            insert(forecast_hour).values(
+                forecast_id=simulated_id,
+                observed_at=observed_at,
+                temperature_c=99.0,
+                interpolated=False,
+            )
+        )
+
+    command.upgrade(_config(store.engine), "head")
+
+    with store.engine.connect() as connection:
+        retained = connection.execute(
+            select(forecast.c.source, forecast_hour.c.temperature_c)
+            .join(forecast_hour, forecast_hour.c.forecast_id == forecast.c.id)
+            .where(forecast.c.id == aemet_id)
+        ).one()
+        assert retained == ("aemet", 8.0)
+        assert connection.execute(
+            select(forecast.c.id).where(forecast.c.id == simulated_id)
+        ).first() is None
+        assert connection.execute(
+            select(forecast_hour.c.forecast_id).where(
+                forecast_hour.c.forecast_id == simulated_id
+            )
+        ).first() is None
 
 
 # --------------------------------------------------------------------------- #

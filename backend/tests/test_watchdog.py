@@ -31,7 +31,7 @@ def test_retries_quickly_in_degraded_mode_and_refreshes_after_recovery(
     caplog,
 ) -> None:
     watchdog = ForecastWatchdog(
-        SequenceProvider([forecast("simulated"), forecast("aemet", 7)]),
+        SequenceProvider([forecast("unsupported"), forecast("aemet", 7)]),
         expected_source="aemet",
         config=WeatherWatchdogConfig(retry_minutes=10, refresh_minutes=120),
     )
@@ -48,7 +48,7 @@ def test_retries_quickly_in_degraded_mode_and_refreshes_after_recovery(
     assert "recovered primary forecast provider" in caplog.text
 
 
-def test_watchdog_mode_builds_fallback_plan_before_waiting(capsys) -> None:
+def test_watchdog_mode_does_not_fabricate_a_charge_plan_without_telemetry(capsys) -> None:
     config = example_installation()
 
     def stop_after_first_cycle(_seconds):
@@ -57,7 +57,7 @@ def test_watchdog_mode_builds_fallback_plan_before_waiting(capsys) -> None:
     status = _run_watchdog(
         config,
         explicit_start=datetime(2026, 1, 15),
-        provider=SequenceProvider([forecast("simulated")]),
+        provider=SequenceProvider([forecast("unsupported")]),
         wait=stop_after_first_cycle,
     )
 

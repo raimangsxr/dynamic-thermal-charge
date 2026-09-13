@@ -40,7 +40,6 @@ from .charge_planning import (
 from .plan_deviation import DeviationVerdict, SlotBoundaryGate, evaluate_plan_deviation
 from .planning_explanation import planning_evidence
 from .models import AppConfig
-from .persistence import ConfigStoreError
 from .persistence.active_plan import SqlActivePlanRepository
 from .scheduler import (
     ScheduleResult,
@@ -50,7 +49,6 @@ from .scheduler import (
 )
 from .service import ControllerService, PlanRefresh
 from .system_settings import MqttSystemSettings
-from .thermal import select_indoor_temperatures
 from .watchdog import DailyAemetForecastManager, ForecastWatchdog
 from .weather import OutdoorForecast, WeatherProvider
 
@@ -75,14 +73,13 @@ def _build_plan(
     config: AppConfig,
     start: datetime,
     forecast: OutdoorForecast | None,
-    indoor_temperatures: dict[str, float] | None = None,
 ) -> ScheduleResult:
     if forecast is not None:
         logger.info(
             "Weather forecast: date=%s source=%s location=%s min=%.1f C avg=%.1f C "
             "max=%.1f C",
             forecast.date.isoformat(),
-            "fallback" if forecast.from_fallback else forecast.source,
+            forecast.source,
             forecast.location or "n/a",
             forecast.minimum_temperature_c,
             forecast.average_temperature_c,
@@ -158,19 +155,11 @@ def _run_controller(
         driver_kind=driver_name,
         location=store.location,
     )
-    indoor_fallback = _IndoorFallbackTracker()
     alerts = _build_alert_service(store)
     driver: OutputDriver | None = None
     service: ControllerService | None = None
     with _controlled_termination():
         try:
-            _require_real_telemetry_for_gpio(
-                driver_name,
-                _live_mqtt_settings(
-                    store, None if system is None else system.mqtt
-                ),
-                store.planning.site(),
-            )
             driver = RecordingOutputDriver(
                 _build_output_driver(config, driver_name),
                 history,
@@ -441,32 +430,10 @@ def _run_controller(
                     next_run_at=now + timedelta(seconds=cycle.next_poll_seconds),
                     forecast_ref=forecast_ref,
                 )
-                indoor_temperatures = indoor_fallback.select(
-                    live_config,
-                    store.indoor_readings,
-                    now,
-                    fixed_temperature_c=(
-                        None
-                        if live_mqtt is None or live_mqtt.enabled
-                        else live_mqtt.fixed_indoor_temperature_c
-                    ),
-                )
-                # Keep the legacy fallback aligned with the same canonical
-                # site limit used by automatic planning and the status API.
-                canonical_config = replace(
-                    live_config,
-                    site=replace(
-                        live_config.site,
-                        max_total_power_w=int(
-                            planning_site.get("contracted_power_w", live_config.site.max_total_power_w)
-                        ),
-                    ),
-                )
                 plan = _build_plan(
-                    canonical_config,
+                    live_config,
                     start,
                     cycle.forecast,
-                    indoor_temperatures=indoor_temperatures,
                 )
                 if store.context is not None:
                     # The fallback snapshot is refreshed only after the plan
@@ -828,65 +795,6 @@ def _safe_forecast_error(error: BaseException) -> str:
     return f"{error.__class__.__name__}: no se pudo obtener el forecast meteorológico"
 
 
-class _IndoorFallbackTracker:
-    """Read once per plan and log only fallback state transitions."""
-
-    def __init__(self) -> None:
-        self._fallback: set[str] = set()
-        self._store_unavailable = False
-
-    def select(
-        self,
-        config: AppConfig,
-        repository,
-        at: datetime,
-        *,
-        fixed_temperature_c: float | None = None,
-    ) -> dict[str, float]:
-        if fixed_temperature_c is not None:
-            self._fallback = set()
-            self._store_unavailable = False
-            return {
-                heater.id: fixed_temperature_c
-                for heater in config.heaters
-                if heater.enabled
-            }
-        try:
-            readings = repository.read_all()
-        except ConfigStoreError as exc:
-            readings = {}
-            if not self._store_unavailable:
-                logger.error(
-                    "Indoor reading store unavailable; using thermal fallback: %s",
-                    exc,
-                )
-            self._store_unavailable = True
-        else:
-            if self._store_unavailable:
-                logger.info("Indoor reading store recovered")
-            self._store_unavailable = False
-
-        selection = select_indoor_temperatures(
-            config.heaters,
-            readings,
-            at=at,
-            max_age_minutes=config.site.indoor_max_age_minutes,
-            min_plausible_c=config.site.indoor_min_plausible_c,
-            max_plausible_c=config.site.indoor_max_plausible_c,
-        )
-        current = set(selection.fallback_reasons)
-        for heater_id in sorted(current - self._fallback):
-            logger.warning(
-                "Heater %s is using thermal fallback: %s",
-                heater_id,
-                selection.fallback_reasons[heater_id],
-            )
-        for heater_id in sorted(self._fallback - current):
-            logger.info("Heater %s recovered indoor temperature", heater_id)
-        self._fallback = current
-        return selection.temperatures
-
-
 def _live_mqtt_settings(
     store,
     fallback: MqttSystemSettings | None,
@@ -906,24 +814,6 @@ def _build_output_driver(config: AppConfig, driver_name: str) -> OutputDriver:
             {heater.id: heater.output for heater in config.heaters if heater.enabled}
         )
     raise ValueError(f"unsupported output driver: {driver_name}")
-
-
-def _require_real_telemetry_for_gpio(
-    driver_name: str,
-    mqtt: MqttSystemSettings | None,
-    planning_site: dict[str, object],
-) -> None:
-    """Reject physical relays only when accumulator simulation is enabled."""
-    if driver_name != "gpio":
-        return
-    causes: list[str] = []
-    if bool(planning_site.get("mqtt_simulation_enabled", False)):
-        causes.append("accumulator simulation is enabled")
-    if not causes:
-        return
-    message = "GPIO controller startup rejected: " + "; ".join(causes)
-    logger.critical(message)
-    raise RuntimeError(message)
 
 
 # ------------------------------------------------------------------------ api
