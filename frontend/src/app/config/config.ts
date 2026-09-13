@@ -506,10 +506,7 @@ export class Config {
   systemGroups(section: SystemSection): readonly FieldGroup[] {
     const fields = SYSTEM_FIELDS[section];
     if (section === 'mqtt') {
-      const enabled = fields[0];
-      return this.mqttEnabled()
-        ? [{ title: 'Conexión MQTT', description: 'Broker y publicación de temperatura interior y SOC de los acumuladores.', fields: [enabled, ...fields.slice(1, 7)] }, { title: 'Valores fijos de prueba', description: 'Se conservan para pruebas cuando MQTT está desactivado.', fields: fields.slice(7) }]
-        : [{ title: 'Modo de integración', fields: [enabled] }, { title: 'Valores fijos de prueba', description: 'Se usan para todos los acumuladores mientras MQTT está desactivado.', fields: fields.slice(7) }];
+      return  [{ title: 'Conexión MQTT', description: 'Broker y publicación de temperatura interior y SOC de los acumuladores.', fields: fields.slice(0, 8) }]
     }
     if (section === 'weather') {
       return [
