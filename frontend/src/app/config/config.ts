@@ -523,8 +523,7 @@ export class Config {
   planningGroups(): readonly FieldGroup[] {
     return [
       { title: 'Cadencia y horizonte', description: 'Define cuánto mira el optimizador y cuándo vuelve a calcular.', fields: PLANNING_FIELDS.slice(0, 5) },
-      { title: 'Límites y sensibilidad', description: 'La potencia contratada total es la fuente única que usa el optimizador y Estado. Las tolerancias gobiernan los recálculos por desviación.', fields: PLANNING_FIELDS.slice(5, 10) },
-      { title: 'Simulación MQTT de acumuladores', description: 'Solo se usa para pruebas controladas.', fields: PLANNING_FIELDS.slice(10) },
+      { title: 'Límites y sensibilidad', description: 'La potencia contratada total es la fuente única que usa el optimizador y Estado. Las tolerancias gobiernan los recálculos por desviación.', fields: PLANNING_FIELDS.slice(5, 10) }
     ];
   }
   mqttEnabled(): boolean {
