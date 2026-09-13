@@ -155,7 +155,6 @@
                 <div><dt class="summary-term">Capacidad térmica<dtc-param-help field="room_thermal_capacity_kwh_per_c" label="Capacidad térmica" /></dt><dd>{{ heater.room_thermal_capacity_kwh_per_c }} kWh/°C</dd></div>
                 <div><dt class="summary-term">Pérdida térmica<dtc-param-help field="room_heat_loss_kw_per_c" label="Pérdida térmica" /></dt><dd>{{ heater.room_heat_loss_kw_per_c }} kW/°C</dd></div>
                 <div><dt class="summary-term">Prioridad<dtc-param-help field="priority" label="Prioridad" /></dt><dd>{{ heater.priority }}</dd></div>
-                <div><dt class="summary-term">Telemetría MQTT</dt><dd><code>{{ heater.telemetry_topic }}</code></dd></div>
               </dl>
             </mat-card-content>
             <mat-card-actions align="end"><button mat-button type="button" (click)="openEditHeater(heater)" [disabled]="!writable()" [attr.data-edit-heater]="heater.id"><mat-icon aria-hidden="true">edit</mat-icon> Editar acumulador</button><button mat-button color="warn" type="button" (click)="requestRemoveHeater(heater)" [disabled]="!writable()" [attr.data-delete-heater]="heater.id"><mat-icon aria-hidden="true">delete</mat-icon> Eliminar</button></mat-card-actions>

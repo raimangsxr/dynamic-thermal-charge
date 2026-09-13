@@ -182,7 +182,6 @@ const EMAIL_SECURITY_MODES: readonly Option[] = [
 
 const WEATHER_PROVIDERS: readonly Option[] = [
   { value: 'aemet', label: 'AEMET' },
-  { value: 'simulated', label: 'Simulada' },
 ];
 const DATABASE_DRIVERS: readonly Option[] = [
   { value: 'sqlite', label: 'SQLite local' },
@@ -205,10 +204,6 @@ const PLANNING_FIELDS: readonly FieldDefinition[] = [
   { name: 'base_load_w', label: 'Consumo base estimado (W)', type: 'number', min: '0', step: '100' },
   { name: 'deviation_shortfall_tolerance_c', label: 'Tolerancia de déficit imprevisto (°C)', type: 'number', min: '0.01', step: '0.1', hint: 'Desviación térmica adicional que se tolera antes de solicitar un recálculo inmediato.' },
   { name: 'deviation_surplus_soc_percent', label: 'Tolerancia de excedente de SOC (%)', type: 'number', min: '0.1', step: '0.5', hint: 'Excedente de carga almacenada que se tolera antes de solicitar un recálculo inmediato.' },
-  { name: 'mqtt_simulation_enabled', label: 'Activar simulación MQTT', type: 'boolean' },
-  { name: 'mqtt_simulation_initial_temperature_c', label: 'Temperatura inicial simulada (°C)', type: 'number', step: '0.1' },
-  { name: 'mqtt_simulation_publish_seconds', label: 'Publicación simulada (s)', type: 'number', min: '1', step: '1' },
-  { name: 'mqtt_simulation_thermal_loss_c_per_hour', label: 'Pérdida térmica simulada (°C/h)', type: 'number', min: '0', step: '0.1' },
 ];
 
 const SYSTEM_FIELDS: Record<SystemSection, readonly FieldDefinition[]> = {
@@ -234,8 +229,6 @@ const SYSTEM_FIELDS: Record<SystemSection, readonly FieldDefinition[]> = {
     { name: 'prefix', label: 'Prefijo de tópicos', type: 'text' },
     { name: 'discovery_prefix', label: 'Prefijo de descubrimiento', type: 'text' },
     { name: 'publish_seconds', label: 'Publicación de estado (s)', type: 'number', min: '1', step: '1' },
-    { name: 'fixed_stored_soc_percent', label: 'SOC almacenado fijo (%)', type: 'number', min: '0', max: '100', step: '1' },
-    { name: 'fixed_indoor_temperature_c', label: 'Temperatura interior fija (°C)', type: 'number', step: '0.1' },
   ],
   email: [
     { name: 'enabled', label: 'Activar alertas por email', type: 'boolean', hint: 'Al activarlas, el servidor, el remitente y al menos un destinatario son obligatorios.' },
@@ -250,10 +243,6 @@ const SYSTEM_FIELDS: Record<SystemSection, readonly FieldDefinition[]> = {
     { name: 'provider', label: 'Proveedor meteorológico', type: 'select', options: WEATHER_PROVIDERS },
     { name: 'municipality_code', label: 'Código de municipio AEMET', type: 'text', hint: 'Código INE de 5 dígitos.' },
     { name: 'timeout_seconds', label: 'Tiempo de espera (s)', type: 'number', min: '1', step: '1' },
-    { name: 'simulated_average_temperature_c', label: 'Media simulada (°C)', type: 'number', step: '0.1' },
-    { name: 'simulated_minimum_temperature_c', label: 'Mínima simulada (°C)', type: 'number', step: '0.1' },
-    { name: 'fallback_average_temperature_c', label: 'Media de respaldo (°C)', type: 'number', step: '0.1' },
-    { name: 'fallback_minimum_temperature_c', label: 'Mínima de respaldo (°C)', type: 'number', step: '0.1' },
     { name: 'retry_minutes', label: 'Reintento tras error (min)', type: 'number', min: '1', step: '1' },
     { name: 'refresh_minutes', label: 'Actualización automática (min)', type: 'number', min: '1', step: '1' },
   ],
@@ -804,7 +793,6 @@ export class Config {
     const values = {
       replan_minutes: number('replan_minutes'), planning_window_hours: number('planning_window_hours'), forecast_horizon_hours: number('forecast_horizon_hours'), aemet_query_hour: number('aemet_query_hour'), solver_time_limit_seconds: number('solver_time_limit_seconds'),
       contracted_power_w: number('contracted_power_w'), max_heating_power_w: number('max_heating_power_w'), base_load_w: number('base_load_w'), deviation_shortfall_tolerance_c: number('deviation_shortfall_tolerance_c'), deviation_surplus_soc_percent: number('deviation_surplus_soc_percent'),
-      mqtt_simulation_enabled: this.planningValue('mqtt_simulation_enabled') === true || this.planningValue('mqtt_simulation_enabled') === 'true', mqtt_simulation_initial_temperature_c: number('mqtt_simulation_initial_temperature_c'), mqtt_simulation_publish_seconds: number('mqtt_simulation_publish_seconds'), mqtt_simulation_topic_prefix: snapshot.mqtt_simulation_topic_prefix, mqtt_simulation_thermal_loss_c_per_hour: number('mqtt_simulation_thermal_loss_c_per_hour'),
     };
     this.planningSaving.set(true);
     this.api.patchPlanningConfig(snapshot.revision, values).subscribe({

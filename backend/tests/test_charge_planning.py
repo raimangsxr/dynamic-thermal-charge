@@ -90,7 +90,7 @@ def test_degree_hours_uses_nominal_coefficient_and_linear_feedback():
     assert estimates[0].demand_kwh == pytest.approx(23 / 21)
 
 
-def test_disabled_mqtt_supplies_valid_global_telemetry_to_automatic_planning(monkeypatch):
+def test_disabled_mqtt_does_not_fabricate_telemetry_for_automatic_planning(monkeypatch):
     now = datetime(2026, 1, 16, 0, 0, tzinfo=timezone.utc)
     config = example_installation()
 
@@ -116,24 +116,18 @@ def test_disabled_mqtt_supplies_valid_global_telemetry_to_automatic_planning(mon
             return original().build(request)
 
     monkeypatch.setattr(runtime, "DeterministicChargeOptimizer", RecordingOptimizer)
-    runtime._build_automatic_runtime_plan(
+    result = runtime._build_automatic_runtime_plan(
         store,
         config,
         now,
         (),
         {"forecast_horizon_hours": 2},
-        mqtt=MqttSystemSettings(
-            fixed_stored_soc_percent=40,
-            fixed_indoor_temperature_c=19,
-        ),
+        mqtt=MqttSystemSettings(enabled=False),
     )
 
     assert planning.telemetry_called is False
-    assert set(requests[0].telemetry) == {heater.id for heater in config.heaters}
-    assert {
-        (value.indoor_temperature_c, value.stored_soc_percent)
-        for value in requests[0].telemetry.values()
-    } == {(19, 40)}
+    assert requests[0].telemetry == {}
+    assert result[0].status == "INVALID"
 
 
 def test_enabled_mqtt_automatic_planning_uses_only_persisted_telemetry(monkeypatch):

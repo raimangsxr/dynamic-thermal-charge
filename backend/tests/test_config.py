@@ -19,7 +19,6 @@ from dynamic_thermal_charge.models import (
     Heater as _Heater,
     OutputConfig as _OutputConfig,
     ScheduleConfig as _ScheduleConfig,
-    SimulatedForecastConfig as _SimulatedForecastConfig,
     SiteConfig as _SiteConfig,
     ThermalProfile as _ThermalProfile,
     WeatherConfig as _WeatherConfig,
@@ -155,12 +154,7 @@ def test_a_thermal_profile_requires_a_weather_provider():
     # rule is checked on a configuration whose weather was dropped afterwards.
     config = _validator_config(
         heaters=(_validator_heater(thermal=thermal),),
-        weather=_WeatherConfig(
-            provider="simulated",
-            simulated=_SimulatedForecastConfig(
-                average_temperature_c=8.0, minimum_temperature_c=3.0
-            ),
-        ),
+        weather=_WeatherConfig(provider="aemet"),
     )
     validate_config(config)
 

@@ -34,7 +34,7 @@ describe('operator presentation vocabulary', () => {
 
   it('keeps forecast origin and next action distinct', () => {
     expect(forecastSourceLabel('aemet')).toContain('proveedor real');
-    expect(forecastSourceLabel('fallback')).toContain('valor de reserva');
+    expect(forecastSourceLabel('unsupported')).toBe('Origen no disponible');
     expect(forecastNextRunLabel('retry')).toBe('Próximo reintento');
     expect(forecastNextRunLabel('daily')).toContain('diaria');
   });

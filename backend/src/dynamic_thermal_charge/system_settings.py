@@ -65,11 +65,9 @@ class MqttSystemSettings:
     host: str | None = None
     port: int = 1883
     tls: bool = False
-    prefix: str = "dtc"
+    prefix: str = "telemetria"
     discovery_prefix: str = "homeassistant"
     publish_seconds: float = 15.0
-    fixed_stored_soc_percent: float = 50.0
-    fixed_indoor_temperature_c: float = 20.0
 
     def __post_init__(self) -> None:
         if self.enabled and not self.host:
@@ -80,49 +78,23 @@ class MqttSystemSettings:
             raise ValueError("MQTT prefixes cannot be empty")
         if self.publish_seconds <= 0:
             raise ValueError("mqtt.publish_seconds must be positive")
-        for name, value in (("fixed_indoor_temperature_c", self.fixed_indoor_temperature_c),):
-            if not math.isfinite(value) or not -50 <= value <= 80:
-                raise ValueError(f"mqtt.{name} must be between -50 and 80")
-        if (
-            not math.isfinite(self.fixed_stored_soc_percent)
-            or not 0 <= self.fixed_stored_soc_percent <= 100
-        ):
-            raise ValueError(
-                "mqtt.fixed_stored_soc_percent must be between 0 and 100"
-            )
-
-
 @dataclass(frozen=True)
 class WeatherSystemSettings:
-    provider: str = "simulated"
+    provider: str = "aemet"
     municipality_code: str | None = None
     timeout_seconds: float = 10.0
-    simulated_average_temperature_c: float = 8.0
-    simulated_minimum_temperature_c: float = 3.0
-    fallback_average_temperature_c: float = 8.0
-    fallback_minimum_temperature_c: float = 3.0
     retry_minutes: int = 15
     refresh_minutes: int = 180
 
     def __post_init__(self) -> None:
-        if self.provider not in {"simulated", "aemet"}:
-            raise ValueError("weather.provider must be simulated or aemet")
+        if self.provider != "aemet":
+            raise ValueError("weather.provider must be aemet")
         if self.municipality_code is not None and (
             len(self.municipality_code) != 5 or not self.municipality_code.isdigit()
         ):
             raise ValueError("weather.municipality_code must contain 5 digits")
-        if self.provider == "aemet" and not self.municipality_code:
-            raise ValueError("weather.municipality_code is required for AEMET")
         if self.timeout_seconds <= 0:
             raise ValueError("weather.timeout_seconds must be positive")
-        if self.simulated_minimum_temperature_c > self.simulated_average_temperature_c:
-            raise ValueError(
-                "weather simulated minimum temperature cannot exceed average temperature"
-            )
-        if self.fallback_minimum_temperature_c > self.fallback_average_temperature_c:
-            raise ValueError(
-                "weather fallback minimum temperature cannot exceed average temperature"
-            )
         if self.retry_minutes <= 0:
             raise ValueError("weather.retry_minutes must be positive")
         if self.refresh_minutes <= 0:
@@ -250,14 +222,23 @@ class SystemConfiguration:
         api = dict(documents["api"])
         api["cors_origins"] = tuple(api.get("cors_origins", ()))
         mqtt = dict(documents["mqtt"])
-        # Read the pre-room-energy simulation names once so an existing system
-        # configuration can be upgraded by the normal write path. They are not
-        # exposed again and never participate in planning.
+        mqtt.setdefault("prefix", "telemetria")
         mqtt.pop("fixed_temperature_c", None)
         mqtt.pop("fixed_target_temperature_c", None)
-        if "fixed_stored_soc_percent" not in mqtt and "fixed_stored_charge_percent" in mqtt:
-            mqtt["fixed_stored_soc_percent"] = mqtt["fixed_stored_charge_percent"]
+        mqtt.pop("fixed_indoor_temperature_c", None)
+        mqtt.pop("fixed_stored_soc_percent", None)
         mqtt.pop("fixed_stored_charge_percent", None)
+        weather = dict(documents["weather"])
+        # Older documents may still be read once while the schema migration is
+        # being applied.  Synthetic weather values are intentionally discarded.
+        weather["provider"] = "aemet"
+        for field_name in (
+            "simulated_average_temperature_c",
+            "simulated_minimum_temperature_c",
+            "fallback_average_temperature_c",
+            "fallback_minimum_temperature_c",
+        ):
+            weather.pop(field_name, None)
         # An installation configured before alerts existed has no email
         # document; the defaults keep sending disabled until it is configured.
         email = dict(documents.get("email") or {})
@@ -266,7 +247,7 @@ class SystemConfiguration:
             database=_strict_build(DatabaseSettings, documents["database"]),
             api=_strict_build(ApiSystemSettings, api),
             mqtt=_strict_build(MqttSystemSettings, mqtt),
-            weather=_strict_build(WeatherSystemSettings, documents["weather"]),
+            weather=_strict_build(WeatherSystemSettings, weather),
             output=_strict_build(OutputSystemSettings, documents["output"]),
             logging=_strict_build(LoggingSystemSettings, documents["logging"]),
             operations=_strict_build(OperationsSystemSettings, documents["operations"]),
@@ -308,15 +289,9 @@ ACTIVATION_POLICIES: dict[str, ActivationPolicy] = {
     "mqtt.prefix": ActivationPolicy.HOT,
     "mqtt.discovery_prefix": ActivationPolicy.HOT,
     "mqtt.publish_seconds": ActivationPolicy.HOT,
-    "mqtt.fixed_stored_soc_percent": ActivationPolicy.NEXT_CYCLE,
-    "mqtt.fixed_indoor_temperature_c": ActivationPolicy.NEXT_CYCLE,
     "weather.provider": ActivationPolicy.NEXT_CYCLE,
     "weather.municipality_code": ActivationPolicy.NEXT_CYCLE,
     "weather.timeout_seconds": ActivationPolicy.NEXT_CYCLE,
-    "weather.simulated_average_temperature_c": ActivationPolicy.NEXT_CYCLE,
-    "weather.simulated_minimum_temperature_c": ActivationPolicy.NEXT_CYCLE,
-    "weather.fallback_average_temperature_c": ActivationPolicy.NEXT_CYCLE,
-    "weather.fallback_minimum_temperature_c": ActivationPolicy.NEXT_CYCLE,
     "weather.retry_minutes": ActivationPolicy.NEXT_CYCLE,
     "weather.refresh_minutes": ActivationPolicy.NEXT_CYCLE,
     "output.driver": ActivationPolicy.RESTART,

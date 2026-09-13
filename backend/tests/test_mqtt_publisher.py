@@ -94,8 +94,8 @@ def test_database_or_schema_failure_makes_everything_unavailable_once_per_transi
     publisher.refresh()
 
     assert mqtt_client.publications[:2] == [
-        ("dtc/installation/state_available", "offline", 1, True),
-        ("dtc/installation/availability", "offline", 1, True),
+        ("telemetria/installation/state_available", "offline", 1, True),
+        ("telemetria/installation/availability", "offline", 1, True),
     ]
     assert caplog.text.count("MQTT publication unavailable:") == 1
     assert caplog.text.count("MQTT publication recovered") == 1
@@ -114,7 +114,7 @@ def test_last_will_is_qos_one_retained_and_declared_before_connect(mqtt_client):
     service.start()
 
     assert mqtt_client.events[:3] == [
-        ("will", "dtc/installation/availability", "offline", 1, True),
+        ("will", "telemetria/installation/availability", "offline", 1, True),
         ("connect", "broker.local", 1883),
         ("loop_start",),
     ]
@@ -133,9 +133,9 @@ def test_connect_and_clean_stop_publish_retained_availability_transitions(mqtt_c
     service.stop()
 
     assert mqtt_client.publications == [
-        ("dtc/installation/availability", "online", 1, True),
-        ("dtc/installation/state_available", "offline", 1, True),
-        ("dtc/installation/availability", "offline", 1, True),
+        ("telemetria/installation/availability", "online", 1, True),
+        ("telemetria/installation/state_available", "offline", 1, True),
+        ("telemetria/installation/availability", "offline", 1, True),
     ]
 
 
@@ -165,7 +165,7 @@ def test_complete_state_is_deterministic_and_retained(mqtt_client):
     publisher.refresh()
 
     publications = {topic: (json.loads(payload), qos, retain) for topic, payload, qos, retain in mqtt_client.publications if payload.startswith("{")}
-    installation, qos, retained = publications["dtc/installation/state"]
+    installation, qos, retained = publications["telemetria/installation/state"]
     assert (qos, retained) == (1, True)
     assert installation == {
         "controller_health": "healthy",
@@ -179,7 +179,7 @@ def test_complete_state_is_deterministic_and_retained(mqtt_client):
         "window_end": "2026-01-16T08:00:00+00:00",
         "window_start": "2026-01-16T00:00:00+00:00",
     }
-    salon, qos, retained = publications["dtc/installation/heater/salon/state"]
+    salon, qos, retained = publications["telemetria/installation/heater/salon/state"]
     assert (qos, retained) == (1, True)
     assert salon["output_on"] is True
     assert salon["power_w"] == 2800
@@ -305,15 +305,7 @@ def test_periodic_cycles_skip_publication_until_connection_is_accepted(mqtt_clie
 
 
 def test_declared_command_and_grouped_telemetry_topics_are_subscribed_after_discovery(mqtt_client):
-    config = replace(
-        example_installation(),
-        heaters=(
-            replace(
-                example_installation().heaters[0],
-                telemetry_topic="ha/salon/telemetry",
-            ),
-        ),
-    )
+    config = replace(example_installation(), heaters=(example_installation().heaters[0],))
     topics = TopicLayout()
     publisher = MqttPublisher(
         mqtt_client,
@@ -322,7 +314,7 @@ def test_declared_command_and_grouped_telemetry_topics_are_subscribed_after_disc
         discovery=lambda: discovery_entities(config, "Casa", topics),
         subscriptions=lambda: (
             topics.command("salon", "enabled"),
-            "ha/salon/telemetry",
+            topics.accumulator_topics("salon").telemetry,
         ),
     )
     service = MqttService(
@@ -343,7 +335,7 @@ def test_declared_command_and_grouped_telemetry_topics_are_subscribed_after_disc
     assert first_subscribe > last_discovery
     assert set(mqtt_client.subscriptions) == {
         topics.command("salon", "enabled"),
-        "ha/salon/telemetry",
+        topics.accumulator_topics("salon").telemetry,
     }
 
     subscribe_count = len(
@@ -386,16 +378,8 @@ def test_snapshot_reader_subscribes_to_standard_telemetry_topic_without_override
     assert "telemetria/acumuladores/salon/telemetry" in subscriptions
 
 
-def test_snapshot_reader_subscribes_only_to_an_explicit_telemetry_override():
-    config = replace(
-        example_installation(),
-        heaters=(
-            replace(
-                example_installation().heaters[0],
-                telemetry_topic="ha/salon/telemetry",
-            ),
-        ),
-    )
+def test_snapshot_reader_uses_the_layout_prefix_for_telemetry():
+    config = replace(example_installation(), heaters=(example_installation().heaters[0],))
     reader = StoreSnapshotReader(
         config_repository=type(
             "Repository",
@@ -419,7 +403,7 @@ def test_snapshot_reader_subscribes_only_to_an_explicit_telemetry_override():
         clock=lambda: NOW,
     )
 
-    subscriptions = reader.subscriptions(TopicLayout())
+    subscriptions = reader.subscriptions(TopicLayout(prefix="casa"))
 
-    assert "ha/salon/telemetry" in subscriptions
+    assert "casa/acumuladores/salon/telemetry" in subscriptions
     assert "telemetria/acumuladores/salon/telemetry" not in subscriptions

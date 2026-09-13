@@ -36,6 +36,10 @@ INVALID = "INVALID"
 # short fallback. Application entry points always inject the persisted value.
 SOLVER_TIME_LIMIT_SECONDS = 30
 PLANNING_HORIZON_HOURS = 24
+# CBC can leave a boundary shortfall a few units beyond the physical zero
+# after successive lexicographic solves. Do not expose that numerical residue
+# as an operator-visible comfort violation.
+SOLVER_NUMERICAL_TOLERANCE = 1e-5
 
 logger = logging.getLogger(__name__)
 
@@ -63,17 +67,7 @@ def resolve_planning_telemetry(
 ) -> dict[str, ChargeTelemetry]:
     """Return the telemetry snapshot automatic planning should use."""
     if mqtt is not None and not mqtt.enabled:
-        return {
-            heater.id: ChargeTelemetry(
-                heater_id=heater.id,
-                temperature_c=getattr(mqtt, "fixed_indoor_temperature_c", 20.0),
-                stored_charge_percent=getattr(mqtt, "fixed_stored_soc_percent", 50.0),
-                temperature_received_at=observed_at,
-                stored_charge_received_at=observed_at,
-            )
-            for heater in heaters
-            if heater.enabled
-        }
+        return {}
     valid: dict[str, ChargeTelemetry] = {}
     for heater in heaters:
         if not heater.enabled:
@@ -81,7 +75,7 @@ def resolve_planning_telemetry(
         value = persisted.get(heater.id)
         if value is None:
             continue
-        stamps = (value.temperature_received_at, value.stored_charge_received_at)
+        stamps = (value.indoor_received_at, value.stored_soc_received_at)
         if all(
             item is not None
             and 0 <= (observed_at - item).total_seconds() <= max_age_seconds
@@ -291,8 +285,12 @@ class DegreeHoursDemandEstimator:
                 raise ValueError(f"missing required telemetry for heater {heater.id}")
             assert state is not None
             coefficient = heater.capacity_kwh / (24 * design_delta)
-            actual = float(state.temperature_c)
-            target = float(state.target_temperature_c)
+            actual = float(state.indoor_temperature_c)
+            target = float(
+                state.target_temperature_c
+                if state.target_temperature_c is not None
+                else design_indoor_temperature_c
+            )
             for index, start in enumerate(starts):
                 outdoor = _weather_at(start, forecast)
                 if outdoor is None:
@@ -440,7 +438,7 @@ class MilpChargePlanner:
             for index, rule in enumerate(constraints)
         }
         for h in heaters:
-            initial_energy = h.capacity_kwh * float(request.telemetry[h.id].stored_charge_percent) / 100
+            initial_energy = h.capacity_kwh * float(request.telemetry[h.id].stored_soc_percent) / 100
             model += energy[(h.id, 0)] == initial_energy
             for i, start in enumerate(starts):
                 model += energy[(h.id, i + 1)] == energy[(h.id, i)] + h.charge_power_kw * slot_hours * on[(h.id, i)] - demand_by_key[(h.id, _key(start))] + unmet[(h.id, i)]
@@ -560,7 +558,7 @@ class MilpChargePlanner:
             if verified_solution is not None:
                 last_verified_solution = verified_solution
             if phase_index < len(phases) - 1:
-                model += objective <= optimum + 1e-7
+                model += objective <= optimum + 1e-6
         try:
             _require_solution_values(on, energy, unmet, c_short)
         except ValueError as exc:
@@ -576,14 +574,14 @@ class MilpChargePlanner:
             violations.append(PlanningViolation(h.id, "individual_power_limit", 0.0, h.power_w - limit_w, starts[0], "heater_power_exceeds_global_limit"))
         for index, rule in enumerate(constraints):
             short_kwh = float(c_short[index].value() or 0.0)
-            if short_kwh > 1e-6:
+            if short_kwh > SOLVER_NUMERICAL_TOLERANCE:
                 h = _heater(heaters, rule.heater_id)
                 achieved = float(energy[(h.id, boundary_index[_key(rule.at)])].value() or 0.0) / h.capacity_kwh * 100
                 violations.append(PlanningViolation(h.id, "minimum_soc", achieved, short_kwh / h.capacity_kwh * 100, rule.at, "insufficient_capacity_or_power"))
         for h in heaters:
             for i, start in enumerate(starts):
                 short = float(unmet[(h.id, i)].value() or 0.0)
-                if short > 1e-6:
+                if short > SOLVER_NUMERICAL_TOLERANCE:
                     served = demand_by_key[(h.id, _key(start))] - short
                     violations.append(PlanningViolation(h.id, "forecast_demand_kwh", served, short, start, "insufficient_stored_energy_or_power"))
         for violation in violations:
@@ -602,7 +600,7 @@ class MilpChargePlanner:
                 {h.id: _charge_percent(energy[(h.id, i + 1)].value(), h.capacity_kwh) for h in heaters},
                 {h.id: round(demand_by_key[(h.id, _key(start))] / h.capacity_kwh * 100, 6) for h in heaters},
                 _weather_at(start, request.forecast),
-                {h.id: float(request.telemetry[h.id].temperature_c) for h in heaters},
+                {h.id: float(request.telemetry[h.id].indoor_temperature_c) for h in heaters},
                 {h.id: _charge_percent(energy[(h.id, i)].value(), h.capacity_kwh) for h in heaters},
                 {h.id: round(demand_by_key[(h.id, _key(start))], 9) for h in heaters},
                 {h.id: (h.power_w if h.id in active else 0) for h in heaters},
@@ -612,7 +610,7 @@ class MilpChargePlanner:
                 start.isoformat(), ",".join(active) or "none", sum(_heater(heaters, heater_id).power_w for heater_id in active),
             )
         explanations = tuple(HeaterExplanation(
-            h.id, float(request.telemetry[h.id].stored_charge_percent),
+            h.id, float(request.telemetry[h.id].stored_soc_percent),
             sum(item.demand_kwh for item in demand if item.heater_id == h.id),
             h.demand_factor, h.reserve_percent,
             next((item.at for item in constraints if item.heater_id == h.id), None),
@@ -811,7 +809,10 @@ def _check_cancelled(request: PlanningInput) -> None:
 
 
 def _telemetry_usable(value: ChargeTelemetry | None) -> bool:
-    return value is not None and all(item is not None for item in (value.temperature_c, value.target_temperature_c, value.stored_charge_percent))
+    return value is not None and all(
+        item is not None
+        for item in (value.indoor_temperature_c, value.stored_soc_percent)
+    )
 
 
 def _weather_at(at: datetime, points: Sequence[HourlyForecastPoint]) -> float | None:
@@ -947,14 +948,10 @@ def _restore_verified_model_solution(
 
 def _invalid_plan(request: PlanningInput, start: datetime, starts: Sequence[datetime], detail: str, reason: str, generated_at: datetime, heater_ids: Sequence[str] = ()) -> AutomaticPlan:
     usable_starts = tuple(starts)
-    enabled = tuple(sorted((item for item in request.heaters if item.enabled), key=lambda item: item.id))
     violations = tuple(PlanningViolation(heater_id, "safe_planning_input", None, None, start, reason) for heater_id in heater_ids) or (PlanningViolation(None, "safe_planning_input", None, None, start, f"{reason}: {detail}"),)
     slots = tuple(AutomaticPlanSlot(
         at, advance_real(at, request.slot_minutes), (), 0,
-        {h.id: float(request.telemetry[h.id].stored_charge_percent or 0) if h.id in request.telemetry else 0.0 for h in enabled},
-        {h.id: 0.0 for h in enabled}, _weather_at(at, request.forecast), None,
-        {h.id: float(request.telemetry[h.id].stored_charge_percent or 0) if h.id in request.telemetry else 0.0 for h in enabled},
-        {h.id: 0.0 for h in enabled}, {h.id: 0 for h in enabled},
+        {}, {}, _weather_at(at, request.forecast), None,
     ) for at in usable_starts)
     horizon_end = advance_real(usable_starts[-1], request.slot_minutes) if usable_starts else advance_real(start, request.horizon_hours * 60)
     return AutomaticPlan(start, horizon_end, request.slot_minutes, slots, violations, INVALID, (), input_token(request), generated_at)
@@ -1601,7 +1598,9 @@ def _build_room_energy_plan(request: PlanningInput) -> AutomaticPlan:
         return _invalid_room_plan(
             request,
             horizon_start,
-            starts,
+            # Unknown physical state must produce no controller schedule and
+            # no fabricated room or storage values.
+            (),
             "missing fresh indoor temperature or stored SOC telemetry",
             "missing_required_state",
             generated_at,
@@ -2175,7 +2174,7 @@ def _solve_room_energy(
         if verified_solution is not None:
             last_verified_solution = verified_solution
         if phase_index < len(phases) - 1:
-            model += objective <= optimum + 1e-7
+            model += objective <= optimum + 1e-6
 
     violations: list[PlanningViolation] = []
     for heater in heaters:
@@ -2240,7 +2239,11 @@ def _solve_room_energy(
             )
             start_short_value = 0.0 if target is None else max(0.0, target - indoor_value)
             short_value = 0.0 if target is None else max(0.0, target - next_indoor_value)
-            if target is not None and start_short_value > 1e-6:
+            if start_short_value <= SOLVER_NUMERICAL_TOLERANCE:
+                start_short_value = 0.0
+            if short_value <= SOLVER_NUMERICAL_TOLERANCE:
+                short_value = 0.0
+            if target is not None and start_short_value > SOLVER_NUMERICAL_TOLERANCE:
                 violations.append(
                     PlanningViolation(
                         heater.id,
@@ -2253,7 +2256,7 @@ def _solve_room_energy(
                         None if target_window is None else target_window[1],
                     )
                 )
-            if target is not None and short_value > 1e-6:
+            if target is not None and short_value > SOLVER_NUMERICAL_TOLERANCE:
                 violations.append(
                     PlanningViolation(
                         heater.id,
@@ -2339,7 +2342,7 @@ def _solve_room_energy(
             start_shortfall = _required_solver_value(
                 start_shortfall_value.value(), "guard start temperature shortfall"
             )
-            if start_shortfall > 1e-6:
+            if start_shortfall > SOLVER_NUMERICAL_TOLERANCE:
                 achieved = _required_solver_value(
                     indoor[(heater.id, len(starts))].value(),
                     "terminal indoor temperature",
@@ -2359,7 +2362,7 @@ def _solve_room_energy(
             guard_end_shortfall[heater.id].value(),
             "guard end temperature shortfall",
         )
-        if end_shortfall > 1e-6:
+        if end_shortfall > SOLVER_NUMERICAL_TOLERANCE:
             achieved = _required_solver_value(
                 guard_indoor_next[heater.id].value(),
                 "guard end indoor temperature",
@@ -2388,6 +2391,7 @@ def _solve_room_energy(
         boundaries[-1],
         targets={heater.id: _room_targets(request, heater) for heater in heaters},
         timezone_name=request.timezone_name,
+        tolerance=SOLVER_NUMERICAL_TOLERANCE,
     )
     comfort_heaters = {
         item.heater_id
@@ -2434,7 +2438,6 @@ def _invalid_room_plan(
     generated_at: datetime,
     heater_ids: Sequence[str] = (),
 ) -> AutomaticPlan:
-    enabled = tuple(sorted((item for item in request.heaters if item.enabled), key=lambda item: item.id))
     violations = tuple(
         PlanningViolation(heater_id, "safe_planning_input", None, None, start, reason)
         for heater_id in heater_ids
@@ -2442,37 +2445,11 @@ def _invalid_room_plan(
     slots: list[AutomaticPlanSlot] = []
     for at in starts:
         end = advance_real(at, request.slot_minutes)
-        stored: dict[str, float] = {}
-        indoor: dict[str, float] = {}
-        target: dict[str, float] = {}
-        for heater in enabled:
-            state = request.telemetry.get(heater.id)
-            soc = 0.0 if state is None or state.stored_soc_percent is None else float(state.stored_soc_percent)
-            value = 0.0 if state is None or state.indoor_temperature_c is None else float(state.indoor_temperature_c)
-            stored[heater.id] = soc * heater.capacity_kwh / 100
-            indoor[heater.id] = value
-            active = active_temperature_target(_room_targets(request, heater), at, request.timezone_name)
-            if active is not None:
-                target[heater.id] = active
         slots.append(
             AutomaticPlanSlot(
                 at, end, (), 0,
-                {heater.id: (stored[heater.id] / heater.capacity_kwh * 100) for heater in enabled},
-                {heater.id: 0.0 for heater in enabled},
+                {}, {},
                 _weather_at(at, request.forecast),
-                indoor,
-                {heater.id: (stored[heater.id] / heater.capacity_kwh * 100) for heater in enabled},
-                {heater.id: 0.0 for heater in enabled},
-                {heater.id: 0 for heater in enabled},
-                stored,
-                target,
-                {heater.id: 0.0 for heater in enabled},
-                {heater.id: 0.0 for heater in enabled},
-                {heater.id: max(0.0, target.get(heater.id, indoor[heater.id]) - indoor[heater.id]) for heater in enabled},
-                {heater.id: 0.0 for heater in enabled},
-                stored,
-                indoor,
-                {heater.id: max(0.0, target.get(heater.id, indoor[heater.id]) - indoor[heater.id]) for heater in enabled},
             )
         )
     horizon_end = advance_real(starts[-1], request.slot_minutes) if starts else advance_real(start, request.horizon_hours * 60)

@@ -292,7 +292,7 @@ def test_automatic_diagnostic_uses_only_the_linked_forecast_context(
             average_temperature_c=99.0,
             minimum_temperature_c=99.0,
             maximum_temperature_c=99.0,
-            source="simulated",
+            source="aemet",
             hourly_points=(HourlyForecastPoint(NOW, 99.0),),
         )
     )
@@ -322,7 +322,7 @@ def test_legacy_diagnostic_uses_its_linked_forecast_and_explanation_stays_unchan
         average_temperature_c=4.0,
         minimum_temperature_c=0.0,
         maximum_temperature_c=8.0,
-        source="fallback",
+        source="aemet",
         hourly_points=tuple(
             HourlyForecastPoint(NOW - timedelta(hours=24) + timedelta(hours=index), 2.0)
             for index in range(72)
@@ -347,7 +347,7 @@ def test_legacy_diagnostic_uses_its_linked_forecast_and_explanation_stays_unchan
 
     assert diagnostic.status_code == 200, diagnostic.text
     assert diagnostic.json()["forecast"]["forecast_id"] == linked.id
-    assert diagnostic.json()["forecast"]["source"] == "fallback"
+    assert diagnostic.json()["forecast"]["source"] == "aemet"
     assert explanation.status_code == 200, explanation.text
     assert "forecast" not in explanation.json()
 

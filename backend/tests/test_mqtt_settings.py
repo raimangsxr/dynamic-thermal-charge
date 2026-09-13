@@ -29,7 +29,7 @@ def test_host_and_defaults_are_loaded_from_database(initialised_store, monkeypat
     assert settings.host == "broker.local"
     assert settings.port == 1883
     assert settings.tls is False
-    assert settings.prefix == "dtc"
+    assert settings.prefix == "telemetria"
     assert settings.discovery_prefix == "homeassistant"
     assert settings.publish_seconds == 15
 

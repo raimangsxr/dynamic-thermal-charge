@@ -1,13 +1,11 @@
 from datetime import date, datetime, timezone
 import io
-import logging
 from urllib.error import HTTPError
 
 import pytest
 
 from dynamic_thermal_charge.models import (
     AemetConfig,
-    SimulatedForecastConfig,
     WeatherConfig,
 )
 from dynamic_thermal_charge.weather import (
@@ -54,7 +52,7 @@ def hourly_aemet_payload():
     }]
 
 
-def test_aemet_fetches_envelope_and_daily_data() -> None:
+def test_aemet_rejects_daily_only_data_without_hourly_coverage() -> None:
     calls = []
 
     def http_get(url, headers, timeout):
@@ -73,13 +71,8 @@ def test_aemet_fetches_envelope_and_daily_data() -> None:
         http_get=http_get,
     )
 
-    result = provider.forecast_for(date(2026, 1, 15))
-
-    assert result.average_temperature_c == 7
-    assert result.minimum_temperature_c == 2
-    assert result.maximum_temperature_c == 12
-    assert result.source == "aemet"
-    assert result.location == "Madrid, Madrid"
+    with pytest.raises(WeatherProviderError, match="hourly"):
+        provider.forecast_for(date(2026, 1, 15))
     assert calls[0][0].endswith("/28079")
     assert calls[0][1]["api_key"] == "secret-key"
     assert "api_key" not in calls[1][1]
@@ -150,18 +143,6 @@ def test_aemet_rejects_an_hourly_payload_without_usable_temperature() -> None:
         provider.forecast_for(date(2026, 1, 15))
 
 
-def test_simulated_forecast_has_a_deterministic_48_hour_series() -> None:
-    config = WeatherConfig(
-        provider="simulated",
-        simulated=SimulatedForecastConfig(average_temperature_c=8, minimum_temperature_c=3),
-    )
-    first = build_weather_provider(config).forecast_for(date(2026, 1, 15))
-    second = build_weather_provider(config).forecast_for(date(2026, 1, 15))
-    assert first.hourly_points == second.hourly_points
-    assert len(first.hourly_points) == 48
-    assert first.hourly_points[0].timestamp == datetime(2026, 1, 15, tzinfo=first.hourly_points[0].timestamp.tzinfo)
-
-
 def test_aemet_persists_all_hourly_days_in_payload() -> None:
     payload = [{
         "nombre": "Madrid",
@@ -183,7 +164,7 @@ def test_aemet_persists_all_hourly_days_in_payload() -> None:
     assert [point.temperature_c for point in result.hourly_points] == [6, 4, 2]
 
 
-def test_aemet_accepts_hourly_payload_starting_on_next_day() -> None:
+def test_aemet_rejects_hourly_payload_without_the_requested_date() -> None:
     payload = [{
         "nombre": "Madrid",
         "provincia": "Madrid",
@@ -204,12 +185,8 @@ def test_aemet_accepts_hourly_payload_starting_on_next_day() -> None:
         http_get=lambda url, headers, timeout: {"estado": 200, "datos": "https://data.example/hourly.json"} if headers.get("api_key") else payload,
     )
 
-    result = provider.forecast_for(date(2026, 1, 15))
-
-    assert [point.temperature_c for point in result.hourly_points] == [3, 5, 1]
-    assert result.average_temperature_c == pytest.approx(3)
-    assert result.minimum_temperature_c == 1
-    assert result.maximum_temperature_c == 5
+    with pytest.raises(WeatherProviderError, match="does not cover"):
+        provider.forecast_for(date(2026, 1, 15))
 
 
 def test_future_forecast_points_drop_hours_before_current_hour() -> None:
@@ -243,28 +220,7 @@ def test_aemet_rejects_missing_forecast_day() -> None:
         provider.forecast_for(date(2026, 1, 16))
 
 
-def test_uses_fallback_when_aemet_key_is_missing(caplog) -> None:
-    config = WeatherConfig(
-        provider="aemet",
-        aemet=AemetConfig(municipality_code="28079"),
-        fallback=SimulatedForecastConfig(
-            average_temperature_c=8,
-            minimum_temperature_c=3,
-        ),
-    )
-    provider = build_weather_provider(config, api_key=None)
-
-    with caplog.at_level(logging.WARNING):
-        result = provider.forecast_for(date(2026, 1, 15))
-
-    assert result.source == "simulated"
-    assert result.average_temperature_c == 8
-    assert result.minimum_temperature_c == 3
-    assert result.maximum_temperature_c == 13
-    assert "using configured fallback" in caplog.text
-
-
-def test_fails_without_key_or_fallback() -> None:
+def test_fails_without_an_aemet_key() -> None:
     config = WeatherConfig(
         provider="aemet",
         aemet=AemetConfig(municipality_code="28079"),

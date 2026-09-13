@@ -40,7 +40,6 @@ from ...planning_explanation import operator_summary as persisted_operator_summa
 from ...planning_explanation import planning_evidence
 from ...persistence import ConfigValidationError
 from ...scheduler import advance_real
-from ...mqtt.topics import resolve_accumulator_topics
 from ..dependencies import usable_store
 from ..schemas import (
     ERROR_RESPONSES,
@@ -58,7 +57,6 @@ from ..schemas import (
     PlanningDeficitView,
     PlanningPreviewRequest,
     PlanningPreviewResponse,
-    HeaterChargeConfigRequest,
     PlanningSiteConfigRequest,
     PlanningSiteConfigResponse,
     PlanningCheckView,
@@ -82,15 +80,6 @@ PREVIEW_STEP_NAMES = (
     "input_validation", "telemetry", "aemet_coverage", "room_model",
     "resolution", "safety_validation", "operator_summary",
 )
-
-
-def _planning_topics(heater, charge_config):
-    configured = charge_config.get(heater.id, {})
-    return resolve_accumulator_topics(
-        heater.id,
-        damper_topic=configured.get("damper_topic"),
-        setpoint_topic=configured.get("setpoint_topic"),
-    )
 
 
 class PreviewJobRunner:
@@ -208,7 +197,6 @@ def get_planning(
     cycle_status = forecast_cycle_context(store.planning)
     planning_site = store.planning.site()
     timezone_name = config.schedule.timezone if config.schedule is not None else "UTC"
-    charge_config = store.planning.heater_charge_config()
     heaters = [
         PlanningHeaterView(
             id=heater.id,
@@ -217,8 +205,6 @@ def get_planning(
             capacity_kwh=heater.capacity_kwh,
             priority=heater.priority,
             enabled=heater.enabled,
-            damper_topic=_planning_topics(heater, charge_config).discharge,
-            setpoint_topic=_planning_topics(heater, charge_config).setpoint,
         )
         for heater in config.heaters
     ]
@@ -626,24 +612,6 @@ def update_planning_config(
     values = payload.model_dump(exclude={"expected_revision"})
     store.planning.update_site(values, payload.expected_revision)
     return PlanningSiteConfigResponse.model_validate(store.planning.site())
-
-
-@router.patch("/planning/heaters/{heater_id}", response_model=PlanningResponse, responses=ERROR_RESPONSES)
-def update_heater_planning(
-    heater_id: str,
-    payload: HeaterChargeConfigRequest,
-    app_request: Request,
-    store: Store = Depends(usable_store),
-) -> PlanningResponse:
-    config, _revision = store.repository.current()
-    if heater_id not in {heater.id for heater in config.heaters}:
-        raise ConfigValidationError("heater does not exist", field="heater_id", heater_id=heater_id)
-    store.planning.update_heater_charge_config(
-        heater_id, payload.model_dump(exclude_unset=True)
-    )
-    # Re-read through the public projection so the response cannot contain a
-    # partially applied topic configuration.
-    return get_planning(app_request, store)
 
 
 def _violation_payload(item: PlanningViolation | dict[str, Any]) -> dict[str, Any]:

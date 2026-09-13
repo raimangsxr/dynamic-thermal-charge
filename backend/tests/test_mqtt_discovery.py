@@ -31,20 +31,20 @@ def test_only_live_controller_values_require_both_availability_levels():
             availability = entity.payload["availability"]
             assert "availability_mode" not in entity.payload
             assert [entry["topic"] for entry in availability] == [
-                "dtc/installation/availability"
+                "telemetria/installation/availability"
             ]
             continue
         availability = entity.payload["availability"]
         if key in controller_dependent:
             assert entity.payload["availability_mode"] == "all"
             assert [entry["topic"] for entry in availability] == [
-                "dtc/installation/availability",
-                "dtc/installation/state_available",
+                "telemetria/installation/availability",
+                "telemetria/installation/state_available",
             ]
         else:
             assert "availability_mode" not in entity.payload
             assert [entry["topic"] for entry in availability] == [
-                "dtc/installation/availability"
+                "telemetria/installation/availability"
             ]
 
 
@@ -78,7 +78,7 @@ def test_grouped_devices_keep_shared_entities_and_separate_live_values():
         "power", "enabled", "requested_minutes", "allocated_minutes", "unmet_minutes"
     }
     assert heater.payload["cmps"]["enabled"]["command_topic"] == (
-        "dtc/installation/heater/salon/set/enabled"
+        "telemetria/installation/heater/salon/set/enabled"
     )
     assert entities["heater_salon_output"].payload["value_template"] == (
         "{{ value_json.output_on }}"

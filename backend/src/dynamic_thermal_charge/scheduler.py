@@ -41,7 +41,6 @@ class ChargeScheduler:
         start: datetime,
         requested_charge_minutes: Mapping[str, int] | None = None,
         hourly_points: Sequence[HourlyForecastPoint] | None = None,
-        fallback_temperature_c: float | None = None,
     ) -> ScheduleResult:
         aligned_start = align_to_slot(start, site.slot_minutes)
         if aligned_start != start:
@@ -95,7 +94,6 @@ class ChargeScheduler:
                 boundaries[slot_index],
                 boundaries[slot_index + 1],
                 hourly_points or (),
-                fallback_temperature_c,
             )
             for slot_index in range(total_slots)
         }
@@ -334,7 +332,6 @@ def _temperature_for_slot(
     start: datetime,
     end: datetime,
     points: Sequence[HourlyForecastPoint],
-    fallback_temperature_c: float | None,
 ) -> tuple[float | None, bool]:
     usable = tuple(
         point for point in points if start <= point.timestamp < end
@@ -343,6 +340,4 @@ def _temperature_for_slot(
         return sum(point.temperature_c for point in usable) / len(usable), any(
             point.interpolated for point in usable
         )
-    if fallback_temperature_c is not None:
-        return fallback_temperature_c, True
     return None, False

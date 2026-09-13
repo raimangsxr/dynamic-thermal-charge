@@ -165,47 +165,40 @@ seguridad como responsabilidad del dispositivo. La duración, el sondeo y la
 renovación de la sesión se ajustan en `Configuración → Servicio → Operación`.
 
 La configuración de previsión se administra exclusivamente en `Configuración →
-Integraciones → Meteorología`: allí se guardan proveedor, municipio AEMET, temperaturas simuladas y
-de fallback, timeout y política de actualización. La clave AEMET se reemplaza
-como secreto gestionado y la API solo informa si está configurada; nunca
-devuelve su valor.
+Integraciones → Meteorología`: allí se guardan el proveedor AEMET, el municipio,
+el timeout y la política de actualización. La clave AEMET se reemplaza como
+secreto gestionado y la API solo informa si está configurada; nunca devuelve su
+valor.
 
 Para AEMET, `aemet_query_hour` define la consulta diaria en la zona horaria de
 la instalación. Tras un fallo se realizan cinco reintentos, uno por hora; si
 se agotan, el controlador conserva la última previsión AEMET válida marcada
-como obsoleta para seguir calculando, pero nunca habilita carga automática con
-una previsión simulada o de respaldo. `replan_minutes` marca la cadencia de
-replanificación y se ajusta siempre a un límite de intervalo, sin ser menor que
-un intervalo de carga.
+como obsoleta, pero solo planifica si esa previsión sigue cubriendo el horizonte
+requerido. Si no hay cobertura AEMET válida, el resultado es `INVALID` y no se
+fabrican temperaturas. `replan_minutes` marca la cadencia de replanificación y
+se ajusta siempre a un límite de intervalo, sin ser menor que un intervalo de
+carga.
 
 La sección `Configuración → Integraciones → MQTT` permite desactivar el broker para instalaciones de
-prueba. Mientras MQTT está deshabilitado, el controlador usa los dos valores
-fijos globales de esa sección (temperatura interior y SOC almacenado); al
-habilitarlo vuelve a exigir ambos datos recibidos por MQTT. La consigna térmica
-procede del horario semanal configurado para cada acumulador y el proceso MQTT
-del `Controller` la publica al `Heater` durante la descarga mediante su topic de
-consigna efectivo. El mando de descarga es una habilitación (`ON`/`OFF`), no
-una orden de abrir permanentemente la compuerta: el termostato del acumulador
-la modula contra esa consigna.
+prueba. Mientras MQTT está deshabilitado, o mientras falte telemetría MQTT
+fresca, la planificación es `INVALID` y no fabrica temperatura interior ni
+SOC. La consigna térmica procede del horario semanal configurado para cada
+acumulador y el proceso MQTT del `Controller` la publica al `Heater` durante la
+descarga. El mando de descarga es una habilitación (`ON`/`OFF`), no una orden
+de abrir permanentemente la compuerta: el termostato del acumulador la modula
+contra esa consigna.
 
 Con salidas GPIO, MQTT puede permanecer deshabilitado para realizar pruebas de
-relés; cuando el controlador necesita planificar en ese modo usa los valores
-fijos anteriores. La simulación explícita de acumuladores
-(`mqtt_simulation_enabled`) sí bloquea el arranque GPIO y se registra como un
-error crítico.
+relés; la prueba de relés no depende de que exista un plan de carga válido.
 
 Cada acumulador usa topics MQTT estándar bajo
-`telemetria/acumuladores/<id-normalizado>`: `telemetry`, `discharge` y
-`setpoint`. El `id` se normaliza con el mismo slug seguro usado por el
-controlador. Los campos persistidos `telemetry_topic`, `damper_topic` y
-`setpoint_topic` se conservan como overrides de compatibilidad; cuando están
-vacíos se usa el topic estándar y nunca se publican o suscriben ambos. El
-payload de telemetría es un objeto JSON con las claves numéricas opcionales
+`<prefijo>/acumuladores/<id-normalizado>`: `telemetry`, `discharge` y
+`setpoint`, donde el prefijo por defecto es `telemetria`. El `id` se normaliza
+con el mismo slug seguro usado por el controlador. El payload de telemetría es
+un objeto JSON con las claves numéricas opcionales
 `indoor_temperature_c`, `stored_soc_percent` y `damper_position_percent`; una
 clave ausente conserva su último valor válido y una clave inválida solo
-invalida ese campo. La telemetría agrupada no se retiene. La simulación publica
-en el mismo topic efectivo; el antiguo prefijo de simulación se conserva solo
-para compatibilidad de configuración y ya no cambia el topic. El descubrimiento de Home Assistant agrupa
+invalida ese campo. La telemetría agrupada no se retiene. El descubrimiento de Home Assistant agrupa
 las entidades con la misma disponibilidad en un único mensaje por dispositivo;
 las entidades que requieren además `state_available` mantienen su disponibilidad
 individual.
@@ -239,43 +232,32 @@ recálculo periódico lo desactiva.
 
 ### Topics MQTT de lectura y escritura
 
-El prefijo MQTT de la instalación es `<prefijo>/installation` (por defecto,
-`dtc/installation`). En la tabla, `Controller` significa el proceso MQTT de
-esta aplicación; `Heater` significa el acumulador físico o su adaptador MQTT.
+Todos los topics propios usan `<prefijo>`; el prefijo MQTT de la instalación es
+`<prefijo>/installation` (por defecto, `telemetria/installation`). En la tabla,
+`Controller` significa el proceso MQTT de esta aplicación; `Heater` significa el
+acumulador físico o su adaptador MQTT.
 La dirección se expresa desde el punto de vista del `Controller`.
 
 | Topic (ejemplo) | Emite | Recibe | Mensaje | QoS / retenido |
 | --- | --- | --- | --- | --- |
-| `telemetria/acumuladores/salon/telemetry` (estándar u override `telemetry_topic`) | `Heater` o simulador del `Controller` | `Controller` | JSON de telemetría | Suscripción QoS 1; simulador QoS 0 / no retenido |
-| `telemetria/acumuladores/salon/discharge` (estándar u override `damper_topic`) | `Controller` (proceso MQTT) | `Heater` | `ON` o `OFF` para habilitar/deshabilitar la descarga | QoS 1 / no retenido |
-| `telemetria/acumuladores/salon/setpoint` (estándar u override `setpoint_topic`) | `Controller` (proceso MQTT) | `Heater` | Temperatura objetivo en °C, con un decimal; `NULL` si está desactivada | QoS 1 / no retenido |
-| `dtc/installation/heater/salon/set/enabled` | Home Assistant u otro cliente MQTT | `Controller` | `ON` o `OFF` | El comando retenido se rechaza |
-| `dtc/installation/availability` | `Controller` | Clientes MQTT / Home Assistant | `online` u `offline` | QoS 1 / retenido |
-| `dtc/installation/state_available` | `Controller` | Clientes MQTT / Home Assistant | `online` u `offline` | QoS 1 / retenido |
-| `dtc/installation/state` | `Controller` | Clientes MQTT / Home Assistant | Estado JSON de la instalación | QoS 1 / retenido |
-| `dtc/installation/heater/salon/state` | `Controller` | Clientes MQTT / Home Assistant | Estado JSON del acumulador | QoS 1 / retenido |
+| `telemetria/acumuladores/salon/telemetry` | `Heater` | `Controller` | JSON de telemetría | Suscripción QoS 1; no retenido |
+| `telemetria/acumuladores/salon/discharge` | `Controller` (proceso MQTT) | `Heater` | `ON` o `OFF` para habilitar/deshabilitar la descarga | QoS 1 / no retenido |
+| `telemetria/acumuladores/salon/setpoint` | `Controller` (proceso MQTT) | `Heater` | Temperatura objetivo en °C, con un decimal; `NULL` si está desactivada | QoS 1 / no retenido |
+| `telemetria/installation/heater/salon/set/enabled` | Home Assistant u otro cliente MQTT | `Controller` | `ON` o `OFF` | El comando retenido se rechaza |
+| `telemetria/installation/availability` | `Controller` | Clientes MQTT / Home Assistant | `online` u `offline` | QoS 1 / retenido |
+| `telemetria/installation/state_available` | `Controller` | Clientes MQTT / Home Assistant | `online` u `offline` | QoS 1 / retenido |
+| `telemetria/installation/state` | `Controller` | Clientes MQTT / Home Assistant | Estado JSON de la instalación | QoS 1 / retenido |
+| `telemetria/installation/heater/salon/state` | `Controller` | Clientes MQTT / Home Assistant | Estado JSON del acumulador | QoS 1 / retenido |
 | `homeassistant/device/dynamic_thermal_charge_installation/config` | `Controller` | Home Assistant | Configuración de discovery agrupada | QoS 1 / retenido |
 | `homeassistant/device/dynamic_thermal_charge_installation_salon/config` | `Controller` | Home Assistant | Configuración de discovery agrupada del acumulador | QoS 1 / retenido |
 | `homeassistant/<componente>/<unique_id>/config` | `Controller` | Home Assistant | Configuración de discovery individual | QoS 1 / retenido |
 
-El topic de telemetría efectivo de cada acumulador es
-`telemetria/acumuladores/<id-normalizado>/telemetry`, salvo que exista el
-override persistido `telemetry_topic`; no se deriva de `<prefijo>/installation`.
-Su payload es un objeto JSON con las claves numéricas opcionales
+El topic de telemetría de cada acumulador es siempre
+`<prefijo>/acumuladores/<id-normalizado>/telemetry`; no se deriva de
+`<prefijo>/installation` y no admite overrides. Su payload es un objeto JSON con las claves numéricas opcionales
 `indoor_temperature_c`, `stored_soc_percent` y `damper_position_percent`. Una
 clave ausente conserva su último valor válido y una clave inválida solo invalida
-ese campo. La telemetría no se retiene. La simulación usa exactamente el mismo
-topic efectivo, independientemente del antiguo `mqtt_simulation_topic_prefix`.
-
-Los overrides `damper_topic` y `setpoint_topic` se aceptan todavía en la API
-para instalaciones existentes, pero el panel los muestra como topics efectivos
-de solo lectura. Para recuperar los topics estándar, hay que establecer ambos
-campos a `null` (o a una cadena vacía) mediante `PATCH /api/v1/planning/heaters/<id>`;
-por ejemplo:
-
-```json
-{"damper_topic": null, "setpoint_topic": null}
-```
+ese campo. La telemetría no se retiene.
 
 El `Controller` publica ambos mandos en cada ciclo, con QoS 1 y
 sin retención. Dentro de una ventana con consigna activa publica `ON` y la
@@ -295,13 +277,6 @@ Telemetría emitida por un acumulador real:
 ```text
 Topic: telemetria/acumuladores/salon/telemetry
 Payload: {"indoor_temperature_c":19.5,"stored_soc_percent":60,"damper_position_percent":42}
-```
-
-Telemetría emitida por el simulador del `Controller`:
-
-```text
-Topic: telemetria/acumuladores/salon/telemetry
-Payload: {"indoor_temperature_c":45.0,"stored_soc_percent":50.0}
 ```
 
 Mando de descarga y temperatura objetivo emitidos por el `Controller` al
@@ -336,21 +311,21 @@ Comando de habilitación emitido por Home Assistant u otro cliente MQTT. No es
 un comando del `Heater` ni contiene una consigna de temperatura:
 
 ```text
-Topic: dtc/installation/heater/salon/set/enabled
+Topic: telemetria/installation/heater/salon/set/enabled
 Payload: ON
 ```
 
 Disponibilidad publicada por el `Controller`:
 
 ```text
-Topic: dtc/installation/availability
+Topic: telemetria/installation/availability
 Payload: online
 ```
 
 Disponibilidad del estado calculado por el `Controller`:
 
 ```text
-Topic: dtc/installation/state_available
+Topic: telemetria/installation/state_available
 Payload: online
 ```
 
@@ -371,7 +346,7 @@ Snapshot de instalación publicado por el `Controller`:
 }
 ```
 
-El topic de ese mensaje es `dtc/installation/state`. Si el `Controller` no
+El topic de ese mensaje es `telemetria/installation/state`. Si el `Controller` no
 puede acreditar que su estado sea actual, omite `instant_power_w`,
 `percent_of_limit` y los campos de salida dependientes del controlador.
 
@@ -389,18 +364,14 @@ Snapshot de un acumulador publicado por el `Controller`:
 }
 ```
 
-El topic de ese mensaje es `dtc/installation/heater/salon/state`.
+El topic de ese mensaje es `telemetria/installation/heater/salon/state`.
 `output_on` solo aparece cuando el estado del `Controller` es actual.
 
 La consigna `target_temperature_c` se guarda como horario semanal y la usa el
 planificador del `Controller`; no se incluye en `state` ni en
 `heater/<id>/state`, sino que se publica como un número con un decimal en el
-`setpoint_topic` del `Heater` mientras `discharge_enabled` sea `true`; cuando es
-`false`, ese topic recibe `NULL`. El campo
-heredado `target_temperature_topic` no se reutiliza para esta orden; sigue
-siendo obsoleto junto con `temperature_topic`, `stored_charge_topic`,
-`stored_soc_topic` e `indoor_topic`. La entrada actual de telemetría es el
-único `telemetry_topic` agrupado.
+topic `setpoint` del `Heater` mientras `discharge_enabled` sea `true`; cuando es
+`false`, ese topic recibe `NULL`.
 
 El descubrimiento de Home Assistant se publica en
 `<discovery_prefix>/device/<id-dispositivo>/config` para los dispositivos
@@ -426,9 +397,9 @@ fragmento representativo:
       "unit_of_measurement": "W"
     }
   },
-  "state_topic": "dtc/installation/state",
+  "state_topic": "telemetria/installation/state",
   "availability": [{
-    "topic": "dtc/installation/availability",
+    "topic": "telemetria/installation/availability",
     "payload_available": "online",
     "payload_not_available": "offline"
   }]
@@ -437,7 +408,7 @@ fragmento representativo:
 
 El dispositivo del acumulador `salon` recibe además un documento en
 `homeassistant/device/dynamic_thermal_charge_installation_salon/config` que
-referencia `dtc/installation/heater/salon/state`:
+referencia `telemetria/installation/heater/salon/state`:
 
 ```json
 {
@@ -458,9 +429,9 @@ referencia `dtc/installation/heater/salon/state`:
       "unit_of_measurement": "W"
     }
   },
-  "state_topic": "dtc/installation/heater/salon/state",
+  "state_topic": "telemetria/installation/heater/salon/state",
   "availability": [{
-    "topic": "dtc/installation/availability",
+    "topic": "telemetria/installation/availability",
     "payload_available": "online",
     "payload_not_available": "offline"
   }]
@@ -483,11 +454,11 @@ salida del acumulador:
     "manufacturer": "Dynamic Thermal Charge",
     "via_device": "dynamic_thermal_charge_installation"
   },
-  "state_topic": "dtc/installation/heater/salon/state",
+  "state_topic": "telemetria/installation/heater/salon/state",
   "value_template": "{{ value_json.output_on }}",
   "availability": [
-    {"topic": "dtc/installation/availability", "payload_available": "online", "payload_not_available": "offline"},
-    {"topic": "dtc/installation/state_available", "payload_available": "online", "payload_not_available": "offline"}
+    {"topic": "telemetria/installation/availability", "payload_available": "online", "payload_not_available": "offline"},
+    {"topic": "telemetria/installation/state_available", "payload_available": "online", "payload_not_available": "offline"}
   ],
   "availability_mode": "all",
   "payload_on": true,
@@ -513,11 +484,9 @@ La sección `Configuración → Planificación` permite configurar la ventana vi
 horizonte completo, ambos entre 1 y 48 horas, con ventana no mayor que el
 horizonte, además del límite total de tiempo del optimizador en segundos
 (entero positivo; por defecto 120). La sección `Planificación` consulta el plan aceptado en `GET /api/v1/planning`
-y permite editar consignas semanales de temperatura. Los topics efectivos de
-telemetría y mandos se muestran como información de solo lectura; los campos
-`damper_topic`, `setpoint_topic` y `telemetry_topic` siguen aceptándose en sus
-endpoints de compatibilidad y un valor en blanco vuelve al topic estándar. Cada
-consigna contiene temperatura en °C, hora de inicio, hora de fin y días de la
+y permite editar consignas semanales de temperatura. Los topics estándar se
+derivan del prefijo MQTT y del identificador normalizado de cada acumulador.
+Cada consigna contiene temperatura en °C, hora de inicio, hora de fin y días de la
 semana; el inicio se incluye, el fin se excluye y el intervalo puede cruzar
 medianoche. La vista previa se inicia con
 `POST /api/v1/planning/preview/jobs`, se consulta con

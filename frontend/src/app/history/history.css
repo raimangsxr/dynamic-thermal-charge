@@ -43,7 +43,6 @@ details summary { cursor: pointer; color: var(--primary); font-size: .86rem; }
 .source-chip, .state-chip { display: inline-flex; align-items: center; gap: .3rem; white-space: nowrap; }
 .source-chip mat-icon, .state-chip mat-icon { width: 1rem; height: 1rem; font-size: 1rem; }
 .source-chip { color: var(--primary); }
-.source-fallback { color: var(--warning); }
 .state-chip { padding: .2rem .5rem; border-radius: 999px; font-size: .78rem; font-weight: 650; }
 .state-on { background: #e7f4eb; color: #176b35; }
 .state-off { background: #edf0f2; color: var(--muted); }

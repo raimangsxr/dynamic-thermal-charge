@@ -201,7 +201,7 @@ def test_forecasts_referenced_by_either_plan_table_survive_until_both_plans_go(
                 average_temperature_c=8.0,
                 minimum_temperature_c=3.0,
                 maximum_temperature_c=13.0,
-                source="fallback",
+                source="aemet",
                 retrieved_at=to_utc(old),
             )
         ).inserted_primary_key[0]

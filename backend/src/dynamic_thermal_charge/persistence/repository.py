@@ -173,7 +173,6 @@ HEATER_FIELDS: dict[str, tuple[str, str, Callable[[str, str], Any]]] = {
     "static_emission_percent": ("heater", "static_emission_percent", _parse_float),
     "priority": ("heater", "priority", _parse_int),
     "enabled": ("heater", "enabled", _parse_bool),
-    "telemetry_topic": ("heater", "telemetry_topic", _parse_optional_str),
     "room_thermal_capacity_kwh_per_c": (
         "thermal", "room_thermal_capacity_kwh_per_c", _parse_float
     ),
@@ -372,7 +371,6 @@ class SqlConfigRepository:
                             "installation_id": installation_id,
                             "heater_id": heater.id,
                             "control_mode": "AUTO",
-                            "damper_topic": None,
                         },
                     )
                 )

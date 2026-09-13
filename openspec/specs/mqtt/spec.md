@@ -44,41 +44,54 @@ procesos.
 - **WHEN** se guarda una sección que no modifica la configuración MQTT ni sus credenciales
 - **THEN** el cliente MQTT activo continúa sin reinicializarse
 
-### Requirement: Telemetría física fija sin broker
+### Requirement: Esquema MQTT único y sin overrides
 
-Mientras la integración está deshabilitada, el controlador usa temperatura
-interior y SOC almacenado fijos como telemetría válida para todos los
-acumuladores. La consigna procede siempre de la programación semanal; no se
-publican ni consumen valores MQTT de temperatura objetivo o temperatura del
-acumulador. Al habilitar MQTT solo son válidas las lecturas interior y SOC
-recibidas por MQTT.
+Todos los topics propios usan `mqtt.prefix`, cuyo valor predeterminado es
+`telemetria`. La única excepción es `mqtt.discovery_prefix`, que se usa solo
+para los topics de descubrimiento de Home Assistant. Cada acumulador deriva
+sus topics de telemetría, descarga y consigna de ese prefijo y de su
+identificador normalizado. La aplicación no acepta ni lee
+`telemetry_topic`, `damper_topic` o `setpoint_topic` como overrides y no
+publica ni se suscribe a los namespaces `dtc/...`.
 
-#### Scenario: Planificación sin mensajes MQTT
+#### Scenario: Prefijo MQTT personalizado
 
-- **WHEN** MQTT está deshabilitado y se recalcula la planificación
-- **THEN** cada acumulador recibe temperatura interior y SOC fijos, y el
-  objetivo se obtiene de su programación semanal
+- **WHEN** `mqtt.prefix` vale `casa`
+- **THEN** los topics de instalación y de cada acumulador empiezan por
+  `casa/`, mientras los topics de descubrimiento siguen empezando por
+  `mqtt.discovery_prefix`
 
-#### Scenario: Planificación con MQTT habilitado
+#### Scenario: Topic legacy recibido
 
-- **WHEN** MQTT está habilitado y se recalcula la planificación
-- **THEN** el controlador usa únicamente la temperatura interior y el SOC MQTT
-  persistidos, y no aplica los valores fijos
+- **WHEN** llega un mensaje a un topic `dtc/...` o a un topic configurado por
+  un override retirado
+- **THEN** el controlador lo ignora y no publica una copia en el esquema nuevo
+
+### Requirement: Telemetría física solo con evidencia fresca
+
+Mientras MQTT está deshabilitado o falta una muestra MQTT fresca de un
+acumulador, ese acumulador no tiene telemetría válida para planificar. No se
+usan temperaturas interiores ni SOC fijos o fabricados. La consigna procede
+siempre de la programación semanal.
+
+#### Scenario: Planificación sin telemetría MQTT válida
+
+- **WHEN** MQTT está deshabilitado o la temperatura interior o el SOC han
+  caducado
+- **THEN** la planificación devuelve `INVALID`, no incluye valores sintéticos
+  y las salidas permanecen seguras
 
 ### Requirement: Telemetría agrupada por acumulador
 
 Cada acumulador tiene tres topics estándar bajo
-`telemetria/acumuladores/<id-normalizado>`: `telemetry`, `discharge` y
+`<prefijo>/acumuladores/<id-normalizado>`: `telemetry`, `discharge` y
 `setpoint`. El identificador usa el mismo slug seguro que la identidad MQTT.
-Los campos persistidos `telemetry_topic`, `damper_topic` y `setpoint_topic` se
-conservan como overrides de compatibilidad: un valor no vacío sustituye solo a
-su topic correspondiente y un valor vacío usa el estándar. Nunca se publican ni
-se suscriben ambos. Los mensajes que llegan al topic efectivo de telemetría son
+Los mensajes que llegan al topic estándar de telemetría son
 objetos JSON con claves numéricas opcionales
 `indoor_temperature_c`, `stored_soc_percent` y `damper_position_percent`.
 Cada clave presente se valida y persiste de forma independiente; una clave
 ausente conserva el valor y la marca temporal válidos anteriores. La
-telemetría recibida no se retiene al publicarla en la simulación.
+telemetría recibida no se retiene.
 
 #### Scenario: Mensaje agrupado válido
 
@@ -93,13 +106,6 @@ telemetría recibida no se retiene al publicarla en la simulación.
   contiene un número válido dentro de sus límites
 - **THEN** solo se actualiza o invalida esa clave y las demás conservan su
   último valor válido
-
-#### Scenario: Simulación agrupada
-
-- **WHEN** la simulación MQTT está activa para un acumulador habilitado
-- **THEN** publica un único objeto JSON en
-  `telemetria/acumuladores/<id-normalizado>/telemetry`, o en el override
-  `telemetry_topic` si existe, en cada intervalo configurado
 
 ### Requirement: Descubrimiento de dispositivos agrupado
 

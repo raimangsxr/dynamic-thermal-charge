@@ -358,8 +358,10 @@ class SystemConfigurationRepository:
         smtp_password = bool(secrets.get("smtp_password"))
         if smtp_user != smtp_password:
             missing.append("smtp_username/smtp_password pair")
-        if configuration.weather.provider == "aemet" and not secrets.get(
-            "aemet_api_key"
+        if (
+            configuration.weather.provider == "aemet"
+            and configuration.weather.municipality_code
+            and not secrets.get("aemet_api_key")
         ):
             missing.append("aemet_api_key")
         if missing:

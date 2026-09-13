@@ -185,7 +185,6 @@
         <div class="forecast-summary" data-testid="forecast">
           <div class="forecast-icon" aria-hidden="true"><mat-icon>cloud</mat-icon></div>
           <div><strong>{{ forecast.date }}</strong><p>Temperatura media: {{ temperature(forecast.average_temperature_c) }}</p><p class="muted">Origen: {{ sourceText(forecast.source) }}@if (forecast.municipality) { · {{ forecast.municipality }} }</p>
-            @if (forecast.source === 'fallback') { <p class="warning-text">Es un valor de reserva y no una previsión actual del proveedor.</p> }
             <dl class="summary-list summary-list-compact"><div><dt>Estado de consulta</dt><dd>{{ forecastStatusText(data.forecast_status) }}</dd></div><div><dt>{{ forecastNextText(data.forecast_next_run_kind) }}</dt><dd>{{ instant(data.forecast_next_run_at) }}</dd></div></dl>
           </div>
         </div>

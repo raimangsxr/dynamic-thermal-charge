@@ -157,15 +157,6 @@ describe('Status', () => {
     expect(entrada?.textContent).toContain('En reposo');
   });
 
-  it('reports a fallback forecast as coming from the reserve values', () => {
-    const dto = statusDto();
-    const element = load({
-      ...dto,
-      forecast: { ...dto.forecast!, source: 'fallback' },
-    });
-    expect(testId(element, 'forecast')?.textContent).toContain('valor de reserva');
-  });
-
   it('localizes automatic status and deficits while keeping heater names friendly', () => {
     const element = load({
       ...statusDto(),

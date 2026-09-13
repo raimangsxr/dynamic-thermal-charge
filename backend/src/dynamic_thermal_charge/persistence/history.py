@@ -301,16 +301,11 @@ class SqlHistoryRecorder:
 
 
 def _forecast_source(forecast: Any) -> str:
-    """Map the provider's source onto the audited one.
-
-    A simulated forecast reached through the fallback provider is recorded as
-    ``fallback``, so the history answers "did the real provider work that night"
-    (FR-017).
-    """
-    source = getattr(forecast, "source", "simulated")
-    if getattr(forecast, "from_fallback", False):
-        return "fallback"
-    return source
+    """Accept only a forecast returned by the real AEMET provider."""
+    source = getattr(forecast, "source", None)
+    if source != "aemet":
+        raise ValueError("only AEMET forecasts can be recorded")
+    return "aemet"
 
 
 def _now_of(forecast: Any) -> datetime:

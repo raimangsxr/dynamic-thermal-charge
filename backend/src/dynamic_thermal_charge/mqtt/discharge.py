@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
 
-from .topics import resolve_accumulator_topics
+from .topics import accumulator_topics
 
 
 # Below this the projected heat is solver noise, not an intention to emit.
@@ -35,18 +35,16 @@ class DischargeCommand:
     heater_id: str
     enabled: bool
     setpoint_c: float | None
-    damper_topic: str | None
-    setpoint_topic: str | None
+    discharge_topic: str
+    setpoint_topic: str
 
     @property
     def payload(self) -> str:
         return ON if self.enabled else OFF
 
     @property
-    def setpoint_payload(self) -> str | None:
+    def setpoint_payload(self) -> str:
         """A decimal target, or the explicit no-target sentinel when off."""
-        if self.setpoint_topic is None:
-            return None
         if not self.enabled or self.setpoint_c is None:
             return NO_SETPOINT
         return f"{self.setpoint_c:.1f}"
@@ -95,7 +93,7 @@ def resolve_discharge_commands(
     *,
     plan: Mapping[str, Any] | None,
     at: datetime,
-    charge_config: Mapping[str, Mapping[str, Any]] | None = None,
+    topic_prefix: str = "telemetria",
     automatic_control_enabled: bool = True,
     heater_modes: Mapping[str, str] | None = None,
     controller_state_is_current: bool = True,
@@ -106,24 +104,18 @@ def resolve_discharge_commands(
     Every degraded condition resolves to a disabled discharge, so stored energy
     is never spent on a plan nobody is governing.
     """
-    config = charge_config or {}
     modes = heater_modes or {}
 
     def command(
         heater_id: str, enabled: bool, setpoint: float | None
     ) -> DischargeCommand:
-        topics = config.get(heater_id, {})
-        effective_topics = resolve_accumulator_topics(
-            heater_id,
-            damper_topic=topics.get("damper_topic"),
-            setpoint_topic=topics.get("setpoint_topic"),
-        )
+        topics = accumulator_topics(heater_id, topic_prefix)
         return DischargeCommand(
             heater_id=heater_id,
             enabled=enabled,
             setpoint_c=setpoint if enabled else None,
-            damper_topic=effective_topics.discharge,
-            setpoint_topic=effective_topics.setpoint,
+            discharge_topic=topics.discharge,
+            setpoint_topic=topics.setpoint,
         )
 
     governed = (

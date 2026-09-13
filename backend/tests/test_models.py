@@ -64,28 +64,13 @@ def test_retention_does_not_weaken_the_existing_invariants():
         )
 
 
-def test_indoor_temperature_configuration_defaults_preserve_old_behaviour():
+def test_indoor_temperature_configuration_defaults_remain_available():
     site = _site()
     heater = _heater()
-    assert heater.telemetry_topic is None
+    assert not hasattr(heater, "telemetry_topic")
     assert site.indoor_max_age_minutes == 30
     assert site.indoor_min_plausible_c == -20
     assert site.indoor_max_plausible_c == 50
-
-
-def test_empty_telemetry_topic_is_normalized_to_none():
-    # Interface normalization is also guarded at the model boundary for direct callers.
-    normalized = Heater(
-        id="salon",
-        name="Salon",
-        power_w=1500,
-        full_charge_minutes=480,
-        target_charge=1,
-        priority=0,
-        output=OutputConfig(),
-        telemetry_topic="   ",
-    )
-    assert normalized.telemetry_topic is None
 
 
 @pytest.mark.parametrize("age", [0, -1])

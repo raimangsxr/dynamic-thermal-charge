@@ -147,14 +147,10 @@ weather_config = Table(
     # The NAME of the environment variable, never its value.
     Column("aemet_api_key_env", String(64), nullable=True),
     Column("aemet_timeout_seconds", Float, nullable=True),
-    Column("simulated_average_temperature_c", Float, nullable=True),
-    Column("simulated_minimum_temperature_c", Float, nullable=True),
-    Column("fallback_average_temperature_c", Float, nullable=True),
-    Column("fallback_minimum_temperature_c", Float, nullable=True),
     Column("watchdog_retry_minutes", Integer, nullable=False, server_default="15"),
     Column("watchdog_refresh_minutes", Integer, nullable=False, server_default="180"),
     CheckConstraint(
-        "provider IN ('simulated', 'aemet')", name="ck_weather_provider"
+        "provider = 'aemet'", name="ck_weather_provider"
     ),
     CheckConstraint("watchdog_retry_minutes > 0", name="ck_weather_retry"),
     CheckConstraint("watchdog_refresh_minutes > 0", name="ck_weather_refresh"),
@@ -184,7 +180,6 @@ heater = Table(
     Column("static_emission_percent", Float, nullable=False, server_default="20.0"),
     Column("priority", Integer, nullable=False, server_default="0"),
     Column("enabled", Boolean, nullable=False, server_default="1"),
-    Column("telemetry_topic", String(512), nullable=True),
     Column("position", Integer, nullable=False),
     UniqueConstraint("installation_id", "heater_id", name="uq_heater_domain_id"),
     UniqueConstraint("installation_id", "position", name="uq_heater_position"),
@@ -298,31 +293,6 @@ charge_planning_site = Table(
         nullable=False,
         server_default="5",
     ),
-    Column("mqtt_simulation_enabled", Boolean, nullable=False, server_default="0"),
-    Column(
-        "mqtt_simulation_initial_temperature_c",
-        Float,
-        nullable=False,
-        server_default="45",
-    ),
-    Column(
-        "mqtt_simulation_publish_seconds",
-        Float,
-        nullable=False,
-        server_default="30",
-    ),
-    Column(
-        "mqtt_simulation_topic_prefix",
-        String(256),
-        nullable=False,
-        server_default="dtc/sim",
-    ),
-    Column(
-        "mqtt_simulation_thermal_loss_c_per_hour",
-        Float,
-        nullable=False,
-        server_default="2",
-    ),
     CheckConstraint("replan_minutes > 0", name="ck_charge_site_replan"),
     CheckConstraint("revision >= 1", name="ck_charge_site_revision"),
     CheckConstraint("planning_window_hours > 0 AND planning_window_hours <= 48", name="ck_charge_site_window"),
@@ -333,23 +303,6 @@ charge_planning_site = Table(
     CheckConstraint("contracted_power_w > 0", name="ck_charge_site_contracted_power"),
     CheckConstraint("max_heating_power_w > 0", name="ck_charge_site_heating_power"),
     CheckConstraint("base_load_w >= 0", name="ck_charge_site_base_load"),
-    CheckConstraint(
-        "mqtt_simulation_initial_temperature_c >= -50 "
-        "AND mqtt_simulation_initial_temperature_c <= 80",
-        name="ck_charge_site_sim_initial_temperature",
-    ),
-    CheckConstraint(
-        "mqtt_simulation_publish_seconds > 0",
-        name="ck_charge_site_sim_publish_seconds",
-    ),
-    CheckConstraint(
-        "length(trim(mqtt_simulation_topic_prefix)) > 0",
-        name="ck_charge_site_sim_topic_prefix",
-    ),
-    CheckConstraint(
-        "mqtt_simulation_thermal_loss_c_per_hour >= 0",
-        name="ck_charge_site_sim_thermal_loss",
-    ),
 )
 
 heater_charge_config = Table(
@@ -358,8 +311,6 @@ heater_charge_config = Table(
     Column("installation_id", Integer, ForeignKey("installation.id", ondelete="CASCADE"), nullable=False),
     Column("heater_id", String(64), primary_key=True),
     Column("control_mode", String(8), nullable=False, server_default="AUTO"),
-    Column("damper_topic", String(512), nullable=True),
-    Column("setpoint_topic", String(512), nullable=True),
     UniqueConstraint("installation_id", "heater_id", name="uq_heater_charge_config"),
     CheckConstraint("control_mode IN ('AUTO', 'OFF')", name="ck_heater_control_mode"),
 )
@@ -577,12 +528,12 @@ forecast = Table(
     Column("average_temperature_c", Float, nullable=False),
     Column("minimum_temperature_c", Float, nullable=True),
     Column("maximum_temperature_c", Float, nullable=True),
-    # 'aemet', 'simulated' or 'fallback'. FR-017.
+    # AEMET is the only accepted source for planning weather.
     Column("source", String(16), nullable=False),
     Column("municipality", String(120), nullable=True),
     Column("retrieved_at", DateTime, nullable=False),
     CheckConstraint(
-        "source IN ('aemet', 'simulated', 'fallback')", name="ck_forecast_source"
+        "source = 'aemet'", name="ck_forecast_source"
     ),
     Index("ix_forecast_retention", "installation_id", "retrieved_at"),
 )
@@ -951,7 +902,7 @@ CONSTRAINT_FIELDS: dict[str, tuple[str, str]] = {
         "indoor_min_plausible_c",
         "indoor_min_plausible_c must be lower than indoor_max_plausible_c",
     ),
-    "ck_weather_provider": ("provider", "the provider must be simulated or aemet"),
+    "ck_weather_provider": ("provider", "the provider must be aemet"),
     "ck_weather_retry": ("retry_minutes", "retry_minutes must be positive"),
     "ck_weather_refresh": ("refresh_minutes", "refresh_minutes must be positive"),
     "ck_weather_timeout": ("timeout_seconds", "timeout_seconds must be positive"),

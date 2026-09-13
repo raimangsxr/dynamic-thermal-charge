@@ -28,8 +28,7 @@ def recorded_night(initialised_store, recorder):
             average_temperature_c=8.0,
             minimum_temperature_c=3.0,
             maximum_temperature_c=13.0,
-            source="simulated",
-            from_fallback=True,
+            source="aemet",
         )
     )
     plan_ref = recorder.record_plan(
@@ -110,11 +109,11 @@ def test_the_plan_in_progress_is_reported_with_its_window(client, heartbeat, rec
     assert plan["slots"]
 
 
-def test_a_fallback_forecast_is_reported_as_fallback(client, heartbeat, recorded_night):
-    """FR-017: the history answers 'did the real provider work that night'."""
+def test_aemet_forecast_is_reported_with_its_canonical_source(client, heartbeat, recorded_night):
+    """FR-017: history exposes the only accepted weather source."""
     heartbeat.publish(API_NOW, degraded=False)
     forecast = _status(client)["forecast"]
-    assert forecast["source"] == "fallback"
+    assert forecast["source"] == "aemet"
     assert forecast["average_temperature_c"] == 8.0
 
 
@@ -130,6 +129,14 @@ def test_unmet_minutes_are_reported(client, heartbeat, recorded_night):
 def test_planning_endpoint_returns_hourly_series_and_all_intervals(
     client, initialised_store, recorder, api_clock
 ):
+    system = initialised_store.system_configuration
+    system_snapshot = system.current()
+    system.update_section(
+        "mqtt",
+        {"enabled": True, "host": "broker.test"},
+        expected_revision=system_snapshot.revision,
+        actor="test",
+    )
     config, revision = initialised_store.repository.current()
     points = tuple(
         HourlyForecastPoint(API_NOW - timedelta(hours=1) + timedelta(hours=index), 4 + index)
@@ -222,7 +229,7 @@ def test_planning_endpoint_prefers_automatic_plan_slot_minutes_over_legacy_plan(
             average_temperature_c=8.0,
             minimum_temperature_c=8.0,
             maximum_temperature_c=8.0,
-            source="simulated",
+            source="aemet",
             hourly_points=legacy_points,
         )
     )
@@ -232,7 +239,6 @@ def test_planning_endpoint_prefers_automatic_plan_slot_minutes_over_legacy_plan(
         WINDOW_START,
         requested_charge_minutes={heater.id: 0 for heater in config.heaters},
         hourly_points=legacy_points,
-        fallback_temperature_c=8.0,
     )
     recorder.record_plan(legacy_plan, legacy_ref, revision)
 
@@ -615,7 +621,7 @@ def test_planning_endpoint_prefers_the_newest_stored_forecast_over_plan_forecast
         OutdoorForecast(
             date=API_NOW.date(), average_temperature_c=8.0,
             minimum_temperature_c=8.0, maximum_temperature_c=8.0,
-            source="simulated", hourly_points=older_points,
+            source="aemet", hourly_points=older_points,
         )
     )
     assert older_ref is not None
@@ -623,7 +629,6 @@ def test_planning_endpoint_prefers_the_newest_stored_forecast_over_plan_forecast
         config.site, config.heaters, WINDOW_START,
         requested_charge_minutes={heater.id: 0 for heater in config.heaters},
         hourly_points=older_points,
-        fallback_temperature_c=8.0,
     )
     recorder.record_plan(plan, older_ref, revision)
 
@@ -833,7 +838,7 @@ def test_planning_config_endpoint_returns_site_parameters(client):
     assert body["forecast_horizon_hours"] == 24
     assert body["solver_time_limit_seconds"] == 120
     assert body["replan_minutes"] == 30
-    assert body["mqtt_simulation_enabled"] is False
+    assert "mqtt_simulation_enabled" not in body
     assert "revision" in body
 
 
@@ -851,20 +856,13 @@ def test_planning_config_endpoint_updates_site_parameters(client):
             "aemet_query_hour": current["aemet_query_hour"],
             "contracted_power_w": current["contracted_power_w"],
             "max_heating_power_w": current["max_heating_power_w"],
-            "mqtt_simulation_enabled": True,
-            "mqtt_simulation_initial_temperature_c": 42.0,
-            "mqtt_simulation_publish_seconds": 15.0,
-            "mqtt_simulation_topic_prefix": "lab/sim",
-            "mqtt_simulation_thermal_loss_c_per_hour": 1.5,
         },
     )
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["forecast_horizon_hours"] == 24
     assert body["solver_time_limit_seconds"] == 120
-    assert body["mqtt_simulation_enabled"] is True
-    assert body["mqtt_simulation_initial_temperature_c"] == 42.0
-    assert body["mqtt_simulation_topic_prefix"] == "lab/sim"
+    assert "mqtt_simulation_enabled" not in body
     assert body["revision"] == current["revision"] + 1
 
 

@@ -54,7 +54,7 @@ function transitionsPage(
 
 const CONFIG: ConfigDto = {
   config_revision: 3,
-  schema_revision: '0015_temperature_target_intervals',
+  schema_revision: '0023_coherent_mqtt_topics',
   max_total_power_kw: 5.2,
   slot_minutes: 30,
   window_minutes: 480,
@@ -79,7 +79,6 @@ const CONFIG: ConfigDto = {
       room_heat_loss_kw_per_c: 0.12,
       priority: 90,
       enabled: true,
-      telemetry_topic: null,
       temperature_targets: [{ id: 1, heater_id: 'salon', target_temperature_c: 21, start_time: '00:00', end_time: '24:00', weekdays: [0, 1, 2, 3, 4, 5, 6], enabled: true }],
       output: { kind: 'gpio', pin: 17, active_high: false },
     },
@@ -266,19 +265,19 @@ describe('History', () => {
     expect(testId('gone')).toBeNull();
   });
 
-  /** FR-029: whether the real provider worked that night. */
-  it('distinguishes a fallback forecast from a real one', () => {
+  /** FR-029: historical forecasts remain attributable to AEMET. */
+  it('labels historical forecasts as coming from AEMET', () => {
     flushPlans();
     fixture.componentInstance.select('forecasts');
     const forecasts: ForecastHistoryDto[] = [
       {
         id: 2,
         forecast_date: '2026-01-16',
-        source: 'fallback',
+        source: 'aemet',
         average_temperature_c: 8,
         minimum_temperature_c: 3,
         maximum_temperature_c: 13,
-        municipality: null,
+        municipality: 'Madrid',
         retrieved_at: '2026-01-16T00:00:00Z',
       },
       {
@@ -297,7 +296,7 @@ describe('History', () => {
       .flush({ items: forecasts, limit_applied: 50, has_more: false, next_cursor: null });
 
     const rows = el().querySelectorAll('[data-table="forecasts"] tbody tr');
-    expect(rows[0].textContent).toContain('valor de reserva');
+    expect(rows[0].textContent).toContain('proveedor real');
     expect(rows[1].textContent).toContain('proveedor real');
   });
 

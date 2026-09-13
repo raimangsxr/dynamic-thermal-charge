@@ -100,6 +100,8 @@ def _copy_legacy_tables(source_engine, destination_engine, destination_metadata)
 
 def _apply_system_environment(repository, environment, functional) -> None:
     parsed_database = urlsplit(environment["DTC_DATABASE_URL"])
+    weather = functional.weather
+    aemet = None if weather is None else weather.aemet
     api_patch = {
         "host": environment.get("DTC_API_HOST", "127.0.0.1") or "127.0.0.1",
         "port": int(environment.get("DTC_API_PORT", "8080") or 8080),
@@ -113,50 +115,16 @@ def _apply_system_environment(repository, environment, functional) -> None:
             "host": environment.get("DTC_MQTT_HOST") or None,
             "port": int(environment.get("DTC_MQTT_PORT", "1883") or 1883),
             "tls": _bool(environment.get("DTC_MQTT_TLS"), False),
-            "prefix": environment.get("DTC_MQTT_PREFIX", "dtc") or "dtc",
+            "prefix": environment.get("DTC_MQTT_PREFIX", "telemetria") or "telemetria",
             "discovery_prefix": environment.get("DTC_MQTT_DISCOVERY_PREFIX", "homeassistant") or "homeassistant",
             "publish_seconds": float(environment.get("DTC_MQTT_PUBLISH_SECONDS", "15") or 15),
         },
         "weather": {
-            "provider": "simulated" if functional.weather is None else functional.weather.provider,
-            "municipality_code": (
-                functional.weather.aemet.municipality_code
-                if functional.weather is not None and functional.weather.aemet is not None
-                else None
-            ),
-            "timeout_seconds": (
-                functional.weather.aemet.timeout_seconds
-                if functional.weather is not None and functional.weather.aemet is not None
-                else 10.0
-            ),
-            "simulated_average_temperature_c": (
-                functional.weather.simulated.average_temperature_c
-                if functional.weather is not None and functional.weather.simulated is not None
-                else 8.0
-            ),
-            "simulated_minimum_temperature_c": (
-                functional.weather.simulated.minimum_temperature_c
-                if functional.weather is not None and functional.weather.simulated is not None
-                else 3.0
-            ),
-            "fallback_average_temperature_c": (
-                functional.weather.fallback.average_temperature_c
-                if functional.weather is not None and functional.weather.fallback is not None
-                else 8.0
-            ),
-            "fallback_minimum_temperature_c": (
-                functional.weather.fallback.minimum_temperature_c
-                if functional.weather is not None and functional.weather.fallback is not None
-                else 3.0
-            ),
-            "retry_minutes": (
-                functional.weather.watchdog.retry_minutes
-                if functional.weather is not None else 15
-            ),
-            "refresh_minutes": (
-                functional.weather.watchdog.refresh_minutes
-                if functional.weather is not None else 180
-            ),
+            "provider": "aemet",
+            "municipality_code": None if aemet is None else aemet.municipality_code,
+            "timeout_seconds": 10.0 if aemet is None else aemet.timeout_seconds,
+            "retry_minutes": 15 if weather is None else weather.watchdog.retry_minutes,
+            "refresh_minutes": 180 if weather is None else weather.watchdog.refresh_minutes,
         },
         "logging": {
             "level": functional.logging.level,

@@ -95,7 +95,7 @@ class PlanSummary(BaseModel):
 
 class ForecastSummary(BaseModel):
     date: date
-    source: str = Field(description="aemet, simulated or fallback")
+    source: str = Field(description="aemet")
     average_temperature_c: float
     minimum_temperature_c: float | None = None
     maximum_temperature_c: float | None = None
@@ -198,8 +198,6 @@ class PlanningHeaterView(BaseModel):
     capacity_kwh: float
     priority: int
     enabled: bool
-    damper_topic: str | None = None
-    setpoint_topic: str | None = None
 
 
 class PlanningPlanView(BaseModel):
@@ -375,12 +373,6 @@ class AutomaticPlanAuditPage(BaseModel):
     items: list[AutomaticPlanAuditItem]
 
 
-class HeaterChargeConfigRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    damper_topic: str | None = None
-    setpoint_topic: str | None = None
-
-
 class PlanningSiteConfigRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expected_revision: int
@@ -394,11 +386,6 @@ class PlanningSiteConfigRequest(BaseModel):
     base_load_w: int = Field(ge=0, default=0)
     deviation_shortfall_tolerance_c: float = Field(gt=0, default=0.1)
     deviation_surplus_soc_percent: float = Field(gt=0, default=5.0)
-    mqtt_simulation_enabled: bool = False
-    mqtt_simulation_initial_temperature_c: float = Field(ge=-50, le=80, default=45.0)
-    mqtt_simulation_publish_seconds: float = Field(gt=0, default=30.0)
-    mqtt_simulation_topic_prefix: str = Field(min_length=1, default="dtc/sim")
-    mqtt_simulation_thermal_loss_c_per_hour: float = Field(ge=0, default=2.0)
 
     @model_validator(mode="after")
     def validate_planning_durations(self):
@@ -419,11 +406,6 @@ class PlanningSiteConfigResponse(BaseModel):
     base_load_w: int
     deviation_shortfall_tolerance_c: float = 0.1
     deviation_surplus_soc_percent: float = 5.0
-    mqtt_simulation_enabled: bool
-    mqtt_simulation_initial_temperature_c: float
-    mqtt_simulation_publish_seconds: float
-    mqtt_simulation_topic_prefix: str
-    mqtt_simulation_thermal_loss_c_per_hour: float
 
 
 class ControllerLogEvent(BaseModel):
@@ -461,7 +443,6 @@ class HeaterResponse(BaseModel):
     static_emission_percent: float = 20.0
     priority: int
     enabled: bool
-    telemetry_topic: str | None = None
     output: OutputView
     room_thermal_capacity_kwh_per_c: float = 2.5
     room_heat_loss_kw_per_c: float = 0.12
@@ -524,7 +505,6 @@ class AddHeaterRequest(BaseModel):
     model: str | None = None
     priority: int = 0
     enabled: bool = True
-    telemetry_topic: str | None = None
     output: str = "simulated"
     pin: int | None = None
     active_high: bool = True
@@ -544,7 +524,6 @@ class UpdateHeaterRequest(BaseModel):
     static_emission_percent: float = Field(ge=0, le=100, default=20.0)
     priority: int = 0
     enabled: bool = True
-    telemetry_topic: str | None = None
     output: str = "simulated"
     pin: int | None = None
     active_high: bool = True
@@ -792,7 +771,6 @@ __all__ = [
     "TemperatureTargetView",
     "PlanningPreviewRequest",
     "PlanningActivateRequest",
-    "HeaterChargeConfigRequest",
     "PlanningSiteConfigRequest",
     "PlanningSiteConfigResponse",
     "HourlyForecastPointView",

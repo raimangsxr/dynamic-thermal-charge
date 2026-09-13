@@ -159,6 +159,14 @@ def test_preview_job_with_legacy_result_remains_readable(client, initialised_sto
 
 
 def _seed_valid_preview_inputs(initialised_store, *, forecast_temperature_c=4.0):
+    system = initialised_store.system_configuration
+    system_snapshot = system.current()
+    system.update_section(
+        "mqtt",
+        {"enabled": True, "host": "broker.test"},
+        expected_revision=system_snapshot.revision,
+        actor="test",
+    )
     config, configuration_revision = initialised_store.repository.current()
     points = tuple(
         HourlyForecastPoint(API_NOW + timedelta(hours=index), forecast_temperature_c)
@@ -264,16 +272,9 @@ def test_changed_telemetry_cannot_activate_cached_preview(
     _persist_preview_job(
         initialised_store, result, configuration_revision, constraints_revision,
     )
-    system = client.get("/api/v1/system/configuration", headers=AUTH).json()
-    changed = client.patch(
-        "/api/v1/system/configuration/mqtt",
-        headers=AUTH,
-        json={
-            "expected_revision": system["revision"],
-            "values": {"fixed_stored_soc_percent": 40.0},
-        },
+    initialised_store.planning.record_telemetry(
+        "salon", "stored_soc_percent", 40.0, API_NOW
     )
-    assert changed.status_code == 200, changed.text
 
     import dynamic_thermal_charge.api.routes.planning as planning_route
 

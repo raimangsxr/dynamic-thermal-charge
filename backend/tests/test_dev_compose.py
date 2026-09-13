@@ -47,7 +47,7 @@ def test_dev_postgres_locator_uses_all_configurable_connection_fields(monkeypatc
     assert locator.tls is False and locator.trusted_no_tls is True
 
 
-def test_dev_sqlite_initialisation_is_simulated_and_idempotent(tmp_path, monkeypatch):
+def test_dev_sqlite_initialisation_is_aemet_and_idempotent(tmp_path, monkeypatch):
     paths = StorePaths.in_directory(tmp_path / "state")
     monkeypatch.setattr(StorePaths, "production", classmethod(lambda cls: paths))
     monkeypatch.setenv("DEV_DATABASE", "sqlite")
@@ -61,9 +61,9 @@ def test_dev_sqlite_initialisation_is_simulated_and_idempotent(tmp_path, monkeyp
     second = open_store(paths)
 
     assert inspect_bootstrap(paths)["locator"]["driver"] == "sqlite"
-    assert config.weather is not None and config.weather.provider == "simulated"
+    assert config.weather is not None and config.weather.provider == "aemet"
     assert all(heater.output.kind == "gpio" for heater in config.heaters)
-    assert system.configuration.weather.provider == "simulated"
+    assert system.configuration.weather.provider == "aemet"
     assert system.configuration.output.driver == "simulated"
     assert system.configuration.mqtt.enabled is True
     assert system.secrets["admin_token_digest"].value

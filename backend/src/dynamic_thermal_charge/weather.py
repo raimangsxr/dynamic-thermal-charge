@@ -1,4 +1,4 @@
-"""Weather provider boundary and deterministic simulated provider."""
+"""AEMET weather provider boundary."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
-from .models import AemetConfig, SimulatedForecastConfig, WeatherConfig, WeatherWatchdogConfig
+from .models import AemetConfig, WeatherConfig, WeatherWatchdogConfig
 from .system_settings import WeatherSystemSettings
 
 
@@ -26,8 +26,8 @@ HttpGet = Callable[[str, Mapping[str, str], float], JsonObject]
 class HourlyForecastPoint:
     """One validated outdoor temperature at an instant.
 
-    A point may be marked as interpolated when a plan had to use the daily
-    summary because the hourly provider did not cover that interval.
+    Points are values returned by AEMET. Missing hours remain missing so the
+    planner can reject an uncovered horizon instead of inventing temperatures.
     """
 
     timestamp: datetime
@@ -54,45 +54,12 @@ class OutdoorForecast:
     maximum_temperature_c: float
     source: str
     location: str | None = None
-    #: True when this forecast came from the configured fallback rather than the
-    #: primary provider. The history records it as ``fallback`` so an audit can
-    #: answer "did the real provider work that night" (FR-017).
-    from_fallback: bool = False
     hourly_points: tuple[HourlyForecastPoint, ...] = ()
 
 
 class WeatherProvider(Protocol):
     def forecast_for(self, forecast_date: date) -> OutdoorForecast:
         """Return the outdoor forecast used to calculate charge demand."""
-
-
-class SimulatedWeatherProvider:
-    def __init__(
-        self, config: SimulatedForecastConfig, timezone_name: str = "UTC"
-    ) -> None:
-        self._config = config
-        self._timezone = ZoneInfo(timezone_name)
-
-    def forecast_for(self, forecast_date: date) -> OutdoorForecast:
-        maximum_temperature_c = (
-            2 * self._config.average_temperature_c
-            - self._config.minimum_temperature_c
-        )
-        return OutdoorForecast(
-            date=forecast_date,
-            average_temperature_c=self._config.average_temperature_c,
-            minimum_temperature_c=self._config.minimum_temperature_c,
-            maximum_temperature_c=maximum_temperature_c,
-            source="simulated",
-            hourly_points=tuple(
-                HourlyForecastPoint(
-                    datetime.combine(forecast_date, datetime.min.time(), tzinfo=self._timezone)
-                    + timedelta(hours=hour),
-                    self._config.average_temperature_c,
-                )
-                for hour in range(48)
-            ),
-        )
 
 
 class WeatherProviderError(RuntimeError):
@@ -211,47 +178,21 @@ class AemetWeatherProvider:
         return _parse_aemet_forecast(payload, forecast_date, self._timezone)
 
 
-class FallbackWeatherProvider:
-    def __init__(
-        self,
-        primary: WeatherProvider,
-        fallback: WeatherProvider,
-    ) -> None:
-        self._primary = primary
-        self._fallback = fallback
-
-    def forecast_for(self, forecast_date: date) -> OutdoorForecast:
-        try:
-            return self._primary.forecast_for(forecast_date)
-        except WeatherProviderError as exc:
-            logger.warning("Weather provider failed; using configured fallback: %s", exc)
-            return replace(
-                self._fallback.forecast_for(forecast_date), from_fallback=True
-            )
-
-
 def build_weather_provider(
     config: WeatherConfig,
     api_key: str | None = None,
     http_get: HttpGet | None = None,
     timezone_name: str = "UTC",
 ) -> WeatherProvider:
-    if config.provider == "simulated":
-        assert config.simulated is not None
-        return SimulatedWeatherProvider(config.simulated, timezone_name)
-
-    assert config.aemet is not None
-    primary = AemetWeatherProvider(
+    if config.provider != "aemet" or config.aemet is None:
+        raise WeatherProviderError(
+            "AEMET municipality configuration is required for weather planning"
+        )
+    return AemetWeatherProvider(
         config.aemet,
         api_key=api_key or "",
         http_get=http_get,
         timezone_name=timezone_name,
-    )
-    if config.fallback is None:
-        return primary
-    return FallbackWeatherProvider(
-        primary,
-        SimulatedWeatherProvider(config.fallback, timezone_name),
     )
 
 
@@ -262,23 +203,15 @@ def weather_config_from_system(settings: WeatherSystemSettings) -> WeatherConfig
     repository owns the secret and callers inject it only into the provider.
     """
     aemet = None
-    if settings.provider == "aemet":
+    if settings.municipality_code:
         aemet = AemetConfig(
             municipality_code=settings.municipality_code or "",
             api_key_env="AEMET_API_KEY",
             timeout_seconds=settings.timeout_seconds,
         )
     return WeatherConfig(
-        provider=settings.provider,
-        simulated=SimulatedForecastConfig(
-            average_temperature_c=settings.simulated_average_temperature_c,
-            minimum_temperature_c=settings.simulated_minimum_temperature_c,
-        ),
+        provider="aemet",
         aemet=aemet,
-        fallback=SimulatedForecastConfig(
-            average_temperature_c=settings.fallback_average_temperature_c,
-            minimum_temperature_c=settings.fallback_minimum_temperature_c,
-        ),
         watchdog=WeatherWatchdogConfig(
             retry_minutes=settings.retry_minutes,
             refresh_minutes=settings.refresh_minutes,
@@ -358,18 +291,20 @@ def _parse_aemet_forecast(
             point.temperature_c
             for point in hourly_points
             if point.timestamp.astimezone(local_timezone).date() == forecast_date
-        ] or [point.temperature_c for point in hourly_points]
+        ]
+        if not temperatures:
+            raise WeatherProviderError(
+                f"AEMET forecast does not cover {forecast_date.isoformat()}"
+            )
         # Keep the daily summary as the stable public value when AEMET sent it,
         # while deriving it for payloads that only contain hourly values.
         average = sum(temperatures) / len(temperatures)
         minimum = min(temperatures) if minimum is None else minimum
         maximum = max(temperatures) if maximum is None else maximum
     else:
-        if minimum is None or maximum is None:
-            raise WeatherProviderError(
-                f"AEMET forecast has no valid temperatures for {forecast_date.isoformat()}"
-            )
-        average = (minimum + maximum) / 2
+        raise WeatherProviderError(
+            f"AEMET forecast has no valid hourly temperatures for {forecast_date.isoformat()}"
+        )
     return OutdoorForecast(
         date=forecast_date,
         average_temperature_c=average,

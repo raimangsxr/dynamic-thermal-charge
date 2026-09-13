@@ -41,7 +41,6 @@ class ControlState:
     recalculation_requested_generation: int
     recalculation_processed_generation: int
     heater_modes: dict[str, str]
-    damper_topics: dict[str, str | None]
 
     @property
     def recalculation_pending(self) -> bool:
@@ -86,7 +85,6 @@ class SqlHomeAssistantRepository:
                     select(
                         heater_charge_config.c.heater_id,
                         heater_charge_config.c.control_mode,
-                        heater_charge_config.c.damper_topic,
                     ).where(
                         heater_charge_config.c.installation_id == self._installation_id
                     )
@@ -103,14 +101,6 @@ class SqlHomeAssistantRepository:
             ),
             heater_modes={
                 str(item["heater_id"]): _normalize_mode(item.get("control_mode"))
-                for item in modes
-            },
-            damper_topics={
-                str(item["heater_id"]): (
-                    None
-                    if item.get("damper_topic") is None
-                    else str(item["damper_topic"])
-                )
                 for item in modes
             },
         )
@@ -228,57 +218,6 @@ class SqlHomeAssistantRepository:
                     raise ConfigConflictError("installation control changed; refresh before retrying")
         if normalized == "OFF":
             self._deactivate_active_plan()
-        return ControlCommandResult(self.control_state(), bool(changed))
-
-    def set_damper_topic(
-        self,
-        heater_id: str,
-        topic: str | None,
-        *,
-        expected_revision: int,
-    ) -> ControlCommandResult:
-        normalized = None if topic is None or not str(topic).strip() else str(topic).strip()
-        changed = 0
-        with transaction(self._configuration, self._configuration_location) as connection:
-            row = self._locked_installation(connection)
-            _require_revision(int(row["revision"]), expected_revision)
-            existing = connection.execute(
-                select(
-                    heater_charge_config.c.heater_id,
-                    heater_charge_config.c.damper_topic,
-                ).where(
-                    (heater_charge_config.c.installation_id == self._installation_id)
-                    & (heater_charge_config.c.heater_id == heater_id)
-                )
-            ).mappings().first()
-            if existing is None:
-                raise ConfigValidationError("unknown heater", field="heater_id", heater_id=heater_id)
-            if existing["damper_topic"] == normalized:
-                changed = 0
-            else:
-                changed = connection.execute(
-                    update(heater_charge_config)
-                    .where(
-                        (heater_charge_config.c.installation_id == self._installation_id)
-                        & (heater_charge_config.c.heater_id == heater_id)
-                    )
-                    .values(damper_topic=normalized)
-                ).rowcount
-                if changed != 1:
-                    raise ConfigConflictError("damper configuration changed; refresh before retrying")
-                revision_changed = connection.execute(
-                    update(installation)
-                    .where(
-                        (installation.c.id == self._installation_id)
-                        & (installation.c.revision == expected_revision)
-                    )
-                    .values(
-                        revision=expected_revision + 1,
-                        updated_at=to_utc(datetime.now(timezone.utc)),
-                    )
-                ).rowcount
-                if revision_changed != 1:
-                    raise ConfigConflictError("installation control changed; refresh before retrying")
         return ControlCommandResult(self.control_state(), bool(changed))
 
     def set_active_temperature_target(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import re
 from uuid import uuid4
 
@@ -19,8 +20,8 @@ from .topology import BootstrapCorruptError, BootstrapIncompatibleError
 from . import SchemaStatus, SchemaVersionError
 
 
-CONFIGURATION_SCHEMA_REVISION = 15
-APPLICATION_SCHEMA_REVISION = 9
+CONFIGURATION_SCHEMA_REVISION = 16
+APPLICATION_SCHEMA_REVISION = 10
 POSTGRES_CONFIGURATION_SCHEMA = "dtc_config"
 POSTGRES_APPLICATION_SCHEMA = "dtc_app"
 
@@ -277,6 +278,22 @@ def _upgrade_application_schema(engine: Engine, revision: int, expected: int) ->
     if revision == 8 and expected >= 9:
         _replace_automatic_plan_status_constraint(engine)
         revision = 9
+    if revision == 9 and expected >= 10:
+        with engine.begin() as connection:
+            if inspect(connection).has_table("forecast_hour"):
+                connection.execute(text(
+                    "DELETE FROM forecast_hour WHERE forecast_id IN "
+                    "(SELECT id FROM forecast WHERE source <> 'aemet')"
+                ))
+            if inspect(connection).has_table("forecast"):
+                connection.execute(text("DELETE FROM forecast WHERE source <> 'aemet'"))
+        _replace_check_constraint(
+            engine,
+            "forecast",
+            "ck_forecast_source",
+            "source = 'aemet'",
+        )
+        revision = 10
     if revision != expected:
         raise BootstrapIncompatibleError(
             f"application schema revision {revision} has no registered upgrade path to {expected}"
@@ -614,6 +631,79 @@ def _upgrade_configuration_schema(engine: Engine, revision: int, expected: int) 
                         )
                     )
         revision = 15
+    if revision == 15 and expected >= 16:
+        _drop_columns(
+            engine,
+            "weather_config",
+            {
+                "simulated_average_temperature_c",
+                "simulated_minimum_temperature_c",
+                "fallback_average_temperature_c",
+                "fallback_minimum_temperature_c",
+            },
+        )
+        _drop_columns(engine, "heater", {"telemetry_topic"})
+        _drop_columns(
+            engine,
+            "charge_planning_site",
+            {
+                "mqtt_simulation_enabled",
+                "mqtt_simulation_initial_temperature_c",
+                "mqtt_simulation_publish_seconds",
+                "mqtt_simulation_topic_prefix",
+                "mqtt_simulation_thermal_loss_c_per_hour",
+            },
+        )
+        _drop_columns(
+            engine,
+            "heater_charge_config",
+            {"damper_topic", "setpoint_topic"},
+        )
+        with engine.begin() as connection:
+            if inspect(connection).has_table("weather_config"):
+                connection.execute(text("UPDATE weather_config SET provider = 'aemet'"))
+            if inspect(connection).has_table("system_configuration"):
+                rows = connection.execute(text(
+                    "SELECT id, mqtt_json, weather_json FROM system_configuration"
+                )).mappings().all()
+                for row in rows:
+                    mqtt = json.loads(row["mqtt_json"])
+                    weather = json.loads(row["weather_json"])
+                    mqtt["prefix"] = "telemetria"
+                    for field_name in (
+                        "fixed_temperature_c",
+                        "fixed_target_temperature_c",
+                        "fixed_indoor_temperature_c",
+                        "fixed_stored_soc_percent",
+                        "fixed_stored_charge_percent",
+                    ):
+                        mqtt.pop(field_name, None)
+                    weather["provider"] = "aemet"
+                    for field_name in (
+                        "simulated_average_temperature_c",
+                        "simulated_minimum_temperature_c",
+                        "fallback_average_temperature_c",
+                        "fallback_minimum_temperature_c",
+                    ):
+                        weather.pop(field_name, None)
+                    connection.execute(
+                        text(
+                            "UPDATE system_configuration SET mqtt_json = :mqtt, "
+                            "weather_json = :weather WHERE id = :id"
+                        ),
+                        {
+                            "id": row["id"],
+                            "mqtt": json.dumps(mqtt, sort_keys=True, separators=(",", ":")),
+                            "weather": json.dumps(weather, sort_keys=True, separators=(",", ":")),
+                        },
+                    )
+        _replace_check_constraint(
+            engine,
+            "weather_config",
+            "ck_weather_provider",
+            "provider = 'aemet'",
+        )
+        revision = 16
     if revision != expected:
         raise BootstrapIncompatibleError(
             f"configuration schema revision {revision} has no registered upgrade path to {expected}"
@@ -697,6 +787,98 @@ def _drop_columns(engine, table_name: str, columns: set[str]) -> None:
         new.indexes.remove(index)
 
     keep = [column.name for column in old.c if column.name not in dropped]
+    child_rows: list[tuple[Table, list[dict[str, object]]]] = []
+    for child_name in inspector.get_table_names():
+        if child_name == table_name:
+            continue
+        child_foreign_keys = inspect(engine).get_foreign_keys(child_name)
+        if not any(item.get("referred_table") == table_name for item in child_foreign_keys):
+            continue
+        child_table = Table(child_name, MetaData(), autoload_with=engine)
+        with engine.connect() as connection:
+            rows = [dict(row) for row in connection.execute(select(child_table)).mappings()]
+        child_rows.append((child_table, rows))
+
+    with engine.begin() as connection:
+        connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+        try:
+            new.create(connection)
+            connection.execute(
+                new.insert().from_select(keep, select(*(old.c[name] for name in keep)))
+            )
+            old.drop(connection)
+            connection.exec_driver_sql(
+                f'ALTER TABLE "{temporary_name}" RENAME TO "{table_name}"'
+            )
+            rebuilt = Table(table_name, MetaData(), autoload_with=connection)
+            for name, unique, keys in index_specs:
+                Index(name, *(rebuilt.c[key] for key in keys), unique=unique).create(connection)
+            for child_table, rows in child_rows:
+                for row in rows:
+                    predicates = [
+                        child_table.c[key].is_(None)
+                        if value is None
+                        else child_table.c[key] == value
+                        for key, value in row.items()
+                    ]
+                    connection.execute(child_table.delete().where(*predicates))
+                if rows:
+                    connection.execute(child_table.insert(), rows)
+        finally:
+            connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+
+
+def _replace_check_constraint(
+    engine,
+    table_name: str,
+    constraint_name: str,
+    expression: str,
+) -> None:
+    """Replace one named CHECK constraint on both supported SQL engines."""
+    inspector = inspect(engine)
+    if not inspector.has_table(table_name):
+        return
+    existing_constraints = {
+        item.get("name")
+        for item in inspector.get_check_constraints(table_name)
+        if item.get("name")
+    }
+    if engine.dialect.name != "sqlite":
+        with engine.begin() as connection:
+            if constraint_name in existing_constraints:
+                connection.exec_driver_sql(
+                    f'ALTER TABLE "{table_name}" DROP CONSTRAINT "{constraint_name}"'
+                )
+            connection.exec_driver_sql(
+                f'ALTER TABLE "{table_name}" ADD CONSTRAINT "{constraint_name}" '
+                f"CHECK ({expression})"
+            )
+        return
+
+    old_metadata = MetaData()
+    with engine.connect() as connection:
+        old = Table(table_name, old_metadata, autoload_with=connection)
+    new_metadata = MetaData()
+    for foreign_key in old.foreign_keys:
+        referenced_name = foreign_key.target_fullname.split(".", 1)[0]
+        if referenced_name not in new_metadata.tables:
+            Table(referenced_name, new_metadata, autoload_with=engine)
+    temporary_name = f"{table_name}__constraint_new"
+    new = old.to_metadata(new_metadata, name=temporary_name)
+    for constraint in list(new.constraints):
+        if constraint.name == constraint_name:
+            new.constraints.remove(constraint)
+    from sqlalchemy import CheckConstraint
+
+    new.append_constraint(CheckConstraint(expression, name=constraint_name))
+
+    index_specs: list[tuple[str, bool, tuple[str, ...]]] = []
+    for index in list(new.indexes):
+        if index.name:
+            index_specs.append((index.name, bool(index.unique), tuple(index.columns.keys())))
+        new.indexes.remove(index)
+    keep = [column.name for column in old.c]
+
     child_rows: list[tuple[Table, list[dict[str, object]]]] = []
     for child_name in inspector.get_table_names():
         if child_name == table_name:

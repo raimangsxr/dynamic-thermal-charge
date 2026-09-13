@@ -97,17 +97,15 @@ def test_a_heater_field_changes_only_that_heater(initialised_store):
             assert changed[heater.id] == heater, "an unrelated heater changed"
 
 
-def test_a_telemetry_topic_changes_only_that_heater(initialised_store):
+def test_a_legacy_telemetry_topic_is_rejected(initialised_store):
     repository = initialised_store.repository
     before, revision = repository.current()
-    repository.set_field(
-        revision, "heater", "salon", "telemetry_topic", "ha/salon/telemetry"
-    )
-    after, _ = repository.current()
-    changed = {heater.id: heater for heater in after.heaters}
-    unchanged = {heater.id: heater for heater in before.heaters}
-    assert changed["salon"].telemetry_topic == "ha/salon/telemetry"
-    assert changed["entrada"].telemetry_topic == unchanged["entrada"].telemetry_topic
+    with pytest.raises(ConfigValidationError, match="unknown heater field"):
+        repository.set_field(
+            revision, "heater", "salon", "telemetry_topic", "ha/salon/telemetry"
+        )
+    after, after_revision = repository.current()
+    assert (after, after_revision) == (before, revision)
 
 
 def test_disabling_a_heater_keeps_it_in_the_configuration(initialised_store):

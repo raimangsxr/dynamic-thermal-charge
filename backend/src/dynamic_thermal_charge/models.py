@@ -238,14 +238,6 @@ class Heater:
     thermal: ThermalProfile | None = None
     model: str | None = None
     enabled: bool = True
-    telemetry_topic: str | None = None
-    # Deprecated compatibility inputs. New persistence and API surfaces use
-    # ``telemetry_topic`` and no longer read these separate MQTT topics.
-    indoor_topic: str | None = None
-    temperature_topic: str | None = None
-    target_temperature_topic: str | None = None
-    stored_charge_topic: str | None = None
-    stored_soc_topic: str | None = None
     reserve_percent: float = 0.0
     demand_factor: float = 1.0
     temperature_targets: tuple[TemperatureTarget, ...] = ()
@@ -275,21 +267,6 @@ class Heater:
             )
         if not 0 <= self.target_charge <= 1:
             raise ValueError(f"heater {self.id}: target_charge must be between 0 and 1")
-        if self.telemetry_topic is not None:
-            topic = self.telemetry_topic.strip()
-            object.__setattr__(self, "telemetry_topic", topic or None)
-        if self.indoor_topic is not None:
-            topic = self.indoor_topic.strip()
-            object.__setattr__(self, "indoor_topic", topic or None)
-        for field_name in (
-            "temperature_topic",
-            "target_temperature_topic",
-            "stored_charge_topic",
-            "stored_soc_topic",
-        ):
-            value = getattr(self, field_name)
-            if value is not None:
-                object.__setattr__(self, field_name, value.strip() or None)
         if self.reserve_percent < 0:
             raise ValueError(f"heater {self.id}: reserve_percent must be non-negative")
         if not math.isfinite(self.demand_factor) or self.demand_factor <= 0:
@@ -553,16 +530,6 @@ class RuntimeConfig:
 
 
 @dataclass(frozen=True)
-class SimulatedForecastConfig:
-    average_temperature_c: float
-    minimum_temperature_c: float
-
-    def __post_init__(self) -> None:
-        if self.minimum_temperature_c > self.average_temperature_c:
-            raise ValueError("minimum temperature cannot exceed average temperature")
-
-
-@dataclass(frozen=True)
 class AemetConfig:
     municipality_code: str
     api_key_env: str = "AEMET_API_KEY"
@@ -591,19 +558,13 @@ class WeatherWatchdogConfig:
 
 @dataclass(frozen=True)
 class WeatherConfig:
-    provider: str
-    simulated: SimulatedForecastConfig | None = None
+    provider: str = "aemet"
     aemet: AemetConfig | None = None
-    fallback: SimulatedForecastConfig | None = None
     watchdog: WeatherWatchdogConfig = WeatherWatchdogConfig()
 
     def __post_init__(self) -> None:
-        if self.provider not in {"simulated", "aemet"}:
+        if self.provider != "aemet":
             raise ValueError(f"unsupported weather provider: {self.provider}")
-        if self.provider == "simulated" and self.simulated is None:
-            raise ValueError("simulated weather provider requires simulated values")
-        if self.provider == "aemet" and self.aemet is None:
-            raise ValueError("AEMET weather provider requires AEMET configuration")
 
 
 @dataclass(frozen=True)

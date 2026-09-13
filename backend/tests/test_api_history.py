@@ -157,7 +157,7 @@ def test_the_forecast_source_is_reported(client, initialised_store):
     _seed(initialised_store, nights=3)
     body = _get(client, "/api/v1/history/forecasts").json()
     assert body["items"]
-    assert all(item["source"] in ("aemet", "simulated", "fallback") for item in body["items"])
+    assert all(item["source"] == "aemet" for item in body["items"])
 
 
 # --------------------------------------------------------------------------- #
