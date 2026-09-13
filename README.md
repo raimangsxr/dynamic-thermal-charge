@@ -269,7 +269,15 @@ topic efectivo, independientemente del antiguo `mqtt_simulation_topic_prefix`.
 
 Los overrides `damper_topic` y `setpoint_topic` se aceptan todavía en la API
 para instalaciones existentes, pero el panel los muestra como topics efectivos
-de solo lectura. El `Controller` publica ambos mandos en cada ciclo, con QoS 1 y
+de solo lectura. Para recuperar los topics estándar, hay que establecer ambos
+campos a `null` (o a una cadena vacía) mediante `PATCH /api/v1/planning/heaters/<id>`;
+por ejemplo:
+
+```json
+{"damper_topic": null, "setpoint_topic": null}
+```
+
+El `Controller` publica ambos mandos en cada ciclo, con QoS 1 y
 sin retención. Dentro de una ventana con consigna activa publica `ON` y la
 temperatura objetivo, aunque ese intervalo proyecte cero calor; el termostato
 del `Heater` puede cerrar la compuerta y volver a abrirla según la temperatura
