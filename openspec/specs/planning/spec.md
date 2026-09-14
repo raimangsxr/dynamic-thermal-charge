@@ -445,6 +445,20 @@ respaldo o simuladas.
 - **THEN** se persiste el intento, se programa el reintento correspondiente y
   la replanificación continúa con la última previsión almacenada apta
 
+#### Scenario: Estado tras un intento fallido posterior
+
+- **WHEN** existe una previsión AEMET almacenada correctamente y una consulta
+  posterior falla
+- **THEN** el estado conserva `forecast_last_success_at` derivado de
+  `forecast.retrieved_at` y expone por separado el estado, error y próximo
+  intento de la consulta más reciente
+
+#### Scenario: Municipio AEMET con codificación heredada
+
+- **WHEN** el proveedor o una previsión histórica contiene un municipio con
+  mojibake UTF-8 como `Noia, A CoruÃ±a`
+- **THEN** el estado lo devuelve y renderiza como `Noia, A Coruña`
+
 ### Requirement: Integridad de la planificación automática
 
 Un plan solo será `VALID` si todas las fases del solver alcanzan el óptimo y

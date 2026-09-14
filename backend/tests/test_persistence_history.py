@@ -27,14 +27,16 @@ from dynamic_thermal_charge.weather import OutdoorForecast
 WINDOW_START = datetime(2026, 1, 16, 0, 0, tzinfo=timezone.utc)
 
 
-def _forecast(source: str = "aemet") -> OutdoorForecast:
+def _forecast(
+    source: str = "aemet", location: str = "A Coruña, A Coruña"
+) -> OutdoorForecast:
     return OutdoorForecast(
         date=date(2026, 1, 16),
         average_temperature_c=6.5,
         minimum_temperature_c=2.0,
         maximum_temperature_c=11.0,
         source=source,
-        location="A Coruña, A Coruña",
+        location=location,
     )
 
 
@@ -73,6 +75,16 @@ def test_a_forecast_is_recorded_with_its_temperatures_and_source(
 def test_non_aemet_forecast_is_not_recorded(initialised_store, recorder):
     assert recorder.record_forecast(_forecast(source="simulated")) is None
     assert _rows(initialised_store, forecast_table) == []
+
+
+def test_a_forecast_municipality_is_normalized_before_persistence(
+    initialised_store, recorder
+):
+    recorder.record_forecast(_forecast(location="Noia, A CoruÃ±a"))
+
+    row = _rows(initialised_store, forecast_table)[0]
+
+    assert row["municipality"] == "Noia, A Coruña"
 
 
 # --------------------------------------------------------------------------- #

@@ -93,6 +93,7 @@ def get_status(
     timezone_name = config.schedule.timezone if config.schedule is not None else "UTC"
     cycle_status = forecast_cycle_context(store.planning)
     latest_forecast = reader.latest_forecast(observed_at)
+    forecast_last_success_at = reader.latest_forecast_success_at()
 
     last_states = reader.last_output_states()
     current = controller.state_is_current
@@ -315,6 +316,7 @@ def get_status(
         horizon_end=horizon_end,
         absence_reason=absence_reason,
         forecast_status=cycle_status.get("forecast_status"),
+        forecast_last_success_at=forecast_last_success_at,
         forecast_last_attempt_at=cycle_status.get("forecast_last_attempt_at"),
         forecast_last_error=cycle_status.get("forecast_last_error"),
         forecast_next_run_at=cycle_status.get("forecast_next_run_at"),

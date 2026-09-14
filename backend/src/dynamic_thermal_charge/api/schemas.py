@@ -137,6 +137,7 @@ class StatusResponse(BaseModel):
     horizon_end: datetime | None = None
     absence_reason: str | None = None
     forecast_status: str | None = None
+    forecast_last_success_at: datetime | None = None
     forecast_last_attempt_at: datetime | None = None
     forecast_last_error: str | None = None
     forecast_next_run_at: datetime | None = None

@@ -216,6 +216,7 @@ export interface StatusDto {
   horizon_end?: string | null;
   absence_reason?: string | null;
   forecast_status?: string | null;
+  forecast_last_success_at?: string | null;
   forecast_last_attempt_at?: string | null;
   forecast_last_error?: string | null;
   forecast_next_run_at?: string | null;

@@ -67,6 +67,7 @@ function statusDto(overrides: Partial<StatusDto> = {}): StatusDto {
       maximum_temperature_c: 13,
       municipality: 'Noia, A Coruña',
     },
+    forecast_last_success_at: '2026-01-16T01:00:00Z',
     allocations: [
       {
         heater_id: 'salon',
@@ -147,6 +148,17 @@ describe('Status', () => {
     expect(testId(element, 'power')?.textContent).toContain('5.2 kW');
     expect(testId(element, 'plan')).not.toBeNull();
     expect(testId(element, 'forecast')?.textContent).toContain('8');
+    expect(testId(element, 'forecast')?.textContent).toContain('Noia, A Coruña');
+  });
+
+  it('shows the last successful forecast in the installation timezone', () => {
+    const element = load(statusDto());
+    expect(testId(element, 'forecast-last-success')?.textContent).toContain('02:00');
+  });
+
+  it('shows the absence marker when no successful forecast exists', () => {
+    const element = load(statusDto({ forecast: null, forecast_last_success_at: null }));
+    expect(testId(element, 'forecast-last-success')?.textContent).toContain('—');
   });
 
   it('shows each heater with its confirmed state', () => {

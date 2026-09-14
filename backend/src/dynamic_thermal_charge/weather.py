@@ -22,6 +22,19 @@ JsonObject = Any
 HttpGet = Callable[[str, Mapping[str, str], float], JsonObject]
 
 
+def normalize_municipality(value: str | None) -> str | None:
+    """Return an AEMET municipality without common UTF-8 mojibake."""
+    if value is None:
+        return None
+    text = str(value)
+    if not any(marker in text for marker in ("Ã", "Â", "â")):
+        return text
+    try:
+        return text.encode("latin-1").decode("utf-8")
+    except (UnicodeDecodeError, UnicodeEncodeError):
+        return text
+
+
 @dataclass(frozen=True)
 class HourlyForecastPoint:
     """One validated outdoor temperature at an instant.
@@ -283,7 +296,9 @@ def _parse_aemet_forecast(
     municipality_name = municipality.get("nombre")
     province = municipality.get("provincia")
     location_parts = [
-        str(part) for part in (municipality_name, province) if part
+        normalize_municipality(str(part))
+        for part in (municipality_name, province)
+        if part
     ]
     hourly_points = _parse_aemet_hourly_points(days, local_timezone)
     if hourly_points:
