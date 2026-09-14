@@ -11,11 +11,12 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCardModule } from '@angular/material/card';
-import { MAT_DIALOG_DATA, MatDialog, MatDialogModule, MatDialogRef } from '@angular/material/dialog';
+import { MatDialog, MatDialogModule, type MatDialogRef } from '@angular/material/dialog';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatIconModule } from '@angular/material/icon';
 import { MatInputModule } from '@angular/material/input';
 import { MatSelectModule } from '@angular/material/select';
+import { MatSnackBarModule } from '@angular/material/snack-bar';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { Component, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
@@ -45,6 +46,8 @@ import {
 } from '../shared/presentation/presentation';
 import { confirmationText, needsConfirmation } from './electrical-fields';
 import { ParamHelp } from '../shared/param-help/param-help';
+import { CONFIRM_DIALOG_CONFIG, ConfirmDialog, type ConfirmDialogData } from '../shared/ui-feedback/dialog-config';
+import { UiFeedback } from '../shared/ui-feedback/ui-feedback';
 
 type ConfigArea = 'summary' | 'installation' | 'heaters' | 'planning' | 'integrations' | 'service';
 type IntegrationSection = 'mqtt' | 'weather' | 'email';
@@ -285,26 +288,9 @@ const SECRET_LABELS: Record<string, string> = {
 };
 
 @Component({
-  selector: 'dtc-confirm-dialog',
-  imports: [MatButtonModule, MatDialogModule],
-  template: `
-    <h2 mat-dialog-title>{{ data.title }}</h2>
-    <mat-dialog-content>{{ data.message }}</mat-dialog-content>
-    <mat-dialog-actions align="end">
-      <button mat-button type="button" [mat-dialog-close]="false">Cancelar</button>
-      <button mat-flat-button color="warn" type="button" [mat-dialog-close]="true" data-testid="confirm-delete">{{ data.confirmLabel }}</button>
-    </mat-dialog-actions>
-  `,
-})
-export class ConfirmDialog {
-  readonly data = inject<{ title: string; message: string; confirmLabel: string }>(MAT_DIALOG_DATA);
-  readonly dialogRef = inject(MatDialogRef<ConfirmDialog>);
-}
-
-@Component({
   selector: 'dtc-config',
   imports: [
-    FormsModule, RouterLink, MatButtonModule, MatCardModule, MatDialogModule,
+    FormsModule, RouterLink, MatButtonModule, MatCardModule, MatDialogModule, MatSnackBarModule,
     MatFormFieldModule, MatIconModule, MatInputModule, MatSelectModule, MatTooltipModule,
     ParamHelp,
   ],
@@ -314,6 +300,8 @@ export class ConfirmDialog {
 export class Config {
   private readonly api = inject(Api);
   private readonly dialog = inject(MatDialog);
+  private readonly feedback = inject(UiFeedback);
+  private confirmationRef: MatDialogRef<ConfirmDialog, boolean> | null = null;
 
   readonly areas = [
     { id: 'summary', label: 'Resumen', description: 'Estado general y accesos rápidos' },
@@ -471,8 +459,15 @@ export class Config {
     this.alertSaving.set(name);
     this.alertError.set('');
     this.api.setAlertEnabled(name, enabled).subscribe({
-      next: (dto) => { this.alertSaving.set(null); this.alertCatalogue.set(dto.alerts); },
-      error: () => { this.alertSaving.set(null); this.alertError.set('No se pudo cambiar la activación de la alerta.'); },
+      next: (dto) => {
+        this.alertSaving.set(null);
+        this.alertCatalogue.set(dto.alerts);
+        this.feedback.success(`Alerta ${enabled ? 'activada' : 'silenciada'}.`);
+      },
+      error: () => {
+        this.alertSaving.set(null);
+        this.feedback.error('No se pudo cambiar la activación de la alerta.');
+      },
     });
   }
 
@@ -481,11 +476,18 @@ export class Config {
     this.emailTestMessage.set('');
     this.emailTestError.set('');
     this.api.testEmail().subscribe({
-      next: () => { this.emailTestLoading.set(false); this.emailTestMessage.set('Mensaje de prueba entregado al servidor de correo.'); },
+      next: () => {
+        this.emailTestLoading.set(false);
+        const message = 'Mensaje de prueba entregado al servidor de correo.';
+        this.emailTestMessage.set(message);
+        this.feedback.success(message);
+      },
       error: (error: unknown) => {
         this.emailTestLoading.set(false);
         const body = error instanceof HttpErrorResponse ? error.error as { message?: unknown } : null;
-        this.emailTestError.set(typeof body?.message === 'string' ? body.message : 'No se pudo enviar el mensaje de prueba.');
+        const message = typeof body?.message === 'string' ? body.message : 'No se pudo enviar el mensaje de prueba.';
+        this.emailTestError.set(message);
+        this.feedback.error(message);
       },
     });
   }
@@ -564,7 +566,16 @@ export class Config {
     const edits = this.installationEdits();
     if (edits.length === 0 || this.installationSaving()) return;
     if (edits.some((edit) => needsConfirmation(edit.field))) {
-      this.confirming.set({ field: edits[0].field, value: edits[0].value, heaterId: null, batchEdits: edits });
+      const pending = { field: edits[0].field, value: edits[0].value, heaterId: null, batchEdits: edits } satisfies PendingEdit;
+      this.confirming.set(pending);
+      this.openConfirmation({
+        title: 'Confirma el cambio',
+        message: this.confirmationMessage(),
+        confirmLabel: 'Sí, cambiar',
+      }, () => {
+        this.confirming.set(null);
+        this.applyInstallation(edits);
+      });
       return;
     }
     this.applyInstallation(edits);
@@ -573,7 +584,16 @@ export class Config {
     const value = this.pending()[this.key(field, heaterId)];
     if (value === undefined) return;
     if (needsConfirmation(field)) {
-      this.confirming.set({ field, value, heaterId });
+      const pending = { field, value, heaterId } satisfies PendingEdit;
+      this.confirming.set(pending);
+      this.openConfirmation({
+        title: 'Confirma el cambio',
+        message: this.confirmationMessage(),
+        confirmLabel: 'Sí, cambiar',
+      }, () => {
+        this.confirming.set(null);
+        this.apply(pending);
+      });
       return;
     }
     this.apply({ field, value, heaterId });
@@ -590,6 +610,10 @@ export class Config {
     return edit.formEdits ? 'Se aplicarán los cambios del acumulador. Revisa especialmente los valores eléctricos.' : confirmationText(edit.field, edit.value);
   }
   confirm(): void {
+    if (this.confirming() && this.confirmationRef) {
+      this.confirmationRef.close(true);
+      return;
+    }
     const edit = this.confirming();
     this.confirming.set(null);
     if (edit === null) return;
@@ -597,11 +621,28 @@ export class Config {
     else if (edit.batchEdits) this.applyInstallation(edit.batchEdits);
     else this.apply(edit);
   }
-  cancelConfirmation(): void { this.confirming.set(null); }
+  cancelConfirmation(): void {
+    if (this.confirming() && this.confirmationRef) {
+      this.confirmationRef.close(false);
+      return;
+    }
+    this.confirming.set(null);
+  }
   confirmSystemSave(): void {
+    if (this.systemConfirming() && this.confirmationRef) {
+      this.confirmationRef.close(true);
+      return;
+    }
     const section = this.systemConfirming();
     this.systemConfirming.set(null);
     if (section !== null) this.saveSystem(section);
+  }
+  cancelSystemConfirmation(): void {
+    if (this.systemConfirming() && this.confirmationRef) {
+      this.confirmationRef.close(false);
+      return;
+    }
+    this.systemConfirming.set(null);
   }
   discard(field: string, heaterId: string | null): void {
     const target = this.key(field, heaterId);
@@ -680,12 +721,13 @@ export class Config {
     if (sensitive) {
       this.heaterSaving.set(false);
       this.dialog.open(ConfirmDialog, {
-        width: 'min(28rem, calc(100vw - 2rem))',
+        ...CONFIRM_DIALOG_CONFIG,
         data: {
           title: `Confirmar cambios en ${original.name}`,
           message: 'Se aplicarán los cambios del acumulador. Revisa especialmente los valores eléctricos.',
           confirmLabel: 'Sí, guardar',
         },
+        ariaLabel: `Confirmar cambios en ${original.name}`,
       }).afterClosed().subscribe((confirmed: boolean) => {
         if (confirmed) this.applyHeaterEdits(original.id);
       });
@@ -694,7 +736,11 @@ export class Config {
     this.applyHeaterEdits(original.id);
   }
   requestRemoveHeater(heater: ConfigDto['heaters'][number]): void {
-    this.dialog.open(ConfirmDialog, { width: 'min(28rem, calc(100vw - 2rem))', data: { title: `Eliminar ${heater.name}`, message: 'Se eliminará el acumulador de la configuración. Su histórico se conservará.', confirmLabel: 'Eliminar acumulador' } }).afterClosed().subscribe((confirmed: boolean) => {
+    this.dialog.open(ConfirmDialog, {
+      ...CONFIRM_DIALOG_CONFIG,
+      data: { title: `Eliminar ${heater.name}`, message: 'Se eliminará el acumulador de la configuración. Su histórico se conservará.', confirmLabel: 'Eliminar acumulador' },
+      ariaLabel: `Eliminar ${heater.name}`,
+    }).afterClosed().subscribe((confirmed: boolean) => {
       if (confirmed) this.removeHeater(heater.id);
     });
   }
@@ -703,8 +749,13 @@ export class Config {
     if (!snapshot || this.heaterSaving()) return;
     this.heaterSaving.set(true);
     this.api.removeHeater(heaterId, snapshot.config_revision).subscribe({
-      next: (change) => { this.heaterSaving.set(false); this.saved.set(`Acumulador eliminado: ${change.entity_key ?? heaterId}`); this.cancelHeaterForm(); this.load(true); },
-      error: (error: unknown) => { this.heaterSaving.set(false); this.banner.set(this.describe(error)); },
+      next: (change) => { this.heaterSaving.set(false); const message = `Acumulador eliminado: ${change.entity_key ?? heaterId}`; this.saved.set(message); this.feedback.success(message); this.cancelHeaterForm(); this.load(true); },
+      error: (error: unknown) => {
+        this.heaterSaving.set(false);
+        const explained = this.describe(error);
+        this.banner.set(explained);
+        this.feedback.error(explained.action ? `${explained.title} ${explained.action}` : explained.title);
+      },
     });
   }
   private formValue(form: HeaterForm, field: typeof HEATER_EDIT_FIELDS[number]): string {
@@ -720,7 +771,14 @@ export class Config {
     const call = edit.heaterId === null ? this.api.setField(body) : this.api.setHeaterField(edit.heaterId, body);
     const target = this.key(edit.field, edit.heaterId);
     call.subscribe({
-      next: (change) => { this.saved.set(`${edit.field}: ${change.old_value ?? '—'} → ${change.new_value ?? '—'}`); this.fieldErrors.update((errors) => { const next = { ...errors }; delete next[target]; return next; }); this.discard(edit.field, edit.heaterId); this.load(true); },
+      next: (change) => {
+        const message = `${edit.field}: ${change.old_value ?? '—'} → ${change.new_value ?? '—'}`;
+        this.saved.set(message);
+        this.feedback.success(message);
+        this.fieldErrors.update((errors) => { const next = { ...errors }; delete next[target]; return next; });
+        this.discard(edit.field, edit.heaterId);
+        this.load(true);
+      },
       error: (error: unknown) => this.reject(target, error),
     });
   }
@@ -735,8 +793,14 @@ export class Config {
         const count = response.changes.length;
         if (count === 1 && response.changes[0].field) {
           const change = response.changes[0];
-          this.saved.set(`${change.field}: ${change.old_value ?? '—'} → ${change.new_value ?? '—'}`);
-        } else this.saved.set(`Configuración guardada (${count} cambios).`);
+          const message = `${change.field}: ${change.old_value ?? '—'} → ${change.new_value ?? '—'}`;
+          this.saved.set(message);
+          this.feedback.success(message);
+        } else {
+          const message = `Configuración guardada (${count} cambios).`;
+          this.saved.set(message);
+          this.feedback.success(message);
+        }
         this.fieldErrors.update((errors) => { const next = { ...errors }; for (const edit of edits) delete next[this.key(edit.field, null)]; return next; });
         for (const edit of edits) this.discard(edit.field, null);
         this.load(true);
@@ -762,23 +826,48 @@ export class Config {
       error: (error: unknown) => { this.heaterSaving.set(false); this.reject(this.key('form', heaterId), error); this.heaterFormError.set('No se pudo guardar el acumulador. El formulario conserva tus cambios.'); },
     });
   }
-  private finishHeaterSave(message: string): void { this.heaterSaving.set(false); this.saved.set(message); this.cancelHeaterForm(); this.load(true); }
+  private finishHeaterSave(message: string): void { this.heaterSaving.set(false); this.saved.set(message); this.feedback.success(message); this.cancelHeaterForm(); this.load(true); }
   private rejectHeater(error: unknown): void { this.heaterSaving.set(false); this.heaterFormError.set(error instanceof HttpErrorResponse ? this.describe(error).title : 'No se pudo guardar el acumulador. Revisa los campos.'); }
   private reject(target: string, error: unknown): void {
-    if (!(error instanceof HttpErrorResponse)) { this.banner.set(UNREACHABLE); return; }
+    if (!(error instanceof HttpErrorResponse)) {
+      this.banner.set(UNREACHABLE);
+      this.feedback.error(`${UNREACHABLE.title} ${UNREACHABLE.action}`);
+      return;
+    }
     const body = error.error as ApiErrorDto | null;
-    if (body === null || typeof body !== 'object' || !('code' in body)) { this.banner.set(UNREACHABLE); return; }
+    if (body === null || typeof body !== 'object' || !('code' in body)) {
+      this.banner.set(UNREACHABLE);
+      this.feedback.error(`${UNREACHABLE.title} ${UNREACHABLE.action}`);
+      return;
+    }
     const explained = explain(body);
     this.relayConflict.set(body.code === 'relay_test_active' || body.code === 'relay_test_fault_latched' || (body.code === 'config_conflict' && body.message.includes('relay test')));
     if (explained.fieldScoped && this.rendered.has(target)) { this.fieldErrors.update((errors) => ({ ...errors, [target]: messageFor(body) })); this.banner.set(null); return; }
-    if (explained.fieldScoped) { this.banner.set({ ...explained, title: messageFor(body), action: explained.action }); return; }
+    if (explained.fieldScoped) {
+      const fallback = { ...explained, title: messageFor(body), action: explained.action };
+      this.banner.set(fallback);
+      this.feedback.error(fallback.action ? `${fallback.title} ${fallback.action}` : fallback.title);
+      return;
+    }
     this.banner.set(explained);
+    this.feedback.error(explained.action ? `${explained.title} ${explained.action}` : explained.title);
   }
 
   requestSystemSave(section: SystemSection): void {
     if (!this.writable() || !this.systemHasChanges(section) || this.systemSaving()) return;
-    if (section === 'database' || section === 'output' || this.secrets(section).some((secret) => this.secretAction(secret) !== 'keep')) this.systemConfirming.set(section);
-    else this.saveSystem(section);
+    if (section === 'database' || section === 'output' || this.secrets(section).some((secret) => this.secretAction(secret) !== 'keep')) {
+      this.systemConfirming.set(section);
+      this.openConfirmation({
+        title: 'Confirma el cambio sensible',
+        message: `${SECTION_LABELS[section]} puede afectar al servicio activo. Comprueba los datos antes de continuar.`,
+        confirmLabel: 'Sí, guardar',
+      }, () => {
+        this.systemConfirming.set(null);
+        this.saveSystem(section);
+      });
+    } else {
+      this.saveSystem(section);
+    }
   }
   savePlanning(): void {
     this.systemError.set('');
@@ -792,8 +881,20 @@ export class Config {
     };
     this.planningSaving.set(true);
     this.api.patchPlanningConfig(snapshot.revision, values).subscribe({
-      next: (updated) => { this.planningSaving.set(false); this.planningConfig.set(updated); this.planningDraft.set({}); this.saved.set('Parámetros de planificación guardados.'); },
-      error: (error: unknown) => { this.planningSaving.set(false); this.systemError.set(error instanceof HttpErrorResponse && error.status === 409 ? 'La configuración de planificación cambió. Tus valores siguen aquí; vuelve a leer antes de guardar.' : 'No se pudo guardar la planificación. Revisa los campos.'); },
+      next: (updated) => {
+        this.planningSaving.set(false);
+        this.planningConfig.set(updated);
+        this.planningDraft.set({});
+        const message = 'Parámetros de planificación guardados.';
+        this.saved.set(message);
+        this.feedback.success(message);
+      },
+      error: (error: unknown) => {
+        this.planningSaving.set(false);
+        this.feedback.error(error instanceof HttpErrorResponse && error.status === 409
+          ? 'La configuración de planificación cambió. Tus valores siguen aquí; vuelve a leer antes de guardar.'
+          : 'No se pudo guardar la planificación. Revisa los campos.');
+      },
     });
   }
   private saveSystem(section: SystemSection): void {
@@ -820,25 +921,51 @@ export class Config {
         this.systemDraft.update((draft) => { const next = { ...draft }; for (const field of SYSTEM_FIELDS[section]) delete next[this.systemKey(section, field.name)]; return next; });
         this.secretValues.update((values) => { const next = { ...values }; for (const secret of sectionSecrets) delete next[secret]; return next; });
         this.secretActions.update((actions) => { const next = { ...actions }; for (const secret of sectionSecrets) delete next[secret]; return next; });
-        this.saved.set(updated.pending_restart?.length ? 'Guardado. Reinicia el proceso indicado para aplicar todos los cambios.' : `${SECTION_LABELS[section]} actualizado.`);
+        const message = updated.pending_restart?.length ? 'Guardado. Reinicia el proceso indicado para aplicar todos los cambios.' : `${SECTION_LABELS[section]} actualizado.`;
+        this.saved.set(message);
+        this.feedback.success(message);
       },
-      error: (error: unknown) => { this.systemSaving.set(false); this.systemError.set(error instanceof HttpErrorResponse && error.status === 409 ? 'La configuración cambió. Tus valores siguen aquí; vuelve a leer antes de guardar.' : 'No se pudo guardar. Tus cambios siguen en pantalla.'); },
+      error: (error: unknown) => {
+        this.systemSaving.set(false);
+        this.feedback.error(error instanceof HttpErrorResponse && error.status === 409
+          ? 'La configuración cambió. Tus valores siguen aquí; vuelve a leer antes de guardar.'
+          : 'No se pudo guardar. Tus cambios siguen en pantalla.');
+      },
     });
   }
   testDatabase(): void {
     this.api.testDatabase(this.databaseCandidate()).subscribe({
-      next: () => { this.systemMessage.set('Conexión de base de datos verificada sin guardar cambios.'); this.systemError.set(''); },
-      error: () => this.systemError.set('No se pudo conectar con el destino; no se guardó ningún cambio.'),
+      next: () => {
+        const message = 'Conexión de base de datos verificada sin guardar cambios.';
+        this.systemMessage.set(message);
+        this.systemError.set('');
+        this.feedback.success(message);
+      },
+      error: () => this.feedback.error('No se pudo conectar con el destino; no se guardó ningún cambio.'),
     });
   }
   migrateDatabase(): void {
     const topology = this.topology();
     if (!topology?.locator_revision || !this.writable()) return;
-    this.systemConfirming.set(null);
+    this.openConfirmation({
+      title: 'Migrar la base de datos',
+      message: 'La migración cambiará el almacenamiento activo y puede requerir reiniciar el servicio. ¿Quieres continuar?',
+      confirmLabel: 'Migrar base de datos',
+    }, () => this.performDatabaseMigration(topology.locator_revision!));
+  }
+  private performDatabaseMigration(locatorRevision: number): void {
     this.operation.set('Migración en curso…');
-    this.api.migrateDatabase(topology.locator_revision, this.databaseCandidate()).subscribe({
-      next: (operation) => this.operation.set(`Migración ${operation.status}: ${operation.phase}`),
-      error: () => { this.operation.set(''); this.systemError.set('La migración no se pudo completar; el backend activo no ha cambiado.'); },
+    this.api.migrateDatabase(locatorRevision, this.databaseCandidate()).subscribe({
+      next: (operation) => {
+        this.operation.set(`Migración ${operation.status}: ${operation.phase}`);
+        if (['completed', 'success', 'succeeded'].includes(operation.status.toLowerCase())) {
+          this.feedback.success('La migración de la base de datos se completó correctamente.');
+        }
+      },
+      error: () => {
+        this.operation.set('');
+        this.feedback.error('La migración no se pudo completar; el backend activo no ha cambiado.');
+      },
     });
   }
   refreshWeather(): void {
@@ -849,14 +976,18 @@ export class Config {
     this.api.refreshWeather().subscribe({
       next: (result) => {
         this.weatherRefreshLoading.set(false);
-        this.weatherRefreshMessage.set('Consulta AEMET completada correctamente.');
+        const message = 'Consulta AEMET completada correctamente.';
+        this.weatherRefreshMessage.set(message);
+        this.feedback.success(message);
         this.configuration.update((current) => current ? ({ ...current, sections: { ...current.sections, weather: { ...current.sections.weather, forecast_status: result.forecast_status, forecast_last_attempt_at: result.forecast_last_attempt_at, forecast_last_error: result.forecast_last_error, forecast_next_run_at: result.forecast_next_run_at, forecast_next_run_kind: result.forecast_next_run_kind } } }) : current);
       },
       error: (error: unknown) => {
         this.weatherRefreshLoading.set(false);
         this.weatherRefreshMessage.set('');
         const body = error instanceof HttpErrorResponse ? error.error as { message?: unknown } : null;
-        this.weatherRefreshError.set(typeof body?.message === 'string' ? body.message : 'No se pudo consultar AEMET.');
+        const message = typeof body?.message === 'string' ? body.message : 'No se pudo consultar AEMET.';
+        this.weatherRefreshError.set(message);
+        this.feedback.error(message);
       },
     });
   }
@@ -878,6 +1009,23 @@ export class Config {
       driver: String(value('driver') || 'sqlite') as 'sqlite' | 'postgresql', host: String(value('host') || '') || undefined, port: Number(value('port')) || undefined, database: String(value('database') || '') || undefined,
       username: this.secretValues()['postgres_username'], password: this.secretValues()['postgres_password'], tls: Boolean(value('tls')), trusted_no_tls: Boolean(value('trusted_no_tls')),
     };
+  }
+  private openConfirmation(data: ConfirmDialogData, onConfirm: () => void): void {
+    if (this.confirmationRef) return;
+    const ref = this.dialog.open(ConfirmDialog, {
+      ...CONFIRM_DIALOG_CONFIG,
+      data,
+      ariaLabel: data.title,
+    });
+    this.confirmationRef = ref;
+    ref.afterClosed().subscribe((confirmed) => {
+      this.confirmationRef = null;
+      if (confirmed) onConfirm();
+      else {
+        this.confirming.set(null);
+        this.systemConfirming.set(null);
+      }
+    });
   }
   private describe(error: unknown): Explained {
     if (error instanceof HttpErrorResponse) {

@@ -195,7 +195,7 @@ describe('Config', () => {
     expect(element.querySelector('.output-note')?.textContent).toContain('Salón');
   });
 
-  it('keeps a replaced secret out of the DOM after saving from the merged page', () => {
+  it('keeps a replaced secret out of the DOM after saving from the merged page', async () => {
     loadUnified();
     fixture.componentInstance.chooseArea('integrations');
     fixture.componentInstance.chooseIntegration('mqtt');
@@ -203,8 +203,11 @@ describe('Config', () => {
     fixture.componentInstance.setSecretAction('mqtt_password', 'replace');
     fixture.componentInstance.setSecretValue('mqtt_password', 'sentinel-secret');
     fixture.componentInstance.requestSystemSave('mqtt');
-    expect(testId('confirm-system')).not.toBeNull();
-    fixture.componentInstance.confirmSystemSave();
+    await fixture.whenStable();
+    const dialog = document.querySelector('mat-dialog-container');
+    expect(dialog?.textContent).toContain('Confirma el cambio sensible');
+    dialog?.querySelector<HTMLButtonElement>('[data-testid="confirm-delete"]')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 100));
     const request = backend.expectOne('/api/v1/system/configuration/mqtt');
     expect(request.request.body.expected_revision).toBe(3);
     expect(request.request.body.secrets.mqtt_password).toEqual({ action: 'replace', value: 'sentinel-secret' });
@@ -240,14 +243,18 @@ describe('Config', () => {
     backend.expectOne('/api/v1/config').flush(configDto({ config_revision: 4 }));
   });
 
-  it('confirms the change with both values', () => {
+  it('confirms the change with both values', async () => {
     load();
     fixture.componentInstance.edit('poll_seconds', null, '7');
     fixture.componentInstance.saveInstallation();
+    await fixture.whenStable();
+    document.querySelector<HTMLButtonElement>('[data-testid="confirm-delete"]')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 100));
     backend.expectOne('/api/v1/config/batch').flush({ changes: [change()] });
     backend.expectOne('/api/v1/config').flush(configDto({ config_revision: 4 }));
-    expect(testId('saved')?.textContent).toContain('5');
-    expect(testId('saved')?.textContent).toContain('7');
+    expect(fixture.componentInstance.saved()).toContain('5');
+    expect(fixture.componentInstance.saved()).toContain('7');
+    expect(document.querySelector('.dtc-snackbar-container')?.textContent).toContain('5');
   });
 
   it('saves several installation fields in one request', () => {
@@ -267,7 +274,7 @@ describe('Config', () => {
       ],
     });
     backend.expectOne('/api/v1/config').flush(configDto({ config_revision: 4 }));
-    expect(testId('saved')?.textContent).toContain('2 cambios');
+    expect(fixture.componentInstance.saved()).toContain('2 cambios');
   });
 
   it('edits an accumulator through one complete update endpoint', () => {
@@ -346,30 +353,37 @@ describe('Config', () => {
       },
     );
 
-    it('does not touch the API until the operator confirms', () => {
+    it('does not touch the API until the operator confirms', async () => {
       load();
       fixture.componentInstance.edit('max_total_power_kw', null, '9.9');
       fixture.componentInstance.saveInstallation();
       backend.expectNone(
         (candidate) => candidate.method === 'PATCH',
       );
-      expect(testId('confirm')).not.toBeNull();
+      await fixture.whenStable();
+      expect(document.querySelector('mat-dialog-container')).not.toBeNull();
+      expect(testId('confirm')).toBeNull();
     });
 
-    it('says what is being changed, and why it matters', () => {
+    it('says what is being changed, and why it matters', async () => {
       load();
       fixture.componentInstance.edit('max_total_power_kw', null, '9.9');
       fixture.componentInstance.saveInstallation();
-      const text = testId('confirm')?.textContent ?? '';
+      await fixture.whenStable();
+      const text = document.querySelector('mat-dialog-container')?.textContent ?? '';
       expect(text).toContain('9.9');
       expect(text).toContain('sobrecarga');
+      document.querySelector<HTMLButtonElement>('[data-testid="confirm-cancel"]')?.click();
+      await new Promise((resolve) => setTimeout(resolve, 100));
     });
 
-    it('applies the change once confirmed', () => {
+    it('applies the change once confirmed', async () => {
       load();
       fixture.componentInstance.edit('max_total_power_kw', null, '6.0');
       fixture.componentInstance.saveInstallation();
-      fixture.componentInstance.confirm();
+      await fixture.whenStable();
+      document.querySelector<HTMLButtonElement>('[data-testid="confirm-delete"]')?.click();
+      await new Promise((resolve) => setTimeout(resolve, 100));
       const request = backend.expectOne(
         (candidate) => candidate.method === 'PATCH' && candidate.url === '/api/v1/config/batch',
       );
@@ -378,11 +392,13 @@ describe('Config', () => {
       backend.expectOne('/api/v1/config').flush(configDto());
     });
 
-    it('changes nothing when cancelled, and keeps what was typed', () => {
+    it('changes nothing when cancelled, and keeps what was typed', async () => {
       load();
       fixture.componentInstance.edit('pin', 'salon', '24');
       fixture.componentInstance.submit('pin', 'salon');
-      fixture.componentInstance.cancelConfirmation();
+      await fixture.whenStable();
+      document.querySelector<HTMLButtonElement>('[data-testid="confirm-cancel"]')?.click();
+      await new Promise((resolve) => setTimeout(resolve, 100));
       backend.expectNone((candidate) => candidate.method === 'PATCH');
       expect(fixture.componentInstance.pending()['salon.pin']).toBe('24');
     });
@@ -550,6 +566,36 @@ describe('Config', () => {
     });
   });
 
+  it('requires confirmation before database migration and reports completion', async () => {
+    const system = systemConfigurationDto({
+      sections: {
+        ...systemConfigurationDto().sections,
+        database: { driver: 'postgresql', host: 'db.internal', port: 5432, database: 'dtc', tls: true, trusted_no_tls: false },
+      },
+    });
+    loadUnified(configDto(), system);
+    fixture.componentInstance.topology.set({ ...topologyDto, locator_revision: 7 });
+
+    fixture.componentInstance.migrateDatabase();
+    await fixture.whenStable();
+    expect(document.querySelector('mat-dialog-container')?.textContent).toContain('Migrar la base de datos');
+    backend.expectNone('/api/v1/system/migrations');
+
+    document.querySelector<HTMLButtonElement>('[data-testid="confirm-cancel"]')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(fixture.componentInstance.operation()).toBe('');
+
+    fixture.componentInstance.migrateDatabase();
+    await fixture.whenStable();
+    document.querySelector<HTMLButtonElement>('[data-testid="confirm-delete"]')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const request = backend.expectOne('/api/v1/system/migrations');
+    expect(request.request.body).toMatchObject({ expected_locator_revision: 7, confirmed: true, destination: { driver: 'postgresql', host: 'db.internal', port: 5432, database: 'dtc' } });
+    request.flush({ operation_id: 'migration-1', phase: 'complete', status: 'succeeded', detail: null });
+    expect(document.querySelector('.dtc-snackbar-container')?.textContent).toContain('se completó correctamente');
+    expect(fixture.componentInstance.operation()).toContain('succeeded');
+  });
+
   it('creates an accumulator with the configuration revision', () => {
     load();
     fixture.componentInstance.openAddHeater();
@@ -600,9 +646,23 @@ describe('Config', () => {
     expect(fixture.componentInstance.heaterForm()).toBeNull();
   });
 
-  it('removes an accumulator with the current revision', () => {
+  it('keeps an accumulator when its removal is cancelled', async () => {
     load();
-    fixture.componentInstance.removeHeater('salon');
+    fixture.componentInstance.requestRemoveHeater(fixture.componentInstance.config()!.heaters[0]);
+    await fixture.whenStable();
+    document.querySelector<HTMLButtonElement>('[data-testid="confirm-cancel"]')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    backend.expectNone((candidate) => candidate.method === 'DELETE');
+    expect(fixture.componentInstance.config()?.heaters).toHaveLength(1);
+  });
+
+  it('removes an accumulator with the current revision after confirmation', async () => {
+    load();
+    fixture.componentInstance.requestRemoveHeater(fixture.componentInstance.config()!.heaters[0]);
+    await fixture.whenStable();
+    document.querySelector<HTMLButtonElement>('[data-testid="confirm-delete"]')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 100));
     const request = backend.expectOne((candidate) => candidate.method === 'DELETE' && candidate.url === '/api/v1/config/heaters/salon');
     expect(request.request.method).toBe('DELETE');
     expect(request.request.params.get('revision')).toBe('3');

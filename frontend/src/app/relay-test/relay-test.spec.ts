@@ -83,12 +83,26 @@ describe('RelayTest', () => {
     expect(element.textContent).not.toContain('· ended');
   });
 
-  it('prevents duplicate start requests and loads the persisted timing', () => {
+  it('requires confirmation before starting and prevents duplicate start requests', async () => {
     const element = create();
     const start = element.querySelector<HTMLButtonElement>('[data-testid="start-relay-test"]');
 
     start?.click();
     start?.click();
+    vi.advanceTimersByTime(100);
+    await fixture.whenStable();
+    expect(document.querySelector('mat-dialog-container')?.textContent).toContain('Iniciar prueba de relés');
+    document.querySelector<HTMLButtonElement>('[data-testid="confirm-cancel"]')?.click();
+    vi.advanceTimersByTime(100);
+    await fixture.whenStable();
+    backend.expectNone((candidate) => candidate.method === 'POST' && candidate.url === '/api/v1/relay-test');
+
+    start?.click();
+    vi.advanceTimersByTime(100);
+    await fixture.whenStable();
+    document.querySelector<HTMLButtonElement>('[data-testid="confirm-delete"]')?.click();
+    vi.advanceTimersByTime(100);
+    await fixture.whenStable();
     const request = backend.expectOne((candidate) => candidate.method === 'POST' && candidate.url === '/api/v1/relay-test');
     request.flush({ session_id: 'session-1', client_credential: 'credential', status: 'starting', lease_expires_at: '2026-01-01T00:00:30Z', state_poll_seconds: 2, lease_renew_seconds: 7 });
     backend.expectOne('/api/v1/relay-test/session-1').flush(view({ session: ACTIVE_SESSION, state_poll_seconds: 2, lease_renew_seconds: 7, heaters: [HEATER] }));
@@ -130,12 +144,26 @@ describe('RelayTest', () => {
     lease.flush(view({ session: ACTIVE_SESSION, state_poll_seconds: 20, lease_renew_seconds: 7, heaters: [HEATER] }));
   });
 
-  it('disables a relay while its command is waiting for confirmation', () => {
+  it('requires confirmation and disables a relay while its command is waiting for confirmation', async () => {
     sessionStorage.setItem('dtc.relay-test.id', ACTIVE_SESSION.id);
     sessionStorage.setItem('dtc.relay-test.credential', 'credential');
     const element = create(view({ session: ACTIVE_SESSION, heaters: [HEATER] }));
     const button = element.querySelector<HTMLButtonElement>('[data-command="salon"]');
     button?.click();
+    vi.advanceTimersByTime(100);
+    await fixture.whenStable();
+    expect(document.querySelector('mat-dialog-container')?.textContent).toContain('Encender Salón');
+    document.querySelector<HTMLButtonElement>('[data-testid="confirm-cancel"]')?.click();
+    vi.advanceTimersByTime(100);
+    await fixture.whenStable();
+    backend.expectNone((candidate) => candidate.method === 'PUT');
+
+    button?.click();
+    vi.advanceTimersByTime(100);
+    await fixture.whenStable();
+    document.querySelector<HTMLButtonElement>('[data-testid="confirm-delete"]')?.click();
+    vi.advanceTimersByTime(100);
+    await fixture.whenStable();
 
     const request = backend.expectOne((candidate) => candidate.method === 'PUT' && candidate.url === '/api/v1/relay-test/session-1/heaters/salon');
     expect(request.request.headers.get('X-Relay-Test-Credential')).toBe('credential');
@@ -151,11 +179,43 @@ describe('RelayTest', () => {
     expect(element.textContent).toContain('Se ha solicitado encender esta salida.');
   });
 
-  it('explains a power-limit rejection next to the relay action', () => {
+  it('requires confirmation before ending a relay test and preserves it when cancelled', async () => {
+    sessionStorage.setItem('dtc.relay-test.id', ACTIVE_SESSION.id);
+    sessionStorage.setItem('dtc.relay-test.credential', 'credential');
+    const element = create(view({ session: ACTIVE_SESSION, heaters: [HEATER] }));
+    element.querySelector<HTMLButtonElement>('[data-testid="end-relay-test"]')?.click();
+    vi.advanceTimersByTime(100);
+    await fixture.whenStable();
+    expect(document.querySelector('mat-dialog-container')?.textContent).toContain('Finalizar prueba de relés');
+    document.querySelector<HTMLButtonElement>('[data-testid="confirm-cancel"]')?.click();
+    vi.advanceTimersByTime(100);
+    await fixture.whenStable();
+    backend.expectNone((candidate) => candidate.method === 'DELETE' && candidate.url === '/api/v1/relay-test/session-1');
+    expect(fixture.componentInstance.view()?.session?.status).toBe('active');
+
+    element.querySelector<HTMLButtonElement>('[data-testid="end-relay-test"]')?.click();
+    vi.advanceTimersByTime(100);
+    await fixture.whenStable();
+    document.querySelector<HTMLButtonElement>('[data-testid="confirm-delete"]')?.click();
+    vi.advanceTimersByTime(100);
+    await fixture.whenStable();
+    const request = backend.expectOne((candidate) => candidate.method === 'DELETE' && candidate.url === '/api/v1/relay-test/session-1');
+    expect(request.request.headers.get('X-Relay-Test-Credential')).toBe('credential');
+    request.flush({});
+    backend.expectOne('/api/v1/relay-test/session-1').flush(view({ session: { ...ACTIVE_SESSION, status: 'ending' }, heaters: [HEATER] }));
+    expect(document.querySelector('.dtc-snackbar-container')?.textContent).toContain('Solicitud de finalización');
+  });
+
+  it('explains a power-limit rejection next to the relay action and in a snackbar', async () => {
     sessionStorage.setItem('dtc.relay-test.id', ACTIVE_SESSION.id);
     sessionStorage.setItem('dtc.relay-test.credential', 'credential');
     const element = create(view({ session: ACTIVE_SESSION, heaters: [HEATER] }));
     element.querySelector<HTMLButtonElement>('[data-command="salon"]')?.click();
+    vi.advanceTimersByTime(100);
+    await fixture.whenStable();
+    document.querySelector<HTMLButtonElement>('[data-testid="confirm-delete"]')?.click();
+    vi.advanceTimersByTime(100);
+    await fixture.whenStable();
 
     const command = backend.expectOne((candidate) => candidate.method === 'PUT');
     command.flush(
@@ -165,8 +225,9 @@ describe('RelayTest', () => {
     backend.expectOne('/api/v1/relay-test/session-1').flush(view({ session: ACTIVE_SESSION, heaters: [{ ...HEATER, desired_state: true, result: 'rejected', result_code: 'power_limit' }] }));
     fixture.detectChanges();
 
-    expect(element.querySelector('[data-testid="relay-error"]')?.textContent).toContain('Se supera el límite de potencia');
-    expect(element.textContent).toContain('Apaga otra salida confirmada');
+    expect(document.querySelector('.dtc-snackbar-container')?.textContent).toContain('Se supera el límite de potencia');
+    expect(document.querySelector('.dtc-snackbar-container')?.textContent).toContain('Apaga otra salida confirmada');
+    expect(element.textContent).toContain('Orden rechazada');
   });
 
   it('keeps an external session in read-only mode', () => {
