@@ -368,10 +368,24 @@ describe('Planning', () => {
     fixture.componentInstance.duplicateTarget(1);
     expect(fixture.componentInstance.selectedTargetPosition()).toBe(2);
     fixture.componentInstance.removeTarget(2);
+    await fixture.whenStable();
+    document.querySelector<HTMLButtonElement>('[data-testid="confirm-cancel"]')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(fixture.componentInstance.draftTargets()).toHaveLength(3);
+    fixture.componentInstance.removeTarget(2);
+    await fixture.whenStable();
+    document.querySelector<HTMLButtonElement>('[data-testid="confirm-delete"]')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 100));
     expect(fixture.componentInstance.selectedTargetPosition()).toBe(1);
     fixture.componentInstance.removeTarget(0);
+    await fixture.whenStable();
+    document.querySelector<HTMLButtonElement>('[data-testid="confirm-delete"]')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 100));
     expect(fixture.componentInstance.selectedTargetPosition()).toBe(0);
     fixture.componentInstance.removeTarget(0);
+    await fixture.whenStable();
+    document.querySelector<HTMLButtonElement>('[data-testid="confirm-delete"]')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 100));
     expect(fixture.componentInstance.selectedTargetPosition()).toBeNull();
     fixture.detectChanges();
     expect(element.querySelector('[data-testid="targets-empty"]')).not.toBeNull();
@@ -536,17 +550,19 @@ describe('Planning', () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
   });
 
-  it('opens both detail dialogs with a wide responsive viewport-bound width', () => {
+  it('opens both detail dialogs with a wide responsive viewport-bound width', async () => {
     backend.expectOne('/api/v1/planning').flush(PLANNING);
     fixture.detectChanges();
+    await fixture.whenStable();
+    expect(fixture.componentInstance.snapshot()).not.toBeNull();
     const dialog = TestBed.inject(MatDialog);
     const open = vi.spyOn(dialog, 'open').mockReturnValue({} as never);
 
     fixture.componentInstance.openForecastDetails();
     fixture.componentInstance.openPlanningDetails();
 
-    expect(open.mock.calls[0][1]).toMatchObject({ width: 'min(92vw, 72rem)' });
-    expect(open.mock.calls[1][1]).toMatchObject({ width: 'min(92vw, 72rem)' });
+    expect(open.mock.calls[0][1]).toMatchObject({ width: 'min(98vw, 192rem)', maxWidth: '98vw' });
+    expect(open.mock.calls[1][1]).toMatchObject({ width: 'min(98vw, 192rem)', maxWidth: '98vw' });
     open.mockRestore();
   });
 
@@ -581,6 +597,7 @@ describe('Planning', () => {
   it('opens an enlarged dialog from each graph section', async () => {
     backend.expectOne('/api/v1/planning').flush(PLANNING);
     fixture.detectChanges();
+    await fixture.whenStable();
     const dialog = TestBed.inject(MatDialog);
     const open = vi.spyOn(dialog, 'open').mockReturnValue({} as never);
     const element = fixture.nativeElement as HTMLElement;
@@ -746,6 +763,50 @@ describe('Planning', () => {
     request.flush({ job_id: 'preview-job', status: 'completed', cancellation_requested: false, requested_at: PLANNING.observed_at, started_at: PLANNING.observed_at, finished_at: PLANNING.observed_at, checks: [], result: { token: 'preview', status: 'FEASIBLE', score: [], window_start: PLANNING.plan!.window_start, window_end: PLANNING.plan!.window_end, horizon_start: PLANNING.horizon_start!, horizon_end: PLANNING.horizon_end!, slot_minutes: 30, slots: [], deficits: [], violations: [], explanations: [], demand: [], temperature_targets: [], operator_summary: {} }, operator_summary: {}, error_code: null, error_detail: null });
   });
 
+  it('requires confirmation before cancelling a preview and preserves it when cancelled', async () => {
+    backend.expectOne('/api/v1/planning').flush(PLANNING);
+    await fixture.whenStable();
+    const runningJob = { ...PREVIEW_JOB(PREVIEW), status: 'running' as const, result: null };
+    fixture.componentInstance.previewJob.set(runningJob);
+    fixture.detectChanges();
+
+    fixture.componentInstance.cancelPreview();
+    await fixture.whenStable();
+    expect(document.querySelector('mat-dialog-container')?.textContent).toContain('Cancelar vista previa');
+    backend.expectNone('/api/v1/planning/preview/jobs/preview-job/cancel');
+    document.querySelector<HTMLButtonElement>('[data-testid="confirm-cancel"]')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(fixture.componentInstance.previewJob()).toEqual(runningJob);
+
+    fixture.componentInstance.cancelPreview();
+    await fixture.whenStable();
+    document.querySelector<HTMLButtonElement>('[data-testid="confirm-delete"]')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const request = backend.expectOne('/api/v1/planning/preview/jobs/preview-job/cancel');
+    request.flush({ ...runningJob, status: 'cancelled', cancellation_requested: true });
+    expect(fixture.componentInstance.previewJob()?.status).toBe('cancelled');
+    expect(document.querySelector('.dtc-snackbar-container')?.textContent).toContain('Solicitud de cancelación');
+  });
+
+  it('keeps a valid preview when activation is cancelled', async () => {
+    backend.expectOne('/api/v1/planning').flush(PLANNING);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    await selectPlanningTab(fixture, 1);
+    fixture.componentInstance.snapshot.set({ ...PLANNING, temperature_targets_revision: 4 });
+    fixture.componentInstance.preview.set({ ...PREVIEW, status: 'FEASIBLE', deficits: [], violations: [] });
+    fixture.detectChanges();
+
+    (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('[data-testid="activate-button"]')?.click();
+    await fixture.whenStable();
+    document.querySelector<HTMLButtonElement>('[data-testid="confirm-cancel"]')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    backend.expectNone('/api/v1/planning/activate');
+    expect(fixture.componentInstance.preview()).not.toBeNull();
+    expect(fixture.componentInstance.activationInFlight()).toBe(false);
+  });
+
   it('activates a valid preview from the new planning tab', async () => {
     backend.expectOne('/api/v1/planning').flush(PLANNING);
     await fixture.whenStable();
@@ -762,6 +823,10 @@ describe('Planning', () => {
     const activateButton = (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('[data-testid="activate-button"]');
     expect(activateButton?.disabled).toBe(false);
     activateButton?.click();
+    await fixture.whenStable();
+    expect(document.querySelector('mat-dialog-container')?.textContent).toContain('Guardar y activar planificación');
+    document.querySelector<HTMLButtonElement>('[data-testid="confirm-delete"]')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 100));
     fixture.detectChanges();
     expect(activateButton?.disabled).toBe(true);
     expect(fixture.componentInstance.actionMessage()).toBe('Guardando y activando…');
@@ -775,12 +840,12 @@ describe('Planning', () => {
     const refresh = backend.expectOne('/api/v1/planning');
     refresh.flush({ ...PLANNING, preview_job: PREVIEW_JOB(PREVIEW) });
     fixture.detectChanges();
-    expect(fixture.componentInstance.actionMessage()).toBe('Planificación guardada y activada correctamente.');
+    expect(fixture.componentInstance.actionMessage()).toBe('');
     expect(fixture.componentInstance.activationInFlight()).toBe(false);
     expect(fixture.componentInstance.preview()).toBeNull();
     expect(fixture.componentInstance.previewJob()).toBeNull();
     expect(sessionStorage.getItem('dtc.planning.preview-job')).toBeNull();
-    expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="planning-action-status"]')?.textContent).toContain('Planificación guardada y activada correctamente.');
+    expect(document.querySelector('.dtc-snackbar-container')?.textContent).toContain('Planificación guardada y activada correctamente.');
   });
 
   it('shows an actionable error and allows retry when activation fails', async () => {
@@ -794,6 +859,9 @@ describe('Planning', () => {
     fixture.detectChanges();
     const activateButton = (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('[data-testid="activate-button"]');
     activateButton?.click();
+    await fixture.whenStable();
+    document.querySelector<HTMLButtonElement>('[data-testid="confirm-delete"]')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 100));
     fixture.detectChanges();
     expect(activateButton?.disabled).toBe(true);
 
@@ -803,11 +871,10 @@ describe('Planning', () => {
 
     expect(fixture.componentInstance.activationInFlight()).toBe(false);
     expect(fixture.componentInstance.actionMessage()).toBe('');
-    expect(fixture.componentInstance.actionError()).toContain('No se pudo guardar y activar');
-    expect(fixture.componentInstance.actionError()).toContain('La configuración cambió mientras editabas');
+    expect(fixture.componentInstance.actionError()).toBe('');
     expect(fixture.componentInstance.preview()).not.toBeNull();
     expect(activateButton?.disabled).toBe(false);
-    expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="planning-action-error"]')?.getAttribute('role')).toBe('alert');
+    expect(document.querySelector('.dtc-snackbar-container')?.textContent).toContain('No se pudo guardar y activar');
   });
 
   it('discards local edits and preview state without reloading the planning projection', async () => {
@@ -826,6 +893,18 @@ describe('Planning', () => {
     fixture.detectChanges();
 
     (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('[data-testid="discard-button"]')?.click();
+    await fixture.whenStable();
+    expect(document.querySelector('mat-dialog-container')?.textContent).toContain('Descartar cambios de planificación');
+    document.querySelector<HTMLButtonElement>('[data-testid="confirm-cancel"]')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(fixture.componentInstance.preview()).not.toBeNull();
+    expect(fixture.componentInstance.draftTargets()[0].target_temperature_c).toBe(19.5);
+    backend.expectNone('/api/v1/planning');
+
+    (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('[data-testid="discard-button"]')?.click();
+    await fixture.whenStable();
+    document.querySelector<HTMLButtonElement>('[data-testid="confirm-delete"]')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 100));
     fixture.detectChanges();
 
     expect(fixture.componentInstance.draftTargets()).toEqual([
@@ -836,9 +915,9 @@ describe('Planning', () => {
     expect(fixture.componentInstance.previewJob()).toBeNull();
     expect(sessionStorage.getItem('dtc.planning.preview-job')).toBeNull();
     expect(fixture.componentInstance.actionError()).toBe('');
-    expect(fixture.componentInstance.actionMessage()).toBe('Cambios descartados. Se han restaurado las consignas guardadas.');
+    expect(fixture.componentInstance.actionMessage()).toBe('');
     expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="preview-job"]')).toBeNull();
-    expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="planning-action-status"]')?.textContent).toContain('Cambios descartados');
+    expect(document.querySelector('.dtc-snackbar-container')?.textContent).toContain('Cambios descartados');
     backend.expectNone('/api/v1/planning');
   });
 

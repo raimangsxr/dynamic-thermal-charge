@@ -1,7 +1,9 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCardModule } from '@angular/material/card';
+import { MatDialog, type MatDialogRef } from '@angular/material/dialog';
 import { MatIconModule } from '@angular/material/icon';
+import { MatSnackBarModule } from '@angular/material/snack-bar';
 import { Component, computed, inject, OnDestroy, signal } from '@angular/core';
 
 import { Api } from '../core/api';
@@ -9,6 +11,8 @@ import type { ApiErrorDto, RelayTestHeaterDto, RelayTestViewDto } from '../core/
 import { type Explained, UNREACHABLE, explain } from '../core/errors';
 import { RelayTestSession } from '../core/relay-test-session';
 import { formatAge, formatInstant } from '../shared/age/age';
+import { CONFIRM_DIALOG_CONFIG, ConfirmDialog, type ConfirmDialogData } from '../shared/ui-feedback/dialog-config';
+import { UiFeedback } from '../shared/ui-feedback/ui-feedback';
 
 type RelaySession = NonNullable<RelayTestViewDto['session']>;
 type RelaySessionStatus = RelaySession['status'];
@@ -25,13 +29,16 @@ interface RelaySummary {
 
 @Component({
   selector: 'dtc-relay-test',
-  imports: [MatButtonModule, MatCardModule, MatIconModule],
+  imports: [MatButtonModule, MatCardModule, MatIconModule, MatSnackBarModule],
   templateUrl: './relay-test.html',
   styleUrl: './relay-test.css',
 })
 export class RelayTest implements OnDestroy {
   private readonly api = inject(Api);
   private readonly stored = inject(RelayTestSession);
+  private readonly dialog = inject(MatDialog);
+  private readonly feedback = inject(UiFeedback);
+  private confirmationRef: MatDialogRef<ConfirmDialog, boolean> | null = null;
 
   private stateTimer: number | null = null;
   private stateTimerMs: number | null = null;
@@ -108,16 +115,25 @@ export class RelayTest implements OnDestroy {
     if (!this.canStart()) {
       return;
     }
+    this.openConfirmation({
+      title: 'Iniciar prueba de relés',
+      message: 'El automático se suspenderá y las salidas podrán activarse físicamente durante la prueba. ¿Quieres continuar?',
+      confirmLabel: 'Iniciar prueba',
+    }, () => this.startNow());
+  }
+
+  private startNow(): void {
     this.action.set('start');
     this.leaseRenewalDisabled = false;
     this.error.set(null);
     this.api.relayTestStart().subscribe({
       next: (started) => {
         this.stored.save(started.session_id, started.client_credential);
+        this.feedback.success('Prueba de relés iniciada. Esperando la confirmación del controlador.');
         this.refresh();
       },
       error: (error: unknown) => {
-        this.handleError(error, 'No se pudo iniciar el modo test.');
+        this.handleActionError(error, 'No se pudo iniciar el modo test.');
         this.action.set(null);
       },
     });
@@ -183,13 +199,28 @@ export class RelayTest implements OnDestroy {
       return;
     }
 
+    this.openConfirmation({
+      title: `${state ? 'Encender' : 'Apagar'} ${heater.name}`,
+      message: `Se solicitará ${state ? 'el encendido' : 'el apagado'} físico de esta salida y el resultado quedará pendiente de confirmación del controlador. ¿Quieres continuar?`,
+      confirmLabel: state ? 'Encender salida' : 'Apagar salida',
+    }, () => this.toggleNow(id, state, heater));
+  }
+
+  private toggleNow(id: string, state: boolean, heater: RelayTestHeaterDto): void {
+    const session = this.view()?.session;
+    const credential = this.stored.credential();
+    if (!session || !credential || !this.canCommand(heater)) return;
+
     this.pendingCommands.update((current) => new Set(current).add(id));
     this.error.set(null);
     this.api.relayTestSet(session.id, id, state, credential).subscribe({
-      next: () => this.refresh(),
+      next: () => {
+        this.feedback.success(`Solicitud para ${state ? 'encender' : 'apagar'} ${heater.name} enviada; esperando confirmación.`);
+        this.refresh();
+      },
       error: (error: unknown) => {
         this.removePending(id);
-        this.handleError(error, `No se pudo solicitar el cambio de ${heater.name}.`);
+        this.handleActionError(error, `No se pudo solicitar el cambio de ${heater.name}.`);
         this.refresh(true);
       },
     });
@@ -202,13 +233,26 @@ export class RelayTest implements OnDestroy {
       return;
     }
 
+    this.openConfirmation({
+      title: 'Finalizar prueba de relés',
+      message: 'Se solicitará el apagado de todas las salidas y el cierre de la prueba. ¿Quieres continuar?',
+      confirmLabel: 'Finalizar prueba',
+    }, () => this.endNow(session.id, credential));
+  }
+
+  private endNow(sessionId: string, credential: string): void {
+    if (!this.canEnd()) return;
+
     this.action.set('end');
     this.error.set(null);
-    this.api.relayTestEnd(session.id, credential).subscribe({
-      next: () => this.refresh(),
+    this.api.relayTestEnd(sessionId, credential).subscribe({
+      next: () => {
+        this.feedback.success('Solicitud de finalización enviada; esperando el apagado confirmado.');
+        this.refresh();
+      },
       error: (error: unknown) => {
         this.action.set(null);
-        this.handleError(error, 'No se pudo solicitar el apagado.');
+        this.handleActionError(error, 'No se pudo solicitar el apagado.');
         this.refresh(true);
       },
     });
@@ -526,6 +570,30 @@ export class RelayTest implements OnDestroy {
       next.delete(id);
       return next;
     });
+  }
+
+  private openConfirmation(data: ConfirmDialogData, onConfirm: () => void): void {
+    if (this.confirmationRef) return;
+    const ref = this.dialog.open(ConfirmDialog, {
+      ...CONFIRM_DIALOG_CONFIG,
+      data,
+      ariaLabel: data.title,
+    });
+    this.confirmationRef = ref;
+    ref.afterClosed().subscribe((confirmed) => {
+      this.confirmationRef = null;
+      if (confirmed) onConfirm();
+    });
+  }
+
+  private handleActionError(error: unknown, fallback: string): void {
+    if (error instanceof HttpErrorResponse && (error.status === 401 || error.status === 404)) {
+      this.handleError(error, fallback);
+      return;
+    }
+    const body = this.structuredError(error);
+    const message = body ? explain(body) : this.fallbackError(fallback);
+    this.feedback.error(message.action ? `${message.title} ${message.action}` : message.title);
   }
 
   private handleError(error: unknown, fallback: string): void {

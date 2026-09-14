@@ -24,3 +24,12 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0
 table { border-collapse: collapse; width: 100%; }
 th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid #eee; }
 th { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.03em; color: var(--muted); }
+
+.dtc-snackbar-container { margin-top: 4.5rem; }
+.dtc-snackbar-container .mdc-snackbar__surface { min-width: 0; border: 1px solid; box-shadow: 0 8px 24px #15223a30; }
+.dtc-snackbar-success .mdc-snackbar__surface { background: #e7f4eb; border-color: #9ac9a8; color: #176b35; }
+.dtc-snackbar-error .mdc-snackbar__surface { background: #fff1f2; border-color: #e2aeb6; color: #7e1b2a; }
+.dtc-snackbar-warning .mdc-snackbar__surface { background: #fff8e8; border-color: #e3c17e; color: #684000; }
+.dtc-snackbar-info .mdc-snackbar__surface { background: #f2f7ff; border-color: #a8c9ef; color: #27415f; }
+.dtc-confirm-dialog .mat-mdc-dialog-surface { border-radius: .75rem; }
+.dtc-content-dialog .mat-mdc-dialog-surface { border-radius: .85rem; }

@@ -23,8 +23,6 @@
   @if (relayConflict()) {
     <p class="banner alert" role="alert">La configuración está bloqueada por una prueba o recuperación de seguridad. <a routerLink="/prueba-reles">Abrir prueba de relés</a></p>
   }
-  @if (saved(); as text) { <p class="saved" role="status" data-testid="saved"><mat-icon aria-hidden="true">check_circle</mat-icon> {{ text }}</p> }
-  @if (systemMessage()) { <p class="saved" role="status">{{ systemMessage() }}</p> }
 
   @if (config() || configuration()) {
     <nav class="area-nav" aria-label="Áreas de configuración">
@@ -232,12 +230,10 @@
             @if (alertError()) { <p class="field-error" role="alert">{{ alertError() }}</p> }
           </div>
           <button mat-stroked-button type="button" (click)="testEmail()" [disabled]="emailTestLoading() || !writable() || systemValue('email', 'enabled') !== true" data-testid="email-test-button">{{ emailTestLoading() ? 'Enviando…' : 'Enviar correo de prueba' }}</button>
-          @if (emailTestMessage()) { <p class="saved" role="status">{{ emailTestMessage() }}</p> }
-          @if (emailTestError()) { <p class="field-error" role="alert">{{ emailTestError() }}</p> }
         </section>
       }
       @if (activeIntegrationSection() === 'weather') {
-        <section class="status-card" aria-labelledby="weather-status-title"><div><h3 id="weather-status-title">Estado de la previsión</h3><p>Última consulta: {{ dateTime(systemValue('weather', 'forecast_last_attempt_at')) }} · resultado: {{ weatherStatusText(systemValue('weather', 'forecast_status')) }}</p><p>{{ weatherNextText(systemValue('weather', 'forecast_next_run_kind')) }}: {{ dateTime(systemValue('weather', 'forecast_next_run_at')) }}</p><p class="field-hint">La consulta diaria usa la hora local de AEMET configurada; los errores programan un reintento separado.</p></div><button mat-stroked-button type="button" (click)="refreshWeather()" [disabled]="weatherRefreshLoading() || !writable() || systemValue('weather', 'provider') !== 'aemet'">{{ weatherRefreshLoading() ? 'Consultando AEMET…' : 'Consultar AEMET ahora' }}</button>@if (systemValue('weather', 'forecast_last_error')) { <p class="field-error" role="alert">Último error del proveedor: {{ systemValue('weather', 'forecast_last_error') }}</p> }@if (weatherRefreshMessage()) { <p class="saved" role="status">{{ weatherRefreshMessage() }}</p> }@if (weatherRefreshError()) { <p class="field-error" role="alert">{{ weatherRefreshError() }}</p> }</section>
+        <section class="status-card" aria-labelledby="weather-status-title"><div><h3 id="weather-status-title">Estado de la previsión</h3><p>Última consulta: {{ dateTime(systemValue('weather', 'forecast_last_attempt_at')) }} · resultado: {{ weatherStatusText(systemValue('weather', 'forecast_status')) }}</p><p>{{ weatherNextText(systemValue('weather', 'forecast_next_run_kind')) }}: {{ dateTime(systemValue('weather', 'forecast_next_run_at')) }}</p><p class="field-hint">La consulta diaria usa la hora local de AEMET configurada; los errores programan un reintento separado.</p></div><button mat-stroked-button type="button" (click)="refreshWeather()" [disabled]="weatherRefreshLoading() || !writable() || systemValue('weather', 'provider') !== 'aemet'">{{ weatherRefreshLoading() ? 'Consultando AEMET…' : 'Consultar AEMET ahora' }}</button>@if (systemValue('weather', 'forecast_last_error')) { <p class="field-error" role="alert">Último error del proveedor: {{ systemValue('weather', 'forecast_last_error') }}</p> }</section>
       }
     </section>
   }
@@ -273,15 +269,8 @@
           </div>
         }
         <div class="form-actions"><button mat-flat-button color="primary" type="submit" [disabled]="!systemHasChanges(activeServiceSection()) || systemSaving() || !writable()">{{ systemSaving() ? 'Guardando…' : 'Guardar configuración' }}</button></div>
-        @if (activeServiceSection() === 'database') { <div class="action-card"><h3>Comprobaciones de base de datos</h3><p>Prueba el destino sin guardar cambios y, si corresponde, confirma la migración.</p><div class="form-actions"><button mat-stroked-button type="button" (click)="testDatabase()" [disabled]="!writable()">Probar conexión</button>@if (systemValue('database', 'driver') === 'postgresql') { <button mat-flat-button color="warn" type="button" (click)="migrateDatabase()" [disabled]="!writable()">Confirmar migración a PostgreSQL</button> }</div>@if (operation()) { <p role="status">{{ operation() }}</p> }</div> }
+        @if (activeServiceSection() === 'database') { <div class="action-card"><h3>Comprobaciones de base de datos</h3><p>Prueba el destino sin guardar cambios y, si corresponde, confirma la migración.</p><div class="form-actions"><button mat-stroked-button type="button" (click)="testDatabase()" [disabled]="!writable()">Probar conexión</button>@if (systemValue('database', 'driver') === 'postgresql') { <button mat-flat-button color="warn" type="button" (click)="migrateDatabase()" [disabled]="!writable()">Confirmar migración a PostgreSQL</button> }</div>@if (operation()) { <p role="status" aria-live="polite">{{ operation() }}</p> }</div> }
       </form>
     </section>
-  }
-
-  @if (confirming(); as edit) {
-    <div class="banner warn" role="alertdialog" data-testid="confirm" aria-live="assertive"><strong>Confirma el cambio</strong><p>{{ confirmationMessage() }}</p><div class="banner-actions"><button mat-flat-button color="warn" type="button" (click)="confirm()" data-testid="confirm-yes">Sí, cambiar</button><button mat-button type="button" (click)="cancelConfirmation()" data-testid="confirm-no">Cancelar</button></div></div>
-  }
-  @if (systemConfirming(); as section) {
-    <div class="banner warn" role="alertdialog" data-testid="confirm-system" aria-live="assertive"><strong>Confirma el cambio sensible</strong><p>{{ sectionLabel(section) }} puede afectar al servicio activo. Comprueba los datos antes de continuar.</p><div class="banner-actions"><button mat-flat-button color="warn" type="button" (click)="confirmSystemSave()" data-testid="confirm-system-yes">Sí, guardar</button><button mat-button type="button" (click)="systemConfirming.set(null)" data-testid="confirm-system-no">Cancelar</button></div></div>
   }
 </main>

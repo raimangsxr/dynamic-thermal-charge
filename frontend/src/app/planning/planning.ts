@@ -1,8 +1,9 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { AfterViewInit, Component, ElementRef, Injector, OnDestroy, ViewChild, afterNextRender, computed, inject, signal } from '@angular/core';
-import { MAT_DIALOG_DATA, MatDialog, MatDialogModule } from '@angular/material/dialog';
+import { MAT_DIALOG_DATA, MatDialog, MatDialogModule, type MatDialogRef } from '@angular/material/dialog';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
+import { MatSnackBarModule } from '@angular/material/snack-bar';
 import { MatTabsModule } from '@angular/material/tabs';
 import { FormsModule } from '@angular/forms';
 import { Chart } from 'chart.js/auto';
@@ -23,6 +24,8 @@ import {
   planStatusLabel,
   requirementLabel,
 } from '../shared/presentation/presentation';
+import { CONFIRM_DIALOG_CONFIG, ConfirmDialog, CONTENT_DIALOG_CONFIG, type ConfirmDialogData } from '../shared/ui-feedback/dialog-config';
+import { UiFeedback } from '../shared/ui-feedback/ui-feedback';
 
 interface PlanningDetailDialogData {
   kind: 'forecast' | 'planning' | 'explanation' | 'failure' | 'problems' | 'preview' | 'planning-table' | 'chart';
@@ -674,14 +677,16 @@ export class PlanningDetailDialog implements AfterViewInit, OnDestroy {
 
 @Component({
   selector: 'dtc-planning',
-  imports: [FormsModule, MatButtonModule, MatIconModule, MatTabsModule],
+  imports: [FormsModule, MatButtonModule, MatIconModule, MatSnackBarModule, MatTabsModule],
   templateUrl: './planning.html',
   styleUrl: './planning.css',
 })
 export class Planning implements AfterViewInit, OnDestroy {
   private readonly api = inject(Api);
   private readonly dialog = inject(MatDialog);
+  private readonly feedback = inject(UiFeedback);
   private readonly injector = inject(Injector);
+  private confirmationRef: MatDialogRef<ConfirmDialog, boolean> | null = null;
   readonly snapshot = signal<PlanningDto | null>(null);
   readonly failure = signal<Explained | null>(null);
   readonly loading = signal(true);
@@ -765,10 +770,9 @@ export class Planning implements AfterViewInit, OnDestroy {
     this.explanationError.set('');
     this.api.planExplanation(source, planId).subscribe({
       next: (explanation) => this.dialog.open(PlanningDetailDialog, {
-        width: 'min(96vw, 86rem)',
+        ...CONTENT_DIALOG_CONFIG,
         data: { kind: 'explanation', explanation, planning: this.snapshot() ?? undefined },
         ariaLabel: 'Explicación de la planificación',
-        ariaModal: true,
       }),
       error: () => this.explanationError.set('No se pudo cargar la explicación de esta planificación.'),
     });
@@ -806,6 +810,16 @@ export class Planning implements AfterViewInit, OnDestroy {
   removeTarget(index: number): void {
     const targets = this.draftTargets();
     if (!targets[index]) return;
+    const target = targets[index];
+    this.openConfirmation({
+      title: 'Eliminar consigna',
+      message: `Se eliminará la consigna de ${this.heaterText(target.heater_id)} (${this.formatTemperature(target.target_temperature_c)} °C, ${this.targetTimeSummary(target)}). El cambio solo se aplicará al guardar y activar la planificación.`,
+      confirmLabel: 'Eliminar consigna',
+    }, () => this.removeTargetNow(index));
+  }
+  private removeTargetNow(index: number): void {
+    const targets = this.draftTargets();
+    if (!targets[index]) return;
     const selectedIndex = this.selectedTargetPosition();
     const nextTargets = targets.filter((_item, itemIndex) => itemIndex !== index);
     this.draftTargets.set(nextTargets);
@@ -816,6 +830,7 @@ export class Planning implements AfterViewInit, OnDestroy {
     } else if (selectedIndex !== null && selectedIndex > index) {
       this.selectedTargetIndex.set(selectedIndex - 1);
     }
+    this.feedback.success('Consigna eliminada del borrador.');
   }
   editTarget(index: number, field: keyof TemperatureTargetDraft, value: unknown): void {
     this.draftTargets.update((items) => items.map((item, itemIndex) => itemIndex === index ? { ...item, [field]: field === 'target_temperature_c' ? Number(value) : value } as TemperatureTargetDraft : item));
@@ -881,26 +896,59 @@ export class Planning implements AfterViewInit, OnDestroy {
     this.dismissedPreviewJobId = null;
     this.actionError.set(''); this.actionMessage.set('Iniciando vista previa…'); this.preview.set(null);
     this.api.planningPreviewJobStart(this.apiTargets(), this.snapshot()?.temperature_targets_revision).subscribe({
-      next: (job) => { this.acceptPreviewJob(job); this.actionMessage.set('Vista previa en curso. Puedes seguir sus comprobaciones o cancelarla.'); },
-      error: (error: unknown) => { this.actionMessage.set(''); this.actionError.set(this.previewStartError(error)); },
+      next: (job) => {
+        this.acceptPreviewJob(job);
+        if (job.result) {
+          this.feedback.success('Vista previa calculada; todavía no modifica el plan activo.');
+        } else if (job.status === 'error') {
+          this.feedback.error(job.error_detail ?? 'La vista previa terminó con errores.');
+        } else if (['cancelled', 'interrupted'].includes(job.status)) {
+          this.feedback.info('La vista previa no llegó a completarse.');
+        } else {
+          this.feedback.info('Vista previa iniciada; puedes seguir sus comprobaciones o cancelarla.');
+          this.actionMessage.set('Vista previa en curso. Puedes seguir sus comprobaciones o cancelarla.');
+        }
+      },
+      error: (error: unknown) => { this.actionMessage.set(''); this.actionError.set(''); this.feedback.error(this.previewStartError(error)); },
     });
   }
   cancelPreview(): void {
     const job = this.previewJob();
     if (!job || ['completed', 'error', 'cancelled', 'interrupted'].includes(job.status)) return;
+    this.openConfirmation({
+      title: 'Cancelar vista previa',
+      message: 'Se solicitará la cancelación del cálculo en curso. El borrador de consignas se conservará.',
+      confirmLabel: 'Cancelar cálculo',
+    }, () => this.cancelPreviewNow(job));
+  }
+  private cancelPreviewNow(job: PlanningPreviewJobDto): void {
     this.actionMessage.set('Solicitando cancelación…');
     this.api.planningPreviewJobCancel(job.job_id).subscribe({
-      next: (value) => { this.acceptPreviewJob(value); this.actionMessage.set('La vista previa está cancelando; terminará al cerrar la fase activa.'); },
-      error: () => this.actionError.set('No se pudo solicitar la cancelación. Vuelve a consultar el estado del trabajo.'),
+      next: (value) => {
+        this.acceptPreviewJob(value);
+        this.feedback.success('Solicitud de cancelación de la vista previa enviada.');
+        if (!['completed', 'error', 'cancelled', 'interrupted'].includes(value.status)) {
+          this.actionMessage.set('La vista previa está cancelando; terminará al cerrar la fase activa.');
+        }
+      },
+      error: () => { this.actionMessage.set(''); this.actionError.set(''); this.feedback.error('No se pudo solicitar la cancelación. Vuelve a consultar el estado del trabajo.'); },
     });
   }
   activate(): void {
     const preview = this.preview(); const revision = this.snapshot()?.temperature_targets_revision;
     if (!preview || revision === undefined || this.activationInFlight()) return;
     if (!this.canActivateStatus(preview.status)) {
-      this.actionError.set('Solo se pueden activar previews VALID o CONVERGING.');
+      this.actionError.set('');
+      this.feedback.error('Solo se pueden activar vistas previas VALID o CONVERGING.');
       return;
     }
+    this.openConfirmation({
+      title: 'Guardar y activar planificación',
+      message: 'Se guardarán las consignas del borrador y la vista previa reemplazará el plan activo. ¿Quieres continuar?',
+      confirmLabel: 'Guardar y activar',
+    }, () => this.activateNow(preview, revision));
+  }
+  private activateNow(preview: PlanningPreviewDto, revision: number): void {
     this.activationInFlight.set(true);
     this.actionError.set(''); this.actionMessage.set('Guardando y activando…');
     this.api.planningActivate(preview.token, this.apiTargets(), revision).subscribe({
@@ -908,12 +956,14 @@ export class Planning implements AfterViewInit, OnDestroy {
         this.activationInFlight.set(false);
         this.clearPreviewState();
         this.refresh({ restorePreview: false });
-        this.actionMessage.set('Planificación guardada y activada correctamente.');
+        this.actionMessage.set('');
+        this.feedback.success('Planificación guardada y activada correctamente.');
       },
       error: (error: unknown) => {
         this.activationInFlight.set(false);
         this.actionMessage.set('');
-        this.actionError.set(this.activationError(error));
+        this.actionError.set('');
+        this.feedback.error(this.activationError(error));
       },
     });
   }
@@ -921,12 +971,42 @@ export class Planning implements AfterViewInit, OnDestroy {
   discardChanges(): void {
     if (this.activationInFlight()) return;
     const planning = this.snapshot();
-    if (!planning) return;
+    if (!planning || !this.hasPendingPlanningChanges()) return;
+    this.openConfirmation({
+      title: 'Descartar cambios de planificación',
+      message: 'Se descartarán las consignas editadas y cualquier vista previa. Se restaurarán los valores guardados.',
+      confirmLabel: 'Descartar cambios',
+    }, () => this.discardChangesNow(planning));
+  }
+  private discardChangesNow(planning: PlanningDto): void {
     this.draftTargets.set(this.draftTargetsFrom(planning));
     this.selectedTargetIndex.set(this.draftTargets().length ? Math.min(this.selectedTargetPosition() ?? 0, this.draftTargets().length - 1) : null);
     this.clearPreviewState();
     this.actionError.set('');
-    this.actionMessage.set('Cambios descartados. Se han restaurado las consignas guardadas.');
+    this.actionMessage.set('');
+    this.feedback.success('Cambios descartados. Se han restaurado las consignas guardadas.');
+  }
+
+  hasPendingPlanningChanges(): boolean {
+    const planning = this.snapshot();
+    if (!planning) return false;
+    return JSON.stringify(this.apiTargets()) !== JSON.stringify(this.draftTargetsFrom(planning))
+      || this.preview() !== null
+      || this.previewJob() !== null;
+  }
+
+  private openConfirmation(data: ConfirmDialogData, onConfirm: () => void): void {
+    if (this.confirmationRef) return;
+    const ref = this.dialog.open(ConfirmDialog, {
+      ...CONFIRM_DIALOG_CONFIG,
+      data,
+      ariaLabel: data.title,
+    });
+    this.confirmationRef = ref;
+    ref.afterClosed().subscribe((confirmed) => {
+      this.confirmationRef = null;
+      if (confirmed) onConfirm();
+    });
   }
 
   private apiTargets(): TemperatureTargetRequest[] {
@@ -1041,12 +1121,12 @@ export class Planning implements AfterViewInit, OnDestroy {
 
   openForecastDetails(): void {
     const planning = this.snapshot();
-    if (planning) this.dialog.open(PlanningDetailDialog, { width: 'min(92vw, 72rem)', data: { kind: 'forecast', planning }, ariaLabel: 'Detalle de la previsión', ariaModal: true });
+    if (planning) this.dialog.open(PlanningDetailDialog, { ...CONTENT_DIALOG_CONFIG, data: { kind: 'forecast', planning }, ariaLabel: 'Detalle de la previsión' });
   }
 
   openPlanningDetails(): void {
     const planning = this.snapshot();
-    if (planning) this.dialog.open(PlanningDetailDialog, { width: 'min(92vw, 72rem)', data: { kind: 'planning', planning }, ariaLabel: 'Detalle de la planificación', ariaModal: true });
+    if (planning) this.dialog.open(PlanningDetailDialog, { ...CONTENT_DIALOG_CONFIG, data: { kind: 'planning', planning }, ariaLabel: 'Detalle de la planificación' });
   }
 
   hasPreviewFailure(job: PlanningPreviewJobDto): boolean {
@@ -1060,17 +1140,17 @@ export class Planning implements AfterViewInit, OnDestroy {
       started_at: null, finished_at: job.finished_at,
     };
     this.dialog.open(PlanningDetailDialog, {
-      width: 'min(92vw, 42rem)',
+      ...CONTENT_DIALOG_CONFIG,
       data: { kind: 'failure', check: failed ?? fallback, job },
-      ariaLabel: 'Detalle del fallo de la vista previa', ariaModal: true,
+      ariaLabel: 'Detalle del fallo de la vista previa',
     });
   }
 
   openPreviewProblems(preview: PlanningPreviewDto): void {
     this.dialog.open(PlanningDetailDialog, {
-      width: 'min(92vw, 58rem)',
+      ...CONTENT_DIALOG_CONFIG,
       data: { kind: 'problems', planning: this.snapshot(), preview },
-      ariaLabel: 'Problemas de la vista previa', ariaModal: true,
+      ariaLabel: 'Problemas de la vista previa',
     });
   }
 
@@ -1079,9 +1159,9 @@ export class Planning implements AfterViewInit, OnDestroy {
     const preview = this.preview() ?? planning?.preview_job?.result;
     if (!planning || !preview) return;
     this.dialog.open(PlanningDetailDialog, {
-      width: 'min(96vw, 72rem)',
+      ...CONTENT_DIALOG_CONFIG,
       data: { kind: 'preview', planning, preview },
-      ariaLabel: 'Detalle de la vista previa por acumulador', ariaModal: true,
+      ariaLabel: 'Detalle de la vista previa por acumulador',
     });
   }
 
@@ -1179,16 +1259,14 @@ export class Planning implements AfterViewInit, OnDestroy {
 
   private openPlanningTableDetails(table: PlanningTableDetail): void {
     this.dialog.open(PlanningDetailDialog, {
-      width: 'min(98vw, 192rem)',
-      maxWidth: '98vw',
+      ...CONTENT_DIALOG_CONFIG,
       data: { kind: 'planning-table', table },
       ariaLabel: `Detalle tabular: ${table.title}`,
-      ariaModal: true,
     });
   }
 
   private openChartDetails(chart: ChartDetail): void {
-    this.dialog.open(PlanningDetailDialog, { width: 'min(96vw, 96rem)', data: { kind: 'chart', chart }, ariaLabel: chart.title, ariaModal: true });
+    this.dialog.open(PlanningDetailDialog, { ...CONTENT_DIALOG_CONFIG, data: { kind: 'chart', chart }, ariaLabel: chart.title });
   }
 
   intervalLabels(labels: string[]): string[] {
@@ -1408,18 +1486,10 @@ export class Planning implements AfterViewInit, OnDestroy {
     if (job.result) {
       this.preview.set(job.result);
       this.previewPoller.stop();
-      const status = normalizePlanStatus(job.result.status);
-      this.actionMessage.set(
-        status === 'INVALID'
-          ? 'La ventana no es planificable; revisa los errores.'
-          : status === 'DEGRADED'
-            ? 'La vista previa es degradada y no se puede activar; revisa los avisos.'
-            : status === 'CONVERGING'
-              ? 'Vista previa convergente calculada. Puede activarse y seguirá adaptándose.'
-              : 'Vista previa calculada. Todavía no modifica el plan activo.',
-      );
+      this.actionMessage.set('');
       this.scheduleChartRender();
     } else if (['completed', 'error', 'cancelled', 'interrupted'].includes(job.status)) {
+      this.actionMessage.set('');
       this.previewPoller.stop();
     } else {
       this.previewPoller.start(2);
