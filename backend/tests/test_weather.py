@@ -102,6 +102,25 @@ def test_aemet_fetches_hourly_endpoint_and_normalizes_valid_points() -> None:
     assert result.maximum_temperature_c == 4
 
 
+def test_aemet_normalizes_mojibake_municipality() -> None:
+    payload = hourly_aemet_payload()
+    payload[0]["nombre"] = "Noia"
+    payload[0]["provincia"] = "A CoruÃ±a"
+    provider = AemetWeatherProvider(
+        AemetConfig(municipality_code="15057"),
+        api_key="secret-key",
+        http_get=lambda url, headers, timeout: (
+            {"estado": 200, "datos": "https://data.example/hourly.json"}
+            if headers.get("api_key")
+            else payload
+        ),
+    )
+
+    result = provider.forecast_for(date(2026, 1, 15))
+
+    assert result.location == "Noia, A Coruña"
+
+
 def test_aemet_accepts_period_and_nested_dato_hourly_shape() -> None:
     payload = [{
         "nombre": "Madrid",

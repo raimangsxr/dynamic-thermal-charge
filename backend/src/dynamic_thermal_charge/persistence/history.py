@@ -22,7 +22,7 @@ from sqlalchemy.engine import Engine
 
 from . import ForecastRef, HistoryPage, PlanRef, PruneReport
 from ..planning_explanation import diagnostic_report
-from ..weather import HourlyForecastPoint, future_forecast_points
+from ..weather import HourlyForecastPoint, future_forecast_points, normalize_municipality
 from .mapping import from_utc, to_utc
 from .forecast_context import persisted_forecast_context
 from .schema import (
@@ -68,7 +68,9 @@ class SqlHistoryRecorder:
                         minimum_temperature_c=forecast.minimum_temperature_c,
                         maximum_temperature_c=forecast.maximum_temperature_c,
                         source=_forecast_source(forecast),
-                        municipality=getattr(forecast, "location", None),
+                        municipality=normalize_municipality(
+                            getattr(forecast, "location", None)
+                        ),
                         retrieved_at=to_utc(_now_of(forecast)),
                     )
                 ).inserted_primary_key[0]
@@ -966,7 +968,9 @@ class SqlStatusReader:
             "average_temperature_c": float(forecast_row["average_temperature_c"]),
             "minimum_temperature_c": forecast_row["minimum_temperature_c"],
             "maximum_temperature_c": forecast_row["maximum_temperature_c"],
-            "municipality": forecast_row["municipality"],
+            "municipality": normalize_municipality(
+                forecast_row["municipality"]
+            ),
             "hourly_points": [
                 {
                     "timestamp": point.timestamp,
@@ -976,6 +980,26 @@ class SqlStatusReader:
                 for point in filtered
             ],
         }
+
+    def latest_forecast_success_at(self) -> datetime | None:
+        """Return when the latest accepted AEMET forecast was stored."""
+        from .engine import store_errors
+
+        with store_errors(self._location):
+            with self._engine.connect() as connection:
+                retrieved_at = connection.execute(
+                    select(forecast_table.c.retrieved_at)
+                    .where(
+                        (forecast_table.c.installation_id == self._installation_id)
+                        & (forecast_table.c.source == "aemet")
+                    )
+                    .order_by(
+                        forecast_table.c.retrieved_at.desc(),
+                        forecast_table.c.id.desc(),
+                    )
+                    .limit(1)
+                ).scalar()
+        return from_utc(retrieved_at)
 
     def planning(self, at: datetime) -> dict | None:
         """Return the active plan or, outside a window, the next future plan."""

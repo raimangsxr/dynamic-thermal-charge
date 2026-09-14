@@ -117,6 +117,69 @@ def test_aemet_forecast_is_reported_with_its_canonical_source(client, heartbeat,
     assert forecast["average_temperature_c"] == 8.0
 
 
+def test_status_keeps_last_successful_forecast_separate_from_a_later_error(
+    client, initialised_store, recorder, heartbeat
+):
+    from sqlalchemy import update
+
+    from dynamic_thermal_charge.persistence.schema import forecast as forecast_table
+
+    reference = recorder.record_forecast(
+        OutdoorForecast(
+            date=API_NOW.date(),
+            average_temperature_c=8.0,
+            minimum_temperature_c=3.0,
+            maximum_temperature_c=13.0,
+            source="aemet",
+            location="Noia, A CoruÃ±a",
+        )
+    )
+    assert reference is not None
+    engine = initialised_store.application_engine or initialised_store.engine
+    with engine.begin() as connection:
+        connection.execute(
+            update(forecast_table)
+            .where(forecast_table.c.id == reference.id)
+            .values(retrieved_at=API_NOW.replace(tzinfo=None))
+        )
+
+    from dynamic_thermal_charge.runtime import _record_forecast_cycle
+
+    _record_forecast_cycle(
+        initialised_store,
+        local_date=API_NOW.date(),
+        scheduled_at=API_NOW,
+        attempted_at=API_NOW,
+        result="success",
+        error=None,
+        next_run_at=API_NOW + timedelta(hours=3),
+        forecast_ref=reference,
+    )
+    _record_forecast_cycle(
+        initialised_store,
+        local_date=API_NOW.date(),
+        scheduled_at=API_NOW,
+        attempted_at=API_NOW + timedelta(minutes=1),
+        result="error",
+        error="WeatherProviderError: AEMET no responde",
+        next_run_at=API_NOW + timedelta(minutes=15),
+    )
+    heartbeat.publish(API_NOW, degraded=False)
+
+    body = _status(client)
+
+    assert body["forecast_last_success_at"].startswith("2026-01-16T01:00")
+    assert body["forecast_status"] == "error"
+    assert body["forecast_last_error"].startswith("WeatherProviderError")
+    assert body["forecast"]["municipality"] == "Noia, A Coruña"
+
+
+def test_status_reports_no_last_successful_forecast(client, heartbeat):
+    heartbeat.publish(API_NOW, degraded=False)
+
+    assert _status(client)["forecast_last_success_at"] is None
+
+
 def test_unmet_minutes_are_reported(client, heartbeat, recorded_night):
     heartbeat.publish(API_NOW, degraded=False)
     allocations = _status(client)["allocations"]

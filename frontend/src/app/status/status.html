@@ -184,13 +184,16 @@
       @if (data.forecast; as forecast) {
         <div class="forecast-summary" data-testid="forecast">
           <div class="forecast-icon" aria-hidden="true"><mat-icon>cloud</mat-icon></div>
-          <div><strong>{{ forecast.date }}</strong><p>Temperatura media: {{ temperature(forecast.average_temperature_c) }}</p><p class="muted">Origen: {{ sourceText(forecast.source) }}@if (forecast.municipality) { · {{ forecast.municipality }} }</p>
-            <dl class="summary-list summary-list-compact"><div><dt>Estado de consulta</dt><dd>{{ forecastStatusText(data.forecast_status) }}</dd></div><div><dt>{{ forecastNextText(data.forecast_next_run_kind) }}</dt><dd>{{ instant(data.forecast_next_run_at) }}</dd></div></dl>
-          </div>
+          <div><strong>{{ forecast.date }}</strong><p>Temperatura media: {{ temperature(forecast.average_temperature_c) }}</p><p class="muted">Origen: {{ sourceText(forecast.source) }}@if (forecast.municipality) { · {{ forecast.municipality }} }</p></div>
         </div>
       } @else {
         <p class="empty">Sin previsión utilizable.</p>
       }
+      <dl class="summary-list summary-list-compact" data-testid="forecast-status">
+        <div><dt>Última consulta correcta</dt><dd data-testid="forecast-last-success">{{ instant(data.forecast_last_success_at) }}</dd></div>
+        <div><dt>Estado de consulta</dt><dd>{{ forecastStatusText(data.forecast_status) }}</dd></div>
+        <div><dt>{{ forecastNextText(data.forecast_next_run_kind) }}</dt><dd>{{ instant(data.forecast_next_run_at) }}</dd></div>
+      </dl>
       @if (data.forecast_last_error) { <p class="warning-text" data-testid="forecast-error">Último error del proveedor: {{ data.forecast_last_error }}</p> }
       @if (data.forecast_stale) { <p class="warning-text">La previsión disponible está marcada como antigua.</p> }
     </section>
