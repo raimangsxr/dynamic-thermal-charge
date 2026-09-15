@@ -18,7 +18,7 @@ timestamp() {
 run_reconciler() {
     mkdir -p "$(dirname "$LOG_FILE")"
 
-    # An unchanged release produces no output in reconcile.sh, so this loop
+    # reconcile.sh keeps unchanged-release reconciliation quiet, so this loop
     # leaves the log untouched until an update or an error is reported.
     /bin/sh "$RECONCILE_SCRIPT" 2>&1 |
         while IFS= read -r line || [ -n "$line" ]; do

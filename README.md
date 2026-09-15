@@ -110,8 +110,10 @@ sudo chown -R "$DTC_RUNTIME_UID:$DTC_RUNTIME_GID" /srv/app/data
 
 El `chown` solo es necesario al preparar la instalación o al migrar datos que
 fueran creados por una versión anterior ejecutada como root. El reconciliador
-detecta automáticamente el GID de `/dev/gpiochip0`; en un despliegue manual,
-`DTC_GPIO_GID` debe ser el GID que devuelva `stat` para ese dispositivo.
+comprueba en cada ejecución que `/dev/gpiochip0` existe como dispositivo de
+caracteres y obtiene automáticamente su GID actual. En un despliegue manual,
+`DTC_GPIO_GID` es obligatorio y debe ser el GID que devuelva `stat` para ese
+dispositivo; Compose rechaza la configuración si falta.
 
 En `/etc/app/app.env` debe existir el token administrativo que usará el panel:
 
@@ -606,7 +608,12 @@ de preview cuando existe y ofrecen una alternativa textual con unidades para
 cada intervalo. El resumen usa lenguaje operativo y agrupa avisos por causa.
 
 Para actualizaciones automatizadas, `deploy/reconcile.sh` lee `deploy/release`,
-descarga las imágenes y aplica la versión indicada. El cronjob se instala con:
+obtiene el GID actual de `/dev/gpiochip0` y aplica la versión indicada. Cada
+ejecución valida y reconcilia la configuración de Compose aunque la release no
+haya cambiado, de modo que un cambio de GID se aplica al backend; solo descarga
+imágenes cuando cambia la release. Si `DTC_GPIO_GID` ya está definido y no
+coincide con el dispositivo, la ejecución termina con un error explicando la
+corrección necesaria. El cronjob se instala con:
 
 ```sh
 sudo /opt/app/repo/deploy/reconciler-cronjob.sh
