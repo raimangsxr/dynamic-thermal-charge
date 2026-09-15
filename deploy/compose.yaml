@@ -26,9 +26,9 @@ services:
         bind: { create_host_path: false }
     # LGPIOFactory(chip=0) controls the Pi through gpiochip0.
     devices: ["/dev/gpiochip0:/dev/gpiochip0"]
-    # The host group id is distribution-specific; the reconciler detects it
-    # automatically and manual deployments can override DTC_GPIO_GID.
-    group_add: ["${DTC_GPIO_GID:-997}"]
+    # The reconciler detects this distribution-specific group id automatically.
+    # Manual deployments must provide the matching value explicitly.
+    group_add: ["${DTC_GPIO_GID:?set DTC_GPIO_GID}"]
     healthcheck: { test: ["CMD", "python", "-c", "from dynamic_thermal_charge.entrypoints import check_configuration; check_configuration()"], interval: 5s, timeout: 10s, start_period: 15s, retries: 12 }
     logging: { driver: json-file, options: { max-size: 10m, max-file: "3" } }
   backend-api:

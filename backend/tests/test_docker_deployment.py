@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[2]
 COMPOSE = ROOT / "deploy" / "compose.yaml"
 DOCKERFILE = ROOT / "backend" / "Dockerfile"
 ENTRYPOINT = ROOT / "backend" / "entrypoint.sh"
+RECONCILER = ROOT / "deploy" / "reconcile.sh"
 
 
 def test_docker_compose_contains_the_runtime_services_and_persistent_state() -> None:
@@ -19,7 +20,8 @@ def test_docker_compose_contains_the_runtime_services_and_persistent_state() -> 
     assert "target: /run/dynamic-thermal-charge/raspberry-pi-model" in compose
     assert "read_only: true" in compose
     assert 'user: "${DTC_RUNTIME_UID:-1000}:${DTC_RUNTIME_GID:-1000}"' in compose
-    assert 'group_add: ["${DTC_GPIO_GID:-997}"]' in compose
+    assert 'group_add: ["${DTC_GPIO_GID:?set DTC_GPIO_GID}"]' in compose
+    assert "DTC_GPIO_GID:-997" not in compose
     assert "LG_WD: /tmp" in compose
     assert "condition: service_healthy" in compose
     assert "run_api(bind_host='0.0.0.0', bind_port=8080)" in compose
@@ -37,9 +39,32 @@ def test_backend_image_runs_idempotent_initialisation_before_its_process() -> No
 
 
 def test_reconciler_passes_the_host_gpio_group_to_compose() -> None:
-    reconciler = (ROOT / "deploy" / "reconcile.sh").read_text(encoding="utf-8")
+    reconciler = RECONCILER.read_text(encoding="utf-8")
     assert 'stat -c \'%g\' /dev/gpiochip0' in reconciler
-    assert "DTC_GPIO_GID" in reconciler
+    assert "if [ ! -c /dev/gpiochip0 ]; then" in reconciler
+    assert 'configured_gpio_gid=${DTC_GPIO_GID:-}' in reconciler
+    assert '"$configured_gpio_gid" != "$detected_gpio_gid"' in reconciler
+    assert 'export DTC_GPIO_GID="$detected_gpio_gid"' in reconciler
+
+
+def test_reconciler_preflights_before_compose_and_reconciles_unchanged_releases() -> None:
+    reconciler = RECONCILER.read_text(encoding="utf-8")
+    preflight = reconciler.index("if [ ! -c /dev/gpiochip0 ]; then")
+    compose_ps = reconciler.index("docker compose -f deploy/compose.yaml ps")
+    compose_config = reconciler.index("docker compose -f deploy/compose.yaml config")
+    compose_pull = reconciler.index("docker compose -f deploy/compose.yaml pull")
+    release_branch = reconciler.index('if [ "$desired" != "$current" ]; then')
+    compose_up = "docker compose -f deploy/compose.yaml up -d --remove-orphans --wait --wait-timeout 120"
+
+    assert preflight < compose_ps < compose_config
+    assert release_branch < compose_pull
+    assert reconciler.count(compose_up) == 2
+    assert compose_pull < reconciler.index(compose_up)
+
+
+def test_compose_check_supplies_a_deterministic_production_gpio_group() -> None:
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    assert "DTC_GPIO_GID=986 docker compose -f deploy/compose.yaml config --quiet" in makefile
 
 
 def test_deployment_has_no_application_cli_invocations_or_modules() -> None:
