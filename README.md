@@ -513,6 +513,12 @@ que el modelo demuestra el cumplimiento continuado y hasta qué fin de horizonte
 queda garantizado. Un `DEGRADED` se conserva como diagnóstico y mantiene el
 último plan activable mientras tenga intervalos vigentes; `INVALID` bloquea la
 activación y deja las salidas en estado seguro cuando no hay sustituto válido.
+La calidad del optimizador se publica por separado como `OPTIMAL`,
+`FEASIBLE_LIMIT` o `NO_SOLUTION`. `FEASIBLE_LIMIT` significa que el candidato
+físico pasó la reproducción determinista pero el tiempo terminó antes de
+demostrar todos los desempates secundarios; si su estado es `VALID` o
+`CONVERGING`, sigue siendo activable. El detalle de diagnóstico incluye el
+tiempo consumido, las fases completadas y la razón de parada.
 
 Para medir la latencia real en el dispositivo de despliegue, ejecuta el medidor
 contra la API después de que cambie el token de entrada (por ejemplo, al cruzar

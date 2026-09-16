@@ -7,10 +7,12 @@ from dynamic_thermal_charge.charge_planning import (
     AutomaticPlan,
     AutomaticPlanSlot,
     DEGRADED,
+    FEASIBLE_LIMIT,
     INVALID,
     MilpChargePlanner,
     PlanningInput,
     PlanningViolation,
+    VALID,
 )
 from dynamic_thermal_charge.models import ChargeTelemetry, Heater, OutputConfig
 from dynamic_thermal_charge.runtime import (
@@ -138,7 +140,7 @@ def test_automatic_planner_emits_debug_progress(caplog):
     assert "Automatic planning completed" in caplog.text
 
 
-def test_verified_time_limited_solver_candidate_is_degraded(monkeypatch):
+def test_verified_time_limited_solver_candidate_keeps_physical_status(monkeypatch):
     original_solve = pulp.LpProblem.solve
     calls = 0
 
@@ -158,8 +160,9 @@ def test_verified_time_limited_solver_candidate_is_degraded(monkeypatch):
             horizon_start=API_NOW, horizon_hours=2, slot_minutes=30,
         )
     )
-    assert result.status == DEGRADED
-    assert any(item.requirement == "solver_time_limit" for item in result.violations)
+    assert result.status == VALID
+    assert result.optimization_quality == FEASIBLE_LIMIT
+    assert not any(item.requirement == "solver_time_limit" for item in result.violations)
 
 
 def test_invalid_automatic_plan_clears_the_previously_active_plan(initialised_store):

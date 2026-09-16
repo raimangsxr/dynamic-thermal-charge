@@ -2,16 +2,26 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import json
 import math
+from time import sleep
 from typing import Any, Mapping
 from uuid import uuid4
 
 from sqlalchemy import delete, insert, select, update
 from sqlalchemy.engine import Engine
 
-from ..charge_planning import CONVERGING, DEGRADED, INVALID, VALID, AutomaticPlan
+from ..charge_planning import (
+    CONVERGING,
+    DEGRADED,
+    FEASIBLE_LIMIT,
+    INVALID,
+    NO_SOLUTION,
+    OPTIMAL,
+    VALID,
+    AutomaticPlan,
+)
 from ..models import (
     ChargeTelemetry,
     TemperatureTarget,
@@ -41,6 +51,8 @@ from .schema import (
     plan_audit,
     preview_job,
     preview_job_step,
+    planning_calculation,
+    planning_lease,
 )
 from .url import StoreLocation
 
@@ -482,6 +494,8 @@ class SqlPlanningRepository:
             "convergence_by_heater": _json_ready(dict(plan.convergence_by_heater)),
             "convergence_at": _json_ready(plan.convergence_at),
             "guaranteed_until": _json_ready(plan.guaranteed_until),
+            "optimization_quality": plan.optimization_quality,
+            "diagnostics": _json_ready(dict(plan.diagnostics)),
             "evidence": _json_ready(dict(evidence or {})),
         }
         with transaction(self._application, self._application_location) as connection:
@@ -577,6 +591,323 @@ class SqlPlanningRepository:
             ])
         return job_id
 
+    def claim_planning_calculation(
+        self,
+        input_token: str,
+        *,
+        kind: str,
+        requested_at: datetime | None = None,
+        lease_seconds: int = 180,
+    ) -> dict[str, Any]:
+        for attempt in range(3):
+            try:
+                return self._claim_planning_calculation_once(
+                    input_token,
+                    kind=kind,
+                    requested_at=requested_at,
+                    lease_seconds=lease_seconds,
+                )
+            except ConfigValidationError:
+                # A concurrent PostgreSQL INSERT can win the unique-token race
+                # before either transaction sees the row.  The losing caller
+                # retries the read/claim path and joins that owner; SQLite's
+                # IMMEDIATE lock normally makes this branch unnecessary.
+                if attempt == 2:
+                    raise
+                sleep(0.01 * (attempt + 1))
+
+    def _claim_planning_calculation_once(
+        self,
+        input_token: str,
+        *,
+        kind: str,
+        requested_at: datetime | None = None,
+        lease_seconds: int = 180,
+    ) -> dict[str, Any]:
+        """Join or claim the durable calculation for an exact input token."""
+        if kind not in {"automatic", "preview"}:
+            raise ValueError("planning calculation kind is invalid")
+        now = datetime.now(timezone.utc)
+        requested = requested_at or now
+        owner = str(uuid4())
+        lease_until = now.timestamp() + max(1, lease_seconds)
+        lease_at = datetime.fromtimestamp(lease_until, timezone.utc)
+        with transaction(self._application, self._application_location) as connection:
+            _begin_coordination_lock(connection)
+            row = connection.execute(
+                select(planning_calculation)
+                .where(
+                    (planning_calculation.c.installation_id == self._installation_id)
+                    & (planning_calculation.c.input_token == input_token)
+                )
+                .with_for_update()
+            ).mappings().first()
+            if row is not None and row["status"] == "completed":
+                result = row["result_json"]
+                try:
+                    decoded_result = None if result is None else json.loads(result)
+                except (TypeError, ValueError):
+                    decoded_result = None
+                return {
+                    "state": "completed",
+                    "owner": None,
+                    "result": decoded_result,
+                }
+            if row is not None and row["status"] == "running":
+                current_lease = row["lease_until"]
+                if current_lease is not None and from_utc(current_lease) > now:
+                    return {"state": "waiting", "owner": None, "result": None}
+                connection.execute(
+                    update(planning_calculation)
+                    .where(planning_calculation.c.id == row["id"])
+                    .values(
+                        status="running",
+                        owner=owner,
+                        kind=kind,
+                        requested_at=to_utc(requested),
+                        lease_until=to_utc(lease_at),
+                        finished_at=None,
+                        result_json=None,
+                        error_detail=None,
+                    )
+                )
+            elif row is None:
+                connection.execute(
+                    insert(planning_calculation).values(
+                        installation_id=self._installation_id,
+                        input_token=input_token,
+                        status="running",
+                        owner=owner,
+                        kind=kind,
+                        requested_at=to_utc(requested),
+                        lease_until=to_utc(lease_at),
+                    )
+                )
+            else:
+                connection.execute(
+                    update(planning_calculation)
+                    .where(planning_calculation.c.id == row["id"])
+                    .values(
+                        status="running",
+                        owner=owner,
+                        kind=kind,
+                        requested_at=to_utc(requested),
+                        lease_until=to_utc(lease_at),
+                        finished_at=None,
+                        result_json=None,
+                        error_detail=None,
+                    )
+                )
+        return {"state": "owner", "owner": owner, "result": None}
+
+    def finish_planning_calculation(
+        self,
+        input_token: str,
+        owner: str,
+        *,
+        result: Mapping[str, Any] | None = None,
+        error_detail: str | None = None,
+    ) -> bool:
+        now = datetime.now(timezone.utc)
+        status = "completed" if result is not None else "error"
+        with transaction(self._application, self._application_location) as connection:
+            changed = connection.execute(
+                update(planning_calculation)
+                .where(
+                    (planning_calculation.c.installation_id == self._installation_id)
+                    & (planning_calculation.c.input_token == input_token)
+                    & (planning_calculation.c.owner == owner)
+                )
+                .values(
+                    status=status,
+                    lease_until=None,
+                    finished_at=to_utc(now),
+                    result_json=(
+                        None
+                        if result is None
+                        else json.dumps(_json_ready(dict(result)), separators=(",", ":"))
+                    ),
+                    error_detail=error_detail,
+                )
+            ).rowcount
+        return changed == 1
+
+    def invalidate_planning_calculation(
+        self,
+        input_token: str,
+        *,
+        error_detail: str,
+    ) -> bool:
+        """Mark a malformed completed payload unusable without activating it."""
+        now = datetime.now(timezone.utc)
+        with transaction(self._application, self._application_location) as connection:
+            changed = connection.execute(
+                update(planning_calculation)
+                .where(
+                    (planning_calculation.c.installation_id == self._installation_id)
+                    & (planning_calculation.c.input_token == input_token)
+                    & (planning_calculation.c.status == "completed")
+                )
+                .values(
+                    status="error",
+                    owner=None,
+                    lease_until=None,
+                    finished_at=to_utc(now),
+                    error_detail=error_detail[:512],
+                )
+            ).rowcount
+        return changed == 1
+
+    def planning_calculation(self, input_token: str) -> dict[str, Any] | None:
+        with store_errors(self._application_location):
+            with self._application.connect() as connection:
+                row = connection.execute(
+                    select(planning_calculation).where(
+                        (planning_calculation.c.installation_id == self._installation_id)
+                        & (planning_calculation.c.input_token == input_token)
+                    )
+                ).mappings().first()
+        if row is None:
+            return None
+        try:
+            decoded_result = (
+                None if row["result_json"] is None else json.loads(row["result_json"])
+            )
+        except (TypeError, ValueError):
+            decoded_result = None
+        return {
+            "id": int(row["id"]),
+            "input_token": str(row["input_token"]),
+            "status": str(row["status"]),
+            "owner": row["owner"],
+            "kind": str(row["kind"]),
+            "requested_at": from_utc(row["requested_at"]),
+            "lease_until": from_utc(row["lease_until"]),
+            "finished_at": from_utc(row["finished_at"]),
+            "result": decoded_result,
+            "error_detail": row["error_detail"],
+        }
+
+    def renew_planning_calculation(
+        self,
+        input_token: str,
+        owner: str,
+        *,
+        lease_seconds: int = 180,
+    ) -> bool:
+        """Extend an owner's calculation lease while it waits for the CPU.
+
+        A request can spend longer queued behind another token than the solver
+        budget itself.  Renewing the single-flight row prevents a second
+        process from reclaiming that still-live request and starting duplicate
+        work before the installation lease becomes available.
+        """
+        now = datetime.now(timezone.utc)
+        lease_until = now + timedelta(seconds=max(1, lease_seconds))
+        with transaction(self._application, self._application_location) as connection:
+            changed = connection.execute(
+                update(planning_calculation)
+                .where(
+                    (planning_calculation.c.installation_id == self._installation_id)
+                    & (planning_calculation.c.input_token == input_token)
+                    & (planning_calculation.c.owner == owner)
+                    & (planning_calculation.c.status == "running")
+                )
+                .values(lease_until=to_utc(lease_until))
+            ).rowcount
+        return changed == 1
+
+    def acquire_planning_lease(
+        self,
+        owner: str,
+        *,
+        input_token: str,
+        kind: str,
+        lease_seconds: int = 180,
+    ) -> bool:
+        if kind not in {"automatic", "preview"}:
+            raise ValueError("planning lease kind is invalid")
+        for attempt in range(3):
+            try:
+                return self._acquire_planning_lease_once(
+                    owner,
+                    input_token=input_token,
+                    kind=kind,
+                    lease_seconds=lease_seconds,
+                )
+            except ConfigValidationError:
+                if attempt == 2:
+                    raise
+                sleep(0.01 * (attempt + 1))
+
+    def _acquire_planning_lease_once(
+        self,
+        owner: str,
+        *,
+        input_token: str,
+        kind: str,
+        lease_seconds: int = 180,
+    ) -> bool:
+        now = datetime.now(timezone.utc)
+        lease_until = now + timedelta(seconds=max(1, lease_seconds))
+        with transaction(self._application, self._application_location) as connection:
+            _begin_coordination_lock(connection)
+            row = connection.execute(
+                select(planning_lease).where(
+                    planning_lease.c.installation_id == self._installation_id
+                )
+            ).mappings().first()
+            if row is not None and row["owner"] != owner and from_utc(row["lease_until"]) > now:
+                return False
+            # Automatic refreshes have priority over previews that have not
+            # acquired the installation lease yet.  This keeps an operator
+            # preview from delaying the control loop when both arrive together.
+            if kind == "preview":
+                automatic_waiting = connection.execute(
+                    select(planning_calculation.c.id)
+                    .where(
+                        (planning_calculation.c.installation_id == self._installation_id)
+                        & (planning_calculation.c.kind == "automatic")
+                        & (planning_calculation.c.status == "running")
+                        & (planning_calculation.c.owner != owner)
+                        & (planning_calculation.c.lease_until.is_not(None))
+                        & (planning_calculation.c.lease_until > to_utc(now))
+                    )
+                    .limit(1)
+                ).scalar()
+                if automatic_waiting is not None:
+                    return False
+            values = {
+                "owner": owner,
+                "input_token": input_token,
+                "kind": kind,
+                "acquired_at": to_utc(now),
+                "lease_until": to_utc(lease_until),
+            }
+            if row is None:
+                connection.execute(
+                    insert(planning_lease).values(
+                        installation_id=self._installation_id, **values
+                    )
+                )
+            else:
+                connection.execute(
+                    update(planning_lease)
+                    .where(planning_lease.c.installation_id == self._installation_id)
+                    .values(**values)
+                )
+        return True
+
+    def release_planning_lease(self, owner: str) -> bool:
+        with transaction(self._application, self._application_location) as connection:
+            changed = connection.execute(
+                delete(planning_lease).where(
+                    (planning_lease.c.installation_id == self._installation_id)
+                    & (planning_lease.c.owner == owner)
+                )
+            ).rowcount
+        return changed == 1
+
     def preview_job(self, job_id: str) -> dict[str, Any] | None:
         with store_errors(self._application_location):
             with self._application.connect() as connection:
@@ -653,6 +984,19 @@ class SqlPlanningRepository:
                     and item.get("requirement") == "solver_time_limit"
                     for item in violations
                 ):
+                    continue
+                quality = str(
+                    result.get(
+                        "optimization_quality",
+                        (result.get("diagnostics") or {}).get(
+                            "optimization_quality", "OPTIMAL"
+                        ),
+                    )
+                )
+                if quality not in {OPTIMAL, FEASIBLE_LIMIT}:
+                    continue
+                validation = (result.get("diagnostics") or {}).get("validation")
+                if isinstance(validation, dict) and validation.get("verified") is False:
                     continue
             return job
         return None
@@ -797,6 +1141,7 @@ class SqlPlanningRepository:
     def _decode_plan(self, row, slots) -> dict[str, Any]:
         inputs = json.loads(row["inputs_json"])
         status = _canonical_plan_status(row["status"])
+        deficits = json.loads(row["deficits_json"])
         convergence_by_heater = {
             str(heater_id): _datetime_or_none(value)
             for heater_id, value in (inputs.get("convergence_by_heater") or {}).items()
@@ -814,13 +1159,31 @@ class SqlPlanningRepository:
             "active": bool(row["active"]),
             "input_token": row["input_token"],
             "created_at": from_utc(row["created_at"]),
-            "deficits": json.loads(row["deficits_json"]),
-            "violations": json.loads(row["deficits_json"]),
+            "deficits": deficits,
+            "violations": deficits,
             "demand": inputs.get("demand", []),
             "explanations": inputs.get("explanations", []),
             "convergence_by_heater": convergence_by_heater,
             "convergence_at": _datetime_or_none(inputs.get("convergence_at")),
             "guaranteed_until": _datetime_or_none(inputs.get("guaranteed_until")),
+            "optimization_quality": str(
+                inputs.get(
+                    "optimization_quality",
+                    (inputs.get("diagnostics") or {}).get(
+                        "optimization_quality",
+                        NO_SOLUTION
+                        if status == INVALID
+                        else FEASIBLE_LIMIT
+                        if any(
+                            isinstance(item, dict)
+                            and item.get("requirement") == "solver_time_limit"
+                            for item in deficits
+                        )
+                        else OPTIMAL,
+                    ),
+                )
+            ),
+            "diagnostics": inputs.get("diagnostics") or {},
             "evidence": inputs.get("evidence") or None,
             "predecessor_plan_id": inputs.get("predecessor_plan_id"),
             "predecessor_preserved": bool(inputs.get("predecessor_preserved", False)),
@@ -1141,6 +1504,17 @@ def _json_ready(value: Any) -> Any:
     if isinstance(value, dict):
         return {key: _json_ready(item) for key, item in value.items()}
     return value
+
+
+def _begin_coordination_lock(connection) -> None:
+    """Make the claim/lease read-modify-write atomic on SQLite.
+
+    ``with_for_update`` is ignored by SQLite.  An IMMEDIATE transaction takes
+    the single writer reservation before reading, so two API/runtime processes
+    cannot both observe an absent or expired lease and then launch CBC.
+    """
+    if connection.dialect.name == "sqlite":
+        connection.exec_driver_sql("BEGIN IMMEDIATE")
 
 
 __all__ = ["SqlPlanningRepository"]

@@ -37,6 +37,7 @@ from .charge_planning import (
     PlanningInput,
     resolve_planning_telemetry,
 )
+from .planning_coordination import coordinated_plan
 from .plan_deviation import DeviationVerdict, SlotBoundaryGate, evaluate_plan_deviation
 from .planning_explanation import planning_evidence
 from .models import AppConfig
@@ -547,7 +548,13 @@ def _build_automatic_runtime_plan(
         room_energy_model=True,
         telemetry_max_age_seconds=config.site.indoor_max_age_minutes * 60,
     )
-    plan = DeterministicChargeOptimizer().build(request)
+    plan = coordinated_plan(
+        store.planning,
+        request,
+        kind="automatic",
+        builder=lambda: DeterministicChargeOptimizer().build(request),
+        lease_seconds=max(30, int(planning_site.get("solver_time_limit_seconds", 120)) + 30),
+    )
     legacy_slots = tuple(
         ScheduleSlot(slot.start, slot.end, slot.heater_ids, slot.power_w, slot.outdoor_temperature_c, False)
         for slot in plan.slots

@@ -30,6 +30,7 @@ from ...charge_planning import (
     PlanningInput,
     PlanningViolation,
     group_planning_violations,
+    independently_validate_plan,
     input_token,
     resolve_planning_telemetry,
 )
@@ -73,6 +74,7 @@ from ...persistence.mapping import (
     parse_time,
 )
 from ..read_model import automatic_window, forecast_cycle_context, real_before, wall_clock_end
+from ...planning_coordination import coordinated_plan
 
 
 router = APIRouter()
@@ -138,6 +140,8 @@ class PreviewJobRunner:
                 progress_callback=progress,
                 cancellation_probe=lambda: repository.preview_job_cancel_requested(job_id),
             )
+            if repository.preview_job_cancel_requested(job_id):
+                raise PlanningCancelled()
             forecast = SqlStatusReader(
                 store.application_engine or store.engine,
                 store.repository.installation_id(),
@@ -249,6 +253,7 @@ def get_planning(
             absence_reason="invalid_automatic_plan",
             forecast=_forecast_view(latest_forecast),
             plan_status="INVALID",
+            optimization_quality=latest_automatic.get("optimization_quality"),
             deficits=_grouped_deficit_views(
                 _plan_violations(latest_automatic),
                 slot_minutes=latest_automatic.get("slot_minutes"),
@@ -278,6 +283,7 @@ def get_planning(
             absence_reason="no_active_automatic_plan",
             forecast=_forecast_view(latest_forecast),
             plan_status=_canonical_plan_status(latest_automatic["status"]),
+            optimization_quality=latest_automatic.get("optimization_quality"),
             deficits=_grouped_deficit_views(
                 _plan_violations(latest_automatic),
                 slot_minutes=latest_automatic.get("slot_minutes"),
@@ -588,10 +594,24 @@ def activate_planning(
             constraints_revision=int(site["revision"]),
         )
     if plan is None:
-        plan = DeterministicChargeOptimizer().build(planning_request)
+        # Activation joins the same durable calculation as preview/runtime;
+        # it must never launch a second solver for an identical token.
+        plan = coordinated_plan(
+            store.planning,
+            planning_request,
+            kind="preview",
+            builder=lambda: DeterministicChargeOptimizer().build(planning_request),
+            lease_seconds=max(30, int(site.get("solver_time_limit_seconds", 120)) + 30),
+        )
     if plan.status not in {VALID, CONVERGING}:
         raise ConfigValidationError(
             "only VALID or CONVERGING plans can be activated",
+            field="planning",
+        )
+    verified, _validation = independently_validate_plan(planning_request, plan)
+    if not verified:
+        raise ConfigValidationError(
+            "the preview candidate failed independent physical validation",
             field="planning",
         )
     new_revision = (
@@ -780,6 +800,7 @@ def _automatic_planning_response(
         forecast_next_run_at=cycle_status.get("forecast_next_run_at"),
         plan=automatic_plan,
         plan_status=_canonical_plan_status(automatic["status"]),
+        optimization_quality=automatic.get("optimization_quality"),
         deficits=_grouped_deficit_views(
             _plan_violations(automatic), slot_minutes=automatic.get("slot_minutes")
         ),
@@ -883,6 +904,7 @@ def _enrich(response: PlanningResponse, store: Store, observed_at: datetime) -> 
         response.convergence_by_heater = projection.get("convergence_by_heater", {})
         response.convergence_at = projection.get("convergence_at")
         response.guaranteed_until = projection.get("guaranteed_until")
+        response.optimization_quality = projection.get("optimization_quality")
         response.preview_token = active["input_token"] if active is not None else None
     site = planning.site()
     response.temperature_targets_revision = site["revision"]
@@ -978,14 +1000,22 @@ def _build_automatic_plan(
     progress_callback=None,
     cancellation_probe=None,
 ):
-    return DeterministicChargeOptimizer().build(_build_automatic_request(
+    planning_request = _build_automatic_request(
         store,
         observed_at,
         site,
         temperature_targets=temperature_targets,
         progress_callback=progress_callback,
         cancellation_probe=cancellation_probe,
-    ))
+    )
+    return coordinated_plan(
+        store.planning,
+        planning_request,
+        kind="preview",
+        builder=lambda: DeterministicChargeOptimizer().build(planning_request),
+        cancellation_probe=cancellation_probe,
+        lease_seconds=max(30, int(site.get("solver_time_limit_seconds", 120)) + 30),
+    )
 
 
 def _build_automatic_request(
@@ -1073,6 +1103,15 @@ def _cached_preview_plan(
         return None
     if plan.input_token != input_token(request):
         return None
+    verified, validation = independently_validate_plan(request, plan)
+    if not verified:
+        logger.debug(
+            "Ignoring cached planning preview that failed independent validation: "
+            "job_id=%s reason=%s",
+            job.get("id"),
+            validation.get("reason"),
+        )
+        return None
     logger.info("Reusing completed planning preview: job_id=%s token=%s", job["id"], plan.input_token)
     return plan
 
@@ -1106,8 +1145,24 @@ def _matching_completed_preview_job(
         for item in violations
     ):
         return None
-    expected_phases = len({heater.priority for heater in request.heaters if heater.enabled}) + 7
-    if len(result.get("score", [])) != expected_phases:
+    quality = str(
+        result.get(
+            "optimization_quality",
+            (result.get("diagnostics") or {}).get("optimization_quality", "OPTIMAL"),
+        )
+    )
+    if quality not in {"OPTIMAL", "FEASIBLE_LIMIT", "NO_SOLUTION"}:
+        return None
+    expected_comfort_phases = len(
+        {heater.priority for heater in request.heaters if heater.enabled}
+    )
+    minimum_score_length = (
+        expected_comfort_phases + 7 if quality == "OPTIMAL" else expected_comfort_phases
+    )
+    if quality == "NO_SOLUTION" or len(result.get("score", [])) < minimum_score_length:
+        return None
+    validation = (result.get("diagnostics") or {}).get("validation")
+    if isinstance(validation, dict) and validation.get("verified") is False:
         return None
     return job
 
@@ -1270,6 +1325,12 @@ def _automatic_plan_from_preview_payload(payload: dict[str, Any]) -> AutomaticPl
         _preview_optional_datetime(payload.get("convergence_at")),
         _preview_optional_datetime(payload.get("guaranteed_until")),
         dict(payload.get("diagnostics") or {}),
+        str(
+            payload.get(
+                "optimization_quality",
+                (payload.get("diagnostics") or {}).get("optimization_quality", "OPTIMAL"),
+            )
+        ),
     )
 
 
@@ -1478,6 +1539,10 @@ def _preview_response(
             {"explanations": explanation_payload}
         ),
         "room_energy_model": room_energy_model,
+        "optimization": {
+            "quality": plan.optimization_quality,
+            "solver": dict((plan.diagnostics or {}).get("solver") or {}),
+        },
         "warnings": warnings,
         "deficit_groups": [item.model_dump(mode="json") for item in grouped_violations],
         "recommended_action": "Revisa los avisos agrupados y corrige la entrada indicada." if warnings else "No se requieren acciones adicionales.",
@@ -1544,6 +1609,7 @@ def _preview_response(
         ],
         operator_summary=operator_summary,
         diagnostics=dict(plan.diagnostics),
+        optimization_quality=plan.optimization_quality,
     )
 
 
