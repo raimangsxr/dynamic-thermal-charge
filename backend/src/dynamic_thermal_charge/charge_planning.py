@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -32,6 +32,9 @@ FEASIBLE = VALID
 CONVERGING = "CONVERGING"
 DEGRADED = "DEGRADED"
 INVALID = "INVALID"
+OPTIMAL = "OPTIMAL"
+FEASIBLE_LIMIT = "FEASIBLE_LIMIT"
+NO_SOLUTION = "NO_SOLUTION"
 # Direct planner callers without persisted site settings retain the historical
 # short fallback. Application entry points always inject the persisted value.
 SOLVER_TIME_LIMIT_SECONDS = 30
@@ -40,6 +43,14 @@ PLANNING_HORIZON_HOURS = 24
 # after successive lexicographic solves. Do not expose that numerical residue
 # as an operator-visible comfort violation.
 SOLVER_NUMERICAL_TOLERANCE = 1e-5
+# Persisted MILP values are rounded to nine decimal places per slot.  Long
+# horizons can accumulate a few units in the fifth decimal place; this replay
+# tolerance is still far below any physical capacity/power decision.
+REPLAY_NUMERICAL_TOLERANCE = 1e-4
+# A polish objective is deliberately best-effort.  Leaving a fixed small slice
+# of the global deadline for it bounds interactive latency even when CBC cannot
+# prove a cosmetic tie-break on a 24-hour/four-heater model.
+QUALITY_PHASE_BUDGET_SECONDS = 2.0
 
 logger = logging.getLogger(__name__)
 
@@ -218,6 +229,7 @@ class AutomaticPlan:
     convergence_at: datetime | None = None
     guaranteed_until: datetime | None = None
     diagnostics: Mapping[str, Any] = field(default_factory=dict)
+    optimization_quality: str = OPTIMAL
 
     @property
     def violations(self) -> tuple[PlanningViolation, ...]:
@@ -493,6 +505,7 @@ class MilpChargePlanner:
             solver_time_limit_seconds,
         )
         time_limited = False
+        stop_reason = "optimal"
         last_verified_solution: dict[str, float] | None = None
         for phase_index, objective in enumerate(phases):
             _notify(request, f"solver_phase_{phase_index + 1}")
@@ -513,6 +526,7 @@ class MilpChargePlanner:
                     len(phases),
                 )
                 time_limited = True
+                stop_reason = "time_limit"
                 break
             solver.timeLimit = remaining_seconds
             model.setObjective(objective)
@@ -542,6 +556,7 @@ class MilpChargePlanner:
                         "solver_failure", generated_at,
                     )
                 time_limited = True
+                stop_reason = "time_limit" if remaining_seconds <= phase_duration + 1e-6 else "solver_status"
                 break
             try:
                 optimum = _required_solver_value(pulp.value(objective), "objective")
@@ -565,12 +580,6 @@ class MilpChargePlanner:
         except ValueError as exc:
             return _invalid_plan(request, starts[0], starts, str(exc), "solver_failure", generated_at)
         violations: list[PlanningViolation] = []
-        if time_limited:
-            violations.append(
-                PlanningViolation(
-                    None, "solver_time_limit", None, None, starts[0], "solver_time_limit"
-                )
-            )
         for h in oversized:
             violations.append(PlanningViolation(h.id, "individual_power_limit", 0.0, h.power_w - limit_w, starts[0], "heater_power_exceeds_global_limit"))
         for index, rule in enumerate(constraints):
@@ -620,8 +629,19 @@ class MilpChargePlanner:
         ) for h in heaters)
         plan = AutomaticPlan(
             starts[0], boundaries[-1], request.slot_minutes,
-            tuple(plan_slots), tuple(violations), DEGRADED if violations or time_limited else FEASIBLE,
+            tuple(plan_slots), tuple(violations), DEGRADED if violations else FEASIBLE,
             tuple(score), input_token(request), generated_at, explanations, tuple(demand),
+            diagnostics={
+                "solver": {
+                    "elapsed_seconds": monotonic() - solver_started,
+                    "budget_seconds": solver_time_limit_seconds,
+                    "time_limited": time_limited,
+                    "completed_phases": len(score),
+                    "total_phases": len(phases),
+                    "stop_reason": stop_reason,
+                },
+            },
+            optimization_quality=FEASIBLE_LIMIT if time_limited else OPTIMAL,
         )
         _notify(request, "safety")
         _notify(request, "summary")
@@ -684,7 +704,10 @@ def input_token(request: PlanningInput) -> str:
         payload["room_energy_model"] = True
         # A preview from before the terminal-guard model must not be reused for
         # activation after the optimization semantics change.
-        payload["room_energy_model_version"] = "terminal_guard_v3"
+        # The optimization-quality pipeline is part of the calculation
+        # semantics.  Bump the token version so a preview produced by the
+        # former nine-phase hierarchy cannot be silently reused.
+        payload["room_energy_model_version"] = "terminal_guard_v4_quality_single_phase"
         payload["room_coefficients"] = {
             heater.id: {
                 "capacity_kwh_per_c": heater.room_thermal_capacity_kwh_per_c,
@@ -733,6 +756,241 @@ def _json_telemetry(value: ChargeTelemetry, *, room_energy: bool = False) -> dic
         "target_temperature_c": value.target_temperature_c,
         "stored_charge_percent": value.stored_charge_percent,
     }
+
+
+def _plan_json_ready(value: Any) -> Any:
+    """Convert a plan value into the stable JSON shape used by coordination.
+
+    The calculation coordinator stores a complete domain result, rather than
+    an API projection.  Keeping this conversion beside the domain model lets
+    the runtime and the API consume the exact same result without importing
+    each other's modules.
+    """
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, tuple):
+        return [_plan_json_ready(item) for item in value]
+    if isinstance(value, list):
+        return [_plan_json_ready(item) for item in value]
+    if isinstance(value, Mapping):
+        return {str(key): _plan_json_ready(item) for key, item in value.items()}
+    return value
+
+
+def serialize_automatic_plan(plan: AutomaticPlan) -> dict[str, Any]:
+    """Return a JSON-compatible, lossless representation of ``plan``."""
+    return _plan_json_ready(asdict(plan))
+
+
+def _plan_datetime(value: Any, *, required: bool = True) -> datetime | None:
+    if value is None:
+        if required:
+            raise ValueError("plan datetime is missing")
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("plan datetime is invalid") from exc
+
+
+def _plan_float(value: Any, default: float | None = None) -> float | None:
+    if value is None:
+        return default
+    return float(value)
+
+
+def _plan_float_map(value: Any) -> dict[str, float]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError("plan numeric map is invalid")
+    return {str(key): float(item) for key, item in value.items()}
+
+
+def _plan_int_map(value: Any) -> dict[str, int]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError("plan integer map is invalid")
+    return {str(key): int(item) for key, item in value.items()}
+
+
+def _plan_dict_list(value: Any, *, field_name: str) -> list[dict[str, Any]]:
+    if value is None:
+        return []
+    if not isinstance(value, list) or any(not isinstance(item, Mapping) for item in value):
+        raise ValueError(f"plan {field_name} is invalid")
+    return [dict(item) for item in value]
+
+
+def _plan_charge_reason(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Restore datetime fields nested in an explanation's charge reason."""
+    reason = dict(value)
+    for field_name in (
+        "start",
+        "end",
+        "target_window_start",
+        "target_window_end",
+    ):
+        if field_name in reason and reason[field_name] is not None:
+            reason[field_name] = _plan_datetime(reason[field_name])
+    return reason
+
+
+def _plan_charge_reasons(value: Any) -> tuple[dict[str, Any], ...] | None:
+    if value is None:
+        return None
+    if not isinstance(value, list) or any(not isinstance(item, Mapping) for item in value):
+        raise ValueError("plan charge reasons are invalid")
+    return tuple(_plan_charge_reason(item) for item in value)
+
+
+def deserialize_automatic_plan(payload: Mapping[str, Any]) -> AutomaticPlan:
+    """Rehydrate a result written by :func:`serialize_automatic_plan`."""
+    if not isinstance(payload, Mapping):
+        raise ValueError("plan payload is invalid")
+    value = payload.get("plan", payload)
+    if not isinstance(value, Mapping):
+        raise ValueError("plan payload is invalid")
+
+    slots = tuple(
+        AutomaticPlanSlot(
+            start=_plan_datetime(item.get("start")),
+            end=_plan_datetime(item.get("end")),
+            heater_ids=tuple(str(heater_id) for heater_id in item.get("heater_ids", [])),
+            power_w=int(item.get("power_w", 0)),
+            stored_charge_percent=_plan_float_map(item.get("stored_charge_percent")),
+            required_charge_percent=_plan_float_map(item.get("required_charge_percent")),
+            outdoor_temperature_c=_plan_float(item.get("outdoor_temperature_c")),
+            indoor_temperature_c=_plan_float_map(item.get("indoor_temperature_c")),
+            initial_soc_percent=_plan_float_map(item.get("initial_soc_percent")),
+            demand_kwh=_plan_float_map(item.get("demand_kwh")),
+            heater_power_w=_plan_int_map(item.get("heater_power_w")),
+            stored_energy_kwh=_plan_float_map(item.get("stored_energy_kwh")),
+            target_temperature_c=_plan_float_map(item.get("target_temperature_c")),
+            heat_delivered_kwh=_plan_float_map(item.get("heat_delivered_kwh")),
+            thermal_loss_kwh=_plan_float_map(item.get("thermal_loss_kwh")),
+            temperature_shortfall_c=_plan_float_map(item.get("temperature_shortfall_c")),
+            charge_energy_kwh=_plan_float_map(item.get("charge_energy_kwh")),
+            stored_energy_next_kwh=_plan_float_map(item.get("stored_energy_next_kwh")),
+            indoor_temperature_next_c=_plan_float_map(item.get("indoor_temperature_next_c")),
+            temperature_shortfall_start_c=_plan_float_map(item.get("temperature_shortfall_start_c")),
+            heat_delivery_limit_kwh=_plan_float_map(item.get("heat_delivery_limit_kwh")),
+        )
+        for item in _plan_dict_list(value.get("slots"), field_name="slots")
+    )
+    violations = tuple(
+        PlanningViolation(
+            item.get("heater_id"),
+            str(item.get("requirement", "")),
+            _plan_float(item.get("achievable_value")),
+            _plan_float(item.get("shortfall")),
+            _plan_datetime(item.get("at"), required=False),
+            str(item.get("reason", "")),
+            _plan_datetime(item.get("target_window_start"), required=False),
+            _plan_datetime(item.get("target_window_end"), required=False),
+        )
+        for item in _plan_dict_list(
+            value.get("deficits", value.get("violations", [])),
+            field_name="deficits",
+        )
+    )
+    explanations = tuple(
+        HeaterExplanation(
+            heater_id=str(item.get("heater_id", "")),
+            actual_soc_percent=float(item.get("actual_soc_percent", 0.0)),
+            total_demand_kwh=float(
+                item.get("total_demand_kwh", item.get("total_heat_delivered_kwh", 0.0))
+            ),
+            demand_factor=float(item.get("demand_factor", 1.0)),
+            reserve_percent=float(item.get("reserve_percent", 0.0)),
+            next_constraint_at=_plan_datetime(item.get("next_constraint_at"), required=False),
+            charge_periods=tuple(
+                (_plan_datetime(period[0]), _plan_datetime(period[1]))
+                for period in item.get("charge_periods", [])
+            ),
+            capacity_kwh=float(item.get("capacity_kwh", 0.0)),
+            initial_indoor_temperature_c=_plan_float(item.get("initial_indoor_temperature_c")),
+            final_indoor_temperature_c=_plan_float(item.get("final_indoor_temperature_c")),
+            total_heat_delivered_kwh=float(item.get("total_heat_delivered_kwh", 0.0)),
+            total_thermal_loss_kwh=float(item.get("total_thermal_loss_kwh", 0.0)),
+            maximum_temperature_shortfall_c=float(item.get("maximum_temperature_shortfall_c", 0.0)),
+            initial_stored_energy_kwh=_plan_float(item.get("initial_stored_energy_kwh")),
+            final_stored_energy_kwh=_plan_float(item.get("final_stored_energy_kwh")),
+            total_charge_energy_kwh=_plan_float(item.get("total_charge_energy_kwh")),
+            forecast_contribution_kwh=_plan_float(item.get("forecast_contribution_kwh")),
+            terminal_surplus_energy_kwh=_plan_float(item.get("terminal_surplus_energy_kwh")),
+            next_target_temperature_c=_plan_float(item.get("next_target_temperature_c")),
+            next_target_start=_plan_datetime(item.get("next_target_start"), required=False),
+            next_target_end=_plan_datetime(item.get("next_target_end"), required=False),
+            charge_reasons=_plan_charge_reasons(item.get("charge_reasons")),
+        )
+        for item in _plan_dict_list(value.get("explanations"), field_name="explanations")
+    )
+    demand_items = _plan_dict_list(value.get("demand"), field_name="demand")
+    if demand_items and "indoor_temperature_next_c" in demand_items[0]:
+        demand = tuple(
+            RoomEnergyInterval(
+                heater_id=str(item["heater_id"]),
+                start=_plan_datetime(item.get("start")),
+                end=_plan_datetime(item.get("end")),
+                outdoor_temperature_c=float(item["outdoor_temperature_c"]),
+                target_temperature_c=_plan_float(item.get("target_temperature_c")),
+                indoor_temperature_c=float(item["indoor_temperature_c"]),
+                indoor_temperature_next_c=float(item["indoor_temperature_next_c"]),
+                stored_energy_kwh=float(item["stored_energy_kwh"]),
+                stored_energy_next_kwh=float(item["stored_energy_next_kwh"]),
+                stored_soc_percent=float(item["stored_soc_percent"]),
+                stored_soc_next_percent=float(item["stored_soc_next_percent"]),
+                charge_energy_kwh=float(item["charge_energy_kwh"]),
+                heat_delivered_kwh=float(item["heat_delivered_kwh"]),
+                thermal_loss_kwh=float(item["thermal_loss_kwh"]),
+                temperature_shortfall_c=float(item["temperature_shortfall_c"]),
+                temperature_shortfall_start_c=float(item.get("temperature_shortfall_start_c", 0.0)),
+                heat_delivery_limit_kwh=float(item.get("heat_delivery_limit_kwh", 0.0)),
+            )
+            for item in demand_items
+        )
+    else:
+        demand = tuple(
+            DemandEstimate(
+                str(item["heater_id"]),
+                _plan_datetime(item.get("start")),
+                _plan_datetime(item.get("end")),
+                float(item["outdoor_temperature_c"]),
+                float(item["target_temperature_c"]),
+                float(item["feedback_temperature_c"]),
+                float(item["degree_hours"]),
+                float(item["thermal_coefficient"]),
+                float(item["demand_factor"]),
+                float(item["reserve_percent"]),
+                float(item["demand_kwh"]),
+            )
+            for item in demand_items
+        )
+    return AutomaticPlan(
+        horizon_start=_plan_datetime(value.get("horizon_start")),
+        horizon_end=_plan_datetime(value.get("horizon_end")),
+        slot_minutes=int(value["slot_minutes"]),
+        slots=slots,
+        deficits=violations,
+        status=str(value.get("status", INVALID)),
+        score=tuple(float(score) for score in value.get("score", [])),
+        input_token=str(value.get("input_token", value.get("token", ""))),
+        generated_at=_plan_datetime(value.get("generated_at"), required=False),
+        explanations=explanations,
+        demand=demand,
+        convergence_by_heater={
+            str(heater_id): _plan_datetime(timestamp, required=False)
+            for heater_id, timestamp in (value.get("convergence_by_heater") or {}).items()
+        },
+        convergence_at=_plan_datetime(value.get("convergence_at"), required=False),
+        guaranteed_until=_plan_datetime(value.get("guaranteed_until"), required=False),
+        diagnostics=dict(value.get("diagnostics") or {}),
+        optimization_quality=str(value.get("optimization_quality", OPTIMAL)),
+    )
 
 
 def _charge_percent(value: float | None, capacity_kwh: float) -> float:
@@ -955,7 +1213,22 @@ def _invalid_plan(request: PlanningInput, start: datetime, starts: Sequence[date
         {}, {}, _weather_at(at, request.forecast), None,
     ) for at in usable_starts)
     horizon_end = advance_real(usable_starts[-1], request.slot_minutes) if usable_starts else advance_real(start, request.horizon_hours * 60)
-    return AutomaticPlan(start, horizon_end, request.slot_minutes, slots, violations, INVALID, (), input_token(request), generated_at)
+    return AutomaticPlan(
+        start,
+        horizon_end,
+        request.slot_minutes,
+        slots,
+        violations,
+        INVALID,
+        (),
+        input_token(request),
+        generated_at,
+        optimization_quality=NO_SOLUTION,
+        diagnostics={
+            "optimization_quality": NO_SOLUTION,
+            "solver": {"stop_reason": reason},
+        },
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -2042,7 +2315,9 @@ def _solve_room_energy(
     }
     terminal_surplus = {
         heater.id: pulp.LpVariable(
-            f"terminal_surplus_{heater.id}", lowBound=0
+            f"terminal_surplus_{heater.id}",
+            lowBound=0,
+            upBound=heater.capacity_kwh,
         )
         for heater in heaters
     }
@@ -2076,6 +2351,22 @@ def _solve_room_energy(
         for position, heater in enumerate(heaters)
         for index in decision_indices[heater.id]
     )
+    max_charge = sum(
+        heater.charge_power_kw * slot_hours * len(decision_indices[heater.id])
+        for heater in heaters
+    )
+    max_surplus = sum(heater.capacity_kwh for heater in heaters)
+    max_heat = sum(
+        heater.emission_power_kw * slot_hours * len(decision_indices[heater.id])
+        for heater in heaters
+    )
+    max_latest_charge = max_charge * max(1, len(starts))
+    max_heat_timing = max_heat * max(1, len(starts)) * max(1, len(heaters))
+    max_deterministic = sum(
+        (index + 1) * (position + 1)
+        for position, heater in enumerate(heaters)
+        for index in decision_indices[heater.id]
+    )
     priorities = sorted({heater.priority for heater in heaters}, reverse=True)
     comfort_phases = []
     for priority in priorities:
@@ -2096,27 +2387,43 @@ def _solve_room_energy(
             if heater.priority == priority and heater.id in guard_end_shortfall
         )
         comfort_phases.append(pulp.lpSum(terms))
-    secondary_phases = (
-        total_charge,
-        pulp.lpSum(terminal_surplus.values()),
-        total_heat,
-        premature_heat,
-        latest_charge,
-        heat_timing,
-        deterministic,
+    terminal_surplus_total = pulp.lpSum(terminal_surplus.values())
+    # The former implementation launched one CBC process for every secondary
+    # preference. Those preferences are useful for choosing among physically
+    # equivalent plans, but proving each one is not a safety invariant. Keep
+    # their values for the public score and diagnostics while solving one
+    # bounded polishing objective after comfort priorities are locked.
+    quality_components = (
+        ("total_charge", total_charge, max_charge),
+        ("terminal_surplus", terminal_surplus_total, max_surplus),
+        ("total_heat", total_heat, max_heat),
+        ("premature_heat", premature_heat, max_heat),
+        ("latest_charge", latest_charge, max_latest_charge),
+        ("heat_timing", heat_timing, max_heat_timing),
+        ("deterministic", deterministic, max_deterministic),
     )
-    # Every model uses the same successive solves. A scalar weighted fallback
-    # is not equivalent: CBC can accept a cheaper schedule while leaving a
-    # higher-priority comfort deficit within its numerical tolerances.
-    phases = comfort_phases + list(secondary_phases)
+    # Keep the historical business ordering while making it one bounded
+    # objective. Every component is normalised to [0, 1] first; the descending
+    # finite weights make energy and timing dominate presentation tie-breaks
+    # without the ill-conditioned coefficients of an unbounded big-M model.
+    quality_weights = (1_000_000.0, 100_000.0, 10_000.0, 1_000.0, 100.0, 10.0, 1.0)
+    quality_terms = [
+        weight * expression / bound
+        for weight, (_name, expression, bound) in zip(quality_weights, quality_components)
+        if bound > 0
+    ]
+    quality_objective = pulp.lpSum(quality_terms)
+    phases = comfort_phases + [quality_objective]
     solver_gap_relative = None
     score: list[float] = []
     solver_started = monotonic()
     time_limit = float(request.solver_time_limit_seconds or SOLVER_TIME_LIMIT_SECONDS)
     solver_deadline = solver_started + time_limit
     time_limited = False
+    stop_reason = "optimal"
     last_verified_solution: dict[str, float] | None = None
     phase_diagnostics: list[dict[str, Any]] = []
+    completed_phase_count = 0
     dense_binary_decisions = len(heaters) * len(starts)
     dense_shortfall_variables = 2 * len(heaters) * len(starts)
     model_build_seconds = monotonic() - model_build_started
@@ -2132,6 +2439,7 @@ def _solve_room_energy(
     for phase_index, objective in enumerate(phases):
         _notify(request, f"solver_phase_{phase_index + 1}")
         _check_cancelled(request)
+        is_quality_phase = phase_index == len(phases) - 1
         if last_verified_solution is not None and _model_solution_is_feasible(model, pulp, on):
             incumbent_value = pulp.value(objective)
             if incumbent_value is None:
@@ -2142,15 +2450,38 @@ def _solve_room_energy(
             # Every objective in the exact hierarchy is a sum of non-negative
             # variables or expressions. Zero is therefore a proven global
             # lower bound, rather than a heuristic solver bound.
-            if -1e-6 <= incumbent_value <= 1e-6:
+            component_values = (
+                tuple(
+                    _required_solver_value(
+                        pulp.value(expression)
+                        if pulp.value(expression) is not None
+                        else getattr(expression, "constant", expression),
+                        f"room-energy quality component {_name} incumbent",
+                    )
+                    for _name, expression, _bound in quality_components
+                    if _bound > 0
+                )
+                if is_quality_phase
+                else ()
+            )
+            at_proven_lower_bound = (
+                all(abs(value) <= SOLVER_NUMERICAL_TOLERANCE for value in component_values)
+                if is_quality_phase
+                else -1e-6 <= incumbent_value <= 1e-6
+            )
+            if at_proven_lower_bound:
                 optimum = 0.0
-                score.append(optimum)
+                if is_quality_phase:
+                    score.extend(0.0 for _name, _expression, _bound in quality_components)
+                else:
+                    score.append(optimum)
                 phase_diagnostics.append({
                     "phase": phase_index + 1,
                     "duration_seconds": 0.0,
                     "skipped_at_proven_lower_bound": True,
                     "optimum": optimum,
                 })
+                completed_phase_count += 1
                 if phase_index < len(phases) - 1:
                     model += objective <= optimum + 1e-6
                 logger.debug(
@@ -2173,13 +2504,20 @@ def _solve_room_energy(
                     generated_at,
                 )
             time_limited = True
+            stop_reason = "time_limit"
             break
+        phase_budget = remaining_seconds
+        if is_quality_phase:
+            phase_budget = min(
+                remaining_seconds,
+                max(0.25, min(QUALITY_PHASE_BUDGET_SECONDS, time_limit * 0.2)),
+            )
         phase_started = monotonic()
         model.setObjective(objective)
         status = model.solve(
             _cbc_solver(
                 pulp,
-                time_limit_seconds=remaining_seconds,
+                time_limit_seconds=phase_budget,
                 gap_relative=solver_gap_relative,
                 warm_start=phase_index > 0,
             )
@@ -2211,9 +2549,11 @@ def _solve_room_energy(
                     generated_at,
                 )
             time_limited = True
+            stop_reason = "time_limit" if phase_duration >= phase_budget - 1e-3 else "solver_status"
             phase_diagnostics.append({
                 "phase": phase_index + 1,
                 "duration_seconds": phase_duration,
+                "time_limit_seconds": phase_budget,
                 "skipped_at_proven_lower_bound": False,
                 "status": pulp.LpStatus[status],
             })
@@ -2227,14 +2567,27 @@ def _solve_room_energy(
         optimum = _required_solver_value(
             objective_value, f"room-energy phase {phase_index + 1} objective"
         )
-        score.append(optimum)
+        if is_quality_phase:
+            for _name, expression, _bound in quality_components:
+                component_value = pulp.value(expression)
+                if component_value is None:
+                    component_value = getattr(expression, "constant", expression)
+                score.append(
+                    _required_solver_value(
+                        component_value, f"room-energy quality component {_name}"
+                    )
+                )
+        else:
+            score.append(optimum)
         phase_diagnostics.append({
             "phase": phase_index + 1,
             "duration_seconds": phase_duration,
+            "time_limit_seconds": phase_budget,
             "skipped_at_proven_lower_bound": False,
             "status": pulp.LpStatus[status],
             "optimum": optimum,
         })
+        completed_phase_count += 1
         logger.debug(
             "Room-energy solver phase=%d optimum=%.9g",
             phase_index + 1,
@@ -2455,8 +2808,6 @@ def _solve_room_energy(
         _room_heater_explanation(heater, by_heater[heater.id], request)
         for heater in heaters
     )
-    if time_limited:
-        violations.append(PlanningViolation(None, "solver_time_limit", None, None, starts[0], "solver_time_limit"))
     convergence_by_heater = _room_convergence_by_heater(
         room_intervals,
         heaters,
@@ -2488,6 +2839,7 @@ def _solve_room_energy(
         if convergence_by_heater
         else None
     )
+    optimization_quality = FEASIBLE_LIMIT if time_limited else OPTIMAL
     plan = AutomaticPlan(
         starts[0], boundaries[-1], request.slot_minutes, tuple(plan_slots), tuple(violations),
         status, tuple(score), input_token(request), generated_at, explanations,
@@ -2513,13 +2865,448 @@ def _solve_room_energy(
                 "elapsed_seconds": monotonic() - solver_started,
                 "budget_seconds": time_limit,
                 "time_limited": time_limited,
+                "completed_phases": completed_phase_count,
+                "total_phases": len(phases),
+                "stop_reason": stop_reason,
+                "relative_gap": solver_gap_relative,
                 "phases": phase_diagnostics,
             },
+            "quality_objective": [
+                {"name": name, "bound": bound, "weight": weight}
+                for weight, (name, _expression, bound) in zip(
+                    quality_weights, quality_components
+                )
+                if bound > 0
+            ],
+            "optimization_quality": optimization_quality,
+            "validation": {"verified": False},
         },
+        optimization_quality,
     )
+    verified, replayed, replay_violations, validation_diagnostics = _validate_room_energy_plan(
+        request, plan
+    )
+    diagnostics = dict(plan.diagnostics)
+    diagnostics["validation"] = validation_diagnostics
+    if not verified:
+        plan = replace(
+            plan,
+            deficits=replay_violations,
+            status=INVALID,
+            guaranteed_until=None,
+            optimization_quality=NO_SOLUTION,
+            diagnostics=diagnostics,
+        )
+    else:
+        replay_by_heater = {
+            heater.id: [item for item in replayed if item.heater_id == heater.id]
+            for heater in heaters
+        }
+        status, replay_convergence = _room_plan_status(
+            replay_violations, replayed, heaters, request, boundaries[-1]
+        )
+        replay_explanations = tuple(
+            _room_heater_explanation(heater, replay_by_heater[heater.id], request)
+            for heater in heaters
+        )
+        plan = replace(
+            plan,
+            deficits=replay_violations,
+            status=status,
+            demand=replayed,
+            explanations=replay_explanations,
+            convergence_by_heater=replay_convergence,
+            convergence_at=(
+                max(replay_convergence.values()) if replay_convergence else None
+            ),
+            guaranteed_until=(
+                boundaries[-1] if status in {VALID, CONVERGING} else None
+            ),
+            diagnostics=diagnostics,
+        )
     _notify(request, "safety")
     _notify(request, "summary")
     return plan
+
+
+def _room_plan_status(
+    violations: Sequence[PlanningViolation],
+    intervals: Sequence[RoomEnergyInterval],
+    heaters: Sequence[Heater],
+    request: PlanningInput,
+    horizon_end: datetime,
+) -> tuple[str, dict[str, datetime]]:
+    """Classify a replayed physical trace, independently of CBC status."""
+    convergence_by_heater = _room_convergence_by_heater(
+        intervals,
+        heaters,
+        horizon_end,
+        targets={heater.id: _room_targets(request, heater) for heater in heaters},
+        timezone_name=request.timezone_name,
+        tolerance=SOLVER_NUMERICAL_TOLERANCE,
+    )
+    comfort_heaters = {
+        item.heater_id
+        for item in violations
+        if item.requirement == "temperature_comfort" and item.heater_id is not None
+    }
+    non_comfort_violations = tuple(
+        item for item in violations if item.requirement != "temperature_comfort"
+    )
+    if not violations:
+        status = VALID
+    elif (
+        comfort_heaters
+        and not non_comfort_violations
+        and comfort_heaters == set(convergence_by_heater)
+    ):
+        status = CONVERGING
+    else:
+        status = DEGRADED
+    return status, convergence_by_heater
+
+
+def _validate_room_energy_plan(
+    request: PlanningInput,
+    plan: AutomaticPlan,
+) -> tuple[bool, tuple[RoomEnergyInterval, ...], tuple[PlanningViolation, ...], dict[str, Any]]:
+    """Replay a candidate without relying on solver-reported state values."""
+    started = monotonic()
+    try:
+        horizon_start = align_to_slot(request.horizon_start, request.slot_minutes)
+        boundaries = _continuous_forecast_slots(
+            horizon_start, request.forecast, request.horizon_hours, request.slot_minutes
+        )
+        starts = tuple(boundaries[:-1])
+        heaters = tuple(
+            sorted((item for item in request.heaters if item.enabled), key=lambda item: item.id)
+        )
+        if len(plan.slots) != len(starts):
+            raise ValueError("candidate does not cover every planning interval")
+        if len(plan.demand) != len(starts) * len(heaters):
+            raise ValueError("candidate does not contain every physical interval")
+        limit_w = min(
+            request.max_heating_power_w or request.max_total_power_w,
+            request.max_total_power_w - request.base_load_w,
+        )
+        intervals: list[RoomEnergyInterval] = []
+        violations: list[PlanningViolation] = []
+        by_key = {
+            (_key(item.start), item.heater_id): item for item in plan.demand
+        }
+        if len(by_key) != len(plan.demand):
+            raise ValueError("candidate contains duplicate physical intervals")
+        inside_by_heater = {
+            heater.id: float(request.telemetry[heater.id].indoor_temperature_c)
+            for heater in heaters
+        }
+        stored_by_heater = {
+            heater.id: heater.capacity_kwh
+            * float(request.telemetry[heater.id].stored_soc_percent)
+            / 100
+            for heater in heaters
+        }
+        for index, start in enumerate(starts):
+            slot = plan.slots[index]
+            expected_end = boundaries[index + 1]
+            if _key(slot.start) != _key(start) or _key(slot.end) != _key(expected_end):
+                raise ValueError("candidate slot boundaries do not match the request")
+            active = tuple(str(item) for item in slot.heater_ids)
+            if len(set(active)) != len(active):
+                raise ValueError("candidate contains a duplicate heater decision")
+            known = {heater.id for heater in heaters}
+            if any(item not in known for item in active):
+                raise ValueError("candidate contains an unknown heater decision")
+            expected_power = sum(
+                heater.power_w for heater in heaters if heater.id in active
+            )
+            if slot.power_w != expected_power or expected_power > limit_w + 1e-6:
+                raise ValueError("candidate violates the global heating power limit")
+            for heater in heaters:
+                candidate = by_key.get((_key(start), heater.id))
+                if candidate is None:
+                    raise ValueError(f"candidate is missing interval for heater {heater.id}")
+                if _key(candidate.end) != _key(expected_end):
+                    raise ValueError("candidate demand interval boundaries do not match the request")
+                state = request.telemetry.get(heater.id)
+                if not _room_telemetry_usable(state):
+                    raise ValueError(f"missing required telemetry for heater {heater.id}")
+                assert state is not None
+                charge_on = heater.id in active
+                heat_values = slot.heat_delivered_kwh or {}
+                charge_values = slot.charge_energy_kwh or {}
+                if heater.id not in heat_values or heater.id not in charge_values:
+                    raise ValueError(f"candidate is missing decisions for heater {heater.id}")
+                stored_values = slot.stored_energy_kwh or {}
+                stored_next_values = slot.stored_energy_next_kwh or {}
+                indoor_values = slot.indoor_temperature_c or {}
+                indoor_next_values = slot.indoor_temperature_next_c or {}
+                if any(
+                    heater.id not in values
+                    for values in (
+                        stored_values,
+                        stored_next_values,
+                        indoor_values,
+                        indoor_next_values,
+                    )
+                ):
+                    raise ValueError(f"candidate is missing physical state for heater {heater.id}")
+                heat = float(heat_values[heater.id])
+                charge = float(charge_values[heater.id])
+                if not math.isfinite(heat) or not math.isfinite(charge) or heat < -1e-6:
+                    raise ValueError("candidate contains a non-finite physical decision")
+                expected_charge = heater.charge_power_kw * request.slot_minutes / 60 if charge_on else 0.0
+                if abs(charge - expected_charge) > 1e-5:
+                    raise ValueError("candidate charge decision does not match its binary state")
+                if abs(candidate.charge_energy_kwh - charge) > 1e-5:
+                    raise ValueError("candidate charge trace is inconsistent")
+                if heat > candidate.stored_energy_kwh + charge + 1e-5:
+                    raise ValueError("candidate emits more energy than it stores")
+                delivery_limit = _heat_delivery_limit_kwh(
+                    heater, request.slot_minutes, candidate.stored_energy_kwh
+                )
+                if heat > delivery_limit + 1e-5:
+                    raise ValueError("candidate exceeds the emission capability")
+                target = active_temperature_target(
+                    _room_targets(request, heater), start, request.timezone_name
+                )
+                outdoor = _weather_at(start, request.forecast)
+                if outdoor is None:
+                    raise ValueError(f"missing forecast at {start.isoformat()}")
+                if slot.outdoor_temperature_c is None or not math.isclose(
+                    float(slot.outdoor_temperature_c),
+                    float(outdoor),
+                    abs_tol=REPLAY_NUMERICAL_TOLERANCE,
+                    rel_tol=1e-7,
+                ):
+                    raise ValueError("candidate forecast projection is inconsistent")
+                target_values = slot.target_temperature_c or {}
+                if target is None:
+                    if heater.id in target_values:
+                        raise ValueError("candidate exposes a target outside its active window")
+                elif heater.id not in target_values or not math.isclose(
+                    float(target_values[heater.id]),
+                    float(target),
+                    abs_tol=REPLAY_NUMERICAL_TOLERANCE,
+                    rel_tol=1e-7,
+                ):
+                    raise ValueError("candidate target projection is inconsistent")
+                replayed = room_energy_step(
+                    heater,
+                    start=start,
+                    outdoor_temperature_c=outdoor,
+                    target_temperature_c=target,
+                    indoor_temperature_c=inside_by_heater[heater.id],
+                    stored_energy_kwh=stored_by_heater[heater.id],
+                    slot_minutes=request.slot_minutes,
+                    charge_on=charge_on,
+                    heat_delivered_kwh=heat,
+                )
+                if replayed.temperature_shortfall_c <= SOLVER_NUMERICAL_TOLERANCE or replayed.temperature_shortfall_start_c <= SOLVER_NUMERICAL_TOLERANCE:
+                    replayed = replace(
+                        replayed,
+                        temperature_shortfall_c=(
+                            0.0
+                            if replayed.temperature_shortfall_c <= SOLVER_NUMERICAL_TOLERANCE
+                            else replayed.temperature_shortfall_c
+                        ),
+                        temperature_shortfall_start_c=(
+                            0.0
+                            if replayed.temperature_shortfall_start_c <= SOLVER_NUMERICAL_TOLERANCE
+                            else replayed.temperature_shortfall_start_c
+                        ),
+                    )
+                inside_by_heater[heater.id] = replayed.indoor_temperature_next_c
+                stored_by_heater[heater.id] = replayed.stored_energy_next_kwh
+                for actual, expected in (
+                    (candidate.indoor_temperature_c, replayed.indoor_temperature_c),
+                    (candidate.indoor_temperature_next_c, replayed.indoor_temperature_next_c),
+                    (candidate.stored_energy_kwh, replayed.stored_energy_kwh),
+                    (candidate.stored_energy_next_kwh, replayed.stored_energy_next_kwh),
+                    (indoor_values[heater.id], replayed.indoor_temperature_c),
+                    (indoor_next_values[heater.id], replayed.indoor_temperature_next_c),
+                    (stored_values[heater.id], replayed.stored_energy_kwh),
+                    (stored_next_values[heater.id], replayed.stored_energy_next_kwh),
+                    (heat_values[heater.id], replayed.heat_delivered_kwh),
+                    (charge_values[heater.id], replayed.charge_energy_kwh),
+                    (candidate.stored_soc_percent, replayed.stored_soc_percent),
+                    (candidate.stored_soc_next_percent, replayed.stored_soc_next_percent),
+                    (candidate.heat_delivered_kwh, replayed.heat_delivered_kwh),
+                    (candidate.thermal_loss_kwh, replayed.thermal_loss_kwh),
+                    (candidate.temperature_shortfall_c, replayed.temperature_shortfall_c),
+                    (candidate.temperature_shortfall_start_c, replayed.temperature_shortfall_start_c),
+                    (candidate.heat_delivery_limit_kwh, replayed.heat_delivery_limit_kwh),
+                ):
+                    if not math.isclose(
+                        float(actual),
+                        float(expected),
+                        abs_tol=REPLAY_NUMERICAL_TOLERANCE,
+                        rel_tol=1e-7,
+                    ):
+                        raise ValueError(
+                            "candidate physical trace cannot be independently replayed "
+                            f"for {heater.id} at {start.isoformat()}: "
+                            f"{float(actual):.9g} != {float(expected):.9g}"
+                        )
+                slot_values = (
+                    ("stored_charge_percent", slot.stored_charge_percent, replayed.stored_soc_next_percent),
+                    ("initial_soc_percent", slot.initial_soc_percent, replayed.stored_soc_percent),
+                    ("demand_kwh", slot.demand_kwh, replayed.heat_delivered_kwh),
+                    ("heater_power_w", slot.heater_power_w, float(heater.power_w if charge_on else 0)),
+                    ("indoor_temperature_c", indoor_values, replayed.indoor_temperature_c),
+                    ("stored_energy_kwh", stored_values, replayed.stored_energy_kwh),
+                    ("heat_delivered_kwh", heat_values, replayed.heat_delivered_kwh),
+                    ("thermal_loss_kwh", slot.thermal_loss_kwh, replayed.thermal_loss_kwh),
+                    ("temperature_shortfall_c", slot.temperature_shortfall_c, replayed.temperature_shortfall_c),
+                    ("charge_energy_kwh", charge_values, replayed.charge_energy_kwh),
+                    ("stored_energy_next_kwh", stored_next_values, replayed.stored_energy_next_kwh),
+                    ("indoor_temperature_next_c", indoor_next_values, replayed.indoor_temperature_next_c),
+                    ("temperature_shortfall_start_c", slot.temperature_shortfall_start_c, replayed.temperature_shortfall_start_c),
+                    ("heat_delivery_limit_kwh", slot.heat_delivery_limit_kwh, replayed.heat_delivery_limit_kwh),
+                )
+                for field_name, values, expected in slot_values:
+                    if values is None or heater.id not in values:
+                        raise ValueError(f"candidate is missing slot field {field_name}")
+                    actual = float(values[heater.id])
+                    if not math.isfinite(actual) or not math.isclose(
+                        actual,
+                        float(expected),
+                        abs_tol=REPLAY_NUMERICAL_TOLERANCE,
+                        rel_tol=1e-7,
+                    ):
+                        raise ValueError(f"candidate slot field {field_name} is inconsistent")
+                intervals.append(replayed)
+                if target is not None and replayed.temperature_shortfall_start_c > SOLVER_NUMERICAL_TOLERANCE:
+                    violations.append(
+                        PlanningViolation(
+                            heater.id,
+                            "temperature_comfort",
+                            replayed.indoor_temperature_c,
+                            replayed.temperature_shortfall_start_c,
+                            start,
+                            "insufficient_stored_energy_or_power",
+                        )
+                    )
+                # The MILP treats each active target as a boundary invariant:
+                # even when its window ends at this boundary, its end value is
+                # still required. This is distinct from a target that starts at
+                # the boundary, which the following interval checks at start.
+                if target is not None and replayed.temperature_shortfall_c > SOLVER_NUMERICAL_TOLERANCE:
+                    violations.append(
+                        PlanningViolation(
+                            heater.id,
+                            "temperature_comfort",
+                            replayed.indoor_temperature_next_c,
+                            replayed.temperature_shortfall_c,
+                            expected_end,
+                            "insufficient_stored_energy_or_power",
+                        )
+                    )
+        terminal_guards = _terminal_guard_requirements(request, boundaries[-1])
+        for heater in heaters:
+            if heater.power_w > limit_w:
+                violations.append(
+                    PlanningViolation(
+                        heater.id,
+                        "individual_power_limit",
+                        0.0,
+                        float(heater.power_w - limit_w),
+                        starts[0],
+                        "heater_power_exceeds_global_limit",
+                    )
+                )
+            guard = terminal_guards.get(heater.id)
+            if guard is None:
+                continue
+            final = next(
+                item for item in reversed(intervals) if item.heater_id == heater.id
+            )
+            if final.indoor_temperature_next_c < guard.target_temperature_c - SOLVER_NUMERICAL_TOLERANCE:
+                violations.append(
+                    PlanningViolation(
+                        heater.id,
+                        "temperature_comfort",
+                        final.indoor_temperature_next_c,
+                        guard.target_temperature_c - final.indoor_temperature_next_c,
+                        guard.start,
+                        "insufficient_stored_energy_or_power",
+                        guard.target_window_start,
+                        guard.target_window_end,
+                    )
+                )
+            # The model's terminal guard deliberately reuses the forecast at
+            # the visible horizon boundary for its private continuation slot;
+            # the public request is not required to carry another hour.
+            guard_outdoor = _weather_at(boundaries[-1], request.forecast)
+            if guard_outdoor is None:
+                raise ValueError("missing forecast coverage for the terminal guard slot")
+            guard_step = room_energy_step(
+                heater,
+                start=guard.start,
+                outdoor_temperature_c=guard_outdoor,
+                target_temperature_c=guard.target_temperature_c,
+                indoor_temperature_c=final.indoor_temperature_next_c,
+                stored_energy_kwh=final.stored_energy_next_kwh,
+                slot_minutes=request.slot_minutes,
+                heat_delivered_kwh=_heat_delivery_limit_kwh(
+                    heater, request.slot_minutes, final.stored_energy_next_kwh
+                ),
+            )
+            if guard_step.temperature_shortfall_c > SOLVER_NUMERICAL_TOLERANCE:
+                violations.append(
+                    PlanningViolation(
+                        heater.id,
+                        "temperature_comfort",
+                        guard_step.indoor_temperature_next_c,
+                        guard_step.temperature_shortfall_c,
+                        guard.end,
+                        "insufficient_stored_energy_or_power",
+                        guard.target_window_start,
+                        guard.target_window_end,
+                    )
+                )
+        return True, tuple(intervals), tuple(violations), {
+            "verified": True,
+            "elapsed_seconds": monotonic() - started,
+            "intervals": len(intervals),
+            "checks": len(intervals) * 8,
+        }
+    except (AttributeError, IndexError, KeyError, TypeError, ValueError, ArithmeticError) as exc:
+        return False, (), (
+            PlanningViolation(
+                None,
+                "safe_planning_input",
+                None,
+                None,
+                plan.horizon_start,
+                f"validator_failed: {exc}",
+            ),
+        ), {
+            "verified": False,
+            "elapsed_seconds": monotonic() - started,
+            "reason": str(exc),
+        }
+
+
+def independently_validate_plan(
+    request: PlanningInput, plan: AutomaticPlan
+) -> tuple[bool, dict[str, Any]]:
+    """Run the activation gate without trusting persisted solver metadata.
+
+    Legacy percentage plans predate the room-energy replay contract and keep
+    their historical solver checks.  New room-energy candidates are always
+    replayed, including candidates loaded from a durable preview cache.
+    """
+    if plan.optimization_quality not in {OPTIMAL, FEASIBLE_LIMIT, NO_SOLUTION}:
+        return False, {"verified": False, "reason": "unknown optimization quality"}
+    if plan.optimization_quality == NO_SOLUTION:
+        return False, {"verified": False, "reason": "no solver candidate exists"}
+    if not _is_room_energy_request(request):
+        return True, {"verified": True, "legacy": True}
+    verified, _replayed, _violations, diagnostics = _validate_room_energy_plan(
+        request, plan
+    )
+    return verified, diagnostics
 
 
 def _invalid_room_plan(
@@ -2556,15 +3343,22 @@ def _invalid_room_plan(
         (),
         input_token(request),
         generated_at,
+        optimization_quality=NO_SOLUTION,
+        diagnostics={
+            "optimization_quality": NO_SOLUTION,
+            "solver": {"stop_reason": reason},
+        },
     )
 
 
 __all__ = [
     "AutomaticPlan", "AutomaticPlanSlot", "CONVERGING", "DEGRADED", "DemandEstimate",
     "DegreeHoursDemandEstimator", "DeterministicChargeOptimizer", "FEASIBLE",
-    "HeaterExplanation", "INVALID", "MaterializedConstraint", "MilpChargePlanner",
+    "FEASIBLE_LIMIT", "HeaterExplanation", "INVALID", "MaterializedConstraint", "MilpChargePlanner",
+    "NO_SOLUTION", "OPTIMAL",
     "PlanningCancelled", "PlanningDeficit", "PlanningInput", "PlanningViolation", "PLANNING_HORIZON_HOURS", "SOLVER_TIME_LIMIT_SECONDS", "input_token",
     "materialize_constraints", "resolve_planning_telemetry", "RoomEnergyDemandEstimator",
-    "RoomEnergyInterval", "RoomEnergyPlanner", "VALID", "active_temperature_target",
-    "group_planning_violations", "room_energy_step",
+    "REPLAY_NUMERICAL_TOLERANCE", "RoomEnergyInterval", "RoomEnergyPlanner", "VALID", "active_temperature_target",
+    "deserialize_automatic_plan", "group_planning_violations", "independently_validate_plan", "room_energy_step",
+    "serialize_automatic_plan",
 ]

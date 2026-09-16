@@ -149,12 +149,37 @@ el acumulador y su horario, sin redondear el intervalo.
 #### Scenario: Orden lexicográfico de la optimización
 
 - **WHEN** existen varias decisiones que cubren las mismas consignas
-- **THEN** se conserva primero la seguridad y el confort por prioridad, después
-  se minimizan sucesivamente la energía eléctrica cargada, el excedente
-  terminal necesario, el calor entregado, el calor fuera de consigna y la
-  anticipación de la carga, y finalmente se aplican desempates deterministas.
-  El orden y el bloqueo del óptimo son iguales aunque el modelo supere 96
-  decisiones binarias.
+- **THEN** se conserva primero la seguridad y el confort por prioridad, y, con
+  el tiempo restante, se ejecuta como máximo una fase acotada de calidad que
+  combina energía cargada, excedente terminal, calor fuera de consigna,
+  anticipación y desempate determinista. Si vence el plazo durante esa fase,
+  el candidato físicamente validado conserva su estado y se publica su calidad
+  `FEASIBLE_LIMIT`; no se convierte en un déficit físico por no demostrar todos
+  los desempates históricos.
+
+### Requirement: Calidad de optimización y coordinación de cálculo
+
+La planificación expone separadamente la calidad del optimizador como
+`OPTIMAL`, `FEASIBLE_LIMIT` o `NO_SOLUTION`, junto con el tiempo consumido, las
+fases completadas y la razón de parada. Un candidato `FEASIBLE_LIMIT` que haya
+superado la reproducción física independiente conserva el estado físico
+`VALID` o `CONVERGING` y puede activarse. Preview y planificación automática
+reutilizan duraderamente el resultado del mismo token de entrada; cálculos con
+tokens distintos se serializan por instalación para no competir por el solver.
+
+#### Scenario: Candidato verificable limitado por tiempo
+
+- **WHEN** el plazo termina después de obtener un candidato físicamente válido
+- **THEN** el resultado conserva `VALID` o `CONVERGING`, informa
+  `optimization_quality: FEASIBLE_LIMIT` y no añade un déficit
+  `solver_time_limit`.
+
+#### Scenario: Solicitudes concurrentes
+
+- **WHEN** preview y planificación automática llegan con el mismo token
+- **THEN** una sola ejecución calcula el resultado y las demás solicitudes se
+  unen al registro persistido; tokens distintos esperan el arrendamiento de la
+  instalación y nunca ejecutan CBC simultáneamente.
 
 #### Scenario: Evolución exterior suficiente
 
@@ -461,16 +486,18 @@ respaldo o simuladas.
 
 ### Requirement: Integridad de la planificación automática
 
-Un plan solo será `VALID` si todas las fases del solver alcanzan el óptimo y
-todas sus variables necesarias tienen valor. Una solución factible verificada
-al expirar el límite de tiempo será `DEGRADED` con la violación
-`solver_time_limit`; una solución no verificable será `INVALID`.
+Un plan solo será `VALID` o `CONVERGING` cuando su candidato físico haya pasado
+la reproducción independiente y todas sus variables necesarias tengan valor.
+La calidad del solver se conserva por separado: una solución factible verificada
+al expirar el límite de tiempo puede seguir siendo activable como
+`FEASIBLE_LIMIT`, mientras que una solución no verificable será `INVALID`.
 
 #### Scenario: Límite de tiempo del solver
 
 - **WHEN** el solver alcanza su límite de tiempo
-- **THEN** el controlador no publica un plan factible salvo que la solución se
-  haya verificado, y en tal caso informa `solver_time_limit`
+- **THEN** el controlador conserva un candidato solo si la solución se ha
+  verificado físicamente, informa `optimization_quality: FEASIBLE_LIMIT` y no
+  crea una violación física `solver_time_limit`
 
 ### Requirement: Activación segura de previews completados
 
@@ -494,18 +521,19 @@ validación normal y nunca activar un resultado obsoleto o `INVALID`.
 ### Requirement: Reutilización exacta de previews durables
 
 Una nueva solicitud de preview puede copiar el resultado del preview durable más
-reciente sólo cuando coincide el token exacto de entrada y la optimización
-completa terminó sin `solver_time_limit`. El nuevo job conserva su propia
-identidad y lifecycle; un resultado temporizado nunca es una fuente válida.
+reciente sólo cuando coincide el token exacto de entrada y el resultado tiene
+calidad `OPTIMAL` o `FEASIBLE_LIMIT` con validación física verificada. El nuevo
+job conserva su propia identidad y lifecycle; un resultado `NO_SOLUTION` o no
+verificado nunca es una fuente válida.
 
 #### Scenario: Preview repetido sin cambios
 
-- **WHEN** se solicita un preview con el mismo token y revisiones que un resultado optimizado completo
+- **WHEN** se solicita un preview con el mismo token y revisiones que un resultado reutilizable
 - **THEN** se crea y completa un nuevo job sin ejecutar CBC y se registra el job fuente
 
-#### Scenario: Preview fuente temporizado
+#### Scenario: Preview fuente sin candidato verificable
 
-- **WHEN** el resultado más reciente contiene `solver_time_limit`
+- **WHEN** el resultado más reciente es `NO_SOLUTION` o no pasó la validación
 - **THEN** no se reutiliza y la nueva solicitud sigue el flujo normal de resolución
 
 ### Requirement: Límite de tiempo configurable del solver

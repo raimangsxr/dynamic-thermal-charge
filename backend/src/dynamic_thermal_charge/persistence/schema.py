@@ -484,6 +484,47 @@ preview_job_step = Table(
     Index("ix_preview_job_step_job_position", "job_id", "position"),
 )
 
+planning_calculation = Table(
+    "planning_calculation",
+    application_metadata,
+    Column("id", Integer, primary_key=True),
+    Column("installation_id", Integer, nullable=False),
+    Column("input_token", String(64), nullable=False),
+    Column("status", String(16), nullable=False),
+    Column("owner", String(64), nullable=True),
+    Column("kind", String(16), nullable=False),
+    Column("requested_at", DateTime, nullable=False),
+    Column("lease_until", DateTime, nullable=True),
+    Column("finished_at", DateTime, nullable=True),
+    Column("result_json", Text, nullable=True),
+    Column("error_detail", String(512), nullable=True),
+    UniqueConstraint("installation_id", "input_token", name="uq_planning_calculation_token"),
+    CheckConstraint(
+        "status IN ('running', 'completed', 'error')",
+        name="ck_planning_calculation_status",
+    ),
+    CheckConstraint(
+        "kind IN ('automatic', 'preview')",
+        name="ck_planning_calculation_kind",
+    ),
+    Index("ix_planning_calculation_installation_requested", "installation_id", "requested_at"),
+)
+
+planning_lease = Table(
+    "planning_lease",
+    application_metadata,
+    Column("installation_id", Integer, primary_key=True),
+    Column("owner", String(64), nullable=False),
+    Column("input_token", String(64), nullable=False),
+    Column("kind", String(16), nullable=False),
+    Column("acquired_at", DateTime, nullable=False),
+    Column("lease_until", DateTime, nullable=False),
+    CheckConstraint(
+        "kind IN ('automatic', 'preview')",
+        name="ck_planning_lease_kind",
+    ),
+)
+
 plan_audit = Table(
     "plan_audit",
     application_metadata,
@@ -991,6 +1032,10 @@ CONSTRAINT_FIELDS: dict[str, tuple[str, str]] = {
     "ck_preview_job_step_status": ("status", "the preview check status is not recognised"),
     "uq_preview_job_step_name": ("name", "a preview job cannot repeat a check name"),
     "uq_preview_job_step_position": ("position", "a preview job cannot repeat a check position"),
+    "ck_planning_calculation_kind": ("planning", "the planning calculation kind is not recognised"),
+    "ck_planning_calculation_status": ("planning", "the planning calculation status is not recognised"),
+    "ck_planning_lease_kind": ("planning", "the planning lease kind is not recognised"),
+    "uq_planning_calculation_token": ("planning", "a planning calculation token must be unique"),
 }
 
 
@@ -1009,6 +1054,7 @@ RETAINED_TABLES: tuple[tuple[Table, str], ...] = (
     (forecast_cycle, "updated_at"),
     (automatic_plan, "created_at"),
     (preview_job, "requested_at"),
+    (planning_calculation, "requested_at"),
     (plan_audit, "occurred_at"),
     (relay_test_event, "occurred_at"),
     (controller_log_event, "occurred_at"),
@@ -1049,6 +1095,8 @@ APPLICATION_TABLES = (
     plan_audit,
     preview_job,
     preview_job_step,
+    planning_calculation,
+    planning_lease,
     process_applied_revision,
     reconciled_event,
 )
@@ -1063,6 +1111,7 @@ HISTORY_TABLES = (
     automatic_plan_slot,
     plan_audit,
     preview_job,
+    planning_calculation,
     output_transition,
 )
 
@@ -1103,7 +1152,7 @@ __all__ = [
     "automatic_plan",
     "automatic_plan_slot",
     "plan_audit",
-    "preview_job", "preview_job_step",
+    "preview_job", "preview_job_step", "planning_calculation", "planning_lease",
     "weather_config",
     "relay_test_control", "relay_test_session", "relay_test_output", "relay_test_event",
 ]

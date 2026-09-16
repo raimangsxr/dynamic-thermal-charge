@@ -38,6 +38,7 @@
               <p class="hint">El plan aceptado por el controlador y sus indicadores operativos.</p>
             </div>
             @if (data.plan_status) { <span class="status-chip active-chip">{{ planStatus(data.plan_status) }}</span> }
+            @if (data.optimization_quality === 'FEASIBLE_LIMIT') { <span class="hint" data-testid="active-feasible-limit">Plan validado; optimización limitada por tiempo</span> }
           </div>
 
           <div class="summary-grid single-summary-grid" data-testid="planning-summaries">
@@ -284,6 +285,7 @@
               </ol>
               @if (job.result; as result) {
                 <div class="operator-result" data-testid="operator-summary"><strong>Resultado para el operador</strong><p>Ventana {{ dateTime(result.window_start) }}–{{ dateTime(result.window_end) }} · horizonte {{ dateTime(result.horizon_start) }}–{{ dateTime(result.horizon_end) }} · previsión: {{ operatorForecastText(result.operator_summary) }}</p><p>Carga prevista: {{ previewSummaryText(result.operator_summary) }}</p><p>{{ result.operator_summary['recommended_action'] }}</p></div>
+                @if (result.optimization_quality === 'FEASIBLE_LIMIT') { <p class="hint" data-testid="preview-feasible-limit">Plan físicamente validado; la optimización secundaria se detuvo al alcanzar el límite de tiempo.</p> }
                 @if (isConvergingStatus(result.status)) { <p class="warning" data-testid="preview-converging">Puede activarse: converge en {{ convergenceText(result.convergence_by_heater, result.convergence_at) }}@if (result.guaranteed_until) { y mantiene el objetivo hasta {{ dateTime(result.guaranteed_until) }} }.</p> }
                 @if (isDegradedStatus(result.status)) { <p class="warning" data-testid="preview-degraded">No se puede activar: el resultado degradado no demuestra la convergencia de todos los objetivos.</p> }
                 @if (isInvalidStatus(result.status)) { <p class="error" data-testid="preview-invalid">No se puede activar: faltan entradas válidas o una solución verificable.</p> }
@@ -301,6 +303,9 @@
             <div class="preview" role="status">
               <strong>Vista previa: {{ planStatus(candidate.status) }}</strong>
               · {{ previewIntervalCount(candidate) }} intervalos de {{ candidate.slot_minutes }} minutos
+              @if (candidate.optimization_quality === 'FEASIBLE_LIMIT') {
+                <span class="hint" data-testid="candidate-feasible-limit"> · Plan validado; optimización limitada por tiempo</span>
+              }
               @if (previewProblems(candidate).length) {
                 <span class="warning"> · Problemas detectados: {{ previewProblems(candidate).length }}</span>
               }

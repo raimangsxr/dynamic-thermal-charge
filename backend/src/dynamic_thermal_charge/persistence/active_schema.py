@@ -21,7 +21,7 @@ from . import SchemaStatus, SchemaVersionError
 
 
 CONFIGURATION_SCHEMA_REVISION = 16
-APPLICATION_SCHEMA_REVISION = 10
+APPLICATION_SCHEMA_REVISION = 11
 POSTGRES_CONFIGURATION_SCHEMA = "dtc_config"
 POSTGRES_APPLICATION_SCHEMA = "dtc_app"
 
@@ -294,6 +294,13 @@ def _upgrade_application_schema(engine: Engine, revision: int, expected: int) ->
             "source = 'aemet'",
         )
         revision = 10
+    if revision == 10 and expected >= 11:
+        from .schema import planning_calculation, planning_lease
+
+        application_metadata.create_all(
+            engine, tables=[planning_calculation, planning_lease]
+        )
+        revision = 11
     if revision != expected:
         raise BootstrapIncompatibleError(
             f"application schema revision {revision} has no registered upgrade path to {expected}"

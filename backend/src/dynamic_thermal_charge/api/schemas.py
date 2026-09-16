@@ -129,6 +129,7 @@ class StatusResponse(BaseModel):
     allocations: list[AllocationSummary] = Field(default_factory=list)
     telemetry: list["ChargeTelemetryView"] = Field(default_factory=list)
     plan_status: str | None = None
+    optimization_quality: str | None = None
     deficits: list["PlanningDeficitView"] = Field(default_factory=list)
     convergence_by_heater: dict[str, datetime | None] = Field(default_factory=dict)
     convergence_at: datetime | None = None
@@ -231,6 +232,7 @@ class PlanningResponse(BaseModel):
     convergence_at: datetime | None = None
     guaranteed_until: datetime | None = None
     preview_token: str | None = None
+    optimization_quality: str | None = None
     temperature_targets_revision: int = 1
     forecast_status: str | None = None
     forecast_last_attempt_at: datetime | None = None
@@ -331,6 +333,7 @@ class PlanningPreviewResponse(BaseModel):
     temperature_targets: list[TemperatureTargetView] = Field(default_factory=list)
     operator_summary: dict = Field(default_factory=dict)
     diagnostics: dict = Field(default_factory=dict)
+    optimization_quality: str = "OPTIMAL"
 
 
 class PlanningCheckView(BaseModel):

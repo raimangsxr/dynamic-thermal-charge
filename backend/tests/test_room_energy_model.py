@@ -7,13 +7,17 @@ from dynamic_thermal_charge.charge_planning import (
     CONVERGING,
     DEGRADED,
     FEASIBLE,
+    FEASIBLE_LIMIT,
     INVALID,
+    NO_SOLUTION,
     PlanningInput,
     PlanningViolation,
     RoomEnergyDemandEstimator,
     RoomEnergyPlanner,
+    VALID,
     active_temperature_target,
     group_planning_violations,
+    independently_validate_plan,
     room_energy_step,
 )
 from dynamic_thermal_charge.models import ChargeTelemetry, Heater, OutputConfig, TemperatureTarget, ThermalProfile
@@ -800,7 +804,7 @@ def test_terminal_guard_diagnostics_keep_shortfall_mapping_intact():
     assert result.diagnostics["model"]["omitted_shortfall_variables"] == 4
 
 
-def test_room_time_limited_candidate_is_degraded_until_all_phases_are_optimal(monkeypatch):
+def test_room_time_limited_candidate_keeps_physical_validity_and_reports_quality(monkeypatch):
     import pulp
 
     original_solve = pulp.LpProblem.solve
@@ -821,9 +825,11 @@ def test_room_time_limited_candidate_is_degraded_until_all_phases_are_optimal(mo
         _request(telemetry={"salon": _telemetry("salon", indoor=21.0, soc=100.0)})
     )
 
-    assert result.status == DEGRADED
+    assert result.status == VALID
+    assert result.optimization_quality == FEASIBLE_LIMIT
     assert len(result.score) < 8
-    assert any(item.requirement == "solver_time_limit" for item in result.violations)
+    assert not any(item.requirement == "solver_time_limit" for item in result.violations)
+    assert result.diagnostics["validation"]["verified"] is True
 
 
 def test_large_room_model_keeps_priority_lexicographic():
@@ -953,6 +959,44 @@ def test_sparse_room_model_omits_inactive_shortfalls_and_dominated_charge_decisi
     assert model["shortfall_variables"] == 32
 
 
+def test_four_heater_preview_has_one_bounded_polish_phase():
+    heaters = tuple(
+        replace(
+            _heater(
+                heater_id,
+                power_w=1000,
+                full_charge_minutes=60,
+                full_discharge_minutes=60,
+                priority=priority,
+                target=20.0,
+            ),
+            temperature_targets=(TemperatureTarget(20.0, time(0, 0)),),
+        )
+        for heater_id, priority in (
+            ("salon", 90),
+            ("entrada", 50),
+            ("habitaciones", 100),
+            ("buhardilla", 40),
+        )
+    )
+    request = _request(
+        heaters=heaters,
+        outdoor=20.0,
+        horizon_hours=24,
+        slot_minutes=30,
+        telemetry={heater.id: _telemetry(heater.id, indoor=20.0, soc=100.0) for heater in heaters},
+    )
+    request = replace(request, solver_time_limit_seconds=5)
+
+    result = RoomEnergyPlanner().build(request)
+
+    assert result.status == VALID
+    assert result.diagnostics["validation"]["verified"] is True
+    assert result.diagnostics["solver"]["total_phases"] == 5
+    assert result.diagnostics["solver"]["elapsed_seconds"] < 5
+    assert len(result.diagnostics["quality_objective"]) == 7
+
+
 def test_verified_zero_objectives_are_locked_without_relaunching_cbc():
     result = RoomEnergyPlanner().build(
         _request(
@@ -963,9 +1007,68 @@ def test_verified_zero_objectives_are_locked_without_relaunching_cbc():
 
     phases = result.diagnostics["solver"]["phases"]
     assert len(result.score) == 8
-    assert any(item["skipped_at_proven_lower_bound"] for item in phases[1:])
-    assert all(
-        result.score[item["phase"] - 1] == pytest.approx(0.0)
-        for item in phases
-        if item["skipped_at_proven_lower_bound"]
+    assert len(phases) == 2
+    assert phases[-1]["phase"] == 2
+    assert result.diagnostics["solver"]["total_phases"] == 2
+
+
+@pytest.mark.parametrize("mutation", [
+    "power",
+    "storage",
+    "charge",
+    "missing_interval",
+    "temperature",
+])
+def test_independent_validator_rejects_corrupted_solver_payloads(mutation):
+    request = _request(
+        outdoor=21.0,
+        telemetry={"salon": _telemetry("salon", indoor=21.0, soc=100.0)},
     )
+    plan = RoomEnergyPlanner().build(request)
+    first = plan.slots[0]
+    if mutation == "power":
+        corrupted = replace(plan, slots=(replace(first, power_w=10_000), *plan.slots[1:]))
+    elif mutation == "storage":
+        corrupted = replace(
+            plan,
+            slots=(
+                replace(
+                    first,
+                    stored_energy_next_kwh={"salon": first.stored_energy_next_kwh["salon"] + 1.0},
+                ),
+                *plan.slots[1:],
+            ),
+        )
+    elif mutation == "charge":
+        corrupted = replace(
+            plan,
+            slots=(replace(first, charge_energy_kwh={"salon": 999.0}), *plan.slots[1:]),
+        )
+    elif mutation == "missing_interval":
+        corrupted = replace(plan, demand=plan.demand[:-1])
+    else:
+        corrupted = replace(
+            plan,
+            slots=(
+                replace(first, indoor_temperature_next_c={"salon": -99.0}),
+                *plan.slots[1:],
+            ),
+        )
+
+    verified, diagnostics = independently_validate_plan(request, corrupted)
+    assert verified is False
+    assert diagnostics["verified"] is False
+
+
+def test_no_solution_quality_is_never_activation_verified():
+    request = _request(
+        outdoor=21.0,
+        telemetry={"salon": _telemetry("salon", indoor=21.0, soc=100.0)},
+    )
+    plan = RoomEnergyPlanner().build(request)
+    no_solution = replace(plan, optimization_quality=NO_SOLUTION)
+
+    verified, diagnostics = independently_validate_plan(request, no_solution)
+
+    assert verified is False
+    assert diagnostics["reason"] == "no solver candidate exists"

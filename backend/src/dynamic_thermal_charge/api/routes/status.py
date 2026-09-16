@@ -284,6 +284,11 @@ def get_status(
             if diagnostic_plan is not None
             else None if canonical_plan is None else _canonical_plan_status(canonical_plan["status"])
         ),
+        optimization_quality=(
+            diagnostic_plan.get("optimization_quality")
+            if diagnostic_plan is not None
+            else None if canonical_plan is None else canonical_plan.get("optimization_quality")
+        ),
         deficits=(
             [PlanningDeficitView(**item) for item in group_planning_violations(
                 _plan_violations(diagnostic_plan),
