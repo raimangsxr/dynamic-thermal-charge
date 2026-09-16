@@ -624,6 +624,8 @@ class SqlPlanningRepository:
         constraints_revision: int,
         constraints: list[dict[str, Any]] | None = None,
         temperature_targets: list[dict[str, Any]] | None = None,
+        input_token: str | None = None,
+        require_fully_optimized: bool = False,
     ) -> dict[str, Any] | None:
         """Return the newest durable preview matching the activation inputs."""
         with store_errors(self._application_location):
@@ -637,8 +639,22 @@ class SqlPlanningRepository:
         expected_targets = temperature_targets or []
         for job_id in job_ids:
             job = self.preview_job(str(job_id))
-            if job is not None and job["request"].get("temperature_targets", []) == expected_targets:
-                return job
+            if job is None or job["request"].get("temperature_targets", []) != expected_targets:
+                continue
+            result = job.get("result")
+            if input_token is not None and (
+                not isinstance(result, dict) or result.get("token") != input_token
+            ):
+                continue
+            if require_fully_optimized and isinstance(result, dict):
+                violations = result.get("violations", result.get("deficits", []))
+                if any(
+                    isinstance(item, dict)
+                    and item.get("requirement") == "solver_time_limit"
+                    for item in violations
+                ):
+                    continue
+            return job
         return None
 
     def mark_interrupted_preview_jobs(self) -> None:
@@ -688,13 +704,20 @@ class SqlPlanningRepository:
         now = datetime.now(timezone.utc)
         with transaction(self._application, self._application_location) as connection:
             if status == "running":
+                current = connection.execute(select(preview_job_step.c.status).where(
+                    (preview_job_step.c.job_id == job_id) &
+                    (preview_job_step.c.name == name)
+                )).scalar()
+                if current == "running":
+                    return
                 connection.execute(update(preview_job_step).where(
                     (preview_job_step.c.job_id == job_id) &
                     (preview_job_step.c.status == "running")
                 ).values(status="completed", finished_at=to_utc(now)))
                 connection.execute(update(preview_job_step).where(
                     (preview_job_step.c.job_id == job_id) &
-                    (preview_job_step.c.name == name)
+                    (preview_job_step.c.name == name) &
+                    (preview_job_step.c.status == "pending")
                 ).values(status="running", started_at=to_utc(now), detail=detail))
             else:
                 connection.execute(update(preview_job_step).where(

@@ -513,6 +513,24 @@ que el modelo demuestra el cumplimiento continuado y hasta qué fin de horizonte
 queda garantizado. Un `DEGRADED` se conserva como diagnóstico y mantiene el
 último plan activable mientras tenga intervalos vigentes; `INVALID` bloquea la
 activación y deja las salidas en estado seguro cuando no hay sustituto válido.
+
+Para medir la latencia real en el dispositivo de despliegue, ejecuta el medidor
+contra la API después de que cambie el token de entrada (por ejemplo, al cruzar
+un límite de slot). El primer job debe ser no cacheado y el segundo reutiliza
+exactamente el mismo resultado durable. El informe JSON incluye scores, tamaños
+del modelo, tiempos por fase, lifecycle y procedencia del cache; no imprime el
+token administrativo:
+
+```sh
+python3 backend/scripts/benchmark_planning_preview.py \
+  --base-url http://127.0.0.1:8080 \
+  --token "$DTC_API_TOKEN"
+```
+
+El comando termina con código `0` sólo si el primer cálculo tarda como máximo
+30 segundos, el repetido como máximo 1 segundo, ambos comparten token de entrada
+y el segundo confirma el cache hit. Si el primero ya estaba cacheado, espera al
+siguiente límite de slot y repite la medición.
 Los históricos que usaban `FEASIBLE` se leen como `VALID`. La configuración
 incluye `deviation_shortfall_tolerance_c` (por defecto 0,1 °C) y
 `deviation_surplus_soc_percent` (por defecto 5 %) para solicitar un recálculo

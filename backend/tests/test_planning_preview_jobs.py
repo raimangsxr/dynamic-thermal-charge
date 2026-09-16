@@ -1,10 +1,14 @@
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from time import sleep
 
 from dynamic_thermal_charge.charge_planning import (
+    AutomaticPlan,
     PLANNING_HORIZON_HOURS,
     DeterministicChargeOptimizer,
     PlanningInput,
+    VALID,
+    input_token,
 )
 from dynamic_thermal_charge.persistence.history import SqlHistoryRecorder
 from dynamic_thermal_charge.weather import HourlyForecastPoint
@@ -105,7 +109,10 @@ def test_preview_rejects_non_aligned_temperature_targets_without_persisting(
 
 
 def test_preview_job_cancel_is_visible_and_cannot_produce_a_result(initialised_store):
-    from dynamic_thermal_charge.api.routes.planning import PREVIEW_STEP_NAMES, PreviewJobRunner
+    from dynamic_thermal_charge.api.routes.planning import (
+        PREVIEW_STEP_NAMES,
+        PreviewJobRunner,
+    )
 
     site = initialised_store.planning.site()
     _config, configuration_revision = initialised_store.repository.current()
@@ -297,3 +304,179 @@ def test_changed_telemetry_cannot_activate_cached_preview(
 
     assert activated.status_code >= 400
     assert calls == []
+
+
+def _wait_for_preview_job(client, job_id):
+    for _ in range(1000):
+        response = client.get(f"/api/v1/planning/preview/jobs/{job_id}", headers=AUTH)
+        assert response.status_code == 200, response.text
+        if response.json()["status"] not in {"queued", "running", "cancelling"}:
+            return response.json()
+        sleep(0.01)
+    raise AssertionError("preview job did not finish")
+
+
+def _fast_preview_plan(
+    store,
+    observed_at,
+    site,
+    *,
+    temperature_targets=None,
+    progress_callback=None,
+    cancellation_probe=None,
+):
+    from dynamic_thermal_charge.api.routes.planning import _build_automatic_request
+
+    request = _build_automatic_request(
+        store,
+        observed_at,
+        site,
+        temperature_targets=temperature_targets,
+        progress_callback=progress_callback,
+        cancellation_probe=cancellation_probe,
+    )
+    for step in (
+        "inputs", "coverage", "telemetry", "room_model", "solver",
+        "solver_phase_1", "solver_phase_2", "safety", "summary",
+    ):
+        if progress_callback is not None:
+            progress_callback(step)
+    phase_count = len({heater.priority for heater in request.heaters if heater.enabled}) + 7
+    return AutomaticPlan(
+        observed_at,
+        observed_at + timedelta(hours=int(site["forecast_horizon_hours"])),
+        request.slot_minutes,
+        (),
+        (),
+        VALID,
+        tuple(0.0 for _ in range(phase_count)),
+        input_token(request),
+        observed_at,
+        diagnostics={"solver": {"time_limited": False}},
+    )
+
+
+def test_preview_resolution_is_persisted_once_for_all_solver_phases(
+    initialised_store, monkeypatch,
+):
+    from dynamic_thermal_charge.api.routes.planning import (
+        PREVIEW_STEP_NAMES,
+        PreviewJobRunner,
+        _temperature_target_payload,
+    )
+    from dynamic_thermal_charge.persistence.planning import SqlPlanningRepository
+    import dynamic_thermal_charge.api.routes.planning as planning_route
+
+    _configuration_revision, constraints_revision = _seed_valid_preview_inputs(initialised_store)
+    _config, configuration_revision = initialised_store.repository.current()
+    job_id = initialised_store.planning.create_preview_job(
+        [],
+        temperature_targets=_temperature_target_payload({
+            heater.id: heater.temperature_targets for heater in _config.heaters
+        }),
+        configuration_revision=configuration_revision,
+        constraints_revision=constraints_revision,
+        requested_at=API_NOW,
+        steps=PREVIEW_STEP_NAMES,
+    )
+    updates = []
+    original_update = SqlPlanningRepository.update_preview_step
+
+    def record_update(self, job_id, name, status, detail=None):
+        updates.append((name, status))
+        return original_update(self, job_id, name, status, detail)
+
+    monkeypatch.setattr(SqlPlanningRepository, "update_preview_step", record_update)
+    monkeypatch.setattr(planning_route, "_build_automatic_plan", _fast_preview_plan)
+    PreviewJobRunner(lambda: initialised_store, lambda: API_NOW)._run(job_id)
+
+    running = [name for name, status in updates if status == "running"]
+    final_job = initialised_store.planning.preview_job(job_id)
+    assert final_job["status"] == "completed", final_job
+    assert running == [
+        "input_validation",
+        "aemet_coverage",
+        "telemetry",
+        "room_model",
+        "resolution",
+        "safety_validation",
+        "operator_summary",
+    ], final_job
+
+
+def test_exact_repeated_preview_creates_a_new_durable_cache_hit(
+    client, initialised_store, monkeypatch,
+):
+    from dynamic_thermal_charge.api.routes.planning import PreviewJobRunner
+    import dynamic_thermal_charge.api.routes.planning as planning_route
+
+    _configuration_revision, constraints_revision = _seed_valid_preview_inputs(initialised_store)
+    monkeypatch.setattr(planning_route, "_build_automatic_plan", _fast_preview_plan)
+    first = client.post(
+        "/api/v1/planning/preview/jobs",
+        headers=AUTH,
+        json={"expected_revision": constraints_revision},
+    )
+    assert first.status_code == 200, first.text
+    first_final = _wait_for_preview_job(client, first.json()["job_id"])
+    assert first_final["status"] == "completed"
+
+    def unexpected_submit(self, job_id):
+        raise AssertionError("an exact repeated preview must not launch the solver")
+
+    monkeypatch.setattr(PreviewJobRunner, "submit", unexpected_submit)
+    second = client.post(
+        "/api/v1/planning/preview/jobs",
+        headers=AUTH,
+        json={"expected_revision": constraints_revision},
+    )
+
+    assert second.status_code == 200, second.text
+    repeated = second.json()
+    assert repeated["job_id"] != first_final["job_id"]
+    assert repeated["status"] == "completed"
+    assert repeated["result"]["token"] == first_final["result"]["token"]
+    assert repeated["result"]["diagnostics"]["preview"]["cache_hit"] is True
+    assert repeated["result"]["diagnostics"]["preview"]["cache_source_job_id"] == first_final["job_id"]
+    assert repeated["result"]["diagnostics"]["preview"]["reuse_seconds"] < 1.0
+
+
+def test_timed_out_preview_is_never_reused_for_a_new_job(
+    client, initialised_store, monkeypatch,
+):
+    from dynamic_thermal_charge.api.routes.planning import PreviewJobRunner
+    import dynamic_thermal_charge.api.routes.planning as planning_route
+
+    configuration_revision, constraints_revision = _seed_valid_preview_inputs(initialised_store)
+    monkeypatch.setattr(planning_route, "_build_automatic_plan", _fast_preview_plan)
+    first = client.post(
+        "/api/v1/planning/preview/jobs",
+        headers=AUTH,
+        json={"expected_revision": constraints_revision},
+    )
+    assert first.status_code == 200, first.text
+    first_final = _wait_for_preview_job(client, first.json()["job_id"])
+    timed_out = first_final["result"]
+    timed_out["violations"].append({
+        "requirement": "solver_time_limit",
+        "reason": "solver_time_limit",
+    })
+    initialised_store.planning.finish_preview_job(
+        first_final["job_id"], status="completed", result=timed_out,
+    )
+    submitted = []
+    monkeypatch.setattr(
+        PreviewJobRunner,
+        "submit",
+        lambda self, job_id: submitted.append(job_id),
+    )
+
+    response = client.post(
+        "/api/v1/planning/preview/jobs",
+        headers=AUTH,
+        json={"expected_revision": constraints_revision},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "queued"
+    assert submitted == [response.json()["job_id"]]

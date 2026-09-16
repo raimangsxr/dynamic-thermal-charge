@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import logging
+from time import monotonic
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -94,6 +96,7 @@ class PreviewJobRunner:
         self._executor.submit(self._run, job_id)
 
     def _run(self, job_id: str) -> None:
+        job_started = monotonic()
         store = self._store_factory()
         repository = store.planning
         if not repository.start_preview_job(job_id):
@@ -122,9 +125,10 @@ class PreviewJobRunner:
                 mapped = {
                     "inputs": "input_validation", "coverage": "aemet_coverage",
                     "telemetry": "telemetry", "room_model": "room_model",
+                    "solver": "resolution",
                     "safety": "safety_validation",
                     "summary": "operator_summary",
-                }.get(step, "resolution" if step.startswith("solver_phase_") else None)
+                }.get(step)
                 if mapped is not None:
                     repository.update_preview_step(job_id, mapped, "running")
 
@@ -147,6 +151,10 @@ class PreviewJobRunner:
                 forecast_status=forecast_cycle_context(repository),
                 timezone_name=(config.schedule.timezone if config.schedule is not None else "UTC"),
             ).model_dump(mode="json")
+            payload.setdefault("diagnostics", {})["preview"] = {
+                "cache_hit": False,
+                "pre_persistence_seconds": monotonic() - job_started,
+            }
             repository.finish_preview_job(job_id, status="completed", result=payload)
             if plan.status == "INVALID" and plan.violations:
                 reason = plan.violations[0].reason.split(":", 1)[0]
@@ -475,19 +483,48 @@ def start_preview_job(
     app_request: Request,
     store: Store = Depends(usable_store),
 ) -> PlanningPreviewJobResponse:
+    submission_started = monotonic()
     site = store.planning.site()
     if request.expected_revision is not None and request.expected_revision != site["revision"]:
         raise ConfigValidationError("planning configuration changed; recalculate before saving")
     temperature_targets = _resolve_temperature_targets(store, request.temperature_targets)
     _config, configuration_revision = store.repository.current()
+    observed_at = app_request.app.state.clock()
+    planning_request = _build_automatic_request(
+        store, observed_at, site, temperature_targets=temperature_targets
+    )
     job_id = store.planning.create_preview_job(
         [],
         temperature_targets=_temperature_target_payload(temperature_targets),
         configuration_revision=configuration_revision,
         constraints_revision=int(site["revision"]),
-        requested_at=app_request.app.state.clock(),
+        requested_at=observed_at,
         steps=PREVIEW_STEP_NAMES,
     )
+    cached_job = _matching_completed_preview_job(
+        store,
+        planning_request,
+        configuration_revision=configuration_revision,
+        constraints_revision=int(site["revision"]),
+    )
+    if cached_job is not None:
+        result = deepcopy(cached_job["result"])
+        result.setdefault("diagnostics", {})["preview"] = {
+            "cache_hit": True,
+            "cache_source_job_id": cached_job["id"],
+            "reuse_seconds": monotonic() - submission_started,
+        }
+        # The new request remains a distinct durable job even though its
+        # immutable result payload is copied from an exact-token predecessor.
+        store.planning.start_preview_job(job_id)
+        store.planning.finish_preview_job(job_id, status="completed", result=result)
+        logger.info(
+            "Planning preview cache hit: job_id=%s source_job_id=%s token=%s",
+            job_id,
+            cached_job["id"],
+            input_token(planning_request),
+        )
+        return _job_response(store.planning.preview_job(job_id), site=site)
     _job_runner(app_request).submit(job_id)
     return _job_response(
         store.planning.preview_job(job_id),
@@ -1020,19 +1057,15 @@ def _cached_preview_plan(
     configuration_revision: int,
     constraints_revision: int,
 ) -> AutomaticPlan | None:
-    finder = getattr(store.planning, "latest_completed_preview_job", None)
-    if finder is None:
-        return None
-    job = finder(
+    job = _matching_completed_preview_job(
+        store,
+        request,
         configuration_revision=configuration_revision,
         constraints_revision=constraints_revision,
-        temperature_targets=_temperature_target_payload(request.temperature_targets),
     )
     if job is None:
         return None
     result = job.get("result")
-    if not isinstance(result, dict) or result.get("token") != input_token(request):
-        return None
     try:
         plan = _automatic_plan_from_preview_payload(result)
     except (KeyError, TypeError, ValueError, IndexError) as exc:
@@ -1042,6 +1075,41 @@ def _cached_preview_plan(
         return None
     logger.info("Reusing completed planning preview: job_id=%s token=%s", job["id"], plan.input_token)
     return plan
+
+
+def _matching_completed_preview_job(
+    store: Store,
+    request: PlanningInput,
+    *,
+    configuration_revision: int,
+    constraints_revision: int,
+) -> dict[str, Any] | None:
+    """Find a fully optimized durable result for this exact planning token."""
+    finder = getattr(store.planning, "latest_completed_preview_job", None)
+    if finder is None:
+        return None
+    job = finder(
+        configuration_revision=configuration_revision,
+        constraints_revision=constraints_revision,
+        temperature_targets=_temperature_target_payload(request.temperature_targets),
+        input_token=input_token(request),
+        require_fully_optimized=True,
+    )
+    if job is None:
+        return None
+    result = job.get("result")
+    if not isinstance(result, dict) or result.get("token") != input_token(request):
+        return None
+    violations = result.get("violations", result.get("deficits", []))
+    if any(
+        isinstance(item, dict) and item.get("requirement") == "solver_time_limit"
+        for item in violations
+    ):
+        return None
+    expected_phases = len({heater.priority for heater in request.heaters if heater.enabled}) + 7
+    if len(result.get("score", [])) != expected_phases:
+        return None
+    return job
 
 
 def _temperature_target_payload(
@@ -1201,6 +1269,7 @@ def _automatic_plan_from_preview_payload(payload: dict[str, Any]) -> AutomaticPl
         convergence_by_heater,
         _preview_optional_datetime(payload.get("convergence_at")),
         _preview_optional_datetime(payload.get("guaranteed_until")),
+        dict(payload.get("diagnostics") or {}),
     )
 
 
@@ -1474,6 +1543,7 @@ def _preview_response(
             for target in targets
         ],
         operator_summary=operator_summary,
+        diagnostics=dict(plan.diagnostics),
     )
 
 

@@ -330,6 +330,7 @@ class PlanningPreviewResponse(BaseModel):
     demand: list[dict] = Field(default_factory=list)
     temperature_targets: list[TemperatureTargetView] = Field(default_factory=list)
     operator_summary: dict = Field(default_factory=dict)
+    diagnostics: dict = Field(default_factory=dict)
 
 
 class PlanningCheckView(BaseModel):
