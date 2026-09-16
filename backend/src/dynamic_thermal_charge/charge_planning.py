@@ -2411,10 +2411,10 @@ def _solve_room_energy(
         target_window = (guard.target_window_start, guard.target_window_end)
         start_shortfall_value = guard_start_shortfall.get(heater.id)
         if start_shortfall_value is not None:
-            start_shortfall = _required_solver_value(
+            guard_start_shortfall_result = _required_solver_value(
                 start_shortfall_value.value(), "guard start temperature shortfall"
             )
-            if start_shortfall > SOLVER_NUMERICAL_TOLERANCE:
+            if guard_start_shortfall_result > SOLVER_NUMERICAL_TOLERANCE:
                 achieved = _required_solver_value(
                     indoor[(heater.id, len(starts))].value(),
                     "terminal indoor temperature",
@@ -2424,7 +2424,7 @@ def _solve_room_energy(
                         heater.id,
                         "temperature_comfort",
                         achieved,
-                        start_shortfall,
+                        guard_start_shortfall_result,
                         guard.start,
                         "insufficient_stored_energy_or_power",
                         *target_window,
