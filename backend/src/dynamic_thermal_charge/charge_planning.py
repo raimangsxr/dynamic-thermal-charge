@@ -130,6 +130,7 @@ class PlanningViolation:
     reason: str
     target_window_start: datetime | None = None
     target_window_end: datetime | None = None
+    stored_energy_kwh: float | None = None
 
     @property
     def target_charge_percent(self) -> float:
@@ -891,6 +892,7 @@ def deserialize_automatic_plan(payload: Mapping[str, Any]) -> AutomaticPlan:
             str(item.get("reason", "")),
             _plan_datetime(item.get("target_window_start"), required=False),
             _plan_datetime(item.get("target_window_end"), required=False),
+            stored_energy_kwh=_plan_float(item.get("stored_energy_kwh")),
         )
         for item in _plan_dict_list(
             value.get("deficits", value.get("violations", [])),
@@ -2679,6 +2681,7 @@ def _solve_room_energy(
                         "insufficient_stored_energy_or_power",
                         None if target_window is None else target_window[0],
                         None if target_window is None else target_window[1],
+                        stored_energy_kwh=stored_value,
                     )
                 )
             if target is not None and short_value > SOLVER_NUMERICAL_TOLERANCE:
@@ -2692,6 +2695,7 @@ def _solve_room_energy(
                         "insufficient_stored_energy_or_power",
                         None if target_window is None else target_window[0],
                         None if target_window is None else target_window[1],
+                        stored_energy_kwh=next_stored_value,
                     )
                 )
             if on_value > 0.5:
@@ -2781,6 +2785,10 @@ def _solve_room_energy(
                         guard.start,
                         "insufficient_stored_energy_or_power",
                         *target_window,
+                        stored_energy_kwh=_required_solver_value(
+                            stored[(heater.id, len(starts))].value(),
+                            "terminal stored energy",
+                        ),
                     )
                 )
         end_shortfall = _required_solver_value(
@@ -2801,6 +2809,10 @@ def _solve_room_energy(
                     guard.end,
                     "insufficient_stored_energy_or_power",
                     *target_window,
+                    stored_energy_kwh=_required_solver_value(
+                        guard_stored_next[heater.id].value(),
+                        "guard next stored energy",
+                    ),
                 )
             )
     by_heater = {heater.id: [item for item in room_intervals if item.heater_id == heater.id] for heater in heaters}
@@ -3185,6 +3197,7 @@ def _validate_room_energy_plan(
                             replayed.temperature_shortfall_start_c,
                             start,
                             "insufficient_stored_energy_or_power",
+                            stored_energy_kwh=replayed.stored_energy_kwh,
                         )
                     )
                 # The MILP treats each active target as a boundary invariant:
@@ -3200,6 +3213,7 @@ def _validate_room_energy_plan(
                             replayed.temperature_shortfall_c,
                             expected_end,
                             "insufficient_stored_energy_or_power",
+                            stored_energy_kwh=replayed.stored_energy_next_kwh,
                         )
                     )
         terminal_guards = _terminal_guard_requirements(request, boundaries[-1])
@@ -3232,6 +3246,7 @@ def _validate_room_energy_plan(
                         "insufficient_stored_energy_or_power",
                         guard.target_window_start,
                         guard.target_window_end,
+                        stored_energy_kwh=final.stored_energy_next_kwh,
                     )
                 )
             # The model's terminal guard deliberately reuses the forecast at
@@ -3263,6 +3278,7 @@ def _validate_room_energy_plan(
                         "insufficient_stored_energy_or_power",
                         guard.target_window_start,
                         guard.target_window_end,
+                        stored_energy_kwh=guard_step.stored_energy_next_kwh,
                     )
                 )
         return True, tuple(intervals), tuple(violations), {

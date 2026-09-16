@@ -495,7 +495,10 @@ def test_insufficient_storage_reports_shortfall_without_negative_energy():
     assert result.status == DEGRADED
     assert interval.stored_energy_next_kwh >= 0.0
     assert interval.temperature_shortfall_c > 0.0
-    assert any(item.requirement == "temperature_comfort" for item in result.violations)
+    violation = next(
+        item for item in result.violations if item.requirement == "temperature_comfort"
+    )
+    assert violation.stored_energy_kwh == pytest.approx(interval.stored_energy_kwh)
 
 
 def test_room_energy_solver_limits_discharge_and_preserves_comfort_deficit():
