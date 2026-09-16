@@ -896,3 +896,55 @@ def test_large_room_model_places_charge_in_the_latest_viable_slot():
         if interval.heater_id == "late" and interval.charge_energy_kwh > 1e-6
     ]
     assert late_charge_starts == [8]
+
+
+def test_sparse_room_model_omits_inactive_shortfalls_and_dominated_charge_decisions():
+    heaters = tuple(
+        replace(
+            _heater(
+                heater_id,
+                power_w=1000,
+                full_charge_minutes=60,
+                full_discharge_minutes=60,
+                target=20.0,
+            ),
+            temperature_targets=(TemperatureTarget(20.0, time(1, 0), time(2, 0)),),
+        )
+        for heater_id in ("one", "two", "three", "four")
+    )
+    result = RoomEnergyPlanner().build(
+        _request(
+            heaters=heaters,
+            outdoor=20.0,
+            horizon_hours=48,
+            slot_minutes=30,
+            telemetry={
+                heater.id: _telemetry(heater.id, indoor=20.0, soc=100.0)
+                for heater in heaters
+            },
+        )
+    )
+
+    model = result.diagnostics["model"]
+    assert result.status == FEASIBLE
+    assert model["omitted_shortfall_variables"] >= 230
+    assert model["omitted_binary_decisions"] >= 24
+    assert model["shortfall_variables"] == 32
+
+
+def test_verified_zero_objectives_are_locked_without_relaunching_cbc():
+    result = RoomEnergyPlanner().build(
+        _request(
+            outdoor=21.0,
+            telemetry={"salon": _telemetry("salon", indoor=21.0, soc=100.0)},
+        )
+    )
+
+    phases = result.diagnostics["solver"]["phases"]
+    assert len(result.score) == 8
+    assert any(item["skipped_at_proven_lower_bound"] for item in phases[1:])
+    assert all(
+        result.score[item["phase"] - 1] == pytest.approx(0.0)
+        for item in phases
+        if item["skipped_at_proven_lower_bound"]
+    )

@@ -217,6 +217,7 @@ class AutomaticPlan:
     convergence_by_heater: Mapping[str, datetime | None] = field(default_factory=dict)
     convergence_at: datetime | None = None
     guaranteed_until: datetime | None = None
+    diagnostics: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def violations(self) -> tuple[PlanningViolation, ...]:
@@ -1585,6 +1586,7 @@ def _build_room_energy_plan(request: PlanningInput) -> AutomaticPlan:
     if not starts or not request.forecast_automatic_eligible:
         reason = "forecast_not_eligible" if not request.forecast_automatic_eligible else "missing_forecast_coverage"
         return _invalid_room_plan(request, horizon_start, starts, reason, reason, generated_at)
+    _notify(request, "coverage")
     missing_telemetry = [
         heater.id
         for heater in request.heaters
@@ -1835,11 +1837,38 @@ def _solve_room_energy(
                 "missing_guard_forecast_coverage",
                 generated_at,
             )
+    model_build_started = monotonic()
     model = pulp.LpProblem("dynamic_room_energy", pulp.LpMinimize)
+    target_values: dict[tuple[str, int], float | None] = {}
+    outdoor_values: dict[tuple[str, int], float] = {}
+    decision_indices: dict[str, tuple[int, ...]] = {}
+    active_target_indices: dict[str, tuple[int, ...]] = {}
+    for heater in heaters:
+        targets = _room_targets(request, heater)
+        for index, start in enumerate(starts):
+            outdoor = _weather_at(start, request.forecast)
+            if outdoor is None:
+                raise ValueError(f"missing forecast at {start.isoformat()}")
+            outdoor_values[(heater.id, index)] = outdoor
+            target_values[(heater.id, index)] = active_temperature_target(
+                targets, start, request.timezone_name
+            )
+        active = tuple(
+            index
+            for index in range(len(starts))
+            if target_values[(heater.id, index)] is not None
+        )
+        active_target_indices[heater.id] = active
+        last_relevant = (
+            len(starts) - 1
+            if heater.id in terminal_guards
+            else max(active, default=-1)
+        )
+        decision_indices[heater.id] = tuple(range(last_relevant + 1))
     on = {
         (heater.id, index): pulp.LpVariable(f"room_on_{heater.id}_{index:03d}", cat="Binary")
         for heater in heaters
-        for index in range(len(starts))
+        for index in decision_indices[heater.id]
     }
     stored = {
         (heater.id, index): pulp.LpVariable(
@@ -1864,14 +1893,14 @@ def _solve_room_energy(
             f"heat_delivered_{heater.id}_{index:03d}", lowBound=0
         )
         for heater in heaters
-        for index in range(len(starts))
+        for index in decision_indices[heater.id]
     }
     shortfall = {
         (heater.id, index): pulp.LpVariable(
             f"temperature_shortfall_{heater.id}_{index:03d}", lowBound=0, upBound=200
         )
         for heater in heaters
-        for index in range(len(starts))
+        for index in active_target_indices[heater.id]
     }
     start_shortfall = {
         (heater.id, index): pulp.LpVariable(
@@ -1880,15 +1909,13 @@ def _solve_room_energy(
             upBound=200,
         )
         for heater in heaters
-        for index in range(len(starts))
+        for index in active_target_indices[heater.id]
     }
     charge = {
         (heater.id, index): heater.charge_power_kw * slot_hours * on[(heater.id, index)]
         for heater in heaters
-        for index in range(len(starts))
+        for index in decision_indices[heater.id]
     }
-    target_values: dict[tuple[str, int], float | None] = {}
-    outdoor_values: dict[tuple[str, int], float] = {}
     guard_stored_next: dict[str, Any] = {}
     guard_indoor_next: dict[str, Any] = {}
     guard_heat: dict[str, Any] = {}
@@ -1898,15 +1925,6 @@ def _solve_room_energy(
         state = request.telemetry[heater.id]
         model += stored[(heater.id, 0)] == heater.capacity_kwh * float(state.stored_soc_percent) / 100
         model += indoor[(heater.id, 0)] == float(state.indoor_temperature_c)
-        targets = _room_targets(request, heater)
-        for index, start in enumerate(starts):
-            outdoor = _weather_at(start, request.forecast)
-            if outdoor is None:
-                raise ValueError(f"missing forecast at {start.isoformat()}")
-            outdoor_values[(heater.id, index)] = outdoor
-            target_values[(heater.id, index)] = active_temperature_target(
-                targets, start, request.timezone_name
-            )
         # The discharge system only emits on demand, so a slot with no target
         # ahead of it never delivers heat.  A slot inside a gap that precedes a
         # target may still emit, which is what lets the plan preheat towards
@@ -1926,28 +1944,32 @@ def _solve_room_energy(
             target = target_values[(heater.id, index)]
             loss_factor = heater.room_heat_loss_kw_per_c * slot_hours
             capacity = heater.room_thermal_capacity_kwh_per_c
-            model += heat[(heater.id, index)] <= stored[(heater.id, index)] + charge[(heater.id, index)]
-            # Emission capability decays with the state of charge, so a poorly
-            # charged accumulator can no longer reach the target however much
-            # time it is given.  Affine in ``stored``, so no binary is needed.
-            model += heat[(heater.id, index)] <= (
-                emission_floor_kwh
-                + emission_span_kwh * stored[(heater.id, index)] / heater.capacity_kwh
-            )
-            if not emission_allowed[index]:
-                model += heat[(heater.id, index)] == 0
-            model += stored[(heater.id, index + 1)] == stored[(heater.id, index)] + charge[(heater.id, index)] - heat[(heater.id, index)]
+            charge_value = charge.get((heater.id, index), 0)
+            heat_value = heat.get((heater.id, index), 0)
+            if index not in decision_indices[heater.id]:
+                assert target is None and not emission_allowed[index]
+            if (heater.id, index) in heat:
+                model += heat_value <= stored[(heater.id, index)] + charge_value
+                # Emission capability decays with the state of charge, so a poorly
+                # charged accumulator can no longer reach the target however much
+                # time it is given.  Affine in ``stored``, so no binary is needed.
+                model += heat_value <= (
+                    emission_floor_kwh
+                    + emission_span_kwh * stored[(heater.id, index)] / heater.capacity_kwh
+                )
+                if not emission_allowed[index]:
+                    model += heat_value == 0
+            model += stored[(heater.id, index + 1)] == stored[(heater.id, index)] + charge_value - heat_value
             # E_loss = K_room * (T_inside - T_outside) * dt, substituted into
             # the affine temperature balance below.  This retains the sign:
             # warmer outdoor air produces a negative exchange.
             model += indoor[(heater.id, index + 1)] == (
                 (1 - loss_factor / capacity) * indoor[(heater.id, index)]
-                + heat[(heater.id, index)] / capacity
+                + heat_value / capacity
                 + loss_factor * outdoor / capacity
             )
             if target is None:
-                model += shortfall[(heater.id, index)] == 0
-                model += start_shortfall[(heater.id, index)] == 0
+                assert (heater.id, index) not in shortfall
             else:
                 # A target is a boundary invariant, not merely an end-of-slot
                 # result. The start row makes the optimiser preheat in earlier
@@ -2004,7 +2026,13 @@ def _solve_room_energy(
                 guard.target_temperature_c - guard_indoor_next[heater.id]
             )
     for index in range(len(starts)):
-        model += sum(heater.power_w * on[(heater.id, index)] for heater in heaters) <= limit_w
+        power_terms = [
+            heater.power_w * on[(heater.id, index)]
+            for heater in heaters
+            if (heater.id, index) in on
+        ]
+        if power_terms:
+            model += pulp.lpSum(power_terms) <= limit_w
 
     initial_energy = {
         heater.id: heater.capacity_kwh
@@ -2029,26 +2057,24 @@ def _solve_room_energy(
     total_charge = pulp.lpSum(charge.values())
     total_heat = pulp.lpSum(heat.values())
     premature_heat = pulp.lpSum(
-        heat[(heater.id, index)]
-        for heater in heaters
-        for index in range(len(starts))
-        if target_values[(heater.id, index)] is None
+        variable
+        for (heater_id, index), variable in heat.items()
+        if target_values[(heater_id, index)] is None
     )
     latest_charge = pulp.lpSum(
         (len(starts) - index)
-        * charge[(heater.id, index)]
-        for heater in heaters
-        for index in range(len(starts))
+        * variable
+        for (heater_id, index), variable in charge.items()
     )
     deterministic = pulp.lpSum(
         on[(heater.id, index)] * (index + 1) * (position + 1)
         for position, heater in enumerate(heaters)
-        for index in range(len(starts))
+        for index in decision_indices[heater.id]
     )
     heat_timing = pulp.lpSum(
         (len(starts) - index) * (position + 1) * heat[(heater.id, index)]
         for position, heater in enumerate(heaters)
-        for index in range(len(starts))
+        for index in decision_indices[heater.id]
     )
     priorities = sorted({heater.priority for heater in heaters}, reverse=True)
     comfort_phases = []
@@ -2057,7 +2083,7 @@ def _solve_room_energy(
             shortfall[(heater.id, index)] + start_shortfall[(heater.id, index)]
             for heater in heaters
             if heater.priority == priority
-            for index in range(len(starts))
+            for index in active_target_indices[heater.id]
         ]
         terms.extend(
             guard_start_shortfall[heater.id]
@@ -2090,6 +2116,10 @@ def _solve_room_energy(
     solver_deadline = solver_started + time_limit
     time_limited = False
     last_verified_solution: dict[str, float] | None = None
+    phase_diagnostics: list[dict[str, Any]] = []
+    dense_binary_decisions = len(heaters) * len(starts)
+    dense_shortfall_variables = 2 * len(heaters) * len(starts)
+    model_build_seconds = monotonic() - model_build_started
     _notify(request, "solver")
     logger.debug(
         "Room-energy solver model built: variables=%d constraints=%d phases=%d "
@@ -2102,6 +2132,33 @@ def _solve_room_energy(
     for phase_index, objective in enumerate(phases):
         _notify(request, f"solver_phase_{phase_index + 1}")
         _check_cancelled(request)
+        if last_verified_solution is not None and _model_solution_is_feasible(model, pulp, on):
+            incumbent_value = pulp.value(objective)
+            if incumbent_value is None:
+                incumbent_value = getattr(objective, "constant", objective)
+            incumbent_value = _required_solver_value(
+                incumbent_value, f"room-energy phase {phase_index + 1} incumbent"
+            )
+            # Every objective in the exact hierarchy is a sum of non-negative
+            # variables or expressions. Zero is therefore a proven global
+            # lower bound, rather than a heuristic solver bound.
+            if -1e-6 <= incumbent_value <= 1e-6:
+                optimum = 0.0
+                score.append(optimum)
+                phase_diagnostics.append({
+                    "phase": phase_index + 1,
+                    "duration_seconds": 0.0,
+                    "skipped_at_proven_lower_bound": True,
+                    "optimum": optimum,
+                })
+                if phase_index < len(phases) - 1:
+                    model += objective <= optimum + 1e-6
+                logger.debug(
+                    "Room-energy solver phase=%d/%d skipped at proven lower bound=0",
+                    phase_index + 1,
+                    len(phases),
+                )
+                continue
         remaining_seconds = solver_deadline - monotonic()
         if remaining_seconds <= 0:
             if not _model_solution_is_feasible(model, pulp, on) and not _restore_verified_model_solution(
@@ -2154,6 +2211,12 @@ def _solve_room_energy(
                     generated_at,
                 )
             time_limited = True
+            phase_diagnostics.append({
+                "phase": phase_index + 1,
+                "duration_seconds": phase_duration,
+                "skipped_at_proven_lower_bound": False,
+                "status": pulp.LpStatus[status],
+            })
             break
         objective_value = pulp.value(objective)
         if objective_value is None:
@@ -2165,6 +2228,13 @@ def _solve_room_energy(
             objective_value, f"room-energy phase {phase_index + 1} objective"
         )
         score.append(optimum)
+        phase_diagnostics.append({
+            "phase": phase_index + 1,
+            "duration_seconds": phase_duration,
+            "skipped_at_proven_lower_bound": False,
+            "status": pulp.LpStatus[status],
+            "optimum": optimum,
+        })
         logger.debug(
             "Room-energy solver phase=%d optimum=%.9g",
             phase_index + 1,
@@ -2209,7 +2279,8 @@ def _solve_room_energy(
         active: list[str] = []
         for heater in heaters:
             state = request.telemetry[heater.id]
-            on_value = float(on[(heater.id, index)].value() or 0)
+            on_variable = on.get((heater.id, index))
+            on_value = 0.0 if on_variable is None else float(on_variable.value() or 0)
             stored_value = _clean_solver_energy(
                 _required_solver_value(stored[(heater.id, index)].value(), "stored energy")
             )
@@ -2220,8 +2291,9 @@ def _solve_room_energy(
             )
             indoor_value = _required_solver_value(indoor[(heater.id, index)].value(), "indoor temperature")
             next_indoor_value = _required_solver_value(indoor[(heater.id, index + 1)].value(), "next indoor temperature")
-            heat_value = _clean_solver_energy(
-                _required_solver_value(heat[(heater.id, index)].value(), "heat delivered")
+            heat_variable = heat.get((heater.id, index))
+            heat_value = 0.0 if heat_variable is None else _clean_solver_energy(
+                _required_solver_value(heat_variable.value(), "heat delivered")
             )
             target = target_values[(heater.id, index)]
             outdoor = outdoor_values[(heater.id, index)]
@@ -2423,6 +2495,27 @@ def _solve_room_energy(
         convergence_by_heater,
         convergence_at,
         boundaries[-1] if status in {VALID, CONVERGING} else None,
+        {
+            "model": {
+                "build_seconds": model_build_seconds,
+                "variables": len(model.variables()),
+                "constraints": len(model.constraints),
+                "dense_binary_decisions": dense_binary_decisions,
+                "binary_decisions": len(on),
+                "omitted_binary_decisions": dense_binary_decisions - len(on),
+                "dense_shortfall_variables": dense_shortfall_variables,
+                "shortfall_variables": len(shortfall) + len(start_shortfall),
+                "omitted_shortfall_variables": (
+                    dense_shortfall_variables - len(shortfall) - len(start_shortfall)
+                ),
+            },
+            "solver": {
+                "elapsed_seconds": monotonic() - solver_started,
+                "budget_seconds": time_limit,
+                "time_limited": time_limited,
+                "phases": phase_diagnostics,
+            },
+        },
     )
     _notify(request, "safety")
     _notify(request, "summary")

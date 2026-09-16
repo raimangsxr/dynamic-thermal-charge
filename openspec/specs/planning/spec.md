@@ -491,6 +491,23 @@ validación normal y nunca activar un resultado obsoleto o `INVALID`.
   que terminó el preview
 - **THEN** el token deja de coincidir y el resultado anterior no se activa
 
+### Requirement: Reutilización exacta de previews durables
+
+Una nueva solicitud de preview puede copiar el resultado del preview durable más
+reciente sólo cuando coincide el token exacto de entrada y la optimización
+completa terminó sin `solver_time_limit`. El nuevo job conserva su propia
+identidad y lifecycle; un resultado temporizado nunca es una fuente válida.
+
+#### Scenario: Preview repetido sin cambios
+
+- **WHEN** se solicita un preview con el mismo token y revisiones que un resultado optimizado completo
+- **THEN** se crea y completa un nuevo job sin ejecutar CBC y se registra el job fuente
+
+#### Scenario: Preview fuente temporizado
+
+- **WHEN** el resultado más reciente contiene `solver_time_limit`
+- **THEN** no se reutiliza y la nueva solicitud sigue el flujo normal de resolución
+
 ### Requirement: Límite de tiempo configurable del solver
 
 La configuración de planificación debe exponer y persistir
