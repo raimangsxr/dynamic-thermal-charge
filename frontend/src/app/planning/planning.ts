@@ -667,7 +667,7 @@ export class PlanningDetailDialog implements AfterViewInit, OnDestroy {
   }
 
   checkText(name: string): string {
-    return ({ input_validation: 'Validación de inputs', telemetry: 'Telemetría', aemet_coverage: 'Cobertura AEMET', demand_estimation: 'Estimación de demanda', constraints: 'Materialización de constraints', resolution: 'Resolución', safety_validation: 'Validación de seguridad', operator_summary: 'Resumen final' } as Record<string, string>)[name] ?? name;
+    return ({ input_validation: 'Validación de inputs', telemetry: 'Telemetría', aemet_coverage: 'Cobertura AEMET', demand_estimation: 'Estimación de demanda', room_model: 'Modelo energético', constraints: 'Materialización de constraints', resolution: 'Resolución', safety_validation: 'Validación de seguridad', operator_summary: 'Resumen final' } as Record<string, string>)[name] ?? name;
   }
 
   checkStatusText(status: string): string {
@@ -722,7 +722,6 @@ export class Planning implements AfterViewInit, OnDestroy {
 
   constructor() {
     this.refresh();
-    this.restorePreviewJob();
   }
 
   ngAfterViewInit(): void {
@@ -750,6 +749,7 @@ export class Planning implements AfterViewInit, OnDestroy {
         this.failure.set(null);
         this.loading.set(false);
         if (restorePreview && planning.preview_job) this.acceptPreviewJob(planning.preview_job);
+        if (restorePreview && !planning.preview_job) this.clearPreviewState();
         if (!restorePreview) this.clearPreviewState();
         this.scheduleChartRender();
       },
@@ -937,6 +937,17 @@ export class Planning implements AfterViewInit, OnDestroy {
   activate(): void {
     const preview = this.preview(); const revision = this.snapshot()?.temperature_targets_revision;
     if (!preview || revision === undefined || this.activationInFlight()) return;
+    if (!this.previewMatchesDraft()) {
+      const message = 'La vista previa no coincide con las consignas del borrador. Recalcula antes de activar.';
+      this.actionError.set(message);
+      this.feedback.error(message);
+      return;
+    }
+    if (this.previewAlreadyActive()) {
+      this.actionError.set('');
+      this.feedback.info('Esta vista previa ya está activa; no es necesario activarla de nuevo.');
+      return;
+    }
     if (!this.canActivateStatus(preview.status)) {
       this.actionError.set('');
       this.feedback.error('Solo se pueden activar vistas previas VALID o CONVERGING.');
@@ -962,8 +973,9 @@ export class Planning implements AfterViewInit, OnDestroy {
       error: (error: unknown) => {
         this.activationInFlight.set(false);
         this.actionMessage.set('');
-        this.actionError.set('');
-        this.feedback.error(this.activationError(error));
+        const message = this.activationError(error);
+        this.actionError.set(message);
+        this.feedback.error(message);
       },
     });
   }
@@ -1028,6 +1040,44 @@ export class Planning implements AfterViewInit, OnDestroy {
   canActivateStatus(status: string | null | undefined): boolean {
     const normalized = normalizePlanStatus(status);
     return normalized === 'VALID' || normalized === 'CONVERGING';
+  }
+
+  previewMatchesDraft(): boolean {
+    const candidate = this.preview();
+    return candidate !== null
+      && this.normalizedTargetPayload(candidate.temperature_targets) === this.normalizedTargetPayload(this.draftTargets());
+  }
+
+  previewAlreadyActive(): boolean {
+    const candidate = this.preview();
+    if (!candidate) return false;
+    return candidate.already_active === true
+      || this.previewJob()?.already_active === true
+      || candidate.token === this.snapshot()?.preview_token;
+  }
+
+  private normalizedTargetPayload(items: ReadonlyArray<{
+    heater_id: string;
+    target_temperature_c: number;
+    start_time: string;
+    end_time: string;
+    weekdays: number[];
+    enabled?: boolean;
+  }>): string {
+    const payload = items.map((item) => ({
+      heater_id: item.heater_id,
+      target_temperature_c: Number(item.target_temperature_c),
+      start_time: item.start_time,
+      end_time: item.end_time,
+      weekdays: [...item.weekdays].map(Number).sort((left, right) => left - right),
+      enabled: item.enabled !== false,
+    }));
+    payload.sort((left, right) => {
+      const a = JSON.stringify(left);
+      const b = JSON.stringify(right);
+      return a < b ? -1 : a > b ? 1 : 0;
+    });
+    return JSON.stringify(payload);
   }
 
   isConvergingStatus(status: string | null | undefined): boolean {
@@ -1380,7 +1430,7 @@ export class Planning implements AfterViewInit, OnDestroy {
   }
 
   checkText(name: string): string {
-    return ({ input_validation: 'Validación de entradas', telemetry: 'Telemetría', aemet_coverage: 'Cobertura AEMET', demand_estimation: 'Balance energético', constraints: 'Materialización de consignas', resolution: 'Resolución', safety_validation: 'Validación de seguridad', operator_summary: 'Resumen final' } as Record<string, string>)[name] ?? name;
+    return ({ input_validation: 'Validación de entradas', telemetry: 'Telemetría', aemet_coverage: 'Cobertura AEMET', demand_estimation: 'Balance energético', room_model: 'Modelo energético', constraints: 'Materialización de consignas', resolution: 'Resolución', safety_validation: 'Validación de seguridad', operator_summary: 'Resumen final' } as Record<string, string>)[name] ?? name;
   }
 
   previewSlotLabel(slot: Record<string, unknown>): string { return this.dateTime(String(slot['start'] ?? '')); }
@@ -1505,13 +1555,6 @@ export class Planning implements AfterViewInit, OnDestroy {
       error: () => { this.previewPollInFlight = false; },
       complete: () => { this.previewPollInFlight = false; },
     });
-  }
-
-  private restorePreviewJob(): void {
-    let jobId: string | null = null;
-    try { jobId = sessionStorage.getItem(this.previewStorageKey); } catch { return; }
-    if (!jobId) return;
-    this.api.planningPreviewJob(jobId).subscribe({ next: (job) => this.acceptPreviewJob(job), error: () => { try { sessionStorage.removeItem(this.previewStorageKey); } catch { /* ignore */ } } });
   }
 
   private boundaryLabels(slots: PlanningTimelineSlotDto[]): string[] {
@@ -1751,6 +1794,9 @@ export class Planning implements AfterViewInit, OnDestroy {
   }
 
   private activationError(error: unknown): string {
+    if (this.apiErrorCode(error) === 'config_conflict') {
+      return 'No se pudo guardar y activar: las entradas de la vista previa han cambiado. Recalcula la vista previa y vuelve a intentarlo.';
+    }
     const apiMessage = this.apiMessage(error);
     if (apiMessage !== null) return `No se pudo guardar y activar: ${apiMessage}`;
     const explained = this.describe(error);
@@ -1769,5 +1815,11 @@ export class Planning implements AfterViewInit, OnDestroy {
     if (!(error instanceof HttpErrorResponse)) return null;
     const body = error.error as ApiErrorDto | null;
     return body && typeof body === 'object' && 'code' in body ? messageFor(body) : null;
+  }
+
+  private apiErrorCode(error: unknown): string | null {
+    if (!(error instanceof HttpErrorResponse)) return null;
+    const body = error.error as ApiErrorDto | null;
+    return body && typeof body === 'object' && 'code' in body ? body.code : null;
   }
 }

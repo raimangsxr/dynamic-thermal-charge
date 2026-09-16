@@ -517,6 +517,43 @@ describe('Planning', () => {
     expect((fixture.nativeElement as HTMLElement).textContent).toContain('Convergiendo');
   });
 
+  it('blocks activation when the preview no longer matches the draft', async () => {
+    backend.expectOne('/api/v1/planning').flush(PLANNING);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    await selectPlanningTab(fixture, 1);
+
+    fixture.componentInstance.preview.set({ ...PREVIEW, status: 'FEASIBLE', deficits: [], violations: [] });
+    fixture.componentInstance.editTarget(0, 'target_temperature_c', 19.5);
+    fixture.detectChanges();
+
+    const element = fixture.nativeElement as HTMLElement;
+    expect(fixture.componentInstance.previewMatchesDraft()).toBe(false);
+    expect(element.querySelector<HTMLButtonElement>('[data-testid="activate-button"]')?.disabled).toBe(true);
+    expect(element.querySelector('[data-testid="preview-stale-draft"]')?.textContent).toContain('Recalcula');
+    element.querySelector<HTMLButtonElement>('[data-testid="activate-button"]')?.click();
+    backend.expectNone('/api/v1/planning/activate');
+  });
+
+  it('marks a preview with the active token as informational and disables duplicate activation', async () => {
+    backend.expectOne('/api/v1/planning').flush(PLANNING);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    await selectPlanningTab(fixture, 1);
+
+    fixture.componentInstance.snapshot.set({ ...PLANNING, preview_token: PREVIEW.token, temperature_targets_revision: 4 });
+    fixture.componentInstance.preview.set({ ...PREVIEW, status: 'FEASIBLE', deficits: [], violations: [] });
+    fixture.detectChanges();
+
+    const element = fixture.nativeElement as HTMLElement;
+    expect(fixture.componentInstance.previewAlreadyActive()).toBe(true);
+    expect(element.querySelector<HTMLButtonElement>('[data-testid="activate-button"]')?.disabled).toBe(true);
+    expect(element.querySelector('[data-testid="preview-already-active-label"]')?.textContent).toContain('ya activa');
+    fixture.componentInstance.activate();
+    backend.expectNone('/api/v1/planning/activate');
+    expect(document.querySelector('.dtc-snackbar-container')?.textContent).toContain('ya está activa');
+  });
+
   it('does not show the problem button for a feasible preview', async () => {
     backend.expectOne('/api/v1/planning').flush(PLANNING);
     await selectPlanningTab(fixture, 1);
@@ -794,7 +831,12 @@ describe('Planning', () => {
     fixture.detectChanges();
     await selectPlanningTab(fixture, 1);
     fixture.componentInstance.snapshot.set({ ...PLANNING, temperature_targets_revision: 4 });
-    fixture.componentInstance.preview.set({ ...PREVIEW, status: 'FEASIBLE', deficits: [], violations: [] });
+    fixture.componentInstance.preview.set({
+      ...PREVIEW,
+      status: 'FEASIBLE',
+      deficits: [],
+      violations: [],
+    });
     fixture.detectChanges();
 
     (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('[data-testid="activate-button"]')?.click();
@@ -817,7 +859,13 @@ describe('Planning', () => {
       { heater_id: 'salon', target_temperature_c: 19.5, start_time: '07:00', end_time: '09:00', weekdays: [0, 1, 2, 3, 4, 5, 6], enabled: true },
     ]);
     fixture.componentInstance.snapshot.set({ ...PLANNING, temperature_targets_revision: 4 });
-    fixture.componentInstance.preview.set({ ...PREVIEW, status: 'FEASIBLE', deficits: [], violations: [] });
+    fixture.componentInstance.preview.set({
+      ...PREVIEW,
+      status: 'FEASIBLE',
+      deficits: [],
+      violations: [],
+      temperature_targets: [{ ...PREVIEW.temperature_targets[0], target_temperature_c: 19.5, start_time: '07:00', end_time: '09:00' }],
+    });
     fixture.detectChanges();
 
     const activateButton = (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('[data-testid="activate-button"]');
@@ -871,7 +919,7 @@ describe('Planning', () => {
 
     expect(fixture.componentInstance.activationInFlight()).toBe(false);
     expect(fixture.componentInstance.actionMessage()).toBe('');
-    expect(fixture.componentInstance.actionError()).toBe('');
+    expect(fixture.componentInstance.actionError()).toContain('Recalcula');
     expect(fixture.componentInstance.preview()).not.toBeNull();
     expect(activateButton?.disabled).toBe(false);
     expect(document.querySelector('.dtc-snackbar-container')?.textContent).toContain('No se pudo guardar y activar');
@@ -956,5 +1004,9 @@ describe('Planning', () => {
     expect(dialog?.textContent).toContain('El trabajo de vista previa terminó con error.');
     document.querySelector<HTMLButtonElement>('[data-testid="detail-dialog-close"]')?.click();
     await new Promise((resolve) => setTimeout(resolve, 100));
+  });
+
+  it('translates the room model check for the operator', () => {
+    expect(fixture.componentInstance.checkText('room_model')).toBe('Modelo energético');
   });
 });

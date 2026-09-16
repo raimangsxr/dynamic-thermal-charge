@@ -41,7 +41,7 @@ from ...models import (
 )
 from ...planning_explanation import operator_summary as persisted_operator_summary
 from ...planning_explanation import planning_evidence
-from ...persistence import ConfigValidationError
+from ...persistence import ConfigConflictError, ConfigValidationError
 from ...scheduler import advance_real
 from ..dependencies import usable_store
 from ..schemas import (
@@ -84,6 +84,7 @@ PREVIEW_STEP_NAMES = (
     "input_validation", "telemetry", "aemet_coverage", "room_model",
     "resolution", "safety_validation", "operator_summary",
 )
+PREVIEW_STALE_INPUT_ERROR = "planning preview inputs changed; recalculate before activating"
 
 
 class PreviewJobRunner:
@@ -480,6 +481,7 @@ def preview_planning(
         forecast=forecast,
         forecast_status=forecast_cycle_context(store.planning),
         timezone_name=config.schedule.timezone if config.schedule is not None else "UTC",
+        already_active=_active_preview_token(store) == plan.input_token,
     )
 
 
@@ -530,11 +532,16 @@ def start_preview_job(
             cached_job["id"],
             input_token(planning_request),
         )
-        return _job_response(store.planning.preview_job(job_id), site=site)
+        return _job_response(
+            store.planning.preview_job(job_id),
+            site=site,
+            active_token=_active_preview_token(store),
+        )
     _job_runner(app_request).submit(job_id)
     return _job_response(
         store.planning.preview_job(job_id),
         site=site,
+        active_token=_active_preview_token(store),
     )
 
 
@@ -546,6 +553,7 @@ def get_preview_job(job_id: str, store: Store = Depends(usable_store)) -> Planni
     return _job_response(
         job,
         site=store.planning.site(),
+        active_token=_active_preview_token(store),
     )
 
 
@@ -557,6 +565,7 @@ def cancel_preview_job(job_id: str, store: Store = Depends(usable_store)) -> Pla
     return _job_response(
         job,
         site=store.planning.site(),
+        active_token=_active_preview_token(store),
     )
 
 
@@ -573,15 +582,15 @@ def activate_planning(
 ) -> PlanningPreviewResponse:
     site = store.planning.site()
     if request.expected_revision != site["revision"]:
-        raise ConfigValidationError("temperature targets changed; recalculate before saving")
+        raise ConfigConflictError(PREVIEW_STALE_INPUT_ERROR)
     temperature_targets = _resolve_temperature_targets(store, request.temperature_targets)
     observed_at = app_request.app.state.clock()
     planning_request = _build_automatic_request(
         store, observed_at, site, temperature_targets=temperature_targets
     )
     if input_token(planning_request) != request.token:
-        raise ConfigValidationError("the preview inputs changed; recalculate before activating")
-    _config, configuration_revision = store.repository.current()
+        raise ConfigConflictError(PREVIEW_STALE_INPUT_ERROR)
+    config, configuration_revision = store.repository.current()
     preview_cache = getattr(app_request.app.state, "preview_plan_cache", {})
     plan = preview_cache.pop(request.token, None)
     if plan is not None and plan.input_token != input_token(planning_request):
@@ -614,6 +623,21 @@ def activate_planning(
             "the preview candidate failed independent physical validation",
             field="planning",
         )
+    current_site = store.planning.site()
+    _current_config, current_configuration_revision = store.repository.current()
+    if (
+        request.expected_revision != current_site["revision"]
+        or current_configuration_revision != configuration_revision
+    ):
+        raise ConfigConflictError(PREVIEW_STALE_INPUT_ERROR)
+    current_request = _build_automatic_request(
+        store,
+        app_request.app.state.clock(),
+        current_site,
+        temperature_targets=temperature_targets,
+    )
+    if input_token(current_request) != request.token:
+        raise ConfigConflictError(PREVIEW_STALE_INPUT_ERROR)
     new_revision = (
         store.planning.replace_all_temperature_targets(
             temperature_targets,
@@ -645,7 +669,8 @@ def activate_planning(
         site=site,
         forecast=forecast,
         forecast_status=forecast_cycle_context(store.planning),
-        timezone_name=_config.schedule.timezone if _config.schedule is not None else "UTC",
+        timezone_name=config.schedule.timezone if config.schedule is not None else "UTC",
+        already_active=True,
     )
 
 
@@ -828,9 +853,14 @@ def _automatic_planning_response(
     )
 
 
+def _active_preview_token(store: Store) -> str | None:
+    active = store.planning.active_plan()
+    return None if active is None else active.get("input_token")
+
+
 def _enrich(response: PlanningResponse, store: Store, observed_at: datetime) -> PlanningResponse:
     planning = store.planning
-    config, _revision = store.repository.current()
+    config, configuration_revision = store.repository.current()
     capacity_by_id = {heater.id: heater.capacity_kwh for heater in config.heaters}
     max_age_seconds = config.site.indoor_max_age_minutes * 60
     telemetry = planning.telemetry()
@@ -910,11 +940,20 @@ def _enrich(response: PlanningResponse, store: Store, observed_at: datetime) -> 
     response.temperature_targets_revision = site["revision"]
     response.base_load_w = int(site.get("base_load_w", 0))
     response.max_heating_power_w = int(site.get("max_heating_power_w", response.max_total_power_w))
-    latest_job = planning.latest_preview_job()
+    active_token = None if active is None else active.get("input_token")
+    latest_job = planning.latest_preview_job(
+        configuration_revision=configuration_revision,
+        constraints_revision=int(site["revision"]),
+        temperature_targets=_temperature_target_payload(
+            {heater.id: tuple(heater.temperature_targets) for heater in config.heaters}
+        ),
+        active_input_token=active_token,
+    )
     response.preview_job = (
         _job_response(
             latest_job,
             site=site,
+            active_token=active_token,
         )
         if latest_job is not None
         else None
@@ -1223,6 +1262,7 @@ def _automatic_plan_from_preview_payload(payload: dict[str, Any]) -> AutomaticPl
             str(item["reason"]),
             _preview_optional_datetime(item.get("target_window_start")),
             _preview_optional_datetime(item.get("target_window_end")),
+            stored_energy_kwh=_preview_optional_float(item.get("stored_energy_kwh")),
         )
         for item in _preview_dict_list(violation_payload)
     )
@@ -1474,6 +1514,7 @@ def _preview_response(
     forecast: dict[str, Any] | None = None,
     forecast_status: dict[str, Any] | None = None,
     timezone_name: str = "UTC",
+    already_active: bool = False,
 ) -> PlanningPreviewResponse:
     raw_violations = [_violation_payload(item) for item in plan.violations]
     violations = _raw_deficit_views(raw_violations)
@@ -1610,6 +1651,7 @@ def _preview_response(
         operator_summary=operator_summary,
         diagnostics=dict(plan.diagnostics),
         optimization_quality=plan.optimization_quality,
+        already_active=already_active,
     )
 
 
@@ -1629,6 +1671,7 @@ def _job_response(
     job: dict[str, Any] | None,
     *,
     site: dict[str, int | float] | None = None,
+    active_token: str | None = None,
 ) -> PlanningPreviewJobResponse:
     if job is None:
         raise not_found("preview job does not exist", field="job_id")
@@ -1645,13 +1688,18 @@ def _job_response(
             # Preserve the serialized shape of durable results written before
             # timezone-aware preview windows were introduced.
             result_payload["window_end"] = window_start + timedelta(hours=planning_window_hours)
+        result_payload["already_active"] = (
+            active_token is not None and result_payload.get("token") == active_token
+        )
     result = None if result_payload is None else PlanningPreviewResponse.model_validate(result_payload)
+    already_active = result is not None and result.already_active
     return PlanningPreviewJobResponse(
         job_id=job["id"], status=job["status"], cancellation_requested=job["cancellation_requested"],
         requested_at=job["requested_at"], started_at=job["started_at"], finished_at=job["finished_at"],
         checks=[PlanningCheckView(**item) for item in job["steps"]], result=result,
         operator_summary={} if result is None else result.operator_summary,
         error_code=job["error_code"], error_detail=job["error_detail"],
+        already_active=already_active,
     )
 
 

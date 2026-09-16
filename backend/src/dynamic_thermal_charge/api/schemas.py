@@ -334,6 +334,7 @@ class PlanningPreviewResponse(BaseModel):
     operator_summary: dict = Field(default_factory=dict)
     diagnostics: dict = Field(default_factory=dict)
     optimization_quality: str = "OPTIMAL"
+    already_active: bool = False
 
 
 class PlanningCheckView(BaseModel):
@@ -356,6 +357,7 @@ class PlanningPreviewJobResponse(BaseModel):
     operator_summary: dict = Field(default_factory=dict)
     error_code: str | None = None
     error_detail: str | None = None
+    already_active: bool = False
 
 
 class PlanningActivateRequest(BaseModel):

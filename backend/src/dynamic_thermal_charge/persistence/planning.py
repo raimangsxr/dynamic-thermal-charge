@@ -57,6 +57,31 @@ from .schema import (
 from .url import StoreLocation
 
 
+def _canonical_preview_target_payload(
+    value: Any,
+) -> tuple[str, ...] | None:
+    """Normalize target payloads without treating database row ids as input."""
+    if not isinstance(value, list):
+        return None
+    normalized: list[str] = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            return None
+        try:
+            payload = {
+                "heater_id": str(item.get("heater_id", "")),
+                "target_temperature_c": float(item["target_temperature_c"]),
+                "start_time": str(item["start_time"]),
+                "end_time": str(item["end_time"]),
+                "weekdays": sorted({int(day) for day in item.get("weekdays", [])}),
+                "enabled": bool(item.get("enabled", True)),
+            }
+        except (KeyError, TypeError, ValueError):
+            return None
+        normalized.append(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+    return tuple(sorted(normalized))
+
+
 class SqlPlanningRepository:
     """Own planning-specific records while preserving the legacy repositories."""
 
@@ -940,13 +965,54 @@ class SqlPlanningRepository:
             } for item in steps],
         }
 
-    def latest_preview_job(self) -> dict[str, Any] | None:
+    def latest_preview_job(
+        self,
+        *,
+        configuration_revision: int | None = None,
+        constraints_revision: int | None = None,
+        temperature_targets: list[dict[str, Any]] | None = None,
+        active_input_token: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Return the newest preview compatible with the current editor state.
+
+        A completed preview that supplied the currently active plan may have
+        been calculated immediately before the activation write incremented the
+        target revision.  The active token is the safe exception that keeps
+        that durable result visible as informational after a reload.
+        """
         with store_errors(self._application_location):
             with self._application.connect() as connection:
-                job_id = connection.execute(select(preview_job.c.id).where(
+                job_ids = connection.execute(select(preview_job.c.id).where(
                     preview_job.c.installation_id == self._installation_id
-                ).order_by(preview_job.c.requested_at.desc()).limit(1)).scalar()
-        return None if job_id is None else self.preview_job(str(job_id))
+                ).order_by(preview_job.c.requested_at.desc())).scalars().all()
+        expected_targets = (
+            None
+            if temperature_targets is None
+            else _canonical_preview_target_payload(temperature_targets)
+        )
+        for job_id in job_ids:
+            job = self.preview_job(str(job_id))
+            if job is None:
+                continue
+            if (
+                configuration_revision is not None
+                and job["configuration_revision"] != configuration_revision
+            ):
+                continue
+            if constraints_revision is not None and job["constraints_revision"] != constraints_revision:
+                result = job.get("result")
+                result_token = result.get("token") if isinstance(result, dict) else None
+                if result_token != active_input_token:
+                    continue
+            if expected_targets is not None and (
+                _canonical_preview_target_payload(
+                    job["request"].get("temperature_targets", [])
+                )
+                != expected_targets
+            ):
+                continue
+            return job
+        return None
 
     def latest_completed_preview_job(
         self,

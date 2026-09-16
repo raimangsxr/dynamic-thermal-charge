@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from types import SimpleNamespace
 from time import sleep
 
@@ -11,6 +11,7 @@ from dynamic_thermal_charge.charge_planning import (
     input_token,
 )
 from dynamic_thermal_charge.persistence.history import SqlHistoryRecorder
+from dynamic_thermal_charge.models import TemperatureTarget
 from dynamic_thermal_charge.weather import HourlyForecastPoint
 from tests.conftest import API_NOW, AUTH
 
@@ -263,6 +264,44 @@ def test_activation_reuses_completed_preview_without_second_solver_call(
     assert activated.status_code == 200, activated.text
     assert calls == []
     assert activated.json()["token"] == result["token"]
+    assert activated.json()["already_active"] is True
+
+    reloaded = client.get("/api/v1/planning", headers=AUTH)
+    assert reloaded.status_code == 200, reloaded.text
+    assert reloaded.json()["preview_job"]["already_active"] is True
+    assert reloaded.json()["preview_job"]["result"]["already_active"] is True
+
+
+def test_planning_hides_incompatible_preview_but_keeps_it_queryable_for_audit(
+    client, initialised_store,
+):
+    configuration_revision, constraints_revision = _seed_valid_preview_inputs(
+        initialised_store, forecast_temperature_c=20.0
+    )
+    preview = client.post(
+        "/api/v1/planning/preview",
+        headers=AUTH,
+        json={"expected_revision": constraints_revision},
+    )
+    assert preview.status_code == 200, preview.text
+    result = preview.json()
+    job_id = _persist_preview_job(
+        initialised_store, result, configuration_revision, constraints_revision,
+    )
+
+    initialised_store.planning.replace_temperature_targets(
+        "salon",
+        (TemperatureTarget(19.0, time(0, 0)),),
+        constraints_revision,
+    )
+
+    reloaded = client.get("/api/v1/planning", headers=AUTH)
+    assert reloaded.status_code == 200, reloaded.text
+    assert reloaded.json()["preview_job"] is None
+
+    audit = client.get(f"/api/v1/planning/preview/jobs/{job_id}", headers=AUTH)
+    assert audit.status_code == 200, audit.text
+    assert audit.json()["result"]["token"] == result["token"]
 
 
 def test_changed_telemetry_cannot_activate_cached_preview(
@@ -304,6 +343,49 @@ def test_changed_telemetry_cannot_activate_cached_preview(
 
     assert activated.status_code >= 400
     assert calls == []
+    assert activated.json()["code"] == "config_conflict"
+    assert "recalculate" in activated.json()["message"]
+
+
+def test_live_input_change_during_activation_is_rejected_before_persistence(
+    client, initialised_store, monkeypatch,
+):
+    configuration_revision, constraints_revision = _seed_valid_preview_inputs(
+        initialised_store, forecast_temperature_c=20.0
+    )
+    preview = client.post(
+        "/api/v1/planning/preview",
+        headers=AUTH,
+        json={"expected_revision": constraints_revision},
+    )
+    assert preview.status_code == 200, preview.text
+    result = preview.json()
+    _persist_preview_job(
+        initialised_store, result, configuration_revision, constraints_revision,
+    )
+
+    import dynamic_thermal_charge.api.routes.planning as planning_route
+
+    original_validate = planning_route.independently_validate_plan
+
+    def validate_then_change(request, plan):
+        validation = original_validate(request, plan)
+        initialised_store.planning.record_telemetry(
+            "salon", "stored_soc_percent", 40.0, API_NOW
+        )
+        return validation
+
+    monkeypatch.setattr(planning_route, "independently_validate_plan", validate_then_change)
+    activated = client.post(
+        "/api/v1/planning/activate",
+        headers=AUTH,
+        json={"token": result["token"], "expected_revision": constraints_revision},
+    )
+
+    assert activated.status_code == 409, activated.text
+    assert activated.json()["code"] == "config_conflict"
+    assert "recalculate" in activated.json()["message"]
+    assert initialised_store.planning.active_plan() is None
 
 
 def _wait_for_preview_job(client, job_id):

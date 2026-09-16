@@ -504,7 +504,10 @@ al expirar el límite de tiempo puede seguir siendo activable como
 La activación debe poder reutilizar un preview durable completado cuando el
 token de entrada vigente, las revisiones de configuración y objetivos térmicos
 y el payload de consignas coinciden. En cualquier otro caso debe mantener la
-validación normal y nunca activar un resultado obsoleto o `INVALID`.
+validación normal y nunca activar un resultado obsoleto o `INVALID`. Si cambian
+las entradas durante la activación, la API debe rechazarla con un conflicto
+estable y accionable que indique recalcular, conservando el preview para que el
+operador pueda corregirlo y reintentarlo.
 
 #### Scenario: Activación inmediata de un preview válido
 
@@ -517,6 +520,19 @@ validación normal y nunca activar un resultado obsoleto o `INVALID`.
 - **WHEN** cambia la telemetría, previsión, configuración o las consignas desde
   que terminó el preview
 - **THEN** el token deja de coincidir y el resultado anterior no se activa
+
+#### Scenario: Preview incompatible tras recargar
+
+- **WHEN** el preview durable más reciente ya no coincide con las consignas o
+  revisiones guardadas actuales
+- **THEN** no se expone como candidato recuperable en la planificación, aunque
+  su identificador siga disponible para auditoría
+
+#### Scenario: Preview ya activado
+
+- **WHEN** el token de un preview completado coincide con el plan activo
+- **THEN** se muestra como información ya activa y no se ofrece una segunda
+  activación
 
 ### Requirement: Reutilización exacta de previews durables
 
@@ -634,7 +650,10 @@ existen déficits o violaciones, la vista
 previa debe ofrecer un diálogo accesible con el acumulador, requisito,
 momento, valores objetivo/proyectado/déficit, causa explicada y acción
 recomendada cuando exista; `deficits` tiene prioridad sobre `violations` como
-fuente de problemas.
+fuente de problemas. Los problemas del modelo energético incluyen la energía
+almacenada observada cuando está disponible y conservan `null` cuando no existe
+una medida válida; la interfaz muestra este último caso como “no disponible” y
+traduce `room_model` a un nombre comprensible para el operador.
 
 #### Scenario: Preview degradada con problemas
 
@@ -711,8 +730,9 @@ activación.
 
 - **WHEN** el operador pulsa “Guardar y activar” con una preview válida
 - **THEN** el botón se bloquea mientras espera y después muestra un éxito
-  explícito si la API confirma la activación, o una alerta accionable si la API
-  la rechaza, manteniendo la preview para poder corregirla y reintentar
+  explícito si la API confirma la activación, o una alerta accionable en español
+  que indica recalcular si la API detecta entradas obsoletas, manteniendo la
+  preview para poder corregirla y reintentar
 
 ### Requirement: Protección de salidas GPIO
 

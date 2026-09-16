@@ -136,7 +136,7 @@
               <h2>Nueva planificación</h2>
               <p class="hint">Ajusta las consignas semanales y comprueba el resultado antes de reemplazar el plan activo.</p>
             </div>
-            @if (preview(); as candidate) { <span class="status-chip" [attr.data-status]="candidate.status">Vista previa: {{ planStatus(candidate.status) }}</span> }
+            @if (preview(); as candidate) { <span class="status-chip" [attr.data-status]="candidate.status">Vista previa: {{ planStatus(candidate.status) }}@if (previewAlreadyActive()) { · ya activa }</span> }
           </div>
 
           <section class="constraints" aria-labelledby="targets-title">
@@ -272,9 +272,10 @@
             <div class="planning-actions" role="group" aria-label="Acciones de la planificación" data-testid="planning-actions">
               <button mat-flat-button color="primary" type="button" (click)="recalculate()" [disabled]="activationInFlight()" data-testid="recalculate-button">Recalcular vista previa</button>
               <button mat-button type="button" (click)="discardChanges()" [disabled]="activationInFlight()" data-testid="discard-button">Descartar</button>
-              <button mat-flat-button color="primary" type="button" [disabled]="activationInFlight() || !preview() || !canActivateStatus(preview()?.status)" (click)="activate()" data-testid="activate-button">{{ activationInFlight() ? 'Guardando…' : 'Guardar y activar' }}</button>
+              <button mat-flat-button color="primary" type="button" [disabled]="activationInFlight() || !preview() || !canActivateStatus(preview()?.status) || !previewMatchesDraft() || previewAlreadyActive()" (click)="activate()" data-testid="activate-button">{{ activationInFlight() ? 'Guardando…' : 'Guardar y activar' }}</button>
             </div>
             @if (actionMessage()) { <p class="action-feedback" role="status" aria-live="polite" data-testid="planning-action-status">{{ actionMessage() }}</p> }
+            @if (actionError()) { <p class="action-feedback warning" role="alert" data-testid="planning-action-error">{{ actionError() }}</p> }
           </section>
 
           @if (previewJob(); as job) {
@@ -284,7 +285,7 @@
                 @for (check of job.checks; track check.name) { <li class="check" [attr.data-state]="check.status"><span>{{ checkText(check.name) }}</span><strong>{{ checkStatusText(check.status) }}</strong>@if (check.detail) { <small>{{ check.detail }}</small> } @if (check.status === 'error') { <button mat-stroked-button type="button" (click)="openPreviewFailure(job, check)" data-testid="preview-check-failure-button">Ver detalle</button> }</li> }
               </ol>
               @if (job.result; as result) {
-                <div class="operator-result" data-testid="operator-summary"><strong>Resultado para el operador</strong><p>Ventana {{ dateTime(result.window_start) }}–{{ dateTime(result.window_end) }} · horizonte {{ dateTime(result.horizon_start) }}–{{ dateTime(result.horizon_end) }} · previsión: {{ operatorForecastText(result.operator_summary) }}</p><p>Carga prevista: {{ previewSummaryText(result.operator_summary) }}</p><p>{{ result.operator_summary['recommended_action'] }}</p></div>
+                <div class="operator-result" data-testid="operator-summary"><strong>Resultado para el operador</strong><p>Ventana {{ dateTime(result.window_start) }}–{{ dateTime(result.window_end) }} · horizonte {{ dateTime(result.horizon_start) }}–{{ dateTime(result.horizon_end) }} · previsión: {{ operatorForecastText(result.operator_summary) }}</p><p>Carga prevista: {{ previewSummaryText(result.operator_summary) }}</p><p>{{ result.operator_summary['recommended_action'] }}</p>@if (result.already_active || previewAlreadyActive()) { <p class="hint" data-testid="preview-already-active">Esta vista previa ya está activa; no se ofrece una activación duplicada.</p> }</div>
                 @if (result.optimization_quality === 'FEASIBLE_LIMIT') { <p class="hint" data-testid="preview-feasible-limit">Plan físicamente validado; la optimización secundaria se detuvo al alcanzar el límite de tiempo.</p> }
                 @if (isConvergingStatus(result.status)) { <p class="warning" data-testid="preview-converging">Puede activarse: converge en {{ convergenceText(result.convergence_by_heater, result.convergence_at) }}@if (result.guaranteed_until) { y mantiene el objetivo hasta {{ dateTime(result.guaranteed_until) }} }.</p> }
                 @if (isDegradedStatus(result.status)) { <p class="warning" data-testid="preview-degraded">No se puede activar: el resultado degradado no demuestra la convergencia de todos los objetivos.</p> }
@@ -302,6 +303,7 @@
           @if (preview(); as candidate) {
             <div class="preview" role="status">
               <strong>Vista previa: {{ planStatus(candidate.status) }}</strong>
+              @if (previewAlreadyActive()) { <span class="hint" data-testid="preview-already-active-label"> · ya activa; no hay nada que guardar</span> }
               · {{ previewIntervalCount(candidate) }} intervalos de {{ candidate.slot_minutes }} minutos
               @if (candidate.optimization_quality === 'FEASIBLE_LIMIT') {
                 <span class="hint" data-testid="candidate-feasible-limit"> · Plan validado; optimización limitada por tiempo</span>
@@ -322,6 +324,7 @@
                   }
                 </ul>
               }
+              @if (!previewMatchesDraft()) { <p class="warning" data-testid="preview-stale-draft">La vista previa no coincide con las consignas del borrador. Recalcula antes de activar.</p> }
             </div>
             @if (!data.plan) { <p class="window" data-testid="planning-window">Vista previa · ventana {{ dateTime(candidate.window_start) }}–{{ dateTime(candidate.window_end) }} · horizonte {{ dateTime(candidate.horizon_start) }}–{{ dateTime(candidate.horizon_end) }}</p> }
           }
