@@ -779,6 +779,27 @@ def test_missing_terminal_guard_forecast_is_explicitly_invalid():
     assert len(result.slots) == 2
 
 
+def test_terminal_guard_diagnostics_keep_shortfall_mapping_intact():
+    # When a target starts exactly at the horizon boundary, the continuation
+    # guard needs its own start-shortfall variable. Materialising that value
+    # must not shadow the mapping used by the model diagnostics.
+    heater = replace(
+        _heater(power_w=1000, full_charge_minutes=60, full_discharge_minutes=60),
+        temperature_targets=(TemperatureTarget(20.5, time(2, 0), time(4, 0)),),
+    )
+
+    result = RoomEnergyPlanner().build(
+        _request(
+            heaters=(heater,),
+            horizon_hours=2,
+            telemetry={"salon": _telemetry("salon", indoor=20.0, soc=100.0)},
+        )
+    )
+
+    assert result.diagnostics["model"]["shortfall_variables"] == 0
+    assert result.diagnostics["model"]["omitted_shortfall_variables"] == 4
+
+
 def test_room_time_limited_candidate_is_degraded_until_all_phases_are_optimal(monkeypatch):
     import pulp
 
