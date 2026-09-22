@@ -1,5 +1,5 @@
 <main class="status">
-  <header class="page-header">
+  <header class="page-header dtc-page-header">
     <div>
       <p class="eyebrow">Panel operativo</p>
       <h1>Estado</h1>
@@ -15,15 +15,15 @@
   </header>
 
   @if (loading() && !snapshot()) {
-    <section class="workspace-panel loading-panel" role="status" aria-live="polite" data-testid="status-loading">
+    <section class="workspace-panel dtc-panel loading-panel dtc-loading-panel" role="status" aria-live="polite" data-testid="status-loading">
       <mat-icon aria-hidden="true">hourglass_empty</mat-icon>
       <div><h2>Comprobando la instalación</h2><p>Consultando el controlador, los acumuladores y la telemetría…</p></div>
     </section>
   }
 
   @if (failure(); as message) {
-    <div class="banner alert" role="alert" data-testid="failure">
-      <div class="banner-content">
+    <div class="banner alert dtc-banner" role="alert" data-testid="failure">
+      <div class="banner-content dtc-banner-content">
         <mat-icon aria-hidden="true">error_outline</mat-icon>
         <div>
           <strong>{{ message.title }}</strong>
@@ -86,10 +86,10 @@
       </article>
     </div>
 
-    <section class="workspace-panel" aria-labelledby="heaters-title">
-      <div class="section-heading">
+    <section class="workspace-panel dtc-panel" aria-labelledby="heaters-title">
+      <div class="section-heading dtc-section-heading">
         <div><p class="eyebrow">Equipos</p><h2 id="heaters-title">Acumuladores</h2><p class="section-lead">Estado de las salidas según la última confirmación del controlador.</p></div>
-        <span class="revision-chip">{{ charging().length }} cargando · {{ resting().length }} en reposo</span>
+        <span class="revision-chip dtc-revision-chip">{{ charging().length }} cargando · {{ resting().length }} en reposo</span>
       </div>
       @if (heaters().length === 0) {
         <p class="empty" data-testid="status-empty">La instalación no tiene ningún acumulador configurado.</p>
@@ -100,7 +100,7 @@
               <div class="heater-card-heading">
                 <span class="heater-avatar" aria-hidden="true"><mat-icon>electrical_services</mat-icon></span>
                 <div><h3>{{ item.dto.name }}</h3><p>{{ (item.dto.power_w / 1000).toFixed(1) }} kW</p></div>
-                @if (!item.dto.enabled) { <span class="status-chip">Deshabilitado</span> }
+                @if (!item.dto.enabled) { <span class="status-chip dtc-status-chip">Deshabilitado</span> }
               </div>
               <dtc-output-indicator [state]="item.state" />
             </li>
@@ -110,32 +110,32 @@
     </section>
 
     @if (unmet().length > 0) {
-      <div class="banner warn" role="status" data-testid="unmet">
-        <div class="banner-content"><mat-icon aria-hidden="true">warning</mat-icon><div><strong>Carga solicitada sin atender</strong><ul>@for (allocation of unmet(); track allocation.heater_id) { <li>{{ heaterText(allocation.heater_id) }}: faltan {{ hours(allocation.unmet_minutes) }} h de {{ hours(allocation.requested_minutes) }} h solicitadas</li> }</ul><p>El plan no cabe en la ventana o en el límite de potencia.</p></div></div>
+      <div class="banner warn dtc-banner" role="status" data-testid="unmet">
+        <div class="banner-content dtc-banner-content"><mat-icon aria-hidden="true">warning</mat-icon><div><strong>Carga solicitada sin atender</strong><ul>@for (allocation of unmet(); track allocation.heater_id) { <li>{{ heaterText(allocation.heater_id) }}: faltan {{ hours(allocation.unmet_minutes) }} h de {{ hours(allocation.requested_minutes) }} h solicitadas</li> }</ul><p>El plan no cabe en la ventana o en el límite de potencia.</p></div></div>
       </div>
     }
 
     @if (isConvergingStatus(data.plan_status)) {
-      <div class="banner warn" role="status" data-testid="plan-converging">
-        <div class="banner-content"><mat-icon aria-hidden="true">autorenew</mat-icon><div><strong>Plan en convergencia</strong><p>El plan activo sigue siendo utilizable y está adaptándose al objetivo térmico.</p><p>Objetivo alcanzado: {{ convergenceText(data) }}@if (data.guaranteed_until) { · cobertura garantizada hasta {{ instant(data.guaranteed_until) }} }.</p></div></div>
+      <div class="banner warn dtc-banner" role="status" data-testid="plan-converging">
+        <div class="banner-content dtc-banner-content"><mat-icon aria-hidden="true">autorenew</mat-icon><div><strong>Plan en convergencia</strong><p>El plan activo sigue siendo utilizable y está adaptándose al objetivo térmico.</p><p>Objetivo alcanzado: {{ convergenceText(data) }}@if (data.guaranteed_until) { · cobertura garantizada hasta {{ instant(data.guaranteed_until) }} }.</p></div></div>
       </div>
     }
     @if (isDegradedStatus(data.plan_status)) {
-      <div class="banner warn" role="alert" data-testid="plan-degraded">
-        <div class="banner-content"><mat-icon aria-hidden="true">warning</mat-icon><div><strong>Resultado degradado: no activable</strong><p>Se muestra el último plan utilizable, si existe; este resultado no gobierna las salidas.</p></div></div>
+      <div class="banner warn dtc-banner" role="alert" data-testid="plan-degraded">
+        <div class="banner-content dtc-banner-content"><mat-icon aria-hidden="true">warning</mat-icon><div><strong>Resultado degradado: no activable</strong><p>Se muestra el último plan utilizable, si existe; este resultado no gobierna las salidas.</p></div></div>
       </div>
     }
 
     @if (data.deficits?.length) {
-      <div class="banner warn" role="status" data-testid="plan-deficits">
-        <div class="banner-content"><mat-icon aria-hidden="true">warning</mat-icon><div><strong>Avisos de planificación</strong><ul>@for (deficit of data.deficits; track $index) { <li>{{ deficitText(deficit) }}</li> }</ul></div></div>
+      <div class="banner warn dtc-banner" role="status" data-testid="plan-deficits">
+        <div class="banner-content dtc-banner-content"><mat-icon aria-hidden="true">warning</mat-icon><div><strong>Avisos de planificación</strong><ul>@for (deficit of data.deficits; track $index) { <li>{{ deficitText(deficit) }}</li> }</ul></div></div>
       </div>
     }
 
-    <section class="workspace-panel" aria-labelledby="plan-title">
-      <div class="section-heading">
+    <section class="workspace-panel dtc-panel" aria-labelledby="plan-title">
+      <div class="section-heading dtc-section-heading">
         <div><p class="eyebrow">Automatización</p><h2 id="plan-title">Plan en curso</h2></div>
-        @if (data.plan_status) { <span class="status-chip active-chip">{{ planStatus(data.plan_status) }}</span> }
+        @if (data.plan_status) { <span class="status-chip active-chip dtc-status-chip">{{ planStatus(data.plan_status) }}</span> }
       </div>
       @if (data.plan; as plan) {
         <dl class="summary-list" data-testid="plan">
@@ -151,10 +151,10 @@
       }
     </section>
 
-    <section class="workspace-panel" aria-labelledby="telemetry-title">
-      <div class="section-heading">
+    <section class="workspace-panel dtc-panel" aria-labelledby="telemetry-title">
+      <div class="section-heading dtc-section-heading">
         <div><p class="eyebrow">Lecturas</p><h2 id="telemetry-title">Telemetría</h2></div>
-        <span class="revision-chip">{{ telemetryReady() }} de {{ telemetryTotal() }} completa</span>
+        <span class="revision-chip dtc-revision-chip">{{ telemetryReady() }} de {{ telemetryTotal() }} completa</span>
       </div>
       @if (data.telemetry?.length) {
         <div class="table-scroll">
@@ -179,8 +179,8 @@
       }
     </section>
 
-    <section class="workspace-panel" aria-labelledby="forecast-title">
-      <div class="section-heading"><div><p class="eyebrow">Datos de contexto</p><h2 id="forecast-title">Previsión</h2></div></div>
+    <section class="workspace-panel dtc-panel" aria-labelledby="forecast-title">
+      <div class="section-heading dtc-section-heading"><div><p class="eyebrow">Datos de contexto</p><h2 id="forecast-title">Previsión</h2></div></div>
       @if (data.forecast; as forecast) {
         <div class="forecast-summary" data-testid="forecast">
           <div class="forecast-icon" aria-hidden="true"><mat-icon>cloud</mat-icon></div>

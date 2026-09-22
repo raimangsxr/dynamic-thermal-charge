@@ -24,6 +24,6 @@ Eliminar divergencias de terminología y comportamiento visual mediante un conju
 - D2: Este cambio precede a los cambios funcionales de UX para evitar nuevas duplicaciones.
 
 ## Tasks
-- [ ] T1: Inventariar y consolidar el catálogo de presentación.
+- [x] T1: Inventariar y consolidar el catálogo de presentación.
 - [ ] T2: Extraer los patrones visuales mínimos y migrar los módulos.
 - [ ] T3: Añadir regresiones de accesibilidad, responsive y tamaño.
