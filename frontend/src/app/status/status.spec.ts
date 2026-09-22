@@ -11,6 +11,7 @@ import {
   provideHttpClientTesting,
 } from '@angular/common/http/testing';
 import { TestBed, type ComponentFixture } from '@angular/core/testing';
+import { provideRouter } from '@angular/router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Liveness, StatusDto } from '../core/api.types';
@@ -109,7 +110,7 @@ describe('Status', () => {
     TestBed.resetTestingModule();
     await TestBed.configureTestingModule({
       imports: [Status],
-      providers: [provideHttpClient(), provideHttpClientTesting()],
+      providers: [provideHttpClient(), provideHttpClientTesting(), provideRouter([])],
     }).compileComponents();
     fixture = TestBed.createComponent(Status);
     backend = TestBed.inject(HttpTestingController);
@@ -193,6 +194,37 @@ describe('Status', () => {
     expect(deficits?.textContent).toContain('Objetivo térmico');
     expect(deficits?.textContent).not.toContain('insufficient_capacity_or_power');
     expect(testId(element, 'plan-degraded')).not.toBeNull();
+  });
+
+  it('shows the shared recovery cause and links to its destination', () => {
+    const element = load({
+      ...statusDto(),
+      plan: null,
+      plan_status: 'INVALID',
+      absence_reason: 'invalid_automatic_plan',
+      recovery: {
+        primary: {
+          code: 'missing_required_state',
+          action_code: 'check_telemetry',
+          destination: '/estado#telemetry-title',
+          detail: 'missing_required_state: stored_soc_percent',
+          heater_ids: ['salon'],
+        },
+        secondary: [],
+        safe_state: 'outputs_off',
+      },
+      forecast_points_received: 4,
+      forecast_coverage_start: '2026-01-16T01:00:00Z',
+      forecast_coverage_end: '2026-01-16T04:00:00Z',
+      forecast_required_hours: 24,
+      forecast_automatic_eligible: true,
+    });
+
+    expect(testId(element, 'planning-recovery')?.textContent).toContain('Falta telemetría reciente');
+    expect(testId(element, 'planning-recovery')?.textContent).toContain('Detalle técnico');
+    expect(testId(element, 'planning-recovery-action')?.getAttribute('href')).toBe('/estado#telemetry-title');
+    expect(testId(element, 'forecast-status')?.textContent).toContain('4');
+    expect(testId(element, 'forecast-status')?.textContent).toContain('24 h');
   });
 
   it('presents converging as an activable non-blocking warning with its guarantee', () => {

@@ -58,6 +58,16 @@ const PLANNING_ACTION_LABELS: Record<string, string> = {
   contact_support: 'Contactar con soporte',
 };
 
+const PLANNING_RECOVERY_CAUSE_LABELS: Record<string, string> = {
+  missing_aemet_coverage: 'Cobertura meteorológica insuficiente',
+  missing_required_state: 'Falta telemetría reciente',
+  invalid_configuration: 'Configuración no válida',
+  insufficient_capacity_or_power: 'Capacidad o potencia insuficiente',
+  solver_failure: 'Cálculo no disponible',
+  no_plan_available: 'No hay un plan utilizable',
+  unknown: 'Causa no reconocida',
+};
+
 export function planningStepLabel(value: unknown): string {
   const key = String(value ?? '').trim().toLowerCase();
   return PLANNING_STEP_LABELS[key] ?? (key ? 'Paso no reconocido' : 'Trabajo de vista previa');
@@ -101,12 +111,23 @@ export function planningActionLabel(value: unknown): string {
   return PLANNING_ACTION_LABELS[key] ?? (key ? 'Acción no reconocida' : 'Sin acción recomendada');
 }
 
+export function planningRecoveryCauseLabel(value: unknown): string {
+  const key = String(value ?? '').trim().toLowerCase();
+  return PLANNING_RECOVERY_CAUSE_LABELS[key] ?? (key ? 'Causa no reconocida' : 'Causa no disponible');
+}
+
+export function planningRecoveryActionLabel(value: unknown): string {
+  return planningActionLabel(value);
+}
+
 export function planningActionForCause(value: unknown): string | null {
   const cause = String(value ?? '').trim().toLowerCase();
-  if (cause === 'missing_aemet_coverage') return 'Espera una previsión AEMET horaria completa de 24 horas o revisa la conexión meteorológica.';
+  if (cause === 'missing_aemet_coverage' || cause === 'missing_forecast_coverage' || cause === 'missing_guard_forecast_coverage' || cause === 'forecast_not_eligible') return 'Espera una previsión AEMET horaria completa de 24 horas o revisa la conexión meteorológica.';
   if (cause === 'missing_required_state') return 'Comprueba que cada acumulador publica temperatura interior y SOC reciente.';
+  if (cause === 'invalid_configuration') return 'Revisa las consignas y los parámetros de planificación antes de recalcular.';
   if (cause === 'insufficient_capacity_or_power' || cause === 'insufficient_stored_energy_or_power') return 'Revisa potencia disponible, capacidad térmica y la consigna programada.';
-  if (cause.startsWith('solver')) return 'Revisa la configuración del optimizador o contacta con soporte.';
+  if (cause === 'no_plan_available') return 'Revisa la configuración y solicita un nuevo cálculo del plan.';
+  if (cause === 'solver_failure' || cause.startsWith('solver')) return 'Revisa la configuración del optimizador o contacta con soporte.';
   return null;
 }
 

@@ -132,6 +132,23 @@
       </div>
     }
 
+    @if (data.recovery; as recovery) {
+      @if (recovery.primary; as cause) {
+        <div class="banner warn dtc-banner" [class.alert]="recovery.safe_state === 'outputs_off'" [attr.role]="recovery.safe_state === 'outputs_off' ? 'alert' : 'status'" data-testid="planning-recovery">
+          <div class="banner-content dtc-banner-content">
+            <mat-icon aria-hidden="true">{{ recovery.safe_state === 'outputs_off' ? 'block' : 'build' }}</mat-icon>
+            <div>
+              <strong>{{ recoveryCauseText(cause.code) }}</strong>
+              <p>{{ recoveryActionText(cause.code) }}</p>
+              @if (cause.detail) { <p class="technical-detail">Detalle técnico: {{ cause.detail }}</p> }
+              @if (recovery.secondary.length) { <ul>@for (secondary of recovery.secondary; track secondary.code) { <li>{{ recoveryCauseText(secondary.code) }}</li> }</ul> }
+            </div>
+          </div>
+          @if (cause.destination) { <a mat-stroked-button [routerLink]="recoveryRoute(cause.destination)" [fragment]="recoveryFragment(cause.destination)" data-testid="planning-recovery-action">{{ recoveryActionLabel(cause.action_code) }}</a> }
+        </div>
+      }
+    }
+
     <section class="workspace-panel dtc-panel" aria-labelledby="plan-title">
       <div class="section-heading dtc-section-heading">
         <div><p class="eyebrow">Automatización</p><h2 id="plan-title">Plan en curso</h2></div>
@@ -190,6 +207,10 @@
         <p class="empty">Sin previsión utilizable.</p>
       }
       <dl class="summary-list summary-list-compact" data-testid="forecast-status">
+        <div><dt>Puntos horarios recibidos</dt><dd>{{ data.forecast_points_received ?? 0 }}</dd></div>
+        <div><dt>Cobertura disponible</dt><dd>{{ forecastCoverageText(data) }}</dd></div>
+        <div><dt>Cobertura requerida</dt><dd>{{ data.forecast_required_hours ? data.forecast_required_hours + ' h' : 'Sin configurar' }}</dd></div>
+        <div><dt>Apta para automático</dt><dd>{{ data.forecast_automatic_eligible === true ? 'Sí' : data.forecast_automatic_eligible === false ? 'No' : 'Sin evaluar' }}</dd></div>
         <div><dt>Última consulta correcta</dt><dd data-testid="forecast-last-success">{{ instant(data.forecast_last_success_at) }}</dd></div>
         <div><dt>Estado de consulta</dt><dd>{{ forecastStatusText(data.forecast_status) }}</dd></div>
         <div><dt>{{ forecastNextText(data.forecast_next_run_kind) }}</dt><dd>{{ instant(data.forecast_next_run_at) }}</dd></div>

@@ -8,6 +8,8 @@ import {
   forecastSourceLabel,
   normalizePlanStatus,
   planningActionForCause,
+  planningRecoveryActionLabel,
+  planningRecoveryCauseLabel,
   planningStepLabel,
   planEventLabel,
   planReasonLabel,
@@ -60,6 +62,10 @@ describe('operator presentation vocabulary', () => {
     expect(planningStepLabel('future_step')).toBe('Paso no reconocido');
     expect(checkStatusLabel('future_status')).toBe('Estado no reconocido');
     expect(planningActionForCause('missing_required_state')).toContain('temperatura');
+    expect(planningRecoveryCauseLabel('missing_aemet_coverage')).toContain('Cobertura');
+    expect(planningRecoveryActionLabel('check_telemetry')).toBe('Comprobar telemetría');
+    expect(planningActionForCause('no_plan_available')).toContain('nuevo cálculo');
+    expect(planningRecoveryCauseLabel('future_cause')).toBe('Causa no reconocida');
     expect(planningActionForCause('unknown_cause')).toBeNull();
   });
 
