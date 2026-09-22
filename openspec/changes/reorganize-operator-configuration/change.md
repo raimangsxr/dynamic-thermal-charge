@@ -23,6 +23,6 @@ Agrupar la configuración según el modelo mental del operador y separar las opc
 - D1: La reorganización es exclusivamente de arquitectura de información; no introduce nuevos parámetros ni modifica el esquema persistente.
 
 ## Tasks
-- [ ] T1: Reagrupar campos y corregir los bloques meteorológicos obsoletos.
-- [ ] T2: Añadir presentación básica/avanzada y reubicar metadatos técnicos.
-- [ ] T3: Actualizar pruebas de renderizado, persistencia y accesibilidad.
+- [x] T1: Reagrupar campos y corregir los bloques meteorológicos obsoletos.
+- [x] T2: Añadir presentación básica/avanzada y reubicar metadatos técnicos.
+- [x] T3: Actualizar pruebas de renderizado, persistencia y accesibilidad.
