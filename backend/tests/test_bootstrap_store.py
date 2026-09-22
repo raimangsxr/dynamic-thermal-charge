@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import json
 import sqlite3
 
@@ -14,6 +14,7 @@ from dynamic_thermal_charge.persistence.local_schema import (
     BOOTSTRAP_SCHEMA_REVISION,
     bootstrap_metadata,
     bootstrap_schema_version,
+    bootstrap_state,
 )
 from dynamic_thermal_charge.persistence.locator import DatabaseDriver, DatabaseLocator
 from dynamic_thermal_charge.persistence.paths import StorePaths
@@ -32,9 +33,14 @@ def test_initialise_creates_minimal_schema_with_protected_permissions(tmp_path):
     result = repository.initialise()
 
     assert result.created is True
-    assert result.onboarding_token
+    assert not hasattr(result, "onboarding_token")
     assert result.locator == DatabaseLocator.sqlite()
     assert result.locator_revision == 1
+    assert repository.state().installation_state == "unconfigured"
+    with repository.engine.connect() as connection:
+        row = connection.execute(select(bootstrap_state)).mappings().one()
+    assert row["onboarding_digest"] is None
+    assert row["onboarding_expires_at"] is None
     assert oct(tmp_path.stat().st_mode & 0o777) == "0o700"
     assert oct(paths.bootstrap.stat().st_mode & 0o777) == "0o600"
     assert set(inspect(repository.engine).get_table_names()) == set(
@@ -46,23 +52,9 @@ def test_initialise_is_idempotent_and_never_reissues_the_token(tmp_path):
     paths = StorePaths.in_directory(tmp_path)
     first = BootstrapRepository(paths, clock=lambda: NOW).initialise()
     second = BootstrapRepository(paths, clock=lambda: NOW).initialise()
-    assert first.onboarding_token
     assert second.created is False
-    assert second.onboarding_token is None
-    assert BootstrapRepository(paths, clock=lambda: NOW).onboarding_token_matches(
-        first.onboarding_token
-    )
-
-
-def test_expired_onboarding_token_is_rejected(tmp_path):
-    paths = StorePaths.in_directory(tmp_path)
-    repository = BootstrapRepository(
-        paths, clock=lambda: NOW, onboarding_lifetime=timedelta(seconds=1)
-    )
-    token = repository.initialise().onboarding_token
-    later = BootstrapRepository(paths, clock=lambda: NOW + timedelta(seconds=2))
-    assert token is not None
-    assert later.onboarding_token_matches(token) is False
+    assert not hasattr(first, "onboarding_token")
+    assert not hasattr(second, "onboarding_token")
 
 
 def test_locator_compare_and_swap_is_atomic_and_secret_free(tmp_path):

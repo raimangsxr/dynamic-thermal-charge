@@ -5,6 +5,30 @@ host y evitar despliegues que no puedan acceder a él.
 
 ## Requirements
 
+### Requirement: Identidad aislada de Compose en desarrollo
+
+Los comandos Compose de desarrollo deben derivar una identidad de proyecto
+estable, válida y específica de cada checkout. Las variantes SQLite y
+PostgreSQL, así como parada y limpieza, deben reutilizar esa identidad; la
+configuración de producción conserva sus nombres y volúmenes explícitos.
+
+#### Scenario: Dos checkouts simultáneos
+
+- **WHEN** se levantan dos worktrees del repositorio
+- **THEN** cada uno usa contenedores, redes y volúmenes propios y detener uno no afecta al otro
+
+### Requirement: Artefactos de entrega reproducibles
+
+Las imágenes de producción deben instalar dependencias desde locks versionados,
+usar bases inmutables y publicar metadatos que relacionen el artefacto con su
+commit y locks. El backend debe conservar una ruta verificable para ARMv7 sin
+toolchain de compilación en la imagen final.
+
+#### Scenario: Repetición de un build
+
+- **WHEN** se construye dos veces el mismo commit con la misma configuración
+- **THEN** se resuelven las mismas dependencias y bases y los checks de entrega verifican sus metadatos
+
 ### Requirement: Preflight y GID GPIO autoritativo
 
 El reconciliador debe comprobar que `/dev/gpiochip0` existe como dispositivo de
