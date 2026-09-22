@@ -8,9 +8,9 @@ parte del commit `0118bd1` (`main`) y se integra siempre en `Codex-top`.
 
 | Worktree | Rama actual | Línea de trabajo | Cambios asignados |
 | --- | --- | --- | --- |
-| `Codex-top` | `raimangsxr/Codex-top` | Contratos de frontend, read models e integración final | `establish-shared-ui-language`, `reorganize-operator-configuration`, `add-planning-recovery-guidance` |
-| `Developer1` | `raimangsxr/Developer1` | Plataforma, build, entrega y refactor de planificación al final | `isolate-compose-worktrees`, `make-delivery-reproducible`, `modularize-planning-boundaries` |
-| `Developer2-cursor` | `raimangsxr/Developer2-cursor` | Barrera E2E, acceso y módulos de presentación independientes | `add-critical-flow-e2e-gate`, `simplify-access-lifecycle`, `improve-responsive-planning-editor`, `localize-actionable-diagnostics` |
+| `Codex-top` | `raimangsxr/Codex-top` | Contratos compartidos, E2E, planificación e integración final | `establish-shared-ui-language`, `add-critical-flow-e2e-gate`, `add-planning-recovery-guidance`, `improve-responsive-planning-editor` |
+| `Developer1` | `raimangsxr/Developer1` | Plataforma, seguridad, entrega y refactor de planificación al final | `isolate-compose-worktrees`, `make-delivery-reproducible`, `simplify-access-lifecycle`, `modularize-planning-boundaries` |
+| `Developer2-cursor` | `raimangsxr/Developer2-cursor` | Módulos frontend acotados, con revisión de `Codex-top` | `reorganize-operator-configuration`, `localize-actionable-diagnostics` |
 
 `Developer2-cursor` es el worktree que el equipo denomina `Developer2`.
 
@@ -21,18 +21,22 @@ ownership. El orden de handoff es:
 
 1. **Fundación paralela**
    - `Developer1`: `isolate-compose-worktrees` y `make-delivery-reproducible`.
-   - `Developer2`: `add-critical-flow-e2e-gate`.
    - `Codex-top`: `establish-shared-ui-language`.
 2. **Primera integración**
-   - Integrar la fundación de UI y la barrera E2E en `Codex-top`.
-   - `Codex-top`: `reorganize-operator-configuration`.
-   - `Developer2`: `simplify-access-lifecycle`, después de la fundación de UI y E2E.
+   - `Codex-top`: `add-critical-flow-e2e-gate`, incluyendo su integración en
+     `make check` una vez estabilizado el `Makefile` de `Developer1`.
+   - `Developer2`: `reorganize-operator-configuration`, después de la
+     fundación de UI; solo modifica el módulo de configuración y sus pruebas.
+   - `Developer1`: `simplify-access-lifecycle`, después de la fundación de UI
+     y E2E; mantiene en exclusiva las superficies de autenticación.
 3. **Contrato de recuperación**
    - `Codex-top`: `add-planning-recovery-guidance`, después de configuración y lenguaje UI.
    - No iniciar cambios en `planning/**` de frontend mientras se modifica el contrato de recuperación.
 4. **Módulos dependientes**
-   - `Developer2`: `improve-responsive-planning-editor`, después de recuperación, UI y E2E.
-   - `Developer2`: `localize-actionable-diagnostics`, después de recuperación y UI.
+   - `Codex-top`: `improve-responsive-planning-editor`, después de recuperación,
+     UI y E2E.
+   - `Developer2`: `localize-actionable-diagnostics`, después de recuperación
+     y UI; solo modifica Diagnóstico y sus pruebas.
 5. **Refactor estructural**
    - `Developer1`: `modularize-planning-boundaries`, después de E2E, recuperación y el editor responsive.
    - La verificación de equivalencia y la integración de `make check` quedan bajo coordinación de `Codex-top`.
@@ -50,27 +54,33 @@ Estas reglas evitan editar el mismo archivo desde dos worktrees activos:
   `backend/Dockerfile`, `frontend/Dockerfile`, locks de build, metadatos de
   publicación y workflows de entrega. Ningún otro worktree edita `Makefile` ni
   workflows durante la fundación.
-- `Developer2` es el owner de `frontend/e2e/**` y de los cambios en
-  `frontend/package.json`/`frontend/package-lock.json` necesarios para E2E.
-  La conexión de la suite a `make check` se hace como paso de integración una
-  vez estabilizado el `Makefile` de `Developer1`.
-- `Codex-top` es el owner de los patrones compartidos y del catálogo de UI;
-  mientras se extraen no se editan en paralelo los módulos que los consumen.
-  `README.md` se integra únicamente desde `Codex-top`.
-- `Codex-top` es el owner temporal de `frontend/src/app/config/**` para la
-  reorganización de configuración y de los read models/rutas de recuperación.
-- `Developer2` es el owner de `frontend/src/app/core/auth*`,
+- `Codex-top` es el owner de los patrones compartidos, el catálogo de UI,
+  `frontend/e2e/**`, `frontend/package.json` y `frontend/package-lock.json`
+  para E2E. Mientras se extraen patrones no se editan en paralelo los módulos
+  que los consumen. `README.md` se integra únicamente desde `Codex-top`.
+- `Developer2` es el único owner de `frontend/src/app/config/**` para la
+  reorganización de configuración y, después del contrato de recuperación,
+  de `frontend/src/app/diagnostics/**` para el diagnóstico localizado.
+- `Developer1` es el único owner de `frontend/src/app/core/auth*`,
   `frontend/src/app/core/login/**`, `frontend/src/app/onboarding/**` y los
   adaptadores backend de acceso para `simplify-access-lifecycle`.
-- `frontend/src/app/planning/**` se modifica por fases: recuperación en
-  `Codex-top`, después responsive en `Developer2` y finalmente extracción en
-  `Developer1`. Nunca hay dos de esas fases activas simultáneamente.
-- `Developer2` es el owner de `frontend/src/app/diagnostics/**` para el
-  diagnóstico localizado, después del contrato de recuperación.
+- `frontend/src/app/planning/**` se modifica por fases: recuperación y
+  responsive en `Codex-top`, y finalmente extracción en `Developer1`. Nunca
+  hay dos de esas fases activas simultáneamente.
 
 Si una tarea requiere un archivo fuera de su zona, se detiene en el worktree,
 se registra como dependencia de integración y se solicita el cambio desde
 `Codex-top`; no se resuelve editando el archivo en paralelo.
+
+## Alcance para Developer2
+
+`Developer2` trabajará un solo cambio cada vez. Sus tareas son deliberadamente
+acotadas a plantillas, estilos, catálogo de presentación y pruebas de
+componente en módulos independientes. No se le asignan autenticación,
+credenciales, Docker/CI, runner E2E, rutas de planificación, solver,
+persistencia ni migraciones. `Codex-top` revisa el diff y las pruebas enfocadas
+antes de cada handoff; cualquier necesidad de tocar una ruta compartida se
+convierte en una petición de integración, no en una edición local adicional.
 
 ## Protocolo de handoff
 
