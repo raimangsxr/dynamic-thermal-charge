@@ -200,11 +200,10 @@ const PLANNING_FIELDS: readonly FieldDefinition[] = [
   { name: 'replan_minutes', label: 'Frecuencia de replanificación (min)', type: 'number', min: '1', step: '1' },
   { name: 'planning_window_hours', label: 'Ventana visible (horas)', type: 'number', min: '1', step: '1' },
   { name: 'forecast_horizon_hours', label: 'Horizonte de previsión (horas)', type: 'number', min: '1', step: '1' },
-  { name: 'solver_time_limit_seconds', label: 'Tiempo máximo del optimizador (s)', type: 'number', min: '1', step: '1' },
-  { name: 'aemet_query_hour', label: 'Hora de consulta AEMET (0–23)', type: 'number', min: '0', max: '23', step: '1' },
   { name: 'contracted_power_w', label: 'Potencia total contratada (W)', type: 'number', min: '1', step: '100', hint: 'Fuente única para el optimizador y el indicador de Estado.' },
   { name: 'max_heating_power_w', label: 'Límite de calefacción (W)', type: 'number', min: '1', step: '100' },
   { name: 'base_load_w', label: 'Consumo base estimado (W)', type: 'number', min: '0', step: '100' },
+  { name: 'solver_time_limit_seconds', label: 'Tiempo máximo del optimizador (s)', type: 'number', min: '1', step: '1' },
   { name: 'deviation_shortfall_tolerance_c', label: 'Tolerancia de déficit imprevisto (°C)', type: 'number', min: '0.01', step: '0.1', hint: 'Desviación térmica adicional que se tolera antes de solicitar un recálculo inmediato.' },
   { name: 'deviation_surplus_soc_percent', label: 'Tolerancia de excedente de SOC (%)', type: 'number', min: '0.1', step: '0.5', hint: 'Excedente de carga almacenada que se tolera antes de solicitar un recálculo inmediato.' },
 ];
@@ -512,17 +511,16 @@ export class Config {
     }
     if (section === 'weather') {
       return [
-        { title: 'Proveedor y ubicación', fields: fields.slice(0, 3) },
-        { title: 'Temperaturas simuladas y respaldo', fields: fields.slice(3, 7) },
-        { title: 'Actualización', fields: fields.slice(7) },
+        { title: 'Proveedor y ubicación', description: 'Indica de dónde llegan los datos y qué municipio consulta AEMET.', fields: fields.slice(0, 2) },
+        { title: 'Consulta y actualización', description: 'Controla los tiempos de espera, los reintentos y la frecuencia de actualización.', fields: fields.slice(2) },
       ];
     }
     return [{ title: 'Parámetros', fields }];
   }
   planningGroups(): readonly FieldGroup[] {
     return [
-      { title: 'Cadencia y horizonte', description: 'Define cuánto mira el optimizador y cuándo vuelve a calcular.', fields: PLANNING_FIELDS.slice(0, 5) },
-      { title: 'Límites y sensibilidad', description: 'La potencia contratada total es la fuente única que usa el optimizador y Estado. Las tolerancias gobiernan los recálculos por desviación.', fields: PLANNING_FIELDS.slice(5, 10) }
+      { title: 'Operación básica', description: 'Define cuándo se recalcula, cuánto horizonte se observa y qué límites eléctricos se respetan.', fields: PLANNING_FIELDS.slice(0, 6) },
+      { title: 'Ajustes avanzados del optimizador', description: 'Estos valores afinan el tiempo de resolución y la sensibilidad ante desviaciones; normalmente no es necesario cambiarlos.', fields: PLANNING_FIELDS.slice(6) },
     ];
   }
   mqttEnabled(): boolean {
