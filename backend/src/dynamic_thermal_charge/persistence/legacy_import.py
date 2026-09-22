@@ -66,7 +66,14 @@ def import_legacy(
     if not apply:
         return report
 
-    target, _init_report, _token = initialise_at(target_paths, allow_seed=False)
+    admin_token = environment.get("DTC_API_TOKEN", "").strip()
+    if not admin_token:
+        raise ValueError(
+            "legacy environment must set DTC_API_TOKEN; onboarding is not available"
+        )
+    target, _init_report = initialise_at(
+        target_paths, allow_seed=False, admin_token=admin_token
+    )
     if not target.repository.is_empty():
         current, _ = target.repository.current()
         if current == config:

@@ -21,6 +21,7 @@ export class Auth {
 
   readonly token = this.stored.asReadonly();
   readonly authenticated = computed(() => this.stored() !== null);
+  readonly sessionExpired = signal(false);
 
   /** Remember the credential for this tab. */
   signIn(token: string): void {
@@ -35,10 +36,27 @@ export class Auth {
       // for as long as the page lives; it just will not survive a reload.
     }
     this.stored.set(trimmed);
+    this.sessionExpired.set(false);
   }
 
   /** Forget it. Called on explicit sign-out and when the API rejects it. */
   signOut(): void {
+    this.clearStoredCredential();
+    this.sessionExpired.set(false);
+  }
+
+  /** Clear a rejected session and report whether a redirect is needed. */
+  expire(): boolean {
+    const hadSession = this.stored() !== null;
+    if (!hadSession) {
+      return false;
+    }
+    this.clearStoredCredential();
+    this.sessionExpired.set(true);
+    return true;
+  }
+
+  private clearStoredCredential(): void {
     try {
       globalThis.sessionStorage?.removeItem(STORAGE_KEY);
     } catch {

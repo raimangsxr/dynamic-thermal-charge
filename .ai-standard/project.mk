@@ -22,7 +22,7 @@ AI_TEST_CMD :=
 AI_LINT_CMD := cd backend && PATH="$$PWD/.venv/bin:$$PATH" ruff check . ../custom_components && PATH="$$PWD/.venv/bin:$$PATH" python -m compileall -q src tests ../custom_components
 # Compose files stay part of the gate: a broken deployment descriptor is a
 # build failure, not a surprise on the device.
-AI_CHECK_EXTRA_CMD := $(MAKE) compose-check
+AI_CHECK_EXTRA_CMD := $(MAKE) delivery-check compose-check
 
 # Required only when profile `generic` is active.
 AI_GENERIC_CHECK_CMD :=

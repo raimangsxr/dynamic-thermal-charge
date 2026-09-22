@@ -10,7 +10,8 @@ import {
   provideHttpClientTesting,
 } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { Router } from '@angular/router';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Auth } from './auth';
 import { authInterceptor } from './auth.interceptor';
@@ -29,6 +30,7 @@ describe('authInterceptor', () => {
       providers: [
         provideHttpClient(withInterceptors([authInterceptor])),
         provideHttpClientTesting(),
+        { provide: Router, useValue: { navigateByUrl: vi.fn() } },
       ],
     });
     http = TestBed.inject(HttpClient);
@@ -91,6 +93,18 @@ describe('authInterceptor', () => {
     expect(failed).toBe(true);
     expect(auth.authenticated()).toBe(false);
     expect(sessionStorage.getItem('dtc.api-token')).toBeNull();
+    expect(auth.sessionExpired()).toBe(true);
+  });
+
+  it('redirects once and preserves an explicitly supplied credential', () => {
+    auth.signIn(TOKEN);
+    http.get('/api/v1/status', { headers: { Authorization: 'Bearer candidate' } }).subscribe({ error: () => undefined });
+    const request = backend.expectOne('/api/v1/status');
+    expect(request.request.headers.get('Authorization')).toBe('Bearer candidate');
+    request.flush({}, { status: 401, statusText: 'Unauthorized' });
+    const router = TestBed.inject(Router);
+    expect(router.navigateByUrl).toHaveBeenCalledTimes(1);
+    expect(router.navigateByUrl).toHaveBeenCalledWith('/login');
   });
 
   it('keeps the session on errors that are not about the credential', () => {

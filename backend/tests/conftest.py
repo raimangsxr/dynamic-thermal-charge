@@ -27,6 +27,9 @@ from dynamic_thermal_charge.persistence import (
 )
 from dynamic_thermal_charge.persistence.paths import StorePaths
 
+API_TOKEN = "test-token-" + "z" * 32
+AUTH = {"Authorization": f"Bearer {API_TOKEN}"}
+
 
 # --------------------------------------------------------------------------- #
 # Store fixtures
@@ -52,7 +55,7 @@ def store_env(store_paths) -> StorePaths:
 def store(store_paths):
     from dynamic_thermal_charge.persistence.bootstrap import initialise_at
 
-    store = initialise_at(store_paths, allow_seed=False)[0]
+    store = initialise_at(store_paths, allow_seed=False, admin_token=API_TOKEN)[0]
     try:
         yield store
     finally:
@@ -89,10 +92,6 @@ def recorder(initialised_store):
 # API fixtures. The client runs the app in process over the ASGI transport: no
 # port is ever opened (FR-048).
 # --------------------------------------------------------------------------- #
-
-API_TOKEN = "test-token-" + "z" * 32
-AUTH = {"Authorization": f"Bearer {API_TOKEN}"}
-
 
 @pytest.fixture
 def api_clock() -> "ControlledClock":

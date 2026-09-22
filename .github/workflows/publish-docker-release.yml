@@ -43,6 +43,12 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Compute image metadata
+        id: image-metadata
+        run: |
+          echo "vcs_ref=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "backend_lock_sha256=$(sha256sum backend/requirements.lock | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "frontend_lock_sha256=$(sha256sum frontend/package-lock.json | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
       - name: Validate release tag
         run: |
           case "$RELEASE_VERSION" in
@@ -60,9 +66,16 @@ jobs:
         with:
           context: backend
           file: backend/Dockerfile
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
           push: true
           tags: ${{ secrets.DOCKERHUB_USERNAME }}/dynamic-thermal-charge-backend:${{ env.RELEASE_VERSION }}
+          sbom: true
+          provenance: mode=max
+          build-args: |
+            DTC_BUILD_VERSION=${{ env.RELEASE_VERSION }}
+            DTC_VCS_REF=${{ steps.image-metadata.outputs.vcs_ref }}
+            DTC_BUILD_DATE=${{ github.event.release.published_at }}
+            DTC_LOCK_SHA256=${{ steps.image-metadata.outputs.backend_lock_sha256 }}
       - name: Build and push frontend image
         uses: docker/build-push-action@v7
         with:
@@ -71,7 +84,14 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ secrets.DOCKERHUB_USERNAME }}/dynamic-thermal-charge-frontend:${{ env.RELEASE_VERSION }}
-          build-args: APP_VERSION=${{ env.RELEASE_VERSION }}
+          sbom: true
+          provenance: mode=max
+          build-args: |
+            APP_VERSION=${{ env.RELEASE_VERSION }}
+            DTC_BUILD_VERSION=${{ env.RELEASE_VERSION }}
+            DTC_VCS_REF=${{ steps.image-metadata.outputs.vcs_ref }}
+            DTC_BUILD_DATE=${{ github.event.release.published_at }}
+            DTC_LOCK_SHA256=${{ steps.image-metadata.outputs.frontend_lock_sha256 }}
       - name: Update GitOps release pointer
         run: |
           git fetch --quiet origin main

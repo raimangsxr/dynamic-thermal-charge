@@ -223,7 +223,7 @@ def test_the_api_entrypoint_builds_no_output_driver(monkeypatch, tmp_path, capsy
     from dynamic_thermal_charge.persistence.paths import StorePaths
 
     paths = StorePaths.in_directory(tmp_path / "api-command")
-    initialise_at(paths)
+    initialise_at(paths, admin_token="a" * 40)
     monkeypatch.setattr(StorePaths, "production", classmethod(lambda cls: paths))
     served: dict = {}
     import uvicorn
@@ -243,7 +243,7 @@ def test_the_api_entrypoint_accepts_a_container_bind_override(monkeypatch, tmp_p
     import uvicorn
 
     paths = StorePaths.in_directory(tmp_path / "api-container-command")
-    initialise_at(paths)
+    initialise_at(paths, admin_token="a" * 40)
     monkeypatch.setattr(StorePaths, "production", classmethod(lambda cls: paths))
     served: dict = {}
     monkeypatch.setattr(uvicorn, "run", lambda app, **kw: served.update(kw))
@@ -252,18 +252,3 @@ def test_the_api_entrypoint_accepts_a_container_bind_override(monkeypatch, tmp_p
 
     assert served["host"] == "0.0.0.0"
     assert served["port"] == 8080
-
-
-def test_the_api_entrypoint_starts_safe_onboarding_without_an_admin_token(monkeypatch, tmp_path, capsys):
-    from dynamic_thermal_charge.entrypoints import run_api
-    from dynamic_thermal_charge.persistence.bootstrap import initialise_at
-    from dynamic_thermal_charge.persistence.paths import StorePaths
-    import uvicorn
-
-    paths = StorePaths.in_directory(tmp_path / "api-onboarding")
-    initialise_at(paths)
-    monkeypatch.setattr(StorePaths, "production", classmethod(lambda cls: paths))
-    served = {}
-    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: served.update(kw))
-    run_api()
-    assert served["host"] == "127.0.0.1"

@@ -157,7 +157,7 @@ def test_no_configuration_at_all_is_distinguishable(store_env, api_settings, api
     from dynamic_thermal_charge.api import create_app
     from dynamic_thermal_charge.persistence.bootstrap import initialise_at, open_store
 
-    initialise_at(store_env, allow_seed=False)
+    initialise_at(store_env, allow_seed=False, admin_token=API_TOKEN)
     app = create_app(
         settings=api_settings,
         store_factory=lambda: open_store(store_env),
@@ -244,7 +244,7 @@ def test_the_default_store_factory_applies_the_timeouts(monkeypatch, tmp_path):
     from dynamic_thermal_charge.persistence.paths import StorePaths
 
     paths = StorePaths.in_directory(tmp_path / "default-store")
-    initialise_at(paths, allow_seed=False)
+    initialise_at(paths, allow_seed=False, admin_token=API_TOKEN)
     monkeypatch.setattr(StorePaths, "production", classmethod(lambda cls: paths))
     store = _default_store_factory()
     assert store.engine.pool._timeout == POOL_TIMEOUT_SECONDS

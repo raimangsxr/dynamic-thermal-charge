@@ -100,6 +100,14 @@ class StorageContext:
         seed_functional_configuration: bool = True,
         admin_token: str | None = None,
     ) -> StorageBootstrapResult:
+        if admin_token is None:
+            raise RuntimeError(
+                "DTC_API_TOKEN must be set before storage initialisation; "
+                "onboarding is not available"
+            )
+        from ..api.settings import ApiSettings
+
+        ApiSettings(token=admin_token)
         resolved = paths or StorePaths.production()
         with _initialisation_lock(resolved):
             bootstrap_repository = BootstrapRepository(resolved)
@@ -139,6 +147,13 @@ class StorageContext:
         engines = build_canonical_engines(locator, resolved, timeouts=engine_timeouts)
         require_active_schemas(engines.configuration, engines.application)
         generation = _build_generation(locator, engines, fallback)
+        try:
+            _require_persisted_admin_token(generation.system_configuration)
+        except Exception:
+            generation.close()
+            fallback.close()
+            bootstrap.close()
+            raise
         return cls(resolved, bootstrap, fallback, generation)
 
     @property
@@ -338,9 +353,10 @@ def _initialisation_lock(paths: StorePaths) -> Iterator[None]:
 
 def _seed_admin_token(system_configuration, bootstrap, admin_token: str) -> None:
     """Persist the deployment token and close the first-run gate."""
-    if bootstrap.state().installation_state == "configured":
-        return
     snapshot = system_configuration.current()
+    if snapshot.secrets.get("admin_token_digest") is not None:
+        bootstrap.mark_configured()
+        return
     revision = snapshot.revision
     system_configuration.update_section(
         "api",
@@ -362,6 +378,16 @@ def _seed_admin_token(system_configuration, bootstrap, admin_token: str) -> None
         revision_after=revision + 1,
     )
     bootstrap.mark_configured()
+
+
+def _require_persisted_admin_token(system_configuration) -> None:
+    snapshot = system_configuration.current()
+    secret = snapshot.secrets.get("admin_token_digest")
+    if secret is None or not secret.value:
+        raise RuntimeError(
+            "administrator token is not configured; set DTC_API_TOKEN and "
+            "restart the service"
+        )
 
 
 def _json_ready(value):
