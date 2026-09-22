@@ -24,6 +24,6 @@ Convertir el registro técnico en una herramienta de diagnóstico comprensible p
 - D2: Este cambio depende de `establish-shared-ui-language` y `add-planning-recovery-guidance`.
 
 ## Tasks
-- [ ] T1: Definir el catálogo de eventos, orígenes y fallbacks.
-- [ ] T2: Implementar detalle técnico, remediación y layout responsive.
-- [ ] T3: Añadir pruebas de presentación, navegación y copia.
+- [x] T1: Definir el catálogo de eventos, orígenes y fallbacks.
+- [x] T2: Implementar detalle técnico, remediación y layout responsive.
+- [x] T3: Añadir pruebas de presentación, navegación y copia.

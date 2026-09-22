@@ -68,10 +68,30 @@
           <tbody>
             @for (event of events(); track event.id) {
               <tr [class.warning]="event.level === 'WARNING'" [class.error]="event.level === 'ERROR' || event.level === 'CRITICAL'" [attr.data-level]="event.level">
-                <td>{{ instant(event.occurred_at) }}</td>
-                <td><span class="event-level"><mat-icon aria-hidden="true">{{ levelIcon(event.level) }}</mat-icon><strong>{{ event.level }}</strong></span></td>
-                <td>{{ event.logger }}</td>
-                <td>{{ event.message }}</td>
+                <td data-label="Hora">{{ instant(event.occurred_at) }}</td>
+                <td data-label="Severidad"><span class="event-level"><mat-icon aria-hidden="true">{{ levelIcon(event.level) }}</mat-icon><strong>{{ eventSeverity(event) }}</strong></span></td>
+                <td data-label="Origen">{{ eventOrigin(event) }}</td>
+                <td data-label="Evento" class="event-cell">
+                  <div class="event-heading"><strong>{{ eventTitle(event) }}</strong>@if (eventCause(event); as cause) { <span class="event-cause">{{ cause }}</span> }</div>
+                  <p class="event-summary">{{ eventSummary(event) }}</p>
+                  @if (eventActionText(event); as action) {
+                    <div class="event-remedy">
+                      <div><strong>Qué hacer</strong><span>{{ action }}</span></div>
+                      @if (eventDestination(event); as destination) { <a mat-stroked-button [routerLink]="recoveryRoute(destination)" [fragment]="recoveryFragment(destination)" data-testid="diagnostic-action">{{ eventActionLabel(event) }}</a> }
+                    </div>
+                  }
+                  <details class="technical-details" data-testid="diagnostic-details">
+                    <summary>Detalle técnico</summary>
+                    <dl>
+                      <div><dt>Código detectado</dt><dd><code>{{ technicalCode(event) }}</code></dd></div>
+                      <div><dt>Nivel original</dt><dd><code>{{ event.level }}</code></dd></div>
+                      <div><dt>Origen original</dt><dd><code>{{ event.logger }}</code></dd></div>
+                      <div><dt>Mensaje original</dt><dd><code>{{ event.message }}</code></dd></div>
+                    </dl>
+                    <button mat-stroked-button type="button" (click)="copyTechnical(event)" data-testid="copy-diagnostic-detail"><mat-icon aria-hidden="true">content_copy</mat-icon>Copiar detalle técnico</button>
+                    @if (copyFeedback()) { <p class="copy-feedback" role="status" aria-live="polite">{{ copyFeedback() }}</p> }
+                  </details>
+                </td>
               </tr>
             }
           </tbody>
