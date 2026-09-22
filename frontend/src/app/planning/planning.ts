@@ -20,6 +20,9 @@ import {
   forecastSourceLabel,
   forecastStatusLabel,
   normalizePlanStatus,
+  checkStatusLabel,
+  planningActionForCause,
+  planningStepLabel,
   planReasonLabel,
   planStatusLabel,
   requirementLabel,
@@ -125,14 +128,6 @@ function explainPlanningDeficit(item: PlanningDeficitDto): string {
   if (item.reason.startsWith('projected_deficit')) return 'La proyección actual muestra un déficit térmico que el plan anterior no contemplaba.';
   if (item.reason.startsWith('surplus_stored_energy')) return 'La proyección actual conserva más energía almacenada de la prevista y el plan puede adaptarse.';
   return detail || item.reason;
-}
-
-function recommendedPlanningAction(cause: string): string | null {
-  if (cause === 'missing_aemet_coverage') return 'Espera una previsión AEMET horaria completa de 24 horas o revisa la conexión meteorológica.';
-  if (cause === 'missing_required_state') return 'Comprueba que cada acumulador publica temperatura interior y SOC reciente.';
-  if (cause === 'insufficient_capacity_or_power' || cause === 'insufficient_stored_energy_or_power') return 'Revisa potencia disponible, capacidad térmica y la consigna programada.';
-  if (cause.startsWith('solver')) return 'Revisa la configuración del optimizador o contacta con soporte.';
-  return null;
 }
 
 @Component({
@@ -545,7 +540,7 @@ export class PlanningDetailDialog implements AfterViewInit, OnDestroy {
       const warning = warnings.find((value): value is Record<string, unknown> => typeof value === 'object' && value !== null && value['cause'] === cause);
       if (typeof warning?.['recommended_action'] === 'string') return warning['recommended_action'];
     }
-    return recommendedPlanningAction(cause);
+    return planningActionForCause(cause);
   }
 
   sourceText(source: string): string {
@@ -667,11 +662,11 @@ export class PlanningDetailDialog implements AfterViewInit, OnDestroy {
   }
 
   checkText(name: string): string {
-    return ({ input_validation: 'Validación de inputs', telemetry: 'Telemetría', aemet_coverage: 'Cobertura AEMET', demand_estimation: 'Estimación de demanda', room_model: 'Modelo energético', constraints: 'Materialización de constraints', resolution: 'Resolución', safety_validation: 'Validación de seguridad', operator_summary: 'Resumen final' } as Record<string, string>)[name] ?? name;
+    return planningStepLabel(name);
   }
 
   checkStatusText(status: string): string {
-    return ({ pending: 'pendiente', running: 'en curso', completed: 'completado', error: 'error', cancelled: 'cancelado', skipped: 'omitido' } as Record<string, string>)[status] ?? status;
+    return checkStatusLabel(status);
   }
 }
 
@@ -1366,7 +1361,7 @@ export class Planning implements AfterViewInit, OnDestroy {
       const warning = warnings.find((value): value is Record<string, unknown> => typeof value === 'object' && value !== null && value['cause'] === cause);
       if (typeof warning?.['recommended_action'] === 'string') return warning['recommended_action'];
     }
-    return recommendedPlanningAction(cause);
+    return planningActionForCause(cause);
   }
 
   storedEnergyKwh(data: PlanningDto, heaterId: string, slotIndex: number): number | null {
@@ -1426,11 +1421,11 @@ export class Planning implements AfterViewInit, OnDestroy {
   }
 
   checkStatusText(status: string): string {
-    return ({ pending: 'pendiente', running: 'en curso', completed: 'completado', error: 'error', cancelled: 'cancelado', skipped: 'omitido' } as Record<string, string>)[status] ?? status;
+    return checkStatusLabel(status);
   }
 
   checkText(name: string): string {
-    return ({ input_validation: 'Validación de entradas', telemetry: 'Telemetría', aemet_coverage: 'Cobertura AEMET', demand_estimation: 'Balance energético', room_model: 'Modelo energético', constraints: 'Materialización de consignas', resolution: 'Resolución', safety_validation: 'Validación de seguridad', operator_summary: 'Resumen final' } as Record<string, string>)[name] ?? name;
+    return planningStepLabel(name);
   }
 
   previewSlotLabel(slot: Record<string, unknown>): string { return this.dateTime(String(slot['start'] ?? '')); }
