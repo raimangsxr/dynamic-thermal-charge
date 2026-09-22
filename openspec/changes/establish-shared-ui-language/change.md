@@ -25,5 +25,5 @@ Eliminar divergencias de terminología y comportamiento visual mediante un conju
 
 ## Tasks
 - [x] T1: Inventariar y consolidar el catálogo de presentación.
-- [ ] T2: Extraer los patrones visuales mínimos y migrar los módulos.
-- [ ] T3: Añadir regresiones de accesibilidad, responsive y tamaño.
+- [x] T2: Extraer los patrones visuales mínimos y migrar los módulos.
+- [x] T3: Añadir regresiones de accesibilidad, responsive y tamaño.
