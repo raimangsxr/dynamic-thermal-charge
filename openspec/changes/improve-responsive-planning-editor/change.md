@@ -24,6 +24,6 @@ Hacer que la creación y edición de una planificación sea comprensible y opera
 - D2: Se reutilizarán los patrones de `establish-shared-ui-language` y la cobertura de `add-critical-flow-e2e-gate`.
 
 ## Tasks
-- [ ] T1: Corregir el layout y definir el patrón responsive de navegación.
-- [ ] T2: Reorganizar el flujo móvil y la zona de acciones.
-- [ ] T3: Añadir pruebas responsive, de teclado y del ciclo de activación.
+- [x] T1: Corregir el layout y definir el patrón responsive de navegación.
+- [x] T2: Reorganizar el flujo móvil y la zona de acciones.
+- [x] T3: Añadir pruebas responsive, de teclado y del ciclo de activación.

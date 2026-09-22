@@ -22,6 +22,11 @@
   }
 
   @if (snapshot(); as data) {
+    <nav class="planning-section-nav" aria-label="Secciones de planificación" data-testid="planning-section-nav">
+      <button type="button" [class.active]="selectedTab() === 0" [attr.aria-current]="selectedTab() === 0 ? 'page' : null" (click)="onTabChange(0)" data-testid="planning-section-nav-item">Planificación activa</button>
+      <button type="button" [class.active]="selectedTab() === 1" [attr.aria-current]="selectedTab() === 1 ? 'page' : null" (click)="onTabChange(1)" data-testid="planning-section-nav-item">Nueva planificación</button>
+      <button type="button" [class.active]="selectedTab() === 2" [attr.aria-current]="selectedTab() === 2 ? 'page' : null" (click)="onTabChange(2)" data-testid="planning-section-nav-item">Previsión meteorológica</button>
+    </nav>
     <mat-tab-group
       class="planning-tabs"
       [selectedIndex]="selectedTab()"

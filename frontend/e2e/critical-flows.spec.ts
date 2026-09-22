@@ -36,6 +36,9 @@ for (const width of VIEWPORTS) {
     await expectNoHorizontalOverflow(page);
     const results = await new AxeBuilder({ page }).analyze();
     expect(results.violations.filter((item) => item.impact === 'critical' || item.impact === 'serious')).toEqual([]);
+    await page.goto('/planificacion');
+    await expect(page.getByTestId('planning-section-nav')).toBeAttached();
+    await expectNoHorizontalOverflow(page);
   });
 }
 
@@ -68,7 +71,7 @@ test('essential planning controls remain keyboard reachable on a narrow viewport
   await installFixture(page);
   await signIn(page);
   await page.goto('/planificacion');
-  await page.getByRole('tab', { name: 'Nueva planificación' }).click();
+  await page.getByTestId('planning-section-nav-item').nth(1).click();
   await page.getByTestId('target-temperature-input').focus();
   await page.keyboard.press('ControlOrMeta+A');
   await page.keyboard.type('22');
