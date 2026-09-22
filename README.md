@@ -21,11 +21,12 @@ afecta a la puerta de calidad y a las pruebas de la integración.
 make setup   # entorno de backend en backend/.venv y dependencias del panel
 make test    # pruebas de backend y de frontend
 make lint    # ruff sobre el backend
-make check   # test + lint + build del panel + validación de los Compose
+make check   # test + lint + build + Compose + E2E crítico aislado
 make dev     # valida la configuración persistida
 ```
 
-La barrera de navegador se ejecuta desde el frontend con una fixture aislada:
+La barrera de navegador también forma parte de `make check`; para ejecutarla
+manualmente desde el frontend con una fixture aislada:
 
 ```sh
 cd frontend

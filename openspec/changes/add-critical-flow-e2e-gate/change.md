@@ -26,4 +26,4 @@ Detectar de forma determinista regresiones funcionales, responsive y de accesibi
 ## Tasks
 - [x] T1: Incorporar el runner, fixture aislado y comandos del proyecto.
 - [x] T2: Implementar los flujos, viewports y aserciones acordados.
-- [ ] T3: Integrar la suite en `make check` y documentar su diagnóstico.
+- [x] T3: Integrar la suite en `make check` y documentar su diagnóstico.

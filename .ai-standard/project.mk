@@ -20,9 +20,11 @@ AI_TEST_CMD :=
 # change). Lint is therefore overridden to the checks that are in scope. Drop
 # this override when `ruff format` is adopted and the native lint takes over.
 AI_LINT_CMD := cd backend && PATH="$$PWD/.venv/bin:$$PATH" ruff check . ../custom_components && PATH="$$PWD/.venv/bin:$$PATH" python -m compileall -q src tests ../custom_components
-# Compose files stay part of the gate: a broken deployment descriptor is a
-# build failure, not a surprise on the device.
-AI_CHECK_EXTRA_CMD := $(MAKE) delivery-check compose-check
+# Delivery, Compose and the isolated browser gate stay part of the quality
+# gate: a broken deployment descriptor or critical user flow is a build
+# failure, not a surprise on the device. Playwright's browser install is
+# idempotent and also makes a fresh CI checkout self-contained.
+AI_CHECK_EXTRA_CMD := $(MAKE) delivery-check compose-check && npm --prefix frontend run e2e:install && npm --prefix frontend run e2e
 
 # Required only when profile `generic` is active.
 AI_GENERIC_CHECK_CMD :=

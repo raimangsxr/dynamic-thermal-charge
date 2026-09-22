@@ -23,8 +23,8 @@ test('unauthenticated navigation reaches login and a controlled 401 is surfaced'
   await expect(page.getByTestId('planning-recovery')).toBeVisible();
   state.unauthorizedStatus = true;
   await page.reload();
-  await expect(page.getByTestId('failure')).toBeVisible();
-  await expect(page.getByTestId('failure')).toContainText('No se puede contactar');
+  await expect(page).toHaveURL(/\/login$/);
+  await expect(page.getByRole('alert')).toContainText('La sesión ya no es válida');
 });
 
 for (const width of VIEWPORTS) {
