@@ -7,13 +7,12 @@ from datetime import datetime, timezone
 from time import monotonic, sleep
 from typing import Callable
 
-from .charge_planning import (
-    AutomaticPlan,
-    PlanningCancelled,
+from .planning_compatibility import (
     deserialize_automatic_plan,
     input_token,
     serialize_automatic_plan,
 )
+from .planning_domain import AutomaticPlan, PlanningCancelled
 
 
 def coordinated_plan(

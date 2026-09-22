@@ -7,11 +7,13 @@ from dynamic_thermal_charge.persistence.local_schema import migration_operation
 from dynamic_thermal_charge.persistence.locator import DatabaseLocator
 from dynamic_thermal_charge.persistence.migration import MigrationCoordinator, MigrationInProgress
 from dynamic_thermal_charge.persistence.paths import StorePaths
-from tests.conftest import AUTH
+from tests.conftest import API_TOKEN, AUTH
 
 
 def test_preflight_is_ephemeral_and_never_changes_locator(tmp_path):
-    context = StorageContext.initialise(StorePaths.in_directory(tmp_path)).context
+    context = StorageContext.initialise(
+        StorePaths.in_directory(tmp_path), admin_token=API_TOKEN
+    ).context
     locator, revision = context.bootstrap.locator()
     result = MigrationCoordinator(context).preflight(DatabaseLocator.sqlite())
     assert result == {"ok": True, "driver": "sqlite", "tls": None}
@@ -21,7 +23,9 @@ def test_preflight_is_ephemeral_and_never_changes_locator(tmp_path):
 
 
 def test_migration_requires_confirmation_and_exclusive_unexpired_lease(tmp_path):
-    context = StorageContext.initialise(StorePaths.in_directory(tmp_path)).context
+    context = StorageContext.initialise(
+        StorePaths.in_directory(tmp_path), admin_token=API_TOKEN
+    ).context
     coordinator = MigrationCoordinator(context, owner="one")
     with pytest.raises(ValueError, match="confirmation"):
         coordinator.start(DatabaseLocator.sqlite(), expected_locator_revision=1, confirmed=False)

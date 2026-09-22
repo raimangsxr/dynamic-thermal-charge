@@ -498,7 +498,6 @@ export interface TopologyDto {
   pending_events: number;
   administrative_writes_allowed: boolean;
 }
-export interface OnboardingStatusDto { required: boolean; state: string; }
 export interface SecretEditDto { action: 'keep' | 'replace' | 'clear'; value?: string; }
 export interface DatabaseCandidateDto {
   driver: 'sqlite' | 'postgresql'; host?: string; port?: number; database?: string;

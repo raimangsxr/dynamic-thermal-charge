@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
-import secrets
 import sqlite3
 from typing import Callable
 
@@ -22,7 +21,6 @@ from .local_schema import (
 )
 from .locator import DatabaseDriver, DatabaseLocator
 from .paths import StorePaths
-from .secret_digest import digest_secret, secret_matches
 from .topology import BootstrapCorruptError, BootstrapIncompatibleError
 from .url import parse_location
 
@@ -33,7 +31,6 @@ Clock = Callable[[], datetime]
 @dataclass(frozen=True)
 class BootstrapInitResult:
     created: bool
-    onboarding_token: str | None
     locator: DatabaseLocator
     locator_revision: int
 
@@ -42,8 +39,6 @@ class BootstrapInitResult:
 class BootstrapRecord:
     installation_state: str
     locator_revision: int
-    onboarding_expires_at: datetime | None
-    onboarding_attempts: int
 
 
 class BootstrapRepository:
@@ -52,11 +47,9 @@ class BootstrapRepository:
         paths: StorePaths,
         *,
         clock: Clock | None = None,
-        onboarding_lifetime: timedelta = timedelta(hours=24),
     ) -> None:
         self.paths = paths
         self._clock = clock or (lambda: datetime.now(timezone.utc))
-        self._onboarding_lifetime = onboarding_lifetime
         _ensure_state_permissions(paths.state_directory)
         self.engine = _local_engine(paths.bootstrap)
         upgrade_bootstrap_schema(self.engine)
@@ -68,9 +61,6 @@ class BootstrapRepository:
 
     def initialise(self) -> BootstrapInitResult:
         now = _aware(self._clock())
-        token = secrets.token_urlsafe(32)
-        digest = digest_secret(token)
-        expires = now + self._onboarding_lifetime
         with self.engine.begin() as connection:
             result = connection.execute(
                 insert(bootstrap_state)
@@ -79,8 +69,10 @@ class BootstrapRepository:
                     id=1,
                     installation_state="unconfigured",
                     locator_revision=1,
-                    onboarding_digest=digest,
-                    onboarding_expires_at=expires.isoformat(),
+                    # These columns remain in the schema for existing stores,
+                    # but the one-use onboarding flow no longer writes them.
+                    onboarding_digest=None,
+                    onboarding_expires_at=None,
                     onboarding_attempts=0,
                     created_at=now.isoformat(),
                     updated_at=now.isoformat(),
@@ -104,7 +96,6 @@ class BootstrapRepository:
         locator, revision = self.locator()
         return BootstrapInitResult(
             created=created,
-            onboarding_token=token if created else None,
             locator=locator,
             locator_revision=revision,
         )
@@ -117,8 +108,6 @@ class BootstrapRepository:
         return BootstrapRecord(
             installation_state=str(row["installation_state"]),
             locator_revision=int(row["locator_revision"]),
-            onboarding_expires_at=_parse_datetime(row["onboarding_expires_at"]),
-            onboarding_attempts=int(row["onboarding_attempts"]),
         )
 
     def locator(self) -> tuple[DatabaseLocator, int]:
@@ -133,73 +122,8 @@ class BootstrapRepository:
             )
         return _map_locator(locator_row), int(state_row.locator_revision)
 
-    def onboarding_token_matches(self, offered: str) -> bool:
-        now = _aware(self._clock())
-        with self.engine.connect() as connection:
-            row = connection.execute(
-                select(
-                    bootstrap_state.c.installation_state,
-                    bootstrap_state.c.onboarding_digest,
-                    bootstrap_state.c.onboarding_expires_at,
-                )
-            ).mappings().one_or_none()
-        if row is None or row["installation_state"] != "unconfigured":
-            return False
-        expires = _parse_datetime(row["onboarding_expires_at"])
-        digest = row["onboarding_digest"]
-        return bool(digest and expires and now <= expires and secret_matches(offered, digest))
-
-    def reserve_onboarding(self, offered: str, *, maximum_attempts: int = 8) -> bool:
-        """Atomically reserve the one-use credential for finalisation."""
-        now = _aware(self._clock())
-        with self.engine.begin() as connection:
-            row = connection.execute(select(bootstrap_state)).mappings().one_or_none()
-            if row is None:
-                raise BootstrapCorruptError("bootstrap has no installation state")
-            expires = _parse_datetime(row["onboarding_expires_at"])
-            valid = (
-                row["installation_state"] == "unconfigured"
-                and int(row["onboarding_attempts"]) < maximum_attempts
-                and expires is not None and now <= expires
-                and bool(row["onboarding_digest"])
-                and secret_matches(offered, str(row["onboarding_digest"]))
-            )
-            values = {
-                "onboarding_attempts": int(row["onboarding_attempts"]) + 1,
-                "updated_at": now.isoformat(),
-            }
-            if valid:
-                values["installation_state"] = "completing"
-            connection.execute(
-                update(bootstrap_state).where(bootstrap_state.c.id == 1).values(**values)
-            )
-            return valid
-
-    def finish_onboarding(self) -> None:
-        now = _aware(self._clock()).isoformat()
-        with self.engine.begin() as connection:
-            changed = connection.execute(
-                update(bootstrap_state)
-                .where((bootstrap_state.c.id == 1) & (bootstrap_state.c.installation_state == "completing"))
-                .values(
-                    installation_state="configured", onboarding_digest=None,
-                    onboarding_expires_at=None, updated_at=now,
-                )
-            )
-            if changed.rowcount != 1:
-                raise ConfigConflictError("onboarding is not reserved")
-
-    def release_onboarding(self) -> None:
-        now = _aware(self._clock()).isoformat()
-        with self.engine.begin() as connection:
-            connection.execute(
-                update(bootstrap_state)
-                .where((bootstrap_state.c.id == 1) & (bootstrap_state.c.installation_state == "completing"))
-                .values(installation_state="unconfigured", updated_at=now)
-            )
-
     def mark_configured(self) -> None:
-        """Complete first-run state after an administrator token was seeded."""
+        """Close the bootstrap gate after an administrator token was seeded."""
         now = _aware(self._clock()).isoformat()
         with self.engine.begin() as connection:
             connection.execute(
@@ -344,15 +268,6 @@ def _aware(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
-
-
-def _parse_datetime(value: str | None) -> datetime | None:
-    if value is None:
-        return None
-    try:
-        return _aware(datetime.fromisoformat(value))
-    except ValueError as exc:
-        raise BootstrapCorruptError("bootstrap contains an invalid timestamp") from exc
 
 
 __all__ = [

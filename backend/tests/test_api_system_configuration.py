@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 from dynamic_thermal_charge.api import create_app
+from dynamic_thermal_charge.api.settings import ApiSettingsError
 from dynamic_thermal_charge.persistence.bootstrap import initialise_at, open_store
 from dynamic_thermal_charge.persistence.paths import StorePaths
 from tests.conftest import AUTH
@@ -11,45 +13,24 @@ from tests.conftest import AUTH
 def test_deployment_token_skips_onboarding(tmp_path):
     paths = StorePaths.in_directory(tmp_path / "deployment-token")
     token = "deployment-token-" + "a" * 32
-    store, _report, onboarding_token = initialise_at(paths, admin_token=token)
-    assert onboarding_token is None
+    store, _report = initialise_at(paths, admin_token=token)
     store.context.close()
 
     app = create_app(store_factory=lambda: open_store(paths))
     client = TestClient(app)
-    assert client.get("/api/v1/onboarding/status").json()["required"] is False
+    assert client.get("/api/v1/onboarding/status").status_code == 404
     assert client.get(
         "/api/v1/config", headers={"Authorization": f"Bearer {token}"}
     ).status_code == 200
 
 
-def test_onboarding_is_one_use_and_enables_persisted_authentication(tmp_path):
-    paths = StorePaths.in_directory(tmp_path / "onboarding")
-    _store, _report, onboarding_token = initialise_at(paths, allow_seed=True)
-    assert onboarding_token
-    app = create_app(store_factory=lambda: open_store(paths))
-    client = TestClient(app)
+def test_initialisation_requires_a_strong_deployment_token(tmp_path):
+    paths = StorePaths.in_directory(tmp_path / "missing-token")
+    with pytest.raises(RuntimeError, match="DTC_API_TOKEN"):
+        initialise_at(paths, allow_seed=False)
 
-    assert client.get("/api/v1/onboarding/status").json()["required"] is True
-    assert client.get("/api/v1/config").status_code == 401
-    assert client.post(
-        "/api/v1/onboarding/complete",
-        json={"onboarding_credential": "wrong", "administrator_token": "a" * 40},
-    ).status_code == 401
-
-    response = client.post(
-        "/api/v1/onboarding/complete",
-        json={"onboarding_credential": onboarding_token, "administrator_token": "a" * 40},
-    )
-    assert response.status_code == 204
-    assert client.get("/api/v1/onboarding/status").json()["required"] is False
-    assert client.get(
-        "/api/v1/config", headers={"Authorization": f"Bearer {'a' * 40}"}
-    ).status_code == 200
-    assert client.post(
-        "/api/v1/onboarding/complete",
-        json={"onboarding_credential": onboarding_token, "administrator_token": "b" * 40},
-    ).status_code == 401
+    with pytest.raises(ApiSettingsError, match="too short"):
+        initialise_at(paths, allow_seed=False, admin_token="short")
 
 
 def test_system_sections_are_allow_listed_revisioned_and_secret_free(client):

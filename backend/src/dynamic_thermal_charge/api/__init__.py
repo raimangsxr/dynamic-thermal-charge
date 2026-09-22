@@ -105,7 +105,6 @@ def create_app(
     from .routes import docs as docs_routes
     from .routes import health as health_routes
     from .routes import history as history_routes
-    from .routes import onboarding as onboarding_routes
     from .routes import status as status_routes
     from .routes import system as system_routes
     from .routes import relay_test as relay_test_routes
@@ -125,7 +124,6 @@ def create_app(
 
     # No credential: deliberately mute (FR-052).
     app.include_router(health_routes.router, tags=["health"])
-    app.include_router(onboarding_routes.router)
     # Everything else, credential required -- documentation included.
     protected = [Depends(require_token)]
     app.include_router(

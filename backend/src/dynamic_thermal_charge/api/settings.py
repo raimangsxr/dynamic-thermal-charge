@@ -56,8 +56,13 @@ def settings_from_repository(repository) -> ApiSettings:
     snapshot = repository.current()
     configured = snapshot.configuration.api
     secret = snapshot.secrets.get("admin_token_digest")
+    if secret is None or not secret.value:
+        raise ApiSettingsError(
+            "administrator token is not configured; set DTC_API_TOKEN and "
+            "restart the service"
+        )
     return ApiSettings(
-        token_digest=None if secret is None else secret.value,
+        token_digest=secret.value,
         host=configured.host,
         port=configured.port,
         stale_seconds=configured.stale_seconds,

@@ -27,16 +27,16 @@ from .alerts import (
     plan_recalculation_degraded_message,
     plan_recalculation_invalid_message,
 )
-from .charge_planning import (
+from .planning_domain import (
     CONVERGING,
     DEGRADED,
     INVALID,
     PLANNING_HORIZON_HOURS,
     VALID,
-    DeterministicChargeOptimizer,
     PlanningInput,
     resolve_planning_telemetry,
 )
+from .planning_solver import CurrentEnergyPlanner as DeterministicChargeOptimizer
 from .planning_coordination import coordinated_plan
 from .plan_deviation import DeviationVerdict, SlotBoundaryGate, evaluate_plan_deviation
 from .planning_explanation import planning_evidence

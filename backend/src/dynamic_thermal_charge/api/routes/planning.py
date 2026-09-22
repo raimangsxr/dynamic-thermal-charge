@@ -15,6 +15,12 @@ from fastapi import APIRouter, Depends, Request
 from ...persistence.bootstrap import Store
 from ...persistence.history import SqlStatusReader
 from ...charge_planning import (
+    RoomEnergyInterval,
+    group_planning_violations,
+    independently_validate_plan,
+)
+from ...planning_compatibility import input_token
+from ...planning_domain import (
     AutomaticPlan,
     AutomaticPlanSlot,
     CONVERGING,
@@ -22,18 +28,14 @@ from ...charge_planning import (
     DemandEstimate,
     HeaterExplanation,
     INVALID,
-    RoomEnergyInterval,
-    VALID,
     PLANNING_HORIZON_HOURS,
-    DeterministicChargeOptimizer,
     PlanningCancelled,
     PlanningInput,
     PlanningViolation,
-    group_planning_violations,
-    independently_validate_plan,
-    input_token,
+    VALID,
     resolve_planning_telemetry,
 )
+from ...planning_solver import CurrentEnergyPlanner as DeterministicChargeOptimizer
 from ...models import (
     TemperatureTarget,
     validate_temperature_target_alignment,
