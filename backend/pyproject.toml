@@ -37,6 +37,8 @@ dev = [
     "pytest>=8,<10",
     # Property-based tests for the planner invariants. Dev-only and pure Python.
     "hypothesis>=6.100,<7",
+    # The delivery-contract checker parses PEP 508 requirements.
+    "packaging>=24,<27",
     # Quality gate. Both pure Python and dev-only, so neither reaches the device.
     # ruff is pinned exactly: its default rule set grows between minor versions,
     # so a range would let CI fail on a change that passed locally. Bump it
