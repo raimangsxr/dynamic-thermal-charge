@@ -12,13 +12,14 @@ include .ai-standard/make/entry.mk
 COMPOSE_PROJECT_NAME ?= $(shell python3 deploy/compose_project_name.py)
 COMPOSE_DEV = docker compose --project-name "$(COMPOSE_PROJECT_NAME)" -f deploy/compose.dev.yaml
 COMPOSE_DEV_POSTGRES = $(COMPOSE_DEV) -f deploy/compose.dev-postgres.yaml
+BACKEND_PYTHON ?= $(if $(wildcard backend/.venv/bin/python),backend/.venv/bin/python,python3)
 
 build:
 	docker build -t dynamic-thermal-charge-backend:local -f backend/Dockerfile backend
 	docker build -t dynamic-thermal-charge-frontend:local -f frontend/Dockerfile .
 
 delivery-check:
-	python3 deploy/check_delivery.py
+	$(BACKEND_PYTHON) deploy/check_delivery.py
 
 compose-check:
 	DOCKERHUB_USERNAME=local APP_VERSION=check DTC_GPIO_GID=986 docker compose -f deploy/compose.yaml config --quiet
