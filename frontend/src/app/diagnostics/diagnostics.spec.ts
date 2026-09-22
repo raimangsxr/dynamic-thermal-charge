@@ -1,5 +1,6 @@
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
+import { provideRouter } from '@angular/router';
 import { TestBed } from '@angular/core/testing';
 import type { ComponentFixture } from '@angular/core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -36,7 +37,7 @@ describe('Diagnostics', () => {
     vi.useFakeTimers();
     await TestBed.configureTestingModule({
       imports: [Diagnostics],
-      providers: [provideHttpClient(), provideHttpClientTesting()],
+      providers: [provideHttpClient(), provideHttpClientTesting(), provideRouter([])],
     }).compileComponents();
     fixture = TestBed.createComponent(Diagnostics);
     backend = TestBed.inject(HttpTestingController);
@@ -68,6 +69,66 @@ describe('Diagnostics', () => {
     expect(root.textContent).toContain('WARNING');
     expect(root.textContent).toContain('mqtt');
     expect(root.querySelector('[data-testid="diagnostics-empty"]')).toBeNull();
+  });
+
+  it('localizes a known recovery event and keeps the shared telemetry destination', () => {
+    const root = initial([event({
+      level: 'ERROR',
+      logger: 'dynamic_thermal_charge.planning',
+      message: 'missing_required_state: stored_soc_percent',
+    })]);
+
+    expect(root.querySelector('.event-heading')?.textContent).toContain('Telemetría incompleta');
+    expect(root.querySelector('.event-summary')?.textContent).toContain('Faltan lecturas recientes');
+    expect(root.querySelector('[data-label="Severidad"]')?.textContent).toContain('Error');
+    expect(root.querySelector('[data-label="Origen"]')?.textContent).toContain('Telemetría');
+    expect(root.querySelector('.event-summary')?.textContent).not.toContain('missing_required_state');
+    expect(root.querySelector('[data-testid="diagnostic-action"]')?.textContent).toContain('Comprobar telemetría');
+    expect(root.querySelector('[data-testid="diagnostic-action"]')?.getAttribute('href')).toBe('/estado#telemetry-title');
+    expect(root.querySelector('[data-testid="diagnostic-details"]')?.textContent).toContain('missing_required_state');
+  });
+
+  it('uses a neutral fallback and preserves an untranslated historical message', () => {
+    const root = initial([event({
+      logger: 'legacy.module',
+      message: 'mensaje legacy que no debe traducirse',
+    })]);
+
+    expect(root.querySelector('.event-heading')?.textContent).toContain('Evento técnico');
+    expect(root.querySelector('.event-summary')?.textContent).toBe('mensaje legacy que no debe traducirse');
+    expect(root.querySelector('[data-testid="diagnostic-action"]')).toBeNull();
+    expect(root.querySelector('[data-testid="diagnostic-details"]')?.textContent).toContain('legacy.module');
+    expect(root.querySelector('[data-testid="diagnostic-details"]')?.textContent).toContain('mensaje legacy que no debe traducirse');
+  });
+
+  it('copies the original technical detail without changing the operator summary', async () => {
+    const log = event({
+      level: 'CRITICAL',
+      logger: 'dynamic_thermal_charge.service',
+      message: 'solver_failure: optimizer timed out',
+    });
+    initial([log]);
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const originalClipboard = navigator.clipboard;
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+
+    try {
+      await fixture.componentInstance.copyTechnical(log);
+      fixture.detectChanges();
+      expect(writeText).toHaveBeenCalledWith(expect.stringContaining('solver_failure'));
+      expect(writeText).toHaveBeenCalledWith(expect.stringContaining('dynamic_thermal_charge.service'));
+      expect((fixture.nativeElement as HTMLElement).textContent).toContain('Detalle técnico copiado.');
+      expect((fixture.nativeElement as HTMLElement).querySelector('.event-summary')?.textContent).toContain('El optimizador no ha podido resolver');
+    } finally {
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: originalClipboard });
+    }
+  });
+
+  it('renders labelled cells so the desktop table can become readable cards on narrow screens', () => {
+    const root = initial([event()]);
+    const cells = root.querySelectorAll('[data-testid="events-table"] tbody td');
+    expect(cells.length).toBe(4);
+    expect(Array.from(cells).every((cell) => Boolean(cell.getAttribute('data-label')))).toBe(true);
   });
 
   it('sends the selected level and text query when filters are applied', () => {
