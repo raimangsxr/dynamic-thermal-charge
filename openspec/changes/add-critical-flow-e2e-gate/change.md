@@ -24,6 +24,6 @@ Detectar de forma determinista regresiones funcionales, responsive y de accesibi
 - D2: La suite será una barrera selectiva de flujos críticos, no una duplicación de todas las pruebas unitarias.
 
 ## Tasks
-- [ ] T1: Incorporar el runner, fixture aislado y comandos del proyecto.
-- [ ] T2: Implementar los flujos, viewports y aserciones acordados.
+- [x] T1: Incorporar el runner, fixture aislado y comandos del proyecto.
+- [x] T2: Implementar los flujos, viewports y aserciones acordados.
 - [ ] T3: Integrar la suite en `make check` y documentar su diagnóstico.

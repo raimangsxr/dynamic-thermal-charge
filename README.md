@@ -25,6 +25,18 @@ make check   # test + lint + build del panel + validación de los Compose
 make dev     # valida la configuración persistida
 ```
 
+La barrera de navegador se ejecuta desde el frontend con una fixture aislada:
+
+```sh
+cd frontend
+npm run e2e:install   # una vez por máquina
+npm run e2e
+```
+
+Comprueba login/401, recuperación de una planificación inválida, preview y
+activación segura en 390, 768 y 1280 píxeles, sin acceder a servicios ni
+credenciales reales.
+
 `make check` es la misma puerta que ejecuta CI, así que un test de frontend en
 rojo o un hallazgo del linter impiden mezclar. La suite informa del porcentaje
 de cobertura total y trata como error cualquier advertencia emitida por el

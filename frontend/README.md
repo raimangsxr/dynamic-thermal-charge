@@ -46,13 +46,17 @@ ng test
 
 ## Running end-to-end tests
 
-For end-to-end (e2e) testing, run:
+For the isolated Playwright end-to-end suite, install Chromium once and run:
 
 ```bash
-ng e2e
+npm run e2e:install
+npm run e2e
 ```
 
-Angular CLI does not come with an end-to-end testing framework by default. You can choose one that suits your needs.
+The suite serves the panel locally and intercepts every API request with
+controlled data; it never contacts AEMET, MQTT, GPIO or production services.
+Screenshots are kept only when a test fails, and the fixture contains no real
+credentials.
 
 ## Additional Resources
 

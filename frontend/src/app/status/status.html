@@ -174,7 +174,7 @@
         <span class="revision-chip dtc-revision-chip">{{ telemetryReady() }} de {{ telemetryTotal() }} completa</span>
       </div>
       @if (data.telemetry?.length) {
-        <div class="table-scroll">
+        <div class="table-scroll" tabindex="0" role="region" aria-label="Desplazamiento horizontal de la telemetría">
           <table>
             <caption class="sr-only">Telemetría independiente por acumulador</caption>
             <thead><tr><th scope="col">Acumulador</th><th scope="col">Temperatura interior</th><th scope="col">SOC almacenado</th><th scope="col">Energía almacenada</th><th scope="col">Estado</th></tr></thead>
