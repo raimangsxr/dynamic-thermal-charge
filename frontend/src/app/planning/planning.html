@@ -89,6 +89,23 @@
             </div>
           }
 
+          @if (data.recovery; as recovery) {
+            @if (recovery.primary; as cause) {
+              <div class="banner warn dtc-banner" [class.alert]="recovery.safe_state === 'outputs_off'" [attr.role]="recovery.safe_state === 'outputs_off' ? 'alert' : 'status'" data-testid="planning-recovery">
+                <div class="banner-content dtc-banner-content">
+                  <mat-icon aria-hidden="true">{{ recovery.safe_state === 'outputs_off' ? 'block' : 'build' }}</mat-icon>
+                  <div>
+                    <strong>{{ recoveryCauseText(cause.code) }}</strong>
+                    <p>{{ recoveryActionText(cause.code) }}</p>
+                    @if (cause.detail) { <p class="technical-detail">Detalle técnico: {{ cause.detail }}</p> }
+                    @if (recovery.secondary.length) { <ul>@for (secondary of recovery.secondary; track secondary.code) { <li>{{ recoveryCauseText(secondary.code) }}</li> }</ul> }
+                  </div>
+                </div>
+                @if (cause.destination) { <a mat-stroked-button [routerLink]="recoveryRoute(cause.destination)" [fragment]="recoveryFragment(cause.destination)" data-testid="planning-recovery-action">{{ recoveryActionLabel(cause.action_code) }}</a> }
+              </div>
+            }
+          }
+
           @if (data.plan; as plan) {
             <p class="window" data-testid="planning-window">Ventana visible {{ dateTime(plan.window_start) }}–{{ dateTime(plan.window_end) }} · horizonte {{ dateTime(data.horizon_start) }}–{{ dateTime(data.horizon_end) }} · configuración rev. {{ plan.installation_revision }}</p>
             @if (hasUnmet(data)) {
@@ -352,11 +369,14 @@
                   <div><dt>Origen</dt><dd>{{ sourceText(forecast.source) }}</dd></div>
                   <div><dt>Fecha</dt><dd>{{ dateText(forecast.date) }}</dd></div>
                   <div><dt>Rango temporal</dt><dd>{{ forecastRange(forecast.hourly_points) }}</dd></div>
-                  <div><dt>Registros horarios</dt><dd>{{ forecast.hourly_points.length }}</dd></div>
+                  <div><dt>Registros horarios</dt><dd>{{ forecast.points_received ?? forecast.hourly_points.length }}</dd></div>
+                  <div><dt>Cobertura disponible</dt><dd>{{ forecastCoverageText(forecast) }}</dd></div>
+                  <div><dt>Cobertura requerida</dt><dd>{{ forecast.required_hours ? forecast.required_hours + ' h' : 'Sin configurar' }}</dd></div>
+                  <div><dt>Apta para automático</dt><dd>{{ forecast.automatic_eligible === true ? 'Sí' : forecast.automatic_eligible === false ? 'No' : 'Sin evaluar' }}</dd></div>
                   <div><dt>Temperaturas resumen</dt><dd>{{ temperatures(forecast) }}</dd></div>
                 </dl>
               } @else {
-                <p class="empty" data-testid="planning-no-forecast">No hay previsión utilizable.</p>
+                <p class="empty" data-testid="planning-no-forecast">No hay previsión utilizable: faltan puntos horarios para planificar.</p>
               }
               <dl class="summary-list summary-list-compact">
                 <div><dt>Estado de consulta</dt><dd>{{ forecastStatusText(data.forecast_status) }}</dd></div>
@@ -375,7 +395,7 @@
                 {{ forecastNextText(data.forecast_next_run_kind) }}: {{ data.forecast_next_run_at ? dateTime(data.forecast_next_run_at) : 'no programada' }}
               </p>
             } @else {
-              <p class="empty" data-testid="forecast-empty">No hay datos de previsión horaria disponibles.</p>
+              <p class="empty" data-testid="forecast-empty">No hay datos de previsión horaria disponibles para planificar.</p>
               <p class="next-forecast" data-testid="forecast-next-run">
                 {{ forecastNextText(data.forecast_next_run_kind) }}: {{ data.forecast_next_run_at ? dateTime(data.forecast_next_run_at) : 'no programada' }}
               </p>

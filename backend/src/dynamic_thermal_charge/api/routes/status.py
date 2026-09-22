@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, Request
 from ...persistence.bootstrap import Store
 from ...persistence.history import SqlStatusReader
 from ...charge_planning import group_planning_violations
+from ...planning_recovery import build_planning_recovery, forecast_coverage
 from ..dependencies import controller_view, usable_store
 from ..liveness import ControllerView
 from ..read_model import automatic_window, forecast_cycle_context, real_at_or_after, real_before
@@ -30,6 +31,7 @@ from ..schemas import (
     PlanSlotView,
     PlanSummary,
     PowerSnapshot,
+    PlanningRecoveryView,
     StatusResponse,
     ChargeTelemetryView,
     PlanningDeficitView,
@@ -255,6 +257,44 @@ def get_status(
             missing_fields=missing,
             oldest_age_seconds=oldest,
         ))
+    plan_status = (
+        _canonical_plan_status(diagnostic_plan["status"])
+        if diagnostic_plan is not None
+        else None
+        if canonical_plan is None
+        else _canonical_plan_status(canonical_plan["status"])
+    )
+    deficits = (
+        [PlanningDeficitView(**item) for item in group_planning_violations(
+            _plan_violations(diagnostic_plan),
+            slot_minutes=diagnostic_plan.get("slot_minutes"),
+        )]
+        if diagnostic_plan is not None
+        else []
+        if canonical_plan is None
+        else [PlanningDeficitView(**item) for item in group_planning_violations(
+            _plan_violations(canonical_plan),
+            slot_minutes=canonical_plan.get("slot_minutes"),
+        )]
+    )
+    automatic_eligible = (
+        None
+        if latest_forecast is None
+        else store.planning.latest_forecast_automatic_eligible()
+    )
+    coverage = forecast_coverage(
+        latest_forecast,
+        required_hours=int(planning_site["forecast_horizon_hours"]),
+        automatic_eligible=automatic_eligible,
+        stale=cycle_status.get("forecast_stale"),
+    )
+    recovery_payload = build_planning_recovery(
+        plan_status=plan_status,
+        absence_reason=absence_reason,
+        deficits=deficits,
+        telemetry=telemetry_views,
+        forecast_automatic_eligible=automatic_eligible,
+    )
     return StatusResponse(
         observed_at=observed_at,
         timezone=timezone_name,
@@ -279,28 +319,17 @@ def get_status(
         forecast=forecast,
         allocations=allocations,
         telemetry=telemetry_views,
-        plan_status=(
-            _canonical_plan_status(diagnostic_plan["status"])
-            if diagnostic_plan is not None
-            else None if canonical_plan is None else _canonical_plan_status(canonical_plan["status"])
-        ),
+        plan_status=plan_status,
         optimization_quality=(
             diagnostic_plan.get("optimization_quality")
             if diagnostic_plan is not None
             else None if canonical_plan is None else canonical_plan.get("optimization_quality")
         ),
-        deficits=(
-            [PlanningDeficitView(**item) for item in group_planning_violations(
-                _plan_violations(diagnostic_plan),
-                slot_minutes=diagnostic_plan.get("slot_minutes"),
-            )]
-            if diagnostic_plan is not None
-            else []
-            if canonical_plan is None
-            else [PlanningDeficitView(**item) for item in group_planning_violations(
-                _plan_violations(canonical_plan),
-                slot_minutes=canonical_plan.get("slot_minutes"),
-            )]
+        deficits=deficits,
+        recovery=(
+            None
+            if recovery_payload is None
+            else PlanningRecoveryView.model_validate(recovery_payload)
         ),
         convergence_by_heater=(
             diagnostic_plan.get("convergence_by_heater", {})
@@ -327,6 +356,11 @@ def get_status(
         forecast_next_run_at=cycle_status.get("forecast_next_run_at"),
         forecast_next_run_kind=cycle_status.get("forecast_next_run_kind"),
         forecast_stale=cycle_status.get("forecast_stale"),
+        forecast_points_received=coverage["points_received"],
+        forecast_coverage_start=coverage["coverage_start"],
+        forecast_coverage_end=coverage["coverage_end"],
+        forecast_required_hours=coverage["required_hours"],
+        forecast_automatic_eligible=coverage["automatic_eligible"],
     )
 
 

@@ -5,6 +5,7 @@ import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { MatSnackBarModule } from '@angular/material/snack-bar';
 import { MatTabsModule } from '@angular/material/tabs';
+import { RouterLink } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { Chart } from 'chart.js/auto';
 import type { ChartOptions, TooltipItem } from 'chart.js';
@@ -25,6 +26,8 @@ import {
   planningStepLabel,
   planReasonLabel,
   planStatusLabel,
+  planningRecoveryActionLabel,
+  planningRecoveryCauseLabel,
   requirementLabel,
 } from '../shared/presentation/presentation';
 import { CONFIRM_DIALOG_CONFIG, ConfirmDialog, CONTENT_DIALOG_CONFIG, type ConfirmDialogData } from '../shared/ui-feedback/dialog-config';
@@ -672,7 +675,7 @@ export class PlanningDetailDialog implements AfterViewInit, OnDestroy {
 
 @Component({
   selector: 'dtc-planning',
-  imports: [FormsModule, MatButtonModule, MatIconModule, MatSnackBarModule, MatTabsModule],
+  imports: [FormsModule, MatButtonModule, MatIconModule, MatSnackBarModule, MatTabsModule, RouterLink],
   templateUrl: './planning.html',
   styleUrl: './planning.css',
 })
@@ -1087,6 +1090,27 @@ export class Planning implements AfterViewInit, OnDestroy {
     return normalizePlanStatus(status) === 'INVALID';
   }
 
+  recoveryCauseText(value: unknown): string {
+    return planningRecoveryCauseLabel(value);
+  }
+
+  recoveryActionText(value: unknown): string {
+    return planningActionForCause(value) ?? 'Consulta el detalle técnico y revisa la configuración antes de volver a calcular.';
+  }
+
+  recoveryActionLabel(value: unknown): string {
+    return planningRecoveryActionLabel(value);
+  }
+
+  recoveryRoute(value: string | null | undefined): string[] {
+    return [String(value ?? '/').split('#', 1)[0] || '/'];
+  }
+
+  recoveryFragment(value: string | null | undefined): string | undefined {
+    const fragment = String(value ?? '').split('#', 2)[1];
+    return fragment || undefined;
+  }
+
   convergenceText(
     convergenceByHeater: Record<string, string | null> | undefined,
     convergenceAt: string | null | undefined,
@@ -1130,6 +1154,11 @@ export class Planning implements AfterViewInit, OnDestroy {
   forecastRange(points: HourlyForecastPointDto[]): string {
     if (!points.length) return 'no disponible';
     return `${this.dateTime(points[0].timestamp)}–${this.dateTime(points[points.length - 1].timestamp)}`;
+  }
+
+  forecastCoverageText(forecast: NonNullable<PlanningDto['forecast']>): string {
+    if (!forecast.coverage_start || !forecast.coverage_end) return 'Sin puntos horarios recibidos';
+    return `${this.dateTime(forecast.coverage_start)}–${this.dateTime(forecast.coverage_end)}`;
   }
 
   temperatures(forecast: NonNullable<PlanningDto['forecast']>): string {

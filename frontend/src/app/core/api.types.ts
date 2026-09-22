@@ -73,6 +73,26 @@ export interface HourlyForecastPointDto {
 
 export interface PlanningForecastDto extends ForecastDto {
   hourly_points: HourlyForecastPointDto[];
+  points_received?: number;
+  coverage_start?: string | null;
+  coverage_end?: string | null;
+  required_hours?: number | null;
+  automatic_eligible?: boolean | null;
+  stale?: boolean | null;
+}
+
+export interface PlanningRecoveryCauseDto {
+  code: string;
+  action_code: string | null;
+  destination: string | null;
+  detail: string | null;
+  heater_ids: string[];
+}
+
+export interface PlanningRecoveryDto {
+  primary: PlanningRecoveryCauseDto | null;
+  secondary: PlanningRecoveryCauseDto[];
+  safe_state: string;
 }
 
 export interface PlanningSlotDto extends PlanSlotDto {
@@ -164,6 +184,7 @@ export interface PlanningDto {
   plan_status?: string | null;
   optimization_quality?: string | null;
   deficits?: PlanningDeficitDto[];
+  recovery?: PlanningRecoveryDto | null;
   convergence_by_heater?: Record<string, string | null>;
   convergence_at?: string | null;
   guaranteed_until?: string | null;
@@ -176,6 +197,11 @@ export interface PlanningDto {
   forecast_next_run_at?: string | null;
   forecast_next_run_kind?: string | null;
   forecast_stale?: boolean | null;
+  forecast_points_received?: number;
+  forecast_coverage_start?: string | null;
+  forecast_coverage_end?: string | null;
+  forecast_required_hours?: number | null;
+  forecast_automatic_eligible?: boolean | null;
   preview_job?: PlanningPreviewJobDto | null;
 }
 
@@ -211,6 +237,7 @@ export interface StatusDto {
   plan_status?: string | null;
   optimization_quality?: string | null;
   deficits?: PlanningDeficitDto[];
+  recovery?: PlanningRecoveryDto | null;
   convergence_by_heater?: Record<string, string | null>;
   convergence_at?: string | null;
   guaranteed_until?: string | null;
@@ -224,6 +251,11 @@ export interface StatusDto {
   forecast_next_run_at?: string | null;
   forecast_next_run_kind?: string | null;
   forecast_stale?: boolean | null;
+  forecast_points_received?: number;
+  forecast_coverage_start?: string | null;
+  forecast_coverage_end?: string | null;
+  forecast_required_hours?: number | null;
+  forecast_automatic_eligible?: boolean | null;
 }
 
 export type ControllerLogLevel = 'DEBUG' | 'INFO' | 'WARNING' | 'ERROR' | 'CRITICAL';

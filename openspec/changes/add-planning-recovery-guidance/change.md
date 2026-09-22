@@ -23,6 +23,6 @@ Convertir cualquier planificación no utilizable en un diagnóstico coherente y 
 - D2: Este cambio se implementará después de `reorganize-operator-configuration` y `establish-shared-ui-language`.
 
 ## Tasks
-- [ ] T1: Definir y probar el contrato de causas y acciones.
-- [ ] T2: Adaptar los read models y las pantallas Estado, Planificación y Previsión.
-- [ ] T3: Añadir navegación contextual y regresiones de seguridad.
+- [x] T1: Definir y probar el contrato de causas y acciones.
+- [x] T2: Adaptar los read models y las pantallas Estado, Planificación y Previsión.
+- [x] T3: Añadir navegación contextual y regresiones de seguridad.
