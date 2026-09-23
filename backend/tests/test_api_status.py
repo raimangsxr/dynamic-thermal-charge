@@ -511,11 +511,13 @@ def test_status_does_not_revive_legacy_plan_after_an_invalid_automatic_plan(
     assert body["plan"] is None
     assert body["plan_status"] == "INVALID"
     assert body["absence_reason"] == "invalid_automatic_plan"
+    assert body["recovery"]["primary"]["code"] == "invalid_configuration"
 
     planning = client.get("/api/v1/planning", headers=AUTH)
     assert planning.status_code == 200, planning.text
     assert planning.json()["plan_status"] == "INVALID"
     assert planning.json()["deficits"][0]["reason"] == "invalid_configuration"
+    assert planning.json()["recovery"] == body["recovery"]
 
 
 def test_activation_rejects_a_degraded_preview_without_changing_the_active_plan(
@@ -732,6 +734,7 @@ def test_planning_endpoint_explicitly_reports_absence(client, heartbeat):
     assert body["plan"] is None
     assert body["forecast"] is None
     assert body["absence_reason"] == "no_current_or_next_plan"
+    assert body["recovery"]["primary"]["code"] == "no_plan_available"
 
 
 # --------------------------------------------------------------------------- #

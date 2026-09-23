@@ -2,6 +2,7 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { MatDialog } from '@angular/material/dialog';
 import { TestBed, type ComponentFixture } from '@angular/core/testing';
+import { provideRouter } from '@angular/router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { PlanningDto, PlanningPreviewDto, PlanningPreviewJobDto } from '../core/api.types';
@@ -107,7 +108,7 @@ describe('Planning', () => {
     sessionStorage.removeItem('dtc.planning.preview-job');
     await TestBed.configureTestingModule({
       imports: [Planning],
-      providers: [provideHttpClient(), provideHttpClientTesting()],
+      providers: [provideHttpClient(), provideHttpClientTesting(), provideRouter([])],
     }).compileComponents();
     chartState.configs.length = 0;
     fixture = TestBed.createComponent(Planning);
@@ -144,6 +145,41 @@ describe('Planning', () => {
     expect(element.querySelector('[data-testid="forecast-chart-card"]')).toBeNull();
     expect(element.querySelector('[data-testid="new-planning-tab"]')).toBeNull();
     expect(element.querySelectorAll('[data-testid$="-card"]')).toHaveLength(4);
+  });
+
+  it('renders the shared recovery guidance and explicit forecast coverage', async () => {
+    backend.expectOne('/api/v1/planning').flush({
+      ...PLANNING,
+      plan: null,
+      plan_status: 'INVALID',
+      absence_reason: 'invalid_automatic_plan',
+      recovery: {
+        primary: {
+          code: 'missing_aemet_coverage',
+          action_code: 'check_weather',
+          destination: '/configuracion',
+          detail: 'missing_aemet_coverage',
+          heater_ids: [],
+        },
+        secondary: [],
+        safe_state: 'outputs_off',
+      },
+      forecast: {
+        ...PLANNING.forecast!,
+        points_received: 2,
+        coverage_start: '2026-01-16T00:00:00Z',
+        coverage_end: '2026-01-16T01:00:00Z',
+        required_hours: 24,
+        automatic_eligible: true,
+      },
+    });
+    await fixture.whenStable();
+    const element = fixture.nativeElement as HTMLElement;
+    expect(element.querySelector('[data-testid="planning-recovery"]')?.textContent).toContain('Cobertura meteorológica insuficiente');
+    expect(element.querySelector('[data-testid="planning-recovery-action"]')?.getAttribute('href')).toBe('/configuracion');
+    await selectPlanningTab(fixture, 2);
+    expect(element.querySelector('[data-testid="forecast-summary"]')?.textContent).toContain('24 h');
+    expect(element.querySelector('[data-testid="forecast-summary"]')?.textContent).toContain('Apta para automático');
   });
 
   it('opens a deterministic explanation and recent plan history', async () => {

@@ -1,5 +1,5 @@
 <main class="planning">
-  <header class="page-header">
+  <header class="page-header dtc-page-header">
     <div>
       <p class="eyebrow">Panel operativo</p>
       <h1>Planificación</h1>
@@ -10,14 +10,14 @@
   </header>
 
   @if (loading() && !snapshot()) {
-    <section class="workspace-panel loading-panel" role="status" aria-live="polite" data-testid="planning-loading">
+    <section class="workspace-panel dtc-panel loading-panel dtc-loading-panel" role="status" aria-live="polite" data-testid="planning-loading">
       <mat-icon aria-hidden="true">hourglass_empty</mat-icon>
       <div><h2>Cargando planificación</h2><p>Consultando el plan, las consignas y la previsión…</p></div>
     </section>
   }
   @if (failure(); as error) {
-    <div class="banner alert" role="alert" data-testid="planning-error">
-      <div class="banner-content"><mat-icon aria-hidden="true">error_outline</mat-icon><div><strong>{{ error.title }}</strong><p>{{ error.action }}</p></div></div>
+    <div class="banner alert dtc-banner" role="alert" data-testid="planning-error">
+      <div class="banner-content dtc-banner-content"><mat-icon aria-hidden="true">error_outline</mat-icon><div><strong>{{ error.title }}</strong><p>{{ error.action }}</p></div></div>
     </div>
   }
 
@@ -37,7 +37,7 @@
               <h2>Planificación activa</h2>
               <p class="hint">El plan aceptado por el controlador y sus indicadores operativos.</p>
             </div>
-            @if (data.plan_status) { <span class="status-chip active-chip">{{ planStatus(data.plan_status) }}</span> }
+            @if (data.plan_status) { <span class="status-chip active-chip dtc-status-chip">{{ planStatus(data.plan_status) }}</span> }
             @if (data.optimization_quality === 'FEASIBLE_LIMIT') { <span class="hint" data-testid="active-feasible-limit">Plan validado; optimización limitada por tiempo</span> }
           </div>
 
@@ -79,28 +79,45 @@
           </section>
 
           @if (isConvergingStatus(data.plan_status)) {
-            <div class="banner warn" role="status" data-testid="planning-converging">
-              <div class="banner-content"><mat-icon aria-hidden="true">autorenew</mat-icon><div><strong>Plan en convergencia</strong><p>El plan sigue siendo utilizable mientras adapta la instalación al objetivo térmico.</p><p>Objetivo alcanzado: {{ convergenceText(data.convergence_by_heater, data.convergence_at) }}@if (data.guaranteed_until) { · cobertura garantizada hasta {{ dateTime(data.guaranteed_until) }} }.</p></div></div>
+            <div class="banner warn dtc-banner" role="status" data-testid="planning-converging">
+              <div class="banner-content dtc-banner-content"><mat-icon aria-hidden="true">autorenew</mat-icon><div><strong>Plan en convergencia</strong><p>El plan sigue siendo utilizable mientras adapta la instalación al objetivo térmico.</p><p>Objetivo alcanzado: {{ convergenceText(data.convergence_by_heater, data.convergence_at) }}@if (data.guaranteed_until) { · cobertura garantizada hasta {{ dateTime(data.guaranteed_until) }} }.</p></div></div>
             </div>
           }
           @if (isDegradedStatus(data.plan_status)) {
-            <div class="banner warn" role="alert" data-testid="planning-degraded">
-              <div class="banner-content"><mat-icon aria-hidden="true">warning</mat-icon><div><strong>Resultado degradado: no activable</strong><p>Este recálculo no gobierna las salidas. Se conserva el último plan VALID o CONVERGING mientras queden intervalos vigentes.</p>@if (data.deficits?.length) { <ul>@for (deficit of data.deficits ?? []; track $index) { <li>{{ deficitText(deficit) }}@if (deficit.affected_from || deficit.affected_until) { · {{ dateTime(deficit.affected_from) }}–{{ dateTime(deficit.affected_until) }} }</li> }</ul> }</div></div>
+            <div class="banner warn dtc-banner" role="alert" data-testid="planning-degraded">
+              <div class="banner-content dtc-banner-content"><mat-icon aria-hidden="true">warning</mat-icon><div><strong>Resultado degradado: no activable</strong><p>Este recálculo no gobierna las salidas. Se conserva el último plan VALID o CONVERGING mientras queden intervalos vigentes.</p>@if (data.deficits?.length) { <ul>@for (deficit of data.deficits ?? []; track $index) { <li>{{ deficitText(deficit) }}@if (deficit.affected_from || deficit.affected_until) { · {{ dateTime(deficit.affected_from) }}–{{ dateTime(deficit.affected_until) }} }</li> }</ul> }</div></div>
             </div>
+          }
+
+          @if (data.recovery; as recovery) {
+            @if (recovery.primary; as cause) {
+              <div class="banner warn dtc-banner" [class.alert]="recovery.safe_state === 'outputs_off'" [attr.role]="recovery.safe_state === 'outputs_off' ? 'alert' : 'status'" data-testid="planning-recovery">
+                <div class="banner-content dtc-banner-content">
+                  <mat-icon aria-hidden="true">{{ recovery.safe_state === 'outputs_off' ? 'block' : 'build' }}</mat-icon>
+                  <div>
+                    <strong>{{ recoveryCauseText(cause.code) }}</strong>
+                    <p>{{ recoveryActionText(cause.code) }}</p>
+                    @if (cause.detail) { <p class="technical-detail">Detalle técnico: {{ cause.detail }}</p> }
+                    @if (recovery.secondary.length) { <ul>@for (secondary of recovery.secondary; track secondary.code) { <li>{{ recoveryCauseText(secondary.code) }}</li> }</ul> }
+                  </div>
+                </div>
+                @if (cause.destination) { <a mat-stroked-button [routerLink]="recoveryRoute(cause.destination)" [fragment]="recoveryFragment(cause.destination)" data-testid="planning-recovery-action">{{ recoveryActionLabel(cause.action_code) }}</a> }
+              </div>
+            }
           }
 
           @if (data.plan; as plan) {
             <p class="window" data-testid="planning-window">Ventana visible {{ dateTime(plan.window_start) }}–{{ dateTime(plan.window_end) }} · horizonte {{ dateTime(data.horizon_start) }}–{{ dateTime(data.horizon_end) }} · configuración rev. {{ plan.installation_revision }}</p>
             @if (hasUnmet(data)) {
-              <div class="banner warn" role="alert" data-testid="planning-deficit">
-                <div class="banner-content"><mat-icon aria-hidden="true">warning</mat-icon><div><strong>Carga no atendida</strong><ul>@for (allocation of data.allocations; track allocation.heater_id) {
+              <div class="banner warn dtc-banner" role="alert" data-testid="planning-deficit">
+                <div class="banner-content dtc-banner-content"><mat-icon aria-hidden="true">warning</mat-icon><div><strong>Carga no atendida</strong><ul>@for (allocation of data.allocations; track allocation.heater_id) {
                   @if (allocation.unmet_minutes > 0) { <li>{{ heaterText(allocation.heater_id) }}: faltan {{ hours(allocation.unmet_minutes) }} h</li> }
                 }</ul></div></div>
               </div>
             }
             @if (hasDeficits(data)) {
-              <div class="banner warn" role="status" data-testid="planning-status-deficits">
-                <div class="banner-content"><mat-icon aria-hidden="true">warning</mat-icon><div><strong>Avisos de planificación</strong><ul>@for (deficit of data.deficits ?? []; track $index) { <li>{{ deficitText(deficit) }}</li> }</ul></div></div>
+              <div class="banner warn dtc-banner" role="status" data-testid="planning-status-deficits">
+                <div class="banner-content dtc-banner-content"><mat-icon aria-hidden="true">warning</mat-icon><div><strong>Avisos de planificación</strong><ul>@for (deficit of data.deficits ?? []; track $index) { <li>{{ deficitText(deficit) }}</li> }</ul></div></div>
               </div>
             }
 
@@ -136,7 +153,7 @@
               <h2>Nueva planificación</h2>
               <p class="hint">Ajusta las consignas semanales y comprueba el resultado antes de reemplazar el plan activo.</p>
             </div>
-            @if (preview(); as candidate) { <span class="status-chip" [attr.data-status]="candidate.status">Vista previa: {{ planStatus(candidate.status) }}@if (previewAlreadyActive()) { · ya activa }</span> }
+            @if (preview(); as candidate) { <span class="status-chip dtc-status-chip" [attr.data-status]="candidate.status">Vista previa: {{ planStatus(candidate.status) }}@if (previewAlreadyActive()) { · ya activa }</span> }
           </div>
 
           <section class="constraints" aria-labelledby="targets-title">
@@ -352,11 +369,14 @@
                   <div><dt>Origen</dt><dd>{{ sourceText(forecast.source) }}</dd></div>
                   <div><dt>Fecha</dt><dd>{{ dateText(forecast.date) }}</dd></div>
                   <div><dt>Rango temporal</dt><dd>{{ forecastRange(forecast.hourly_points) }}</dd></div>
-                  <div><dt>Registros horarios</dt><dd>{{ forecast.hourly_points.length }}</dd></div>
+                  <div><dt>Registros horarios</dt><dd>{{ forecast.points_received ?? forecast.hourly_points.length }}</dd></div>
+                  <div><dt>Cobertura disponible</dt><dd>{{ forecastCoverageText(forecast) }}</dd></div>
+                  <div><dt>Cobertura requerida</dt><dd>{{ forecast.required_hours ? forecast.required_hours + ' h' : 'Sin configurar' }}</dd></div>
+                  <div><dt>Apta para automático</dt><dd>{{ forecast.automatic_eligible === true ? 'Sí' : forecast.automatic_eligible === false ? 'No' : 'Sin evaluar' }}</dd></div>
                   <div><dt>Temperaturas resumen</dt><dd>{{ temperatures(forecast) }}</dd></div>
                 </dl>
               } @else {
-                <p class="empty" data-testid="planning-no-forecast">No hay previsión utilizable.</p>
+                <p class="empty" data-testid="planning-no-forecast">No hay previsión utilizable: faltan puntos horarios para planificar.</p>
               }
               <dl class="summary-list summary-list-compact">
                 <div><dt>Estado de consulta</dt><dd>{{ forecastStatusText(data.forecast_status) }}</dd></div>
@@ -375,7 +395,7 @@
                 {{ forecastNextText(data.forecast_next_run_kind) }}: {{ data.forecast_next_run_at ? dateTime(data.forecast_next_run_at) : 'no programada' }}
               </p>
             } @else {
-              <p class="empty" data-testid="forecast-empty">No hay datos de previsión horaria disponibles.</p>
+              <p class="empty" data-testid="forecast-empty">No hay datos de previsión horaria disponibles para planificar.</p>
               <p class="next-forecast" data-testid="forecast-next-run">
                 {{ forecastNextText(data.forecast_next_run_kind) }}: {{ data.forecast_next_run_at ? dateTime(data.forecast_next_run_at) : 'no programada' }}
               </p>
