@@ -151,6 +151,7 @@ describe('Config', () => {
   it('organizes the merged workspace by tasks and hides legacy duplicate controls', () => {
     const element = loadUnified();
     expect(element.querySelectorAll('.area-tab')).toHaveLength(6);
+    expect(element.querySelector('.dtc-page-header')).not.toBeNull();
     expect([...element.querySelectorAll('.area-tab')].map((item) => item.textContent)).not.toContain('Sistema');
 
     fixture.componentInstance.chooseArea('installation');
@@ -163,6 +164,17 @@ describe('Config', () => {
     fixture.componentInstance.chooseArea('planning');
     fixture.detectChanges();
     expect(element.querySelector('#planning-contracted_power_w')).not.toBeNull();
+    expect(element.querySelector('#planning-aemet_query_hour')).toBeNull();
+    expect(element.textContent).toContain('Operación básica');
+    expect(element.textContent).toContain('Ajustes avanzados del optimizador');
+
+    fixture.componentInstance.chooseArea('integrations');
+    fixture.componentInstance.chooseIntegration('weather');
+    fixture.detectChanges();
+    expect(element.querySelector('#weather-aemet_query_hour')).not.toBeNull();
+    expect(element.textContent).toContain('Proveedor y ubicación');
+    expect(element.textContent).toContain('Consulta y actualización');
+    expect([...element.querySelectorAll('.field-group')].every((group) => (group.textContent ?? '').trim().length > 0)).toBe(true);
 
     fixture.componentInstance.chooseArea('service');
     fixture.componentInstance.chooseService('operations');
@@ -185,7 +197,7 @@ describe('Config', () => {
       },
     });
     const element = loadUnified(configDto(), system);
-    expect(element.textContent).toContain('horas de instalación: Europe/Madrid');
+    expect(element.textContent).not.toContain('horas de instalación: Europe/Madrid');
     fixture.componentInstance.chooseArea('service');
     fixture.componentInstance.chooseService('output');
     fixture.detectChanges();
@@ -218,12 +230,28 @@ describe('Config', () => {
   });
 
   it('shows the configuration with its revisions', () => {
-    const element = load();
-    fixture.componentInstance.chooseArea('heaters');
+    const element = loadUnified();
+    fixture.componentInstance.chooseArea('service');
     fixture.detectChanges();
-    expect(element.textContent).toContain('rev. 3');
-    expect(element.textContent).toContain('0023_coherent_mqtt_topics');
-    expect(element.querySelector('[data-heater="salon"]')).not.toBeNull();
+    const technicalDetails = element.querySelector('.technical-details');
+    expect(technicalDetails?.textContent).toContain('Revisión de instalación');
+    expect(technicalDetails?.textContent).toContain('0023_coherent_mqtt_topics');
+    expect(technicalDetails?.textContent).toContain('Formato técnico');
+  });
+
+  it('shows and saves the AEMET query schedule from Meteorología', () => {
+    loadUnified();
+    fixture.componentInstance.chooseArea('integrations');
+    fixture.componentInstance.chooseIntegration('weather');
+    fixture.detectChanges();
+    expect((fixture.nativeElement as HTMLElement).querySelector('#weather-aemet_query_hour')).not.toBeNull();
+
+    fixture.componentInstance.planningEdit('aemet_query_hour', 8);
+    fixture.componentInstance.savePlanning();
+    const request = backend.expectOne('/api/v1/planning/config');
+    expect(request.request.body.aemet_query_hour).toBe(8);
+    request.flush(planningConfigDto({ revision: 3, aemet_query_hour: 8 }));
+    expect(fixture.componentInstance.planningDirty()).toBe(false);
   });
 
   /* --------------------------------------------------------------- editing */
@@ -506,7 +534,7 @@ describe('Config', () => {
 
     fixture.componentInstance.load();
     backend.expectOne('/api/v1/config').flush(configDto({ config_revision: 9 }));
-    expect(el().textContent).toContain('rev. 9');
+    expect(fixture.componentInstance.config()?.config_revision).toBe(9);
   });
 
   /* --------------------------------------------------------------- CRUD */

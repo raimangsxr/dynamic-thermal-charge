@@ -34,7 +34,7 @@ import type {
   ControllerLogPageDto, ControllerLogLevel,
   TransitionHistoryDto,
   RelayTestStartDto, RelayTestViewDto,
-  DatabaseCandidateDto, MigrationDto, OnboardingStatusDto, SecretEditDto,
+  DatabaseCandidateDto, MigrationDto, SecretEditDto,
   SystemConfigurationDto, SystemSection, TopologyDto, ConnectionTestDto,
   WeatherRefreshDto,
 } from './api.types';
@@ -56,6 +56,12 @@ export class Api {
 
   status(): Observable<StatusDto> {
     return this.http.get<StatusDto>(`${BASE}/status`);
+  }
+
+  authenticate(token: string): Observable<StatusDto> {
+    return this.http.get<StatusDto>(`${BASE}/status`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
   }
 
   planning(): Observable<PlanningDto> {
@@ -180,12 +186,6 @@ export class Api {
 
   prune(): Observable<PruneDto> {
     return this.http.post<PruneDto>(`${BASE}/history/prune`, {});
-  }
-  onboardingStatus(): Observable<OnboardingStatusDto> { return this.http.get<OnboardingStatusDto>(`${BASE}/onboarding/status`); }
-  completeOnboarding(onboardingCredential: string, administratorToken: string): Observable<void> {
-    return this.http.post<void>(`${BASE}/onboarding/complete`, {
-      onboarding_credential: onboardingCredential, administrator_token: administratorToken,
-    });
   }
   systemConfiguration(): Observable<SystemConfigurationDto> { return this.http.get<SystemConfigurationDto>(`${BASE}/system/configuration`); }
   topology(): Observable<TopologyDto> { return this.http.get<TopologyDto>(`${BASE}/system/topology`); }

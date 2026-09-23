@@ -12,7 +12,7 @@ from uuid import uuid4
 from sqlalchemy import delete, insert, select, update
 from sqlalchemy.engine import Engine
 
-from ..charge_planning import (
+from ..planning_domain import (
     CONVERGING,
     DEGRADED,
     FEASIBLE_LIMIT,

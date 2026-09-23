@@ -60,10 +60,20 @@ def test_an_unusable_clear_token_refuses_to_start(token):
     assert "token" in str(error.value)
 
 
-def test_missing_persisted_digest_starts_only_the_onboarding_surface(initialised_store):
-    settings = settings_from_repository(initialised_store.system_configuration)
-    assert settings.configured is False
-    assert settings.accepts("anything") is False
+def test_missing_persisted_digest_refuses_to_build_api_settings(initialised_store):
+    from dynamic_thermal_charge.persistence.system_configuration import SecretAction, SecretMutation
+
+    repository = initialised_store.system_configuration
+    revision = repository.current().revision
+    repository.update_section(
+        "api",
+        {},
+        expected_revision=revision,
+        secret_mutations={"admin_token_digest": SecretMutation(SecretAction.CLEAR)},
+        actor="test",
+    )
+    with pytest.raises(ApiSettingsError, match="DTC_API_TOKEN"):
+        settings_from_repository(repository)
 
 
 def test_a_token_of_the_minimum_length_is_accepted():

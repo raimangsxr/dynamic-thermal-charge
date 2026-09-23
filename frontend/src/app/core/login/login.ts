@@ -5,6 +5,7 @@ import { Component, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 
+import { Api } from '../api';
 import { Auth } from '../auth';
 
 @Component({
@@ -25,12 +26,13 @@ import { Auth } from '../auth';
           type="password"
           autocomplete="current-password"
           [(ngModel)]="value"
+          [disabled]="busy()"
           required
         />
-        @if (message()) {
-          <p class="error" role="alert">{{ message() }}</p>
+        @if (message() || auth.sessionExpired()) {
+          <p class="error" role="alert">{{ message() || 'La sesión ya no es válida. Introduce la credencial de nuevo.' }}</p>
         }
-        <button type="submit">Entrar</button>
+        <button type="submit" [disabled]="busy()" [attr.aria-busy]="busy()">{{ busy() ? 'Comprobando…' : 'Entrar' }}</button>
       </form>
       <p class="hint small">
         Se recuerda mientras esta pestaña esté abierta y se olvida al cerrarla.
@@ -48,11 +50,13 @@ import { Auth } from '../auth';
   `,
 })
 export class Login {
-  private readonly auth = inject(Auth);
+  private readonly api = inject(Api);
+  readonly auth = inject(Auth);
   private readonly router = inject(Router);
 
   value = '';
   readonly message = signal('');
+  readonly busy = signal(false);
 
   submit(event: Event): void {
     event.preventDefault();
@@ -61,9 +65,21 @@ export class Login {
       this.message.set('Introduce la credencial.');
       return;
     }
-    this.auth.signIn(this.value);
-    this.value = '';
     this.message.set('');
-    void this.router.navigateByUrl('/estado');
+    this.busy.set(true);
+    const token = this.value.trim();
+    this.api.authenticate(token).subscribe({
+      next: () => {
+        this.auth.signIn(token);
+        this.value = '';
+        this.busy.set(false);
+        void this.router.navigateByUrl('/estado');
+      },
+      error: () => {
+        this.value = '';
+        this.busy.set(false);
+        this.message.set('La credencial no es válida.');
+      },
+    });
   }
 }

@@ -21,9 +21,22 @@ afecta a la puerta de calidad y a las pruebas de la integración.
 make setup   # entorno de backend en backend/.venv y dependencias del panel
 make test    # pruebas de backend y de frontend
 make lint    # ruff sobre el backend
-make check   # test + lint + build del panel + validación de los Compose
+make check   # test + lint + build + Compose + E2E crítico aislado
 make dev     # valida la configuración persistida
 ```
+
+La barrera de navegador también forma parte de `make check`; para ejecutarla
+manualmente desde el frontend con una fixture aislada:
+
+```sh
+cd frontend
+npm run e2e:install   # una vez por máquina
+npm run e2e
+```
+
+Comprueba login/401, recuperación de una planificación inválida, preview y
+activación segura en 390, 768 y 1280 píxeles, sin acceder a servicios ni
+credenciales reales.
 
 `make check` es la misma puerta que ejecuta CI, así que un test de frontend en
 rojo o un hallazgo del linter impiden mezclar. La suite informa del porcentaje

@@ -1,5 +1,5 @@
 <main class="relay-test">
-  <header class="page-header">
+  <header class="page-header dtc-page-header">
     <div>
       <p class="eyebrow">Mantenimiento y seguridad</p>
       <h1>Prueba de relés</h1>
@@ -11,39 +11,39 @@
   </header>
 
   @if (error(); as message) {
-    <div class="banner alert" role="alert" data-testid="relay-error">
-      <div class="banner-content"><mat-icon aria-hidden="true">error_outline</mat-icon><div><strong>{{ message.title }}</strong>@if (message.action) { <p>{{ message.action }}</p> }</div></div>
+    <div class="banner alert dtc-banner" role="alert" data-testid="relay-error">
+      <div class="banner-content dtc-banner-content"><mat-icon aria-hidden="true">error_outline</mat-icon><div><strong>{{ message.title }}</strong>@if (message.action) { <p>{{ message.action }}</p> }</div></div>
       <button mat-stroked-button type="button" (click)="manualRefresh()" [disabled]="refreshing()" data-testid="retry-relay-test">Volver a leer</button>
     </div>
   }
 
   @if (view(); as data) {
     @if (data.safety.fault_latched) {
-      <div class="banner alert safety-banner" role="alert" data-testid="safety-latch">
-        <div class="banner-content"><mat-icon aria-hidden="true">gpp_bad</mat-icon><div><strong>Recuperación de seguridad pendiente</strong><p>El automático está bloqueado porque no se ha podido confirmar el apagado completo. El controlador seguirá intentando dejar todas las salidas seguras.</p>@if (data.safety.fault_reason) { <p>Motivo: {{ reasonText(data.safety.fault_reason) }}</p> }</div></div>
+      <div class="banner alert safety-banner dtc-banner" role="alert" data-testid="safety-latch">
+        <div class="banner-content dtc-banner-content"><mat-icon aria-hidden="true">gpp_bad</mat-icon><div><strong>Recuperación de seguridad pendiente</strong><p>El automático está bloqueado porque no se ha podido confirmar el apagado completo. El controlador seguirá intentando dejar todas las salidas seguras.</p>@if (data.safety.fault_reason) { <p>Motivo: {{ reasonText(data.safety.fault_reason) }}</p> }</div></div>
         <p class="banner-footnote">No limpies este bloqueo desde el panel. Espera a que el controlador confirme la recuperación.</p>
       </div>
     }
     @if (data.audit.degraded) {
-      <div class="banner warn" role="status" data-testid="audit-warning"><div class="banner-content"><mat-icon aria-hidden="true">fact_check</mat-icon><div><strong>Auditoría temporalmente degradada</strong><p>La protección física continúa activa, pero algunos eventos podrían no haber quedado registrados.</p></div></div></div>
+      <div class="banner warn dtc-banner" role="status" data-testid="audit-warning"><div class="banner-content dtc-banner-content"><mat-icon aria-hidden="true">fact_check</mat-icon><div><strong>Auditoría temporalmente degradada</strong><p>La protección física continúa activa, pero algunos eventos podrían no haber quedado registrados.</p></div></div></div>
     }
     @if (data.session && !data.controller.state_is_current && !isTerminal(data.session.status)) {
-      <div class="banner warn" role="alert" data-testid="controller-warning"><div class="banner-content"><mat-icon aria-hidden="true">sync_problem</mat-icon><div><strong>No se puede confirmar el estado del controlador</strong><p>Las órdenes están bloqueadas hasta recibir un heartbeat reciente. La información física que aparece debajo no debe interpretarse como actual.</p></div></div></div>
+      <div class="banner warn dtc-banner" role="alert" data-testid="controller-warning"><div class="banner-content dtc-banner-content"><mat-icon aria-hidden="true">sync_problem</mat-icon><div><strong>No se puede confirmar el estado del controlador</strong><p>Las órdenes están bloqueadas hasta recibir un heartbeat reciente. La información física que aparece debajo no debe interpretarse como actual.</p></div></div></div>
     }
 
     @if (data.session; as session) {
-      <section class="workspace-panel session-panel" aria-labelledby="session-title">
-        <div class="section-heading">
+      <section class="workspace-panel dtc-panel session-panel" aria-labelledby="session-title">
+        <div class="section-heading dtc-section-heading">
           <div><p class="eyebrow">Control de seguridad</p><h2 id="session-title">{{ statusLabel(session.status) }}</h2><p class="section-lead">{{ statusDescription(session) }}</p></div>
           @if (canEnd()) { <button mat-flat-button color="warn" type="button" (click)="end()" data-testid="end-relay-test">{{ action() === 'end' ? 'Solicitando apagado…' : session.status === 'starting' ? 'Cancelar preparación' : 'Finalizar y apagar todo' }}</button> }
-          @if (session.status === 'ending') { <span class="status-chip status-ending"><mat-icon aria-hidden="true">hourglass_top</mat-icon> Apagando</span> }
+          @if (session.status === 'ending') { <span class="status-chip status-ending dtc-status-chip"><mat-icon aria-hidden="true">hourglass_top</mat-icon> Apagando</span> }
         </div>
 
         <div class="session-status" [class]="'session-status status-' + session.status">
           <span class="status-icon" aria-hidden="true"><mat-icon>{{ session.status === 'failed' ? 'warning' : session.status === 'ended' ? 'check_circle' : session.status === 'active' ? 'play_circle' : 'pending' }}</mat-icon></span>
           <div><strong>{{ statusLabel(session.status) }}</strong><p>{{ session.owner ? 'Esta pestaña tiene el control de la prueba.' : 'Esta pestaña solo puede consultar el resultado.' }}</p></div>
-          @if (session.status === 'active' && session.owner) { <span class="status-chip status-active">Automático suspendido</span> }
-          @if (!session.owner && !isTerminal(session.status)) { <span class="status-chip status-observer">Solo consulta</span> }
+          @if (session.status === 'active' && session.owner) { <span class="status-chip status-active dtc-status-chip">Automático suspendido</span> }
+          @if (!session.owner && !isTerminal(session.status)) { <span class="status-chip status-observer dtc-status-chip">Solo consulta</span> }
         </div>
 
         <dl class="session-meta">
@@ -65,8 +65,8 @@
         <article class="summary-card"><div class="summary-card-heading"><mat-icon aria-hidden="true">rule</mat-icon><h3>Seguimiento</h3></div><strong class="summary-value">{{ summary().pending }}</strong><p>{{ summary().pending === 1 ? 'orden esperando confirmación' : 'órdenes esperando confirmación' }}@if (summary().unresolved > 0) { <br>{{ summary().unresolved }} sin confirmar }</p></article>
       </section>
 
-      <section class="workspace-panel outputs-panel" aria-labelledby="outputs-title">
-        <div class="section-heading"><div><p class="eyebrow">Equipos</p><h2 id="outputs-title">Salidas de los acumuladores</h2><p class="section-lead">Solicita un cambio y espera la confirmación del controlador. Una orden enviada no significa que el relé ya haya conmutado.</p></div><span class="revision-chip">{{ data.heaters.length }} configuradas</span></div>
+      <section class="workspace-panel dtc-panel outputs-panel" aria-labelledby="outputs-title">
+        <div class="section-heading dtc-section-heading"><div><p class="eyebrow">Equipos</p><h2 id="outputs-title">Salidas de los acumuladores</h2><p class="section-lead">Solicita un cambio y espera la confirmación del controlador. Una orden enviada no significa que el relé ya haya conmutado.</p></div><span class="revision-chip dtc-revision-chip">{{ data.heaters.length }} configuradas</span></div>
         @if (!data.heaters.length) { <p class="empty">No hay acumuladores configurados en esta sesión.</p> } @else {
           <div class="relay-grid">
             @for (heater of data.heaters; track heater.id) {
@@ -85,19 +85,19 @@
         }
       </section>
     } @else {
-      <section class="workspace-panel start-panel" aria-labelledby="start-title">
+      <section class="workspace-panel dtc-panel start-panel" aria-labelledby="start-title">
         @if (data.safety.fault_latched) {
-          <div class="section-heading"><div><p class="eyebrow">Bloqueo preventivo</p><h2 id="start-title">La prueba no está disponible todavía</h2><p class="section-lead">El controlador debe confirmar primero la recuperación de seguridad. No se puede iniciar una nueva sesión mientras este bloqueo permanezca activo.</p></div><span class="status-chip status-failed">Recuperación pendiente</span></div>
+          <div class="section-heading dtc-section-heading"><div><p class="eyebrow">Bloqueo preventivo</p><h2 id="start-title">La prueba no está disponible todavía</h2><p class="section-lead">El controlador debe confirmar primero la recuperación de seguridad. No se puede iniciar una nueva sesión mientras este bloqueo permanezca activo.</p></div><span class="status-chip status-failed dtc-status-chip">Recuperación pendiente</span></div>
         } @else {
-          <div class="section-heading"><div><p class="eyebrow">Comprobación guiada</p><h2 id="start-title">Preparado para probar las salidas</h2><p class="section-lead">Inicia una sesión cuando puedas observar físicamente los relés y las cargas conectadas.</p></div><button mat-flat-button color="primary" type="button" (click)="start()" [disabled]="!canStart()" data-testid="start-relay-test">{{ action() === 'start' ? 'Iniciando…' : 'Entrar en modo test' }}</button></div>
+          <div class="section-heading dtc-section-heading"><div><p class="eyebrow">Comprobación guiada</p><h2 id="start-title">Preparado para probar las salidas</h2><p class="section-lead">Inicia una sesión cuando puedas observar físicamente los relés y las cargas conectadas.</p></div><button mat-flat-button color="primary" type="button" (click)="start()" [disabled]="!canStart()" data-testid="start-relay-test">{{ action() === 'start' ? 'Iniciando…' : 'Entrar en modo test' }}</button></div>
           <div class="ready-check" [class.not-ready]="!data.controller.state_is_current"><mat-icon aria-hidden="true">{{ data.controller.state_is_current ? 'check_circle' : 'sync_problem' }}</mat-icon><div><strong>{{ controllerLabel(data.controller.state_is_current) }}</strong><p>{{ controllerDescription(data.controller.state_is_current) }}@if (data.controller.last_seen_at) { <br>Último heartbeat: {{ instant(data.controller.last_seen_at) }} }</p></div></div>
           <div class="info-note safety-note"><mat-icon aria-hidden="true">warning</mat-icon><div><strong>Antes de empezar</strong><ul><li>El automático se suspenderá cuando el controlador active la sesión.</li><li>Las salidas se muestran como confirmadas solo después de recibir respuesta del controlador.</li><li>Si algo no responde, finaliza la prueba y deja que el sistema complete el apagado seguro.</li></ul></div></div>
         }
       </section>
     }
   } @else if (loading()) {
-    <section class="workspace-panel loading-panel" aria-live="polite"><mat-icon aria-hidden="true">hourglass_empty</mat-icon><div><h2>Comprobando la instalación</h2><p>Consultando el estado del controlador y de la prueba de relés…</p></div></section>
+    <section class="workspace-panel dtc-panel loading-panel dtc-loading-panel" aria-live="polite"><mat-icon aria-hidden="true">hourglass_empty</mat-icon><div><h2>Comprobando la instalación</h2><p>Consultando el estado del controlador y de la prueba de relés…</p></div></section>
   } @else {
-    <section class="workspace-panel start-panel" aria-labelledby="unavailable-title"><div class="section-heading"><div><p class="eyebrow">Estado no disponible</p><h2 id="unavailable-title">No se ha podido cargar la prueba</h2><p class="section-lead">No se puede confirmar si existe una sesión activa. Vuelve a leer antes de intentar cualquier operación.</p></div><button mat-flat-button color="primary" type="button" (click)="manualRefresh()" [disabled]="refreshing()" data-testid="retry-empty-relay-test">{{ refreshing() ? 'Consultando…' : 'Volver a intentar' }}</button></div></section>
+    <section class="workspace-panel dtc-panel start-panel" aria-labelledby="unavailable-title"><div class="section-heading dtc-section-heading"><div><p class="eyebrow">Estado no disponible</p><h2 id="unavailable-title">No se ha podido cargar la prueba</h2><p class="section-lead">No se puede confirmar si existe una sesión activa. Vuelve a leer antes de intentar cualquier operación.</p></div><button mat-flat-button color="primary" type="button" (click)="manualRefresh()" [disabled]="refreshing()" data-testid="retry-empty-relay-test">{{ refreshing() ? 'Consultando…' : 'Volver a intentar' }}</button></div></section>
   }
 </main>

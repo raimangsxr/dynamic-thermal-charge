@@ -31,14 +31,13 @@ def initialise_storage() -> None:
     if not token:
         raise RuntimeError("DTC_API_TOKEN must be set for storage initialisation")
     ApiSettings(token=token)
-    _store, report, onboarding_token = initialise_at(
+    _store, report = initialise_at(
         StorePaths.production(), allow_seed=True, admin_token=token
     )
     logger.info(
-        "Storage initialised at revision %s (%d heaters)%s",
+        "Storage initialised at revision %s (%d heaters)",
         report.revision,
         report.heaters,
-        "; onboarding credential created" if onboarding_token else "",
     )
 
 
@@ -62,8 +61,7 @@ def initialise_dev_storage() -> None:
     if driver == "postgresql" and result.locator.driver is DatabaseDriver.SQLITE:
         locator = _dev_postgres_locator()
         bootstrap.compare_and_swap_locator(result.locator_revision, locator)
-    store_result = initialise_at(paths, allow_seed=False, admin_token=token)
-    store, _report, _onboarding = store_result
+    store, _report = initialise_at(paths, allow_seed=False, admin_token=token)
     system = store.system_configuration.current()
     if result.created:
         store.system_configuration.update_section(

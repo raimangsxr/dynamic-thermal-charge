@@ -7,12 +7,14 @@ from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
 
 from .charge_planning import (
+    RoomEnergyDemandEstimator,
+    RoomEnergyInterval,
+)
+from .planning_domain import (
     CONVERGING,
     DEGRADED,
     INVALID,
     VALID,
-    RoomEnergyDemandEstimator,
-    RoomEnergyInterval,
 )
 from .models import ChargeTelemetry, Heater, TemperatureTarget
 from .scheduler import _floor_to_wall_boundary

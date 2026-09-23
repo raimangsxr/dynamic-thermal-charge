@@ -1,0 +1,5 @@
+# This file is part of the production build input and is kept separate so the
+# source fallback for MarkupSafe can use a pinned PEP 517 build backend.
+setuptools==84.0.0 \
+    --hash=sha256:51a52592b3b99e102b609654876bd65f19f999935166d1352678931132b0c670 \
+    --hash=sha256:f4695c21257f0d9b537ec2692c941d02ee143b7cc1276941349a546573b2ef73

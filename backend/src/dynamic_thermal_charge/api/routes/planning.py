@@ -15,6 +15,12 @@ from fastapi import APIRouter, Depends, Request
 from ...persistence.bootstrap import Store
 from ...persistence.history import SqlStatusReader
 from ...charge_planning import (
+    RoomEnergyInterval,
+    group_planning_violations,
+    independently_validate_plan,
+)
+from ...planning_compatibility import input_token
+from ...planning_domain import (
     AutomaticPlan,
     AutomaticPlanSlot,
     CONVERGING,
@@ -22,18 +28,14 @@ from ...charge_planning import (
     DemandEstimate,
     HeaterExplanation,
     INVALID,
-    RoomEnergyInterval,
-    VALID,
     PLANNING_HORIZON_HOURS,
-    DeterministicChargeOptimizer,
     PlanningCancelled,
     PlanningInput,
     PlanningViolation,
-    group_planning_violations,
-    independently_validate_plan,
-    input_token,
+    VALID,
     resolve_planning_telemetry,
 )
+from ...planning_solver import CurrentEnergyPlanner as DeterministicChargeOptimizer
 from ...models import (
     TemperatureTarget,
     validate_temperature_target_alignment,
@@ -41,6 +43,7 @@ from ...models import (
 )
 from ...planning_explanation import operator_summary as persisted_operator_summary
 from ...planning_explanation import planning_evidence
+from ...planning_recovery import build_planning_recovery, forecast_coverage
 from ...persistence import ConfigConflictError, ConfigValidationError
 from ...scheduler import advance_real
 from ..dependencies import usable_store
@@ -52,6 +55,7 @@ from ..schemas import (
     PlanningHeaterView,
     PlanningPlanView,
     PlanningResponse,
+    PlanningRecoveryView,
     PlanningSlotView,
     PlanningTimelineSlotView,
     READ_RESPONSES,
@@ -861,6 +865,7 @@ def _active_preview_token(store: Store) -> str | None:
 def _enrich(response: PlanningResponse, store: Store, observed_at: datetime) -> PlanningResponse:
     planning = store.planning
     config, configuration_revision = store.repository.current()
+    site = planning.site()
     capacity_by_id = {heater.id: heater.capacity_kwh for heater in config.heaters}
     max_age_seconds = config.site.indoor_max_age_minutes * 60
     telemetry = planning.telemetry()
@@ -936,7 +941,32 @@ def _enrich(response: PlanningResponse, store: Store, observed_at: datetime) -> 
         response.guaranteed_until = projection.get("guaranteed_until")
         response.optimization_quality = projection.get("optimization_quality")
         response.preview_token = active["input_token"] if active is not None else None
-    site = planning.site()
+    automatic_eligible = (
+        None
+        if response.forecast is None
+        else planning.latest_forecast_automatic_eligible()
+    )
+    if response.forecast is not None:
+        response.forecast = response.forecast.model_copy(
+            update=forecast_coverage(
+                response.forecast,
+                required_hours=int(site["forecast_horizon_hours"]),
+                automatic_eligible=automatic_eligible,
+                stale=response.forecast_stale,
+            )
+        )
+    recovery_payload = build_planning_recovery(
+        plan_status=response.plan_status,
+        absence_reason=response.absence_reason,
+        deficits=response.deficits,
+        telemetry=response.telemetry,
+        forecast_automatic_eligible=automatic_eligible,
+    )
+    response.recovery = (
+        None
+        if recovery_payload is None
+        else PlanningRecoveryView.model_validate(recovery_payload)
+    )
     response.temperature_targets_revision = site["revision"]
     response.base_load_w = int(site.get("base_load_w", 0))
     response.max_heating_power_w = int(site.get("max_heating_power_w", response.max_total_power_w))
@@ -1917,6 +1947,9 @@ def _forecast_view(forecast) -> PlanningForecastView | None:
     return PlanningForecastView(
         **summary,
         hourly_points=hourly_points,
+        points_received=len(hourly_points),
+        coverage_start=(hourly_points[0].timestamp if hourly_points else None),
+        coverage_end=(hourly_points[-1].timestamp if hourly_points else None),
     )
 
 

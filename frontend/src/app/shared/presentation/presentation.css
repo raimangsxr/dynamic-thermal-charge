@@ -1,0 +1,104 @@
+/* Shared operator-facing patterns. Feature styles keep only justified variants. */
+.dtc-page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1.5rem;
+  margin-bottom: 1.25rem;
+}
+.dtc-page-header > div { min-width: 0; }
+.dtc-page-header > button { flex: 0 0 auto; }
+
+.dtc-panel {
+  margin-top: 1rem;
+  padding: 1.35rem;
+  border: 1px solid var(--border);
+  border-radius: .85rem;
+  background: var(--surface);
+  box-shadow: 0 5px 18px #1720330b;
+}
+
+.dtc-section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.dtc-section-heading > div { min-width: 0; }
+.dtc-section-heading > button,
+.dtc-section-heading > .dtc-status-chip,
+.dtc-section-heading > .dtc-revision-chip { flex: 0 0 auto; }
+
+.dtc-banner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: .85rem 1rem;
+  padding: .8rem 1rem;
+  margin: 1rem 0;
+  border-left: 4px solid;
+}
+.dtc-banner-content { display: flex; align-items: flex-start; gap: .65rem; min-width: 0; }
+.dtc-banner-content mat-icon { flex: 0 0 auto; }
+.dtc-banner p { margin: .25rem 0 0; line-height: 1.4; }
+.dtc-banner ul { margin: .45rem 0 0; padding-left: 1.2rem; }
+.dtc-banner.alert { border-color: var(--danger); background: #fff1f2; color: #7e1b2a; }
+.dtc-banner.alert mat-icon { color: var(--danger); }
+.dtc-banner.warn { border-color: var(--warning); background: #fff8e8; color: #684000; }
+.dtc-banner.warn mat-icon { color: var(--warning); }
+
+.dtc-revision-chip,
+.dtc-status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: .25rem;
+  white-space: nowrap;
+}
+.dtc-revision-chip {
+  flex: 0 0 auto;
+  padding: .35rem .65rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: .82rem;
+}
+.dtc-status-chip {
+  padding: .3rem .65rem;
+  border-radius: 999px;
+  background: #edf0f2;
+  color: var(--muted);
+  font-size: .8rem;
+  font-weight: 650;
+}
+.dtc-status-chip mat-icon { width: 1rem; height: 1rem; font-size: 1rem; }
+
+.dtc-loading-panel { display: flex; align-items: flex-start; gap: .7rem; }
+.dtc-loading-panel mat-icon { color: var(--primary); }
+.dtc-loading-panel p { margin: .3rem 0 0; color: var(--muted); }
+.dtc-inline-loading { display: flex; align-items: center; gap: .4rem; margin: 1rem 0; font-size: .88rem; }
+.dtc-inline-loading mat-icon { width: 1.1rem; height: 1.1rem; font-size: 1.1rem; color: var(--primary); }
+.dtc-empty-state {
+  display: flex;
+  align-items: center;
+  gap: .65rem;
+  margin: 1rem 0;
+  padding: .85rem 1rem;
+  border: 1px dashed var(--border);
+  border-radius: .6rem;
+  background: #fbfcfe;
+  color: var(--muted);
+}
+.dtc-empty-state mat-icon { color: var(--muted); }
+.dtc-action-group { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+
+@media (max-width: 48rem) {
+  .dtc-page-header { flex-direction: column; }
+  .dtc-page-header > button { align-self: flex-start; }
+  .dtc-panel { padding: 1rem .75rem; }
+  .dtc-section-heading { flex-direction: column; align-items: stretch; }
+  .dtc-section-heading > button,
+  .dtc-section-heading > .dtc-status-chip,
+  .dtc-section-heading > .dtc-revision-chip { align-self: flex-start; }
+  .dtc-banner { flex-direction: column; }
+  .dtc-banner > button { align-self: flex-start; }
+}

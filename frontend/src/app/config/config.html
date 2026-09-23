@@ -1,10 +1,9 @@
 <main class="config">
-  <header class="page-header">
+  <header class="page-header dtc-page-header">
     <div>
       <p class="eyebrow">Administración</p>
       <h1>Configuración</h1>
       <p class="intro">Todo lo necesario para poner en marcha la instalación y mantener el servicio, ordenado por tarea.</p>
-      @if (config(); as data) { <p class="revisions">Instalación rev. {{ data.config_revision }} · esquema {{ data.schema_revision }} · horas de instalación: {{ installationTimezone() }}@if (configuration(); as system) { · sistema rev. {{ system.revision }} }</p> }
     </div>
     <button mat-stroked-button type="button" (click)="load()" [disabled]="loading()" aria-label="Volver a leer la configuración" data-testid="reload-config">
       <mat-icon aria-hidden="true">refresh</mat-icon> {{ loading() ? 'Cargando…' : 'Volver a leer' }}
@@ -12,16 +11,16 @@
   </header>
 
   @if (banner(); as message) {
-    <div class="banner alert" role="alert" data-testid="banner">
+    <div class="banner alert dtc-banner" role="alert" data-testid="banner">
       <strong>{{ message.title }}</strong><p>{{ message.action }}</p>
       @if (message.onDevice === false && message.title.includes('cambió')) {
         <button mat-stroked-button type="button" (click)="load()" data-testid="reread">Volver a leer la configuración</button>
       }
     </div>
   }
-  @if (systemError()) { <div class="banner alert" role="alert" data-testid="system-error">{{ systemError() }}</div> }
+  @if (systemError()) { <div class="banner alert dtc-banner" role="alert" data-testid="system-error">{{ systemError() }}</div> }
   @if (relayConflict()) {
-    <p class="banner alert" role="alert">La configuración está bloqueada por una prueba o recuperación de seguridad. <a routerLink="/prueba-reles">Abrir prueba de relés</a></p>
+    <p class="banner alert dtc-banner" role="alert">La configuración está bloqueada por una prueba o recuperación de seguridad. <a routerLink="/prueba-reles">Abrir prueba de relés</a></p>
   }
 
   @if (config() || configuration()) {
@@ -35,11 +34,11 @@
   }
 
   @if (areaIs('summary')) {
-    <section class="workspace-panel" aria-labelledby="summary-title">
-      <div class="section-heading">
+    <section class="workspace-panel dtc-panel" aria-labelledby="summary-title">
+      <div class="section-heading dtc-section-heading">
         <div><p class="eyebrow">Vista general</p><h2 id="summary-title">Resumen de la instalación</h2><p class="section-lead">Consulta lo importante de un vistazo y entra directamente en el área que quieras ajustar.</p></div>
       </div>
-      @if (loading() && !config() && !configuration()) { <p class="loading" role="status">Cargando configuración…</p> }
+      @if (loading() && !config() && !configuration()) { <p class="loading dtc-inline-loading" role="status">Cargando configuración…</p> }
       <div class="summary-grid">
         @if (config(); as data) {
           <article class="summary-card">
@@ -80,8 +79,8 @@
   }
 
   @if (areaIs('installation') && config(); as data) {
-    <section class="workspace-panel" aria-labelledby="installation-title">
-      <div class="section-heading">
+    <section class="workspace-panel dtc-panel" aria-labelledby="installation-title">
+      <div class="section-heading dtc-section-heading">
         <div><p class="eyebrow">Base de la instalación</p><h2 id="installation-title">Intervalos y calidad de lecturas</h2><p class="section-lead">Ajusta cómo se interpreta la telemetría y cómo se divide la carga. La potencia, el sondeo y la retención están en sus fuentes canónicas.</p></div>
         <button mat-flat-button color="primary" type="button" (click)="saveInstallation()" [disabled]="!dirty() || installationSaving() || !writable()" data-testid="save-installation">
           {{ installationSaving() ? 'Guardando…' : 'Guardar cambios' }}
@@ -109,8 +108,8 @@
   }
 
   @if (areaIs('heaters') && config(); as data) {
-    <section class="workspace-panel" aria-labelledby="heaters-title">
-      <div class="section-heading">
+    <section class="workspace-panel dtc-panel" aria-labelledby="heaters-title">
+      <div class="section-heading dtc-section-heading">
         <div><p class="eyebrow">Equipos</p><h2 id="heaters-title">Acumuladores</h2><p class="section-lead">Define la potencia y la capacidad térmica de la sala. Los topics MQTT estándar se calculan automáticamente y se muestran como información. Las consignas semanales se gestionan en Planificación.</p></div>
         <button mat-flat-button color="primary" type="button" (click)="openAddHeater()" [disabled]="!writable()" data-testid="add-heater"><mat-icon aria-hidden="true">add</mat-icon> Nuevo acumulador</button>
       </div>
@@ -140,7 +139,7 @@
             </div></div>
           }
           @if (heaterFormError()) { <p class="field-error" role="alert" data-testid="heater-form-error">{{ heaterFormError() }}</p> }
-          <div class="form-actions"><button mat-flat-button color="primary" type="submit" [disabled]="heaterSaving() || !writable()">{{ heaterFormMode() === 'add' ? 'Crear acumulador' : 'Guardar cambios' }}</button><button mat-button type="button" (click)="cancelHeaterForm()">Cancelar</button></div>
+          <div class="form-actions dtc-action-group"><button mat-flat-button color="primary" type="submit" [disabled]="heaterSaving() || !writable()">{{ heaterFormMode() === 'add' ? 'Crear acumulador' : 'Guardar cambios' }}</button><button mat-button type="button" (click)="cancelHeaterForm()">Cancelar</button></div>
         </form>
       }
 
@@ -163,8 +162,8 @@
   }
 
   @if (areaIs('planning') && planningConfig(); as planning) {
-    <section class="workspace-panel" aria-labelledby="planning-title">
-        <div class="section-heading"><div><p class="eyebrow">Optimización automática</p><h2 id="planning-title">Planificación</h2><p class="section-lead">Aquí se definen los límites eléctricos, el horizonte y la simulación. Las consignas de temperatura por acumulador se editan en el módulo Planificación.</p></div><span class="revision-chip">Rev. {{ planning.revision }}</span></div>
+    <section class="workspace-panel dtc-panel" aria-labelledby="planning-title">
+        <div class="section-heading dtc-section-heading"><div><p class="eyebrow">Optimización automática</p><h2 id="planning-title">Planificación</h2><p class="section-lead">Aquí se definen los límites eléctricos, el horizonte y la simulación. Las consignas de temperatura por acumulador se editan en el módulo Planificación.</p></div><span class="revision-chip dtc-revision-chip">Rev. {{ planning.revision }}</span></div>
       <div class="canonical-note"><mat-icon aria-hidden="true">bolt</mat-icon><p><strong>Potencia total canónica:</strong> {{ formatPower(canonicalPower()) }}. Este mismo valor alimenta el optimizador automático y el indicador de Estado.</p></div>
       <form (ngSubmit)="savePlanning()" aria-label="Parámetros de planificación">
         @for (group of planningGroups(); track group.title) {
@@ -181,14 +180,14 @@
             }
           </div></div>
         }
-        <div class="form-actions"><button mat-flat-button color="primary" type="submit" [disabled]="!planningDirty() || planningSaving() || !writable()">{{ planningSaving() ? 'Guardando…' : 'Guardar planificación' }}</button></div>
+        <div class="form-actions dtc-action-group"><button mat-flat-button color="primary" type="submit" [disabled]="!planningDirty() || planningSaving() || !writable()">{{ planningSaving() ? 'Guardando…' : 'Guardar planificación' }}</button></div>
       </form>
     </section>
   }
 
   @if (areaIs('integrations') && configuration(); as system) {
-    <section class="workspace-panel" aria-labelledby="integrations-title">
-      <div class="section-heading"><div><p class="eyebrow">Conexiones</p><h2 id="integrations-title">Integraciones</h2><p class="section-lead">Configura cómo entran los datos de los acumuladores y de dónde procede la previsión meteorológica.</p></div></div>
+    <section class="workspace-panel dtc-panel" aria-labelledby="integrations-title">
+      <div class="section-heading dtc-section-heading"><div><p class="eyebrow">Conexiones</p><h2 id="integrations-title">Integraciones</h2><p class="section-lead">Configura cómo entran los datos de los acumuladores y de dónde procede la previsión meteorológica.</p></div></div>
       <nav class="subnav" aria-label="Integraciones">@for (section of integrationSections; track section) { <button type="button" [class.active]="activeIntegrationSection() === section" [attr.aria-current]="activeIntegrationSection() === section ? 'page' : null" (click)="chooseIntegration(section)">{{ sectionLabel(section) }}</button> }</nav>
       <form (ngSubmit)="requestSystemSave(activeIntegrationSection())" [attr.aria-label]="'Configuración de ' + sectionLabel(activeIntegrationSection())">
         <p class="revision-line">Revisión global {{ system.revision }} · los cambios se aplican según el estado indicado junto a cada campo.</p>
@@ -213,7 +212,23 @@
             @for (secret of secrets(activeIntegrationSection()); track secret) { <div class="secret"><label [for]="secret + '-action'">{{ secretLabel(secret) }} <dtc-param-help [field]="secret" [label]="secretLabel(secret)" /> <span class="secret-status">· {{ system.secrets[secret]?.configured ? 'configurado' : 'sin configurar' }}</span></label><select class="native-input" [id]="secret + '-action'" [name]="secret + '-action'" [ngModel]="secretAction(secret)" (ngModelChange)="setSecretAction(secret, $event)" [disabled]="!writable()"><option value="keep">Conservar</option><option value="replace">Reemplazar</option><option value="clear">Eliminar</option></select>@if (secretAction(secret) === 'replace') { <input class="native-input secret-input" type="password" autocomplete="new-password" [name]="secret + '-value'" [ngModel]="secretValues()[secret] ?? ''" (ngModelChange)="setSecretValue(secret, $event)" aria-label="Valor nuevo" [disabled]="!writable()" /> }</div> }
           </div>
         }
-        <div class="form-actions"><button mat-flat-button color="primary" type="submit" [disabled]="!systemHasChanges(activeIntegrationSection()) || systemSaving() || !writable()">{{ systemSaving() ? 'Guardando…' : 'Guardar integración' }}</button></div>
+        @if (activeIntegrationSection() === 'weather') {
+          <div class="field-group weather-schedule-group">
+            <h3>Programación de consultas AEMET</h3>
+            <p class="group-description">La hora local de consulta diaria se guarda con los parámetros de planificación, pero se muestra aquí junto al proveedor y sus cadencias.</p>
+            <div class="fields form-grid">
+              <div class="form-field-cell">
+                <div class="field-label-row"><label for="weather-aemet_query_hour">Hora de consulta AEMET (0–23)</label><dtc-param-help field="aemet_query_hour" section="planning" label="Hora de consulta AEMET" /></div>
+                <input class="native-input" id="weather-aemet_query_hour" name="weather-aemet_query_hour" type="number" min="0" max="23" step="1" [ngModel]="planningValue('aemet_query_hour')" (ngModelChange)="planningEdit('aemet_query_hour', $event)" [disabled]="!writable()" />
+                <p class="field-hint">Momento del día en que se solicita la previsión diaria. Usa la zona horaria de la instalación.</p>
+              </div>
+            </div>
+          </div>
+        }
+        <div class="form-actions dtc-action-group">
+          <button mat-flat-button color="primary" type="submit" [disabled]="!systemHasChanges(activeIntegrationSection()) || systemSaving() || !writable()">{{ systemSaving() ? 'Guardando…' : 'Guardar integración' }}</button>
+          @if (activeIntegrationSection() === 'weather') { <button mat-stroked-button type="button" (click)="savePlanning()" [disabled]="!planningDirty() || planningSaving() || !writable()">{{ planningSaving() ? 'Guardando horario…' : 'Guardar horario de AEMET' }}</button> }
+        </div>
       </form>
       @if (activeIntegrationSection() === 'email') {
         <section class="status-card" aria-labelledby="alert-catalogue-title" data-testid="alert-catalogue">
@@ -239,8 +254,8 @@
   }
 
   @if (areaIs('service') && configuration(); as system) {
-    <section class="workspace-panel" aria-labelledby="service-title">
-      <div class="section-heading"><div><p class="eyebrow">Operación y mantenimiento</p><h2 id="service-title">Servicio</h2><p class="section-lead">Administra el almacenamiento, el acceso al panel, las salidas físicas, los registros y la operación diaria.</p></div></div>
+    <section class="workspace-panel dtc-panel" aria-labelledby="service-title">
+      <div class="section-heading dtc-section-heading"><div><p class="eyebrow">Operación y mantenimiento</p><h2 id="service-title">Servicio</h2><p class="section-lead">Administra el almacenamiento, el acceso al panel, las salidas físicas, los registros y la operación diaria.</p></div></div>
       <nav class="subnav" aria-label="Servicio">@for (section of serviceSections; track section) { <button type="button" [class.active]="activeServiceSection() === section" [attr.aria-current]="activeServiceSection() === section ? 'page' : null" (click)="chooseService(section)">{{ sectionLabel(section) }}</button> }</nav>
       <form (ngSubmit)="requestSystemSave(activeServiceSection())" [attr.aria-label]="'Configuración de ' + sectionLabel(activeServiceSection())">
         <p class="revision-line">Revisión global {{ system.revision }} · los cambios se aplican según el estado indicado junto a cada campo.</p>
@@ -268,9 +283,20 @@
             @for (secret of secrets(activeServiceSection()); track secret) { <div class="secret"><label [for]="secret + '-action'">{{ secretLabel(secret) }} <dtc-param-help [field]="secret" [label]="secretLabel(secret)" /> <span class="secret-status">· {{ system.secrets[secret]?.configured ? 'configurado' : 'sin configurar' }}</span></label><select class="native-input" [id]="secret + '-action'" [name]="secret + '-action'" [ngModel]="secretAction(secret)" (ngModelChange)="setSecretAction(secret, $event)" [disabled]="!writable()"><option value="keep">Conservar</option><option value="replace">Reemplazar</option><option value="clear">Eliminar</option></select>@if (secretAction(secret) === 'replace') { <input class="native-input secret-input" type="password" autocomplete="new-password" [name]="secret + '-value'" [ngModel]="secretValues()[secret] ?? ''" (ngModelChange)="setSecretValue(secret, $event)" aria-label="Valor nuevo" [disabled]="!writable()" /> }</div> }
           </div>
         }
-        <div class="form-actions"><button mat-flat-button color="primary" type="submit" [disabled]="!systemHasChanges(activeServiceSection()) || systemSaving() || !writable()">{{ systemSaving() ? 'Guardando…' : 'Guardar configuración' }}</button></div>
-        @if (activeServiceSection() === 'database') { <div class="action-card"><h3>Comprobaciones de base de datos</h3><p>Prueba el destino sin guardar cambios y, si corresponde, confirma la migración.</p><div class="form-actions"><button mat-stroked-button type="button" (click)="testDatabase()" [disabled]="!writable()">Probar conexión</button>@if (systemValue('database', 'driver') === 'postgresql') { <button mat-flat-button color="warn" type="button" (click)="migrateDatabase()" [disabled]="!writable()">Confirmar migración a PostgreSQL</button> }</div>@if (operation()) { <p role="status" aria-live="polite">{{ operation() }}</p> }</div> }
+        <div class="form-actions dtc-action-group"><button mat-flat-button color="primary" type="submit" [disabled]="!systemHasChanges(activeServiceSection()) || systemSaving() || !writable()">{{ systemSaving() ? 'Guardando…' : 'Guardar configuración' }}</button></div>
+        @if (activeServiceSection() === 'database') { <div class="action-card"><h3>Comprobaciones de base de datos</h3><p>Prueba el destino sin guardar cambios y, si corresponde, confirma la migración.</p><div class="form-actions dtc-action-group"><button mat-stroked-button type="button" (click)="testDatabase()" [disabled]="!writable()">Probar conexión</button>@if (systemValue('database', 'driver') === 'postgresql') { <button mat-flat-button color="warn" type="button" (click)="migrateDatabase()" [disabled]="!writable()">Confirmar migración a PostgreSQL</button> }</div>@if (operation()) { <p role="status" aria-live="polite">{{ operation() }}</p> }</div> }
       </form>
+      <details class="technical-details">
+        <summary>Detalles técnicos y versiones</summary>
+        <dl>
+          @if (config(); as data) {
+            <div><dt>Revisión de instalación</dt><dd>{{ data.config_revision }}</dd></div>
+            <div><dt>Esquema de instalación</dt><dd>{{ data.schema_revision }}</dd></div>
+            <div><dt>Zona horaria de instalación</dt><dd>{{ installationTimezone() }}</dd></div>
+          }
+          @if (configuration(); as system) { <div><dt>Revisión de configuración del sistema</dt><dd>{{ system.revision }}</dd></div><div><dt>Formato técnico</dt><dd>{{ system.format_version }}</dd></div> }
+        </dl>
+      </details>
     </section>
   }
 </main>

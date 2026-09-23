@@ -11,6 +11,7 @@
  */
 
 import { HttpErrorResponse } from '@angular/common/http';
+import { RouterLink } from '@angular/router';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import {
@@ -37,12 +38,15 @@ import {
   normalizePlanStatus,
   planReasonLabel,
   planStatusLabel,
+  planningActionForCause,
+  planningRecoveryActionLabel,
+  planningRecoveryCauseLabel,
   requirementLabel,
 } from '../shared/presentation/presentation';
 
 @Component({
   selector: 'dtc-status',
-  imports: [MatButtonModule, MatIconModule, ControllerHealth, OutputIndicator],
+  imports: [MatButtonModule, MatIconModule, RouterLink, ControllerHealth, OutputIndicator],
   templateUrl: './status.html',
   styleUrl: './status.css',
 })
@@ -98,6 +102,32 @@ export class Status {
 
   isInvalidStatus(status: string | null | undefined): boolean {
     return normalizePlanStatus(status) === 'INVALID';
+  }
+
+  recoveryCauseText(value: unknown): string {
+    return planningRecoveryCauseLabel(value);
+  }
+
+  recoveryActionText(value: unknown): string {
+    return planningActionForCause(value) ?? 'Consulta el detalle técnico y revisa la configuración antes de volver a calcular.';
+  }
+
+  recoveryActionLabel(value: unknown): string {
+    return planningRecoveryActionLabel(value);
+  }
+
+  recoveryRoute(value: string | null | undefined): string[] {
+    return [String(value ?? '/').split('#', 1)[0] || '/'];
+  }
+
+  recoveryFragment(value: string | null | undefined): string | undefined {
+    const fragment = String(value ?? '').split('#', 2)[1];
+    return fragment || undefined;
+  }
+
+  forecastCoverageText(status: StatusDto): string {
+    if (!status.forecast_coverage_start || !status.forecast_coverage_end) return 'Sin puntos horarios recibidos';
+    return `${this.instant(status.forecast_coverage_start)} — ${this.instant(status.forecast_coverage_end)}`;
   }
 
   convergenceText(status: StatusDto): string {

@@ -11,6 +11,7 @@ import type { ApiErrorDto, RelayTestHeaterDto, RelayTestViewDto } from '../core/
 import { type Explained, UNREACHABLE, explain } from '../core/errors';
 import { RelayTestSession } from '../core/relay-test-session';
 import { formatAge, formatInstant } from '../shared/age/age';
+import { relaySessionStatusLabel } from '../shared/presentation/presentation';
 import { CONFIRM_DIALOG_CONFIG, ConfirmDialog, type ConfirmDialogData } from '../shared/ui-feedback/dialog-config';
 import { UiFeedback } from '../shared/ui-feedback/ui-feedback';
 
@@ -279,13 +280,7 @@ export class RelayTest implements OnDestroy {
   }
 
   statusLabel(status: RelaySessionStatus): string {
-    switch (status) {
-      case 'starting': return 'Preparando la prueba';
-      case 'active': return 'Prueba activa';
-      case 'ending': return 'Apagando las salidas';
-      case 'ended': return 'Prueba finalizada';
-      case 'failed': return 'Recuperación necesaria';
-    }
+    return relaySessionStatusLabel(status);
   }
 
   statusDescription(session: RelaySession): string {

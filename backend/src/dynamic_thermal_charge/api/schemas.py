@@ -102,6 +102,20 @@ class ForecastSummary(BaseModel):
     municipality: str | None = None
 
 
+class PlanningRecoveryCause(BaseModel):
+    code: str
+    action_code: str | None = None
+    destination: str | None = None
+    detail: str | None = None
+    heater_ids: list[str] = Field(default_factory=list)
+
+
+class PlanningRecoveryView(BaseModel):
+    primary: PlanningRecoveryCause | None = None
+    secondary: list[PlanningRecoveryCause] = Field(default_factory=list)
+    safe_state: str = "outputs_off"
+
+
 class AllocationSummary(BaseModel):
     heater_id: str
     requested_minutes: int
@@ -131,6 +145,7 @@ class StatusResponse(BaseModel):
     plan_status: str | None = None
     optimization_quality: str | None = None
     deficits: list["PlanningDeficitView"] = Field(default_factory=list)
+    recovery: PlanningRecoveryView | None = None
     convergence_by_heater: dict[str, datetime | None] = Field(default_factory=dict)
     convergence_at: datetime | None = None
     guaranteed_until: datetime | None = None
@@ -144,6 +159,11 @@ class StatusResponse(BaseModel):
     forecast_next_run_at: datetime | None = None
     forecast_next_run_kind: str | None = None
     forecast_stale: bool | None = None
+    forecast_points_received: int = 0
+    forecast_coverage_start: datetime | None = None
+    forecast_coverage_end: datetime | None = None
+    forecast_required_hours: int | None = None
+    forecast_automatic_eligible: bool | None = None
 
 
 class HourlyForecastPointView(BaseModel):
@@ -154,6 +174,12 @@ class HourlyForecastPointView(BaseModel):
 
 class PlanningForecastView(ForecastSummary):
     hourly_points: list[HourlyForecastPointView] = Field(default_factory=list)
+    points_received: int = 0
+    coverage_start: datetime | None = None
+    coverage_end: datetime | None = None
+    required_hours: int | None = None
+    automatic_eligible: bool | None = None
+    stale: bool | None = None
 
 
 class PlanningSlotView(PlanSlotView):
@@ -228,6 +254,7 @@ class PlanningResponse(BaseModel):
     telemetry: list["ChargeTelemetryView"] = Field(default_factory=list)
     plan_status: str | None = None
     deficits: list["PlanningDeficitView"] = Field(default_factory=list)
+    recovery: PlanningRecoveryView | None = None
     convergence_by_heater: dict[str, datetime | None] = Field(default_factory=dict)
     convergence_at: datetime | None = None
     guaranteed_until: datetime | None = None

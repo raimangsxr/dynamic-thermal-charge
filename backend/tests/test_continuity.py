@@ -10,6 +10,7 @@ from dynamic_thermal_charge.persistence.continuity import (
 from dynamic_thermal_charge.persistence.context import StorageContext
 from dynamic_thermal_charge.persistence.paths import StorePaths
 from dynamic_thermal_charge.persistence.schema import reconciled_event
+from tests.conftest import API_TOKEN
 
 
 NOW = datetime(2026, 8, 28, tzinfo=timezone.utc)
@@ -20,7 +21,9 @@ def _outage():
 
 
 def test_only_unavailability_enters_fallback_and_snapshot_must_be_fresh(tmp_path):
-    context = StorageContext.initialise(StorePaths.in_directory(tmp_path)).context
+    context = StorageContext.initialise(
+        StorePaths.in_directory(tmp_path), admin_token=API_TOKEN
+    ).context
     router = FallbackRouter(context, maximum_age_minutes=60)
     snapshot = router.control_snapshot(_outage, now=datetime.now(timezone.utc))
     assert snapshot.configuration
@@ -34,7 +37,9 @@ def test_only_unavailability_enters_fallback_and_snapshot_must_be_fresh(tmp_path
 
 
 def test_runtime_events_replay_in_batches_exactly_once(tmp_path):
-    context = StorageContext.initialise(StorePaths.in_directory(tmp_path)).context
+    context = StorageContext.initialise(
+        StorePaths.in_directory(tmp_path), admin_token=API_TOKEN
+    ).context
     router = FallbackRouter(context, maximum_age_minutes=60)
     event = router.runtime_write(
         _outage, event_type="heartbeat", aggregate_id="controller",

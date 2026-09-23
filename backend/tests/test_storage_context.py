@@ -12,10 +12,13 @@ from dynamic_thermal_charge.persistence.paths import StorePaths
 
 
 NOW = datetime(2026, 8, 28, 12, 0, tzinfo=timezone.utc)
+ADMIN_TOKEN = "storage-token-" + "a" * 32
 
 
 def _initialise_store_in_child(directory: str) -> bool:
-    context = StorageContext.initialise(StorePaths.in_directory(directory)).context
+    context = StorageContext.initialise(
+        StorePaths.in_directory(directory), admin_token=ADMIN_TOKEN
+    ).context
     context.close()
     return True
 
@@ -23,17 +26,19 @@ def _initialise_store_in_child(directory: str) -> bool:
 def test_context_initialises_and_reopens_without_database_environment(tmp_path, monkeypatch):
     monkeypatch.setenv("DTC_DATABASE_URL", "postgresql://must-be-ignored/ignored")
     paths = StorePaths.in_directory(tmp_path)
-    result = StorageContext.initialise(paths)
+    result = StorageContext.initialise(paths, admin_token=ADMIN_TOKEN)
     context = result.context
-    assert result.bootstrap.onboarding_token
+    assert context.generation.system_configuration.current().secrets[
+        "admin_token_digest"
+    ].value
     assert context.generation.configuration.current()[0].heaters
-    assert context.generation.system_configuration.current().revision == 1
+    assert context.generation.system_configuration.current().revision == 2
     assert context.topology.as_public_dict()["canonical_driver"] == "sqlite"
     context.close()
 
     reopened = StorageContext.open(paths)
     assert reopened.generation.configuration.current()[1] == 1
-    assert reopened.generation.system_configuration.current().revision == 1
+    assert reopened.generation.system_configuration.current().revision == 2
     reopened.close()
 
 
@@ -48,7 +53,7 @@ def test_concurrent_initialisation_serialises_shared_sqlite_migrations(tmp_path)
 
 def test_generation_replacement_waits_for_inflight_lease(tmp_path):
     paths = StorePaths.in_directory(tmp_path)
-    context = StorageContext.initialise(paths).context
+    context = StorageContext.initialise(paths, admin_token=ADMIN_TOKEN).context
     old = context.generation
     locator, locator_revision = context.bootstrap.locator()
     prepared_engines = build_canonical_engines(locator, paths)
@@ -71,7 +76,7 @@ def test_generation_replacement_waits_for_inflight_lease(tmp_path):
 
 def test_failed_generation_preflight_keeps_current_generation(tmp_path):
     paths = StorePaths.in_directory(tmp_path)
-    context = StorageContext.initialise(paths).context
+    context = StorageContext.initialise(paths, admin_token=ADMIN_TOKEN).context
     current = context.generation
     locator, revision = context.bootstrap.locator()
     broken_paths = StorePaths.in_directory(tmp_path / "broken")
@@ -87,7 +92,9 @@ def test_failed_generation_preflight_keeps_current_generation(tmp_path):
 
 
 def test_applied_revision_tracks_convergence_and_restart(tmp_path):
-    context = StorageContext.initialise(StorePaths.in_directory(tmp_path)).context
+    context = StorageContext.initialise(
+        StorePaths.in_directory(tmp_path), admin_token=ADMIN_TOKEN
+    ).context
     repository = context.generation.applied_revisions
     repository.publish(
         "api", applied_revision=2, desired_revision=2, state="applied"
@@ -122,7 +129,9 @@ def test_applied_revision_tracks_convergence_and_restart(tmp_path):
     ],
 )
 def test_invalid_applied_revision_state_is_rejected(tmp_path, args):
-    context = StorageContext.initialise(StorePaths.in_directory(tmp_path)).context
+    context = StorageContext.initialise(
+        StorePaths.in_directory(tmp_path), admin_token=ADMIN_TOKEN
+    ).context
     process, applied, desired, state = args
     with pytest.raises(ValueError):
         context.generation.applied_revisions.publish(
@@ -135,7 +144,9 @@ def test_invalid_applied_revision_state_is_rejected(tmp_path, args):
 
 
 def test_initialisation_refreshes_a_minimal_secret_safe_fallback(tmp_path):
-    context = StorageContext.initialise(StorePaths.in_directory(tmp_path)).context
+    context = StorageContext.initialise(
+        StorePaths.in_directory(tmp_path), admin_token=ADMIN_TOKEN
+    ).context
     snapshot = context.fallback.snapshot()
     assert snapshot is not None
     assert snapshot.configuration["functional_revision"] >= 1
