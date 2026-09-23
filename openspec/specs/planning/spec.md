@@ -234,6 +234,30 @@ aplican ese límite a las dos medidas antes de considerarlas utilizables.
 - **THEN** la planificación la rechaza como estado requerido no fresco y no
   inventa el valor que correspondería al siguiente slot
 
+### Requirement: Recuperación operativa estable
+
+Estado y Planificación deben exponer una proyección común de la causa principal,
+causas secundarias, acción recomendada y destino navegable cuando el resultado
+no sea utilizable. Los códigos de recuperación permanecen estables y el texto
+visible se deriva del catálogo compartido del panel. La respuesta de previsión
+debe distinguir puntos recibidos, rango cubierto, horas requeridas, antigüedad
+y aptitud para automático. Cuando no existe un plan válido, la proyección debe
+mantener el estado seguro de salidas apagadas.
+
+#### Scenario: Causa compartida entre Estado y Planificación
+
+- **WHEN** el mismo estado inválido se consulta en Estado y Planificación
+- **THEN** ambas respuestas exponen el mismo código de causa, acción y destino,
+  sin sustituir el detalle técnico original
+
+#### Scenario: Cobertura insuficiente sin plan válido
+
+- **WHEN** la previsión no alcanza la cobertura horaria requerida para el
+  horizonte automático
+- **THEN** la respuesta identifica la cobertura recibida y requerida, muestra
+  la acción de revisar la conexión meteorológica y conserva las salidas
+  apagadas
+
 ### Requirement: Estados canónicos y convergencia continuada
 
 La planificación pública y persistida usa `VALID`, `CONVERGING`, `DEGRADED` e
