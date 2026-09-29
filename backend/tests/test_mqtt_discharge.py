@@ -62,6 +62,15 @@ def test_an_active_target_enables_the_discharge_with_its_setpoint():
     assert _commands(plan) == {"salon": (True, 21.0), "entrada": (False, None)}
 
 
+def test_a_best_effort_plan_controls_available_heaters_and_keeps_excluded_off():
+    plan = _plan(
+        [_slot(0, targets={"salon": 21.0})],
+        status="DEGRADED",
+    )
+
+    assert _commands(plan) == {"salon": (True, 21.0), "entrada": (False, None)}
+
+
 def test_the_window_rules_inside_the_window_even_with_no_projected_heat():
     """D2: the thermostat must stay able to react in a mild interval."""
     plan = _plan([_slot(0, targets={"salon": 21.0}, heat={"salon": 0.0})])
@@ -110,7 +119,8 @@ def test_custom_prefix_is_used_for_both_command_topics():
 
 
 # --------------------------------------------------------------------------- #
-# R5: every degraded condition disables the discharge
+# R5: safety degradation disables the discharge; validated best-effort remains
+# governed by the active plan.
 # --------------------------------------------------------------------------- #
 
 @pytest.mark.parametrize(

@@ -18,6 +18,11 @@ from fastapi import APIRouter, Depends, Request
 from ...persistence.bootstrap import Store
 from ...persistence.history import SqlStatusReader
 from ...charge_planning import group_planning_violations
+from ...plan_activation import (
+    ACTIVATION_AUTOMATIC,
+    can_activate_plan,
+    seconds_to_next_replan,
+)
 from ..dependencies import controller_view, usable_store
 from ..liveness import ControllerView
 from ..read_model import automatic_window, forecast_cycle_context, real_at_or_after, real_before
@@ -32,8 +37,8 @@ from ..schemas import (
     PowerSnapshot,
     StatusResponse,
     ChargeTelemetryView,
-    PlanningDeficitView,
 )
+from .planning import _deficit_view
 
 
 router = APIRouter()
@@ -184,6 +189,8 @@ def get_status(
                 slot_minutes=canonical_plan["slot_minutes"],
                 installation_revision=canonical_plan["configuration_revision"],
                 created_at=canonical_plan["created_at"],
+                activation_mode=str(canonical_plan.get("activation_mode", ACTIVATION_AUTOMATIC)),
+                best_effort=bool(canonical_plan.get("best_effort", False)),
                 slots=[
                     PlanSlotView(start=start, end=end, heater_ids=sorted(set(ids)))
                     for (start, end), ids in sorted(grouped.items())
@@ -284,20 +291,65 @@ def get_status(
             if diagnostic_plan is not None
             else None if canonical_plan is None else _canonical_plan_status(canonical_plan["status"])
         ),
+        activation_mode=(
+            str((diagnostic_plan or canonical_plan).get("activation_mode", ACTIVATION_AUTOMATIC))
+            if active_automatic is not None and diagnostic_plan is None
+            else None
+        ),
+        best_effort=bool(
+            active_automatic is not None
+            and diagnostic_plan is None
+            and (canonical_plan or {}).get("best_effort", False)
+        ),
+        best_effort_activatable=(
+            can_activate_plan(
+                "DEGRADED",
+                active_automatic,
+                now=observed_at,
+                next_refresh_seconds=seconds_to_next_replan(
+                    observed_at,
+                    replan_minutes=int(planning_site.get("replan_minutes", 30)),
+                    slot_minutes=int(
+                        config.site.slot_minutes
+                        if diagnostic_plan is None
+                        else diagnostic_plan.get("slot_minutes", config.site.slot_minutes)
+                    ),
+                ),
+                best_effort_requested=True,
+                has_exclusions=bool(
+                    (diagnostic_plan or {}).get("excluded_heaters")
+                ),
+            )
+            if diagnostic_plan is not None
+            else False
+        ),
+        best_effort_reasons=[
+            _deficit_view(
+                item,
+                horizon_hours=int(planning_site.get("forecast_horizon_hours", 24)),
+            ).cause or "safe_planning_input"
+            for item in group_planning_violations(
+                _plan_violations(diagnostic_plan or canonical_plan or {}),
+                slot_minutes=(diagnostic_plan or canonical_plan or {}).get("slot_minutes"),
+            )
+        ],
+        excluded_heaters=list(
+            (diagnostic_plan or canonical_plan or {}).get("excluded_heaters", [])
+        ),
         optimization_quality=(
             diagnostic_plan.get("optimization_quality")
             if diagnostic_plan is not None
             else None if canonical_plan is None else canonical_plan.get("optimization_quality")
         ),
         deficits=(
-            [PlanningDeficitView(**item) for item in group_planning_violations(
+            [_deficit_view(item, horizon_hours=int(planning_site.get("forecast_horizon_hours", 24))) for item in group_planning_violations(
                 _plan_violations(diagnostic_plan),
                 slot_minutes=diagnostic_plan.get("slot_minutes"),
             )]
             if diagnostic_plan is not None
             else []
             if canonical_plan is None
-            else [PlanningDeficitView(**item) for item in group_planning_violations(
+            else [_deficit_view(item, horizon_hours=int(planning_site.get("forecast_horizon_hours", 24))) for item in group_planning_violations(
                 _plan_violations(canonical_plan),
                 slot_minutes=canonical_plan.get("slot_minutes"),
             )]

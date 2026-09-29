@@ -75,8 +75,14 @@ def resolve_planning_telemetry(
     *,
     mqtt: MqttSystemSettings | None = None,
     max_age_seconds: float = 900,
+    include_unusable: bool = False,
 ) -> dict[str, ChargeTelemetry]:
-    """Return the telemetry snapshot automatic planning should use."""
+    """Return the telemetry snapshot automatic planning should use.
+
+    Runtime callers that need partial-telemetry planning retain the raw values
+    and let the planner classify each heater.  Historical callers keep the
+    filtered behaviour by default.
+    """
     if mqtt is not None and not mqtt.enabled:
         return {}
     valid: dict[str, ChargeTelemetry] = {}
@@ -85,6 +91,9 @@ def resolve_planning_telemetry(
             continue
         value = persisted.get(heater.id)
         if value is None:
+            continue
+        if include_unusable:
+            valid[heater.id] = value
             continue
         stamps = (value.indoor_received_at, value.stored_soc_received_at)
         if all(
@@ -131,6 +140,7 @@ class PlanningViolation:
     target_window_start: datetime | None = None
     target_window_end: datetime | None = None
     stored_energy_kwh: float | None = None
+    cause: str | None = None
 
     @property
     def target_charge_percent(self) -> float:
@@ -231,6 +241,7 @@ class AutomaticPlan:
     guaranteed_until: datetime | None = None
     diagnostics: Mapping[str, Any] = field(default_factory=dict)
     optimization_quality: str = OPTIMAL
+    excluded_heaters: tuple[Mapping[str, str], ...] = ()
 
     @property
     def violations(self) -> tuple[PlanningViolation, ...]:
@@ -582,7 +593,15 @@ class MilpChargePlanner:
             return _invalid_plan(request, starts[0], starts, str(exc), "solver_failure", generated_at)
         violations: list[PlanningViolation] = []
         for h in oversized:
-            violations.append(PlanningViolation(h.id, "individual_power_limit", 0.0, h.power_w - limit_w, starts[0], "heater_power_exceeds_global_limit"))
+            violations.append(PlanningViolation(
+                h.id,
+                "individual_power_limit",
+                0.0,
+                h.power_w - limit_w,
+                starts[0],
+                "heater_power_exceeds_global_limit",
+                cause="infeasible_power_configuration",
+            ))
         for index, rule in enumerate(constraints):
             short_kwh = float(c_short[index].value() or 0.0)
             if short_kwh > SOLVER_NUMERICAL_TOLERANCE:
@@ -700,6 +719,10 @@ def input_token(request: PlanningInput) -> str:
         "forecast_automatic_eligible": request.forecast_automatic_eligible,
         "solver_time_limit_seconds": request.solver_time_limit_seconds or SOLVER_TIME_LIMIT_SECONDS,
         "telemetry_max_age_seconds": request.telemetry_max_age_seconds,
+        # The room-energy planner now makes a per-heater safety decision from
+        # telemetry freshness.  A preview produced before that decision must
+        # never be activated against the new semantics.
+        "planner_model_version": "planner_resilience_v1_partial_telemetry",
     }
     if room_energy:
         payload["room_energy_model"] = True
@@ -708,7 +731,8 @@ def input_token(request: PlanningInput) -> str:
         # The optimization-quality pipeline is part of the calculation
         # semantics.  Bump the token version so a preview produced by the
         # former nine-phase hierarchy cannot be silently reused.
-        payload["room_energy_model_version"] = "terminal_guard_v4_quality_single_phase"
+        payload["room_energy_model_version"] = "terminal_guard_v5_resilience_partial_telemetry"
+        payload["excluded_heaters"] = list(_room_exclusion_payload(request))
         payload["room_coefficients"] = {
             heater.id: {
                 "capacity_kwh_per_c": heater.room_thermal_capacity_kwh_per_c,
@@ -893,6 +917,11 @@ def deserialize_automatic_plan(payload: Mapping[str, Any]) -> AutomaticPlan:
             _plan_datetime(item.get("target_window_start"), required=False),
             _plan_datetime(item.get("target_window_end"), required=False),
             stored_energy_kwh=_plan_float(item.get("stored_energy_kwh")),
+            cause=(
+                None
+                if item.get("cause") is None
+                else str(item.get("cause"))
+            ),
         )
         for item in _plan_dict_list(
             value.get("deficits", value.get("violations", [])),
@@ -992,6 +1021,14 @@ def deserialize_automatic_plan(payload: Mapping[str, Any]) -> AutomaticPlan:
         guaranteed_until=_plan_datetime(value.get("guaranteed_until"), required=False),
         diagnostics=dict(value.get("diagnostics") or {}),
         optimization_quality=str(value.get("optimization_quality", OPTIMAL)),
+        excluded_heaters=tuple(
+            {
+                "heater_id": str(item.get("heater_id", "")),
+                "cause": str(item.get("cause", "missing_required_state")),
+            }
+            for item in (value.get("excluded_heaters") or [])
+            if isinstance(item, Mapping)
+        ),
     )
 
 
@@ -1652,6 +1689,64 @@ def _room_telemetry_fresh(
     )
 
 
+def _room_exclusion_payload(
+    request: PlanningInput,
+) -> tuple[dict[str, str], ...]:
+    """Return the deterministic safety exclusions for a planning request."""
+    return tuple(
+        {
+            "heater_id": heater.id,
+            "cause": "missing_required_state",
+        }
+        for heater in sorted(
+            (item for item in request.heaters if item.enabled),
+            key=lambda item: item.id,
+        )
+        if not _room_telemetry_fresh(
+            request.telemetry.get(heater.id),
+            request.horizon_start,
+            request.telemetry_max_age_seconds,
+        )
+    )
+
+
+def _room_planned_heaters(
+    request: PlanningInput,
+) -> tuple[tuple[Heater, ...], tuple[dict[str, str], ...]]:
+    """Split enabled heaters into safe-to-plan and excluded sets."""
+    excluded = _room_exclusion_payload(request)
+    excluded_ids = {item["heater_id"] for item in excluded}
+    planned = tuple(
+        sorted(
+            (
+                heater
+                for heater in request.heaters
+                if heater.enabled and heater.id not in excluded_ids
+            ),
+            key=lambda item: item.id,
+        )
+    )
+    return planned, excluded
+
+
+def _excluded_heater_violations(
+    excluded_heaters: Sequence[Mapping[str, str]],
+    at: datetime,
+) -> tuple[PlanningViolation, ...]:
+    return tuple(
+        PlanningViolation(
+            str(item["heater_id"]),
+            "excluded_heater",
+            None,
+            None,
+            at,
+            str(item.get("cause", "missing_required_state")),
+            cause=str(item.get("cause", "missing_required_state")),
+        )
+        for item in excluded_heaters
+    )
+
+
 def _heat_delivery_limit_kwh(
     heater: Heater, slot_minutes: int, stored_energy_kwh: float
 ) -> float:
@@ -1824,11 +1919,14 @@ def _build_room_energy_plan(request: PlanningInput) -> AutomaticPlan:
     generated_at = request.generated_at or request.horizon_start
     _notify(request, "inputs")
     _check_cancelled(request)
+    planned_heaters: tuple[Heater, ...] = ()
+    excluded_heaters: tuple[dict[str, str], ...] = ()
     try:
         _validate_input(request)
         if request.constraints:
             raise ValueError("percentage charge constraints are not accepted by the room-energy planner")
         horizon_start = align_to_slot(request.horizon_start, request.slot_minutes)
+        planned_heaters, excluded_heaters = _room_planned_heaters(request)
     except (ValueError, ArithmeticError) as exc:
         return _invalid_room_plan(
             request, request.horizon_start, (), str(exc), "invalid_configuration", generated_at
@@ -1837,7 +1935,7 @@ def _build_room_energy_plan(request: PlanningInput) -> AutomaticPlan:
         horizon_start, request.forecast, request.horizon_hours, request.slot_minutes
     )
     starts = boundaries[:-1] if boundaries else ()
-    for heater in request.heaters:
+    for heater in planned_heaters:
         if not heater.enabled:
             continue
         try:
@@ -1857,37 +1955,24 @@ def _build_room_energy_plan(request: PlanningInput) -> AutomaticPlan:
                 f"invalid_temperature_schedule: {exc}",
                 generated_at,
                 (heater.id,),
+                excluded_heaters=excluded_heaters,
             )
     if not starts or not request.forecast_automatic_eligible:
         reason = "forecast_not_eligible" if not request.forecast_automatic_eligible else "missing_forecast_coverage"
-        return _invalid_room_plan(request, horizon_start, starts, reason, reason, generated_at)
-    _notify(request, "coverage")
-    missing_telemetry = [
-        heater.id
-        for heater in request.heaters
-        if heater.enabled and not _room_telemetry_fresh(
-            request.telemetry.get(heater.id),
-            request.horizon_start,
-            request.telemetry_max_age_seconds,
-        )
-    ]
-    if missing_telemetry:
         return _invalid_room_plan(
             request,
             horizon_start,
-            # Unknown physical state must produce no controller schedule and
-            # no fabricated room or storage values.
-            (),
-            "missing fresh indoor temperature or stored SOC telemetry",
-            "missing_required_state",
+            starts,
+            reason,
+            reason,
             generated_at,
-            missing_telemetry,
+            excluded_heaters=excluded_heaters,
         )
+    _notify(request, "coverage")
     missing_targets = [
         heater.id
-        for heater in request.heaters
-        if heater.enabled
-        and not any(target.enabled for target in _room_targets(request, heater))
+        for heater in planned_heaters
+        if not any(target.enabled for target in _room_targets(request, heater))
     ]
     if missing_targets:
         return _invalid_room_plan(
@@ -1898,15 +1983,49 @@ def _build_room_energy_plan(request: PlanningInput) -> AutomaticPlan:
             "missing_temperature_schedule",
             generated_at,
             missing_targets,
+            excluded_heaters=excluded_heaters,
+        )
+    if not planned_heaters:
+        return _invalid_room_plan(
+            request,
+            horizon_start,
+            (),
+            "no enabled heater has fresh indoor temperature and stored SOC telemetry",
+            "missing_required_state",
+            generated_at,
+            excluded_heaters=excluded_heaters,
         )
     _notify(request, "telemetry")
     _notify(request, "room_model")
     try:
-        return _solve_room_energy(request, boundaries, generated_at)
+        solver_request = replace(
+            request,
+            heaters=planned_heaters,
+            temperature_targets={
+                heater.id: _room_targets(request, heater)
+                for heater in planned_heaters
+            },
+        )
+        plan = _solve_room_energy(solver_request, boundaries, generated_at)
+        excluded_violations = _excluded_heater_violations(
+            excluded_heaters, horizon_start
+        )
+        return replace(
+            plan,
+            input_token=input_token(request),
+            deficits=tuple(plan.deficits) + excluded_violations,
+            excluded_heaters=excluded_heaters,
+        )
     except (ValueError, ArithmeticError) as exc:
         logger.debug("Room-energy planning rejected: %s", exc)
         return _invalid_room_plan(
-            request, horizon_start, starts, str(exc), "invalid_configuration", generated_at
+            request,
+            horizon_start,
+            starts,
+            str(exc),
+            "invalid_configuration",
+            generated_at,
+            excluded_heaters=excluded_heaters,
         )
 
 
@@ -2612,6 +2731,7 @@ def _solve_room_energy(
                     float(heater.power_w - limit_w),
                     starts[0],
                     "heater_power_exceeds_global_limit",
+                    cause="infeasible_power_configuration",
                 )
             )
     room_intervals: list[RoomEnergyInterval] = []
@@ -2985,14 +3105,43 @@ def _validate_room_energy_plan(
     """Replay a candidate without relying on solver-reported state values."""
     started = monotonic()
     try:
+        planned_heaters, expected_excluded = _room_planned_heaters(request)
+        actual_excluded = tuple(
+            {
+                "heater_id": str(item.get("heater_id", "")),
+                "cause": str(item.get("cause", "")),
+            }
+            for item in (plan.excluded_heaters or ())
+            if isinstance(item, Mapping)
+        )
+        if actual_excluded != expected_excluded:
+            raise ValueError("candidate exclusion set does not match the request")
+        if plan.input_token != input_token(request):
+            raise ValueError("candidate input token does not match the request")
+        planning_request = replace(
+            request,
+            heaters=planned_heaters,
+            temperature_targets={
+                heater.id: _room_targets(request, heater)
+                for heater in planned_heaters
+            },
+        )
         horizon_start = align_to_slot(request.horizon_start, request.slot_minutes)
         boundaries = _continuous_forecast_slots(
             horizon_start, request.forecast, request.horizon_hours, request.slot_minutes
         )
         starts = tuple(boundaries[:-1])
-        heaters = tuple(
-            sorted((item for item in request.heaters if item.enabled), key=lambda item: item.id)
-        )
+        heaters = planned_heaters
+        if not heaters:
+            if plan.slots or plan.demand:
+                raise ValueError("candidate contains decisions for excluded heaters")
+            return True, (), (), {
+                "verified": True,
+                "elapsed_seconds": monotonic() - started,
+                "intervals": 0,
+                "checks": 0,
+                "excluded_heaters": list(expected_excluded),
+            }
         if len(plan.slots) != len(starts):
             raise ValueError("candidate does not cover every planning interval")
         if len(plan.demand) != len(starts) * len(heaters):
@@ -3080,7 +3229,7 @@ def _validate_room_energy_plan(
                 if heat > delivery_limit + 1e-5:
                     raise ValueError("candidate exceeds the emission capability")
                 target = active_temperature_target(
-                    _room_targets(request, heater), start, request.timezone_name
+                    _room_targets(planning_request, heater), start, request.timezone_name
                 )
                 outdoor = _weather_at(start, request.forecast)
                 if outdoor is None:
@@ -3216,7 +3365,7 @@ def _validate_room_energy_plan(
                             stored_energy_kwh=replayed.stored_energy_next_kwh,
                         )
                     )
-        terminal_guards = _terminal_guard_requirements(request, boundaries[-1])
+        terminal_guards = _terminal_guard_requirements(planning_request, boundaries[-1])
         for heater in heaters:
             if heater.power_w > limit_w:
                 violations.append(
@@ -3227,6 +3376,7 @@ def _validate_room_energy_plan(
                         float(heater.power_w - limit_w),
                         starts[0],
                         "heater_power_exceeds_global_limit",
+                        cause="infeasible_power_configuration",
                     )
                 )
             guard = terminal_guards.get(heater.id)
@@ -3286,6 +3436,7 @@ def _validate_room_energy_plan(
             "elapsed_seconds": monotonic() - started,
             "intervals": len(intervals),
             "checks": len(intervals) * 8,
+            "excluded_heaters": list(expected_excluded),
         }
     except (AttributeError, IndexError, KeyError, TypeError, ValueError, ArithmeticError) as exc:
         return False, (), (
@@ -3333,8 +3484,10 @@ def _invalid_room_plan(
     reason: str,
     generated_at: datetime,
     heater_ids: Sequence[str] = (),
+    excluded_heaters: Sequence[Mapping[str, str]] = (),
 ) -> AutomaticPlan:
-    violations = tuple(
+    excluded = tuple(excluded_heaters)
+    violations = _excluded_heater_violations(excluded, start) + tuple(
         PlanningViolation(heater_id, "safe_planning_input", None, None, start, reason)
         for heater_id in heater_ids
     ) or (PlanningViolation(None, "safe_planning_input", None, None, start, f"{reason}: {detail}"),)
@@ -3364,6 +3517,7 @@ def _invalid_room_plan(
             "optimization_quality": NO_SOLUTION,
             "solver": {"stop_reason": reason},
         },
+        excluded_heaters=excluded,
     )
 
 

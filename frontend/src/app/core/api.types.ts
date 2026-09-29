@@ -52,6 +52,8 @@ export interface PlanDto {
   installation_revision: number;
   created_at: string;
   slots: PlanSlotDto[];
+  activation_mode?: 'automatic' | 'best_effort' | string;
+  best_effort?: boolean;
 }
 
 export type ForecastSource = 'aemet';
@@ -121,6 +123,8 @@ export interface PlanningPlanDto {
   installation_revision: number;
   created_at: string;
   slots: PlanningSlotDto[];
+  activation_mode?: 'automatic' | 'best_effort' | string;
+  best_effort?: boolean;
 }
 
 export interface PlanningHeaterDto {
@@ -162,6 +166,11 @@ export interface PlanningDto {
   absence_reason: string | null;
   telemetry?: ChargeTelemetryDto[];
   plan_status?: string | null;
+  activation_mode?: 'automatic' | 'best_effort' | string | null;
+  best_effort?: boolean;
+  best_effort_activatable?: boolean;
+  best_effort_reasons?: string[];
+  excluded_heaters?: Array<{ heater_id: string; cause: string }>;
   optimization_quality?: string | null;
   deficits?: PlanningDeficitDto[];
   convergence_by_heater?: Record<string, string | null>;
@@ -181,9 +190,9 @@ export interface PlanningDto {
 
 export interface TemperatureTargetDto { id: number | null; heater_id: string; target_temperature_c: number; start_time: string; end_time: string; weekdays: number[]; enabled: boolean; }
 export interface ChargeTelemetryDto { heater_id: string; indoor_temperature_c: number | null; stored_soc_percent: number | null; indoor_received_at: string | null; stored_soc_received_at: string | null; state: string; missing_fields: string[]; oldest_age_seconds: number | null; stored_energy_kwh: number | null; }
-export interface PlanningDeficitDto { heater_id: string | null; requirement: string; achievable_value: number | null; shortfall: number | null; at: string | null; reason: string; target_temperature_c: number | null; projected_temperature_c: number | null; shortfall_c: number | null; stored_energy_kwh: number | null; stored_soc_percent: number | null; target_window_start?: string | null; target_window_end?: string | null; affected_from?: string | null; affected_until?: string | null; observation_count?: number; }
+export interface PlanningDeficitDto { heater_id: string | null; requirement: string; achievable_value: number | null; shortfall: number | null; at: string | null; reason: string; cause?: string | null; recommended_action?: string | null; target_temperature_c: number | null; projected_temperature_c: number | null; shortfall_c: number | null; stored_energy_kwh: number | null; stored_soc_percent: number | null; target_window_start?: string | null; target_window_end?: string | null; affected_from?: string | null; affected_until?: string | null; observation_count?: number; }
 export interface TemperatureTargetRequest { heater_id: string; target_temperature_c: number; start_time: string; end_time: string; weekdays: number[]; enabled?: boolean; }
-export interface PlanningPreviewDto { token: string; status: 'VALID' | 'CONVERGING' | 'DEGRADED' | 'INVALID' | 'FEASIBLE'; optimization_quality?: 'OPTIMAL' | 'FEASIBLE_LIMIT' | 'NO_SOLUTION' | string; score: number[]; window_start: string; window_end: string; horizon_start: string; horizon_end: string; slot_minutes: number; slots: Array<Record<string, unknown>>; deficits: PlanningDeficitDto[]; violations: PlanningDeficitDto[]; convergence_by_heater?: Record<string, string | null>; convergence_at?: string | null; guaranteed_until?: string | null; explanations: Array<Record<string, unknown>>; demand: Array<Record<string, unknown>>; temperature_targets: TemperatureTargetDto[]; operator_summary: Record<string, unknown>; already_active?: boolean; }
+export interface PlanningPreviewDto { token: string; status: 'VALID' | 'CONVERGING' | 'DEGRADED' | 'INVALID' | 'FEASIBLE'; optimization_quality?: 'OPTIMAL' | 'FEASIBLE_LIMIT' | 'NO_SOLUTION' | string; score: number[]; window_start: string; window_end: string; horizon_start: string; horizon_end: string; slot_minutes: number; slots: Array<Record<string, unknown>>; deficits: PlanningDeficitDto[]; violations: PlanningDeficitDto[]; convergence_by_heater?: Record<string, string | null>; convergence_at?: string | null; guaranteed_until?: string | null; explanations: Array<Record<string, unknown>>; demand: Array<Record<string, unknown>>; temperature_targets: TemperatureTargetDto[]; operator_summary: Record<string, unknown>; already_active?: boolean; activation_mode?: 'automatic' | 'best_effort' | string; best_effort?: boolean; best_effort_activatable?: boolean; best_effort_reasons?: string[]; excluded_heaters?: Array<{ heater_id: string; cause: string }>; }
 export interface PlanningCheckDto { name: string; status: 'pending' | 'running' | 'completed' | 'error' | 'cancelled' | 'skipped'; detail: string | null; started_at: string | null; finished_at: string | null; }
 export interface PlanningPreviewJobDto { job_id: string; status: 'queued' | 'running' | 'cancelling' | 'completed' | 'error' | 'cancelled' | 'interrupted'; cancellation_requested: boolean; requested_at: string; started_at: string | null; finished_at: string | null; checks: PlanningCheckDto[]; result: PlanningPreviewDto | null; operator_summary: Record<string, unknown>; error_code: string | null; error_detail: string | null; already_active?: boolean; }
 export interface AutomaticPlanAuditItem { id: number; plan_id: number | null; event: string; reason: string; details: Record<string, unknown>; occurred_at: string; }
@@ -209,6 +218,11 @@ export interface StatusDto {
   allocations: AllocationDto[];
   telemetry?: ChargeTelemetryDto[];
   plan_status?: string | null;
+  activation_mode?: 'automatic' | 'best_effort' | string | null;
+  best_effort?: boolean;
+  best_effort_activatable?: boolean;
+  best_effort_reasons?: string[];
+  excluded_heaters?: Array<{ heater_id: string; cause: string }>;
   optimization_quality?: string | null;
   deficits?: PlanningDeficitDto[];
   convergence_by_heater?: Record<string, string | null>;

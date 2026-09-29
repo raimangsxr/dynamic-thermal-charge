@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from ...persistence.bootstrap import Store
 from ...persistence.history import SqlStatusReader
 from ...persistence.home_assistant import ControlCommandResult
+from ...plan_activation import plan_best_effort_reasons
 from ..dependencies import controller_view, usable_store
 from ..liveness import ControllerView
 from ..schemas import ERROR_RESPONSES, READ_RESPONSES
@@ -53,6 +54,8 @@ class OperationalHeater(BaseModel):
     target_temperature_c: float | None = None
     next_charge_at: datetime | None = None
     next_soc_target_percent: float | None = None
+    excluded_from_plan: bool = False
+    exclusion_cause: str | None = None
 
 
 class OperationalPower(BaseModel):
@@ -73,6 +76,10 @@ class PlanInterval(BaseModel):
 
 class OperationalPlan(BaseModel):
     status: str | None = None
+    activation_mode: str | None = None
+    best_effort: bool = False
+    best_effort_reasons: list[str] = Field(default_factory=list)
+    excluded_heaters: list[dict[str, str]] = Field(default_factory=list)
     observed_at: datetime
     intervals: list[PlanInterval] = Field(default_factory=list)
 
@@ -191,6 +198,14 @@ def get_operational_snapshot(
             if item.end > observed_at
         ]
         next_interval = next((item for item in intervals if item.start >= observed_at), None)
+        exclusion = next(
+            (
+                item
+                for item in (plan.excluded_heaters if plan is not None else [])
+                if item.get("heater_id") == heater.id
+            ),
+            None,
+        )
         accumulators.append(
             OperationalHeater(
                 id=heater.id,
@@ -208,6 +223,8 @@ def get_operational_snapshot(
                 target_temperature_c=active_targets.get(heater.id),
                 next_charge_at=None if next_interval is None else next_interval.start,
                 next_soc_target_percent=None if next_interval is None else next_interval.target_soc_percent,
+                excluded_from_plan=exclusion is not None,
+                exclusion_cause=None if exclusion is None else exclusion.get("cause"),
             )
         )
 
@@ -375,9 +392,20 @@ def _operational_plan(store: Store, observed_at: datetime) -> OperationalPlan | 
                 )
             )
     if not intervals:
-        return OperationalPlan(status=automatic.get("status"), observed_at=observed_at)
+        return OperationalPlan(
+            status=automatic.get("status"),
+            activation_mode=automatic.get("activation_mode", "automatic"),
+            best_effort=bool(automatic.get("best_effort", False)),
+            best_effort_reasons=list(plan_best_effort_reasons(automatic)),
+            excluded_heaters=list(automatic.get("excluded_heaters", [])),
+            observed_at=observed_at,
+        )
     return OperationalPlan(
         status=automatic.get("status"),
+        activation_mode=automatic.get("activation_mode", "automatic"),
+        best_effort=bool(automatic.get("best_effort", False)),
+        best_effort_reasons=list(plan_best_effort_reasons(automatic)),
+        excluded_heaters=list(automatic.get("excluded_heaters", [])),
         observed_at=observed_at,
         intervals=sorted(intervals, key=lambda item: (item.start, item.accumulator_id)),
     )

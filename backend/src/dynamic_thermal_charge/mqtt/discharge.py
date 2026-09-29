@@ -101,8 +101,8 @@ def resolve_discharge_commands(
 ) -> tuple[DischargeCommand, ...]:
     """Decide the discharge command of every accumulator for one instant.
 
-    Every degraded condition resolves to a disabled discharge, so stored energy
-    is never spent on a plan nobody is governing.
+    An INVALID or otherwise unguided condition resolves to a disabled discharge;
+    a physically validated best-effort plan is still a governing plan.
     """
     modes = heater_modes or {}
 

@@ -120,7 +120,11 @@
         <div class="banner-content"><mat-icon aria-hidden="true">autorenew</mat-icon><div><strong>Plan en convergencia</strong><p>El plan activo sigue siendo utilizable y está adaptándose al objetivo térmico.</p><p>Objetivo alcanzado: {{ convergenceText(data) }}@if (data.guaranteed_until) { · cobertura garantizada hasta {{ instant(data.guaranteed_until) }} }.</p></div></div>
       </div>
     }
-    @if (isDegradedStatus(data.plan_status)) {
+    @if (data.best_effort) {
+      <div class="banner warn" role="status" data-testid="plan-best-effort">
+        <div class="banner-content"><mat-icon aria-hidden="true">warning</mat-icon><div><strong>Mejor esfuerzo activo</strong><p>El controlador ejecuta el mejor plan físicamente validado y seguirá intentando converger.</p>@if (data.excluded_heaters?.length) { <p>Acumuladores excluidos por telemetría incompleta: {{ excludedHeaterText(data) }}</p> }</div></div>
+      </div>
+    } @else if (isDegradedStatus(data.plan_status)) {
       <div class="banner warn" role="alert" data-testid="plan-degraded">
         <div class="banner-content"><mat-icon aria-hidden="true">warning</mat-icon><div><strong>Resultado degradado: no activable</strong><p>Se muestra el último plan utilizable, si existe; este resultado no gobierna las salidas.</p></div></div>
       </div>
@@ -143,6 +147,7 @@
           @if (data.horizon_start && data.horizon_end) { <div><dt>Horizonte automático</dt><dd>{{ instant(data.horizon_start) }} — {{ instant(data.horizon_end) }}</dd></div> }
           <div><dt>Intervalos</dt><dd>intervalos de {{ plan.slot_minutes }} minutos</dd></div>
           <div><dt>Configuración</dt><dd>Revisión {{ plan.installation_revision }}</dd></div>
+          @if (data.best_effort) { <div><dt>Activación</dt><dd>Mejor esfuerzo</dd></div> }
           <div><dt>Zona horaria</dt><dd>{{ data.timezone || 'Europe/Madrid' }}</dd></div>
         </dl>
       } @else {

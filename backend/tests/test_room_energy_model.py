@@ -576,7 +576,55 @@ def test_missing_or_stale_room_telemetry_is_explicitly_invalid():
 
     assert missing.status == INVALID
     assert stale.status == INVALID
-    assert all(item.requirement == "safe_planning_input" for item in missing.violations)
+    assert missing.slots == ()
+    assert missing.excluded_heaters == (
+        {"heater_id": "salon", "cause": "missing_required_state"},
+    )
+    assert any(
+        item.requirement == "excluded_heater"
+        and item.cause == "missing_required_state"
+        for item in missing.violations
+    )
+    assert stale.excluded_heaters == missing.excluded_heaters
+
+
+def test_partial_room_telemetry_excludes_only_the_unusable_heater():
+    healthy = _heater("salon")
+    excluded = _heater("dormitorio")
+    partial_request = _request(
+        heaters=(healthy, excluded),
+        telemetry={
+            "salon": _telemetry("salon"),
+            "dormitorio": ChargeTelemetry(
+                "dormitorio", indoor_temperature_c=20.0
+            ),
+        },
+    )
+    healthy_request = _request(
+        heaters=(healthy,),
+        telemetry={"salon": _telemetry("salon")},
+    )
+
+    partial = RoomEnergyPlanner().build(partial_request)
+    healthy_only = RoomEnergyPlanner().build(healthy_request)
+
+    assert partial.status == healthy_only.status
+    assert partial.excluded_heaters == (
+        {"heater_id": "dormitorio", "cause": "missing_required_state"},
+    )
+    assert all("dormitorio" not in slot.heater_ids for slot in partial.slots)
+    assert {item.heater_id for item in partial.demand} == {"salon"}
+    assert any(
+        item.heater_id == "dormitorio"
+        and item.requirement == "excluded_heater"
+        and item.cause == "missing_required_state"
+        for item in partial.violations
+    )
+
+    corrupted = replace(partial, excluded_heaters=())
+    verified, diagnostics = independently_validate_plan(partial_request, corrupted)
+    assert verified is False
+    assert diagnostics["verified"] is False
 
 
 def test_room_planner_rejects_future_telemetry_but_accepts_readings_inside_the_limit():

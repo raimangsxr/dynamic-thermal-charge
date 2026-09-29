@@ -52,8 +52,8 @@ class PlanRefresh:
     plan_ref: PlanRef | None = None
     installation_revision: int = 0
     forecast_ref: ForecastRef | None = None
-    # A degraded candidate is recorded for diagnostics but must not replace the
-    # controller's last activable schedule.
+    # Kept for refreshes that deliberately retain the previous schedule (for
+    # example a degraded candidate while a covering plan is still active).
     persist_plan: bool = True
 
 

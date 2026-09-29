@@ -111,6 +111,38 @@ transacción, de modo que un fallo entre ambas no deje un mensaje duplicable.
 - **WHEN** la condición se resuelve y vuelve a ocurrir después
 - **THEN** se envía un segundo correo
 
+### Requirement: Alertas de mejor esfuerzo y telemetría excluida
+
+El catálogo debe incluir `plan_best_effort_active` y
+`plan_heater_excluded`. La primera identifica que el controlador gobierna las
+salidas con un plan físicamente validado que no alcanzó convergencia completa;
+la segunda identifica los acumuladores, la causa y la consecuencia de no
+ordenar carga ni descarga mientras falte estado requerido. Ambas se encolan de
+forma no bloqueante y respetan el episodio único por tipo; al activar un plan
+normal o recuperar la telemetría se limpian y quedan rearmadas. La alerta
+`plan_recalculation_degraded` se conserva para un candidato degradado retenido
+como diagnóstico y no afirma que las salidas permanecerán apagadas si existe
+un best-effort activable cuando expire la cobertura.
+
+#### Scenario: Best-effort activo
+
+- **WHEN** se activa un plan `DEGRADED` como `best_effort`
+- **THEN** se encola una sola alerta de `plan_best_effort_active` con la causa y
+  se mantienen las salidas gobernadas por el plan
+
+#### Scenario: Acumulador excluido
+
+- **WHEN** la planificación activa excluye uno o más acumuladores por falta de
+  temperatura interior o SOC recientes
+- **THEN** se encola una sola alerta `plan_heater_excluded` que nombra los
+  acumuladores, la causa y que no se ordena carga ni descarga para ellos
+
+#### Scenario: Resolución de las alertas nuevas
+
+- **WHEN** un plan posterior ya no usa best-effort ni contiene exclusiones
+- **THEN** ambas alertas se rearman y una ocurrencia futura puede volver a
+  encolarlas
+
 ### Requirement: Aviso de replanificación imposible
 
 Debe avisarse cuando un recálculo devuelve `INVALID`. El correo identifica la
