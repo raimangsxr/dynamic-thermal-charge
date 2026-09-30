@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+PYTHON_BIN="${AI_PYTHON_BIN:-python3}"
+
 action=${1:-}
 shift || true
 if [ -z "$action" ]; then
@@ -27,7 +29,7 @@ run_python() {
   local dir=$1; shift
   prefix_for "$dir"
   if [ "${#PREFIX[@]}" -eq 0 ]; then
-    (cd "$dir" && python3 "$@")
+    (cd "$dir" && "$PYTHON_BIN" "$@")
   elif [ "${PREFIX[0]}" = ".venv/bin" ]; then
     (cd "$dir" && .venv/bin/python "$@")
   else
@@ -75,15 +77,14 @@ setup_one() {
     (cd "$dir" && poetry install)
   else
     if [ ! -x "$dir/.venv/bin/python" ]; then
-      (cd "$dir" && python3 -m venv .venv)
+      (cd "$dir" && "$PYTHON_BIN" -m venv .venv)
     fi
     if [ -f "$dir/requirements-dev.txt" ]; then
       (cd "$dir" && .venv/bin/python -m pip install -r requirements-dev.txt)
     elif [ -f "$dir/requirements.txt" ]; then
       (cd "$dir" && .venv/bin/python -m pip install -r requirements.txt)
     elif [ -f "$dir/pyproject.toml" ]; then
-      (cd "$dir" && .venv/bin/python -m pip install -e '.[dev]') || \
-        (cd "$dir" && .venv/bin/python -m pip install -e .)
+      (cd "$dir" && .venv/bin/python -m pip install -e '.[dev]')
     else
       echo "WARN: no Python dependency manifest found in $dir" >&2
     fi

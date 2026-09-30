@@ -30,3 +30,7 @@ AI_GENERIC_CHECK_CMD :=
 # Optional development commands, executed from the first component directory.
 AI_PYTHON_DEV_CMD :=
 AI_ANGULAR_DEV_CMD := npm run start
+
+# Python used to create local development virtual environments.
+AI_PYTHON_BIN := /opt/homebrew/bin/python3.14
+export AI_PYTHON_BIN
