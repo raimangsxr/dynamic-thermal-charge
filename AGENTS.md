@@ -19,7 +19,7 @@
 - Use `make setup`, `make dev`, `make test`, `make lint`, and `make check` as the project command contract.
 - Persistent model/schema changes use migrations; SQLAlchemy projects use Alembic.
 - Prefer database-backed configuration for runtime application behavior when reasonable. Keep secrets/bootstrap/environment concerns outside it. Ask if placement is ambiguous.
-- `README.md` is the only mandatory general documentation; update it only when installation, configuration, usage, operation, or a relevant public interface changes.
+- Do not read README.md by default. Read/update only the relevant section when installation, configuration, usage, operation, or a relevant public interface changes. Do not create additional general documentation unless explicitly requested.
 
 ### Git
 - Use GitHub Flow with short-lived `feature/*`, `fix/*`, `refactor/*`, or `chore/*` branches.
