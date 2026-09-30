@@ -13,7 +13,13 @@ Do not restate or override those contracts here.
 
 ## Start
 
-Read `AGENTS.md` and `.orca/pilot.md`, then load Orca's bundled `orchestration` skill using the executable declared in `pilot.md`.
+`AGENTS.md` is automatically loaded by Codex; do not reread it unless needed.
+
+Read `.orca/pilot.md`.
+
+Do not load Orca's `orchestration` skill during coordinator initialization. Load it only when the first coordination action requires Orca lifecycle operations.
+
+When required, load it directly with the Orca executable declared in `pilot.md`; do not run general CLI help for discovery.
 
 Load only the conditional Orca references required by the current action.
 

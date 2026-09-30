@@ -1,0 +1,6 @@
+interface:
+  display_name: "Orca Coordinator"
+  short_description: "Start the repository Orca coordinator"
+
+policy:
+  allow_implicit_invocation: false
