@@ -17,13 +17,25 @@ Do not restate or override those contracts here.
 
 Read `.orca/pilot.md`.
 
-Do not load Orca's `orchestration` skill during coordinator initialization. Load it only when the first coordination action requires Orca lifecycle operations.
+Do not load Orca's `orchestration` skill during coordinator initialization.
 
-When required, load it directly with the Orca executable declared in `pilot.md`; do not run general CLI help for discovery.
+When the user provides work that requires Orca lifecycle operations, load the bundled orchestration skill with exactly:
+
+`/Applications/Orca.app/Contents/Resources/bin/orca skills get orchestration`
+
+Do not guess or discover an alternative command. Do not run general CLI help or search Orca installation files for orchestration instructions.
 
 Load only the conditional Orca references required by the current action.
 
 Normally use one Run per user-requested logical change.
+
+### Coordinator terminal
+
+The Coordinator session must run inside an Orca-managed terminal attached to the Principal worktree.
+
+Orca lifecycle commands must use the identity of that terminal. Do not discover, guess, or impersonate another terminal handle to compensate for a Coordinator started outside Orca.
+
+If a lifecycle mutation cannot resolve the current Coordinator terminal identity, stop orchestration and tell the user to relaunch the Coordinator in an Orca-managed terminal. Do not search terminal lists, use `--from`, rebind Runs, or inspect Orca internals as a workaround.
 
 ## Route work
 
