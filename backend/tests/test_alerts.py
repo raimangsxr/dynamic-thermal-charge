@@ -9,12 +9,15 @@ import pytest
 from dynamic_thermal_charge.alerts import (
     ALERT_TYPES,
     MAX_ATTEMPTS,
+    PLAN_BEST_EFFORT_ACTIVE,
+    PLAN_HEATER_EXCLUDED,
     PLAN_RECALCULATION_DEGRADED,
     PLAN_RECALCULATION_INVALID,
     AlertDeliveryError,
     AlertService,
     PendingAlert,
     alert_catalogue,
+    notify_plan_activation,
     plan_recalculation_invalid_message,
 )
 from dynamic_thermal_charge.persistence.alerts import SqlAlertRepository
@@ -361,13 +364,99 @@ def test_the_stored_catalogue_only_records_deviations(initialised_store):
 
     repository.set_type_enabled(PLAN_RECALCULATION_INVALID, False)
     assert repository.type_enabled(PLAN_RECALCULATION_INVALID) is False
-    assert repository.enabled_types() == {
-        PLAN_RECALCULATION_INVALID: False,
-        PLAN_RECALCULATION_DEGRADED: True,
-    }
+    enabled = repository.enabled_types()
+    assert enabled[PLAN_RECALCULATION_INVALID] is False
+    assert enabled[PLAN_RECALCULATION_DEGRADED] is True
+    assert enabled["plan_best_effort_active"] is True
+    assert enabled["plan_heater_excluded"] is True
 
     repository.set_type_enabled(PLAN_RECALCULATION_INVALID, True)
     assert repository.type_enabled(PLAN_RECALCULATION_INVALID) is True
+
+
+def test_best_effort_and_excluded_heater_alerts_are_deduplicated_and_rearmed():
+    from dynamic_thermal_charge.charge_planning import AutomaticPlan, PlanningViolation
+
+    repository, sender = FakeRepository(), FakeSender()
+    service = _service(repository, sender)
+    plan = AutomaticPlan(
+        NOW,
+        NOW + timedelta(hours=2),
+        30,
+        (),
+        (
+            PlanningViolation(
+                "salon",
+                "excluded_heater",
+                None,
+                None,
+                NOW,
+                "missing_required_state",
+                cause="missing_required_state",
+            ),
+        ),
+        "VALID",
+        (),
+        "best-effort-token",
+        NOW,
+        excluded_heaters=(
+            {"heater_id": "salon", "cause": "missing_required_state"},
+        ),
+    )
+
+    notify_plan_activation(
+        service,
+        plan,
+        installation="Casa",
+        at=NOW,
+        activation_mode="best_effort",
+    )
+    notify_plan_activation(
+        service,
+        plan,
+        installation="Casa",
+        at=NOW + timedelta(minutes=1),
+        activation_mode="best_effort",
+    )
+
+    assert [item["alert_type"] for item in repository.queue] == [
+        PLAN_BEST_EFFORT_ACTIVE,
+        PLAN_HEATER_EXCLUDED,
+    ]
+    assert "salon" in repository.queue[1]["body"]
+    assert "missing_required_state" in repository.queue[1]["body"]
+    assert "No se ordena carga ni descarga" in repository.queue[1]["body"]
+
+    notify_plan_activation(
+        service,
+        AutomaticPlan(
+            NOW,
+            NOW + timedelta(hours=2),
+            30,
+            (),
+            (),
+            "VALID",
+            (),
+            "automatic-token",
+            NOW,
+        ),
+        installation="Casa",
+        at=NOW + timedelta(minutes=2),
+        activation_mode="automatic",
+    )
+    notify_plan_activation(
+        service,
+        plan,
+        installation="Casa",
+        at=NOW + timedelta(minutes=3),
+        activation_mode="best_effort",
+    )
+    assert [item["alert_type"] for item in repository.queue] == [
+        PLAN_BEST_EFFORT_ACTIVE,
+        PLAN_HEATER_EXCLUDED,
+        PLAN_BEST_EFFORT_ACTIVE,
+        PLAN_HEATER_EXCLUDED,
+    ]
 
 
 def test_an_unknown_type_cannot_be_stored(initialised_store):

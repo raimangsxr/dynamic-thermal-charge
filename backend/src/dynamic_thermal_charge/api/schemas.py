@@ -91,6 +91,8 @@ class PlanSummary(BaseModel):
     installation_revision: int
     created_at: datetime
     slots: list[PlanSlotView]
+    activation_mode: str = "automatic"
+    best_effort: bool = False
 
 
 class ForecastSummary(BaseModel):
@@ -129,6 +131,11 @@ class StatusResponse(BaseModel):
     allocations: list[AllocationSummary] = Field(default_factory=list)
     telemetry: list["ChargeTelemetryView"] = Field(default_factory=list)
     plan_status: str | None = None
+    activation_mode: str | None = None
+    best_effort: bool = False
+    best_effort_activatable: bool = False
+    best_effort_reasons: list[str] = Field(default_factory=list)
+    excluded_heaters: list[dict[str, str]] = Field(default_factory=list)
     optimization_quality: str | None = None
     deficits: list["PlanningDeficitView"] = Field(default_factory=list)
     convergence_by_heater: dict[str, datetime | None] = Field(default_factory=dict)
@@ -211,6 +218,8 @@ class PlanningPlanView(BaseModel):
     installation_revision: int
     created_at: datetime
     slots: list[PlanningSlotView]
+    activation_mode: str = "automatic"
+    best_effort: bool = False
 
 
 class PlanningResponse(BaseModel):
@@ -227,6 +236,11 @@ class PlanningResponse(BaseModel):
     absence_reason: str | None = None
     telemetry: list["ChargeTelemetryView"] = Field(default_factory=list)
     plan_status: str | None = None
+    activation_mode: str | None = None
+    best_effort: bool = False
+    best_effort_activatable: bool = False
+    best_effort_reasons: list[str] = Field(default_factory=list)
+    excluded_heaters: list[dict[str, str]] = Field(default_factory=list)
     deficits: list["PlanningDeficitView"] = Field(default_factory=list)
     convergence_by_heater: dict[str, datetime | None] = Field(default_factory=dict)
     convergence_at: datetime | None = None
@@ -275,6 +289,8 @@ class PlanningDeficitView(BaseModel):
     shortfall: float | None = None
     at: datetime | None = None
     reason: str
+    cause: str | None = None
+    recommended_action: str | None = None
     target_temperature_c: float | None = None
     projected_temperature_c: float | None = None
     shortfall_c: float | None = None
@@ -335,6 +351,11 @@ class PlanningPreviewResponse(BaseModel):
     diagnostics: dict = Field(default_factory=dict)
     optimization_quality: str = "OPTIMAL"
     already_active: bool = False
+    activation_mode: str = "automatic"
+    best_effort: bool = False
+    best_effort_activatable: bool = False
+    best_effort_reasons: list[str] = Field(default_factory=list)
+    excluded_heaters: list[dict[str, str]] = Field(default_factory=list)
 
 
 class PlanningCheckView(BaseModel):
@@ -365,6 +386,7 @@ class PlanningActivateRequest(BaseModel):
     token: str
     temperature_targets: list[TemperatureTargetRequest] | None = None
     expected_revision: int
+    best_effort: bool = False
 
 
 class AutomaticPlanAuditItem(BaseModel):

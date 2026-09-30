@@ -91,3 +91,32 @@ def test_missing_or_stale_mqtt_telemetry_produces_an_invalid_plan():
     assert all(not slot.heater_ids for slot in plan.slots)
     assert all(not slot.indoor_temperature_c for slot in plan.slots)
     assert all(not slot.stored_energy_kwh for slot in plan.slots)
+
+
+def test_an_empty_invalid_plan_gets_a_persistable_controller_off_interval():
+    stale = ChargeTelemetry(
+        heater_id="salon",
+        indoor_temperature_c=19.0,
+        stored_soc_percent=50.0,
+        indoor_received_at=NOW - timedelta(minutes=31),
+        stored_soc_received_at=NOW - timedelta(minutes=31),
+    )
+    config = example_installation()
+    candidate, schedule, _evidence = runtime._build_automatic_runtime_plan(
+        _store({"salon": stale}),
+        config,
+        NOW,
+        (),
+        _planning_site(),
+        mqtt=MqttSystemSettings(enabled=True, host="broker"),
+    )
+
+    controller_schedule = runtime._controller_schedule_for_candidate(
+        config, candidate, schedule
+    )
+
+    assert candidate.status == "INVALID"
+    assert schedule.slots == ()
+    assert len(controller_schedule.slots) == 1
+    assert controller_schedule.slots[0].heater_ids == ()
+    assert controller_schedule.slots[0].total_power_w == 0

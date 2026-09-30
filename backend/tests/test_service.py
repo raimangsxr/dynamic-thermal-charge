@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 
 from dynamic_thermal_charge.controller import ChargeController
 from dynamic_thermal_charge.drivers import SimulatedOutputDriver
+from dynamic_thermal_charge.persistence import ConfigStoreError
 from dynamic_thermal_charge.scheduler import ScheduleResult, ScheduleSlot
 from dynamic_thermal_charge.service import ControllerService, PlanRefresh
 
@@ -16,6 +17,19 @@ class MemoryActivePlanStore:
 
     def load(self):
         return self.plan
+
+
+class StrictActivePlanStore(MemoryActivePlanStore):
+    """Match the SQL store's contract for controller plans."""
+
+    def save(self, plan, *, installation_revision=0, forecast_ref=None):
+        if not plan.slots:
+            raise ConfigStoreError("an accepted plan must contain at least one slot")
+        return super().save(
+            plan,
+            installation_revision=installation_revision,
+            forecast_ref=forecast_ref,
+        )
 
 
 def service_plan(start):
@@ -79,6 +93,42 @@ def test_service_keeps_outputs_off_without_any_valid_plan(tmp_path, caplog) -> N
     assert "Plan refresh failed; retaining persisted plan and retrying in 60 seconds: forecast unavailable" in caplog.text
     assert "Traceback" not in caplog.text
     assert "all outputs remain off" in caplog.text
+
+
+def test_service_keeps_refreshing_after_a_persistable_empty_plan():
+    start = datetime(2026, 1, 1)
+    safe_plan = ScheduleResult(
+        slots=(ScheduleSlot(start, start + timedelta(minutes=30), (), 0),),
+        allocated_minutes={"a": 0},
+        unmet_minutes={},
+    )
+    recovered_plan = service_plan(start)
+    store = StrictActivePlanStore()
+    refreshes = iter((
+        PlanRefresh(safe_plan, 60),
+        PlanRefresh(recovered_plan, 60),
+    ))
+    times = iter(
+        (
+            start,
+            start,
+            start + timedelta(minutes=30),
+            start + timedelta(minutes=30),
+        )
+    )
+    service = ControllerService(
+        controller=ChargeController(("a", "b"), SimulatedOutputDriver()),
+        store=store,
+        refresh_plan=lambda _now: next(refreshes),
+        poll_seconds=1,
+        error_retry_seconds=60,
+        clock=lambda: next(times),
+        wait=lambda _: None,
+    )
+
+    assert service.run(max_cycles=2) == 0
+    assert service.refresh_abandoned is False
+    assert store.load() == recovered_plan
 
 
 class RecordingHeartbeat:

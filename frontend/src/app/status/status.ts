@@ -163,6 +163,12 @@ export class Status {
     return this.snapshot()?.heaters.find((heater) => heater.id === heaterId)?.name ?? heaterId;
   }
 
+  excludedHeaterText(data: StatusDto): string {
+    return (data.excluded_heaters ?? [])
+      .map((item) => this.heaterText(item.heater_id))
+      .join(', ');
+  }
+
   sourceText(source: string | null | undefined): string {
     return forecastSourceLabel(source);
   }

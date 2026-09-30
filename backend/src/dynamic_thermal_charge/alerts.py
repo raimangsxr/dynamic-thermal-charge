@@ -28,6 +28,8 @@ logger = logging.getLogger(__name__)
 
 PLAN_RECALCULATION_INVALID = "plan_recalculation_invalid"
 PLAN_RECALCULATION_DEGRADED = "plan_recalculation_degraded"
+PLAN_BEST_EFFORT_ACTIVE = "plan_best_effort_active"
+PLAN_HEATER_EXCLUDED = "plan_heater_excluded"
 
 # Retries stop here: a mail server that refused five times with growing waits
 # is not going to accept the sixth attempt inside the same episode.
@@ -59,7 +61,25 @@ ALERT_TYPES: tuple[AlertType, ...] = (
         title="Replanificación degradada",
         description=(
             "Un recálculo no demostró una solución activable. El último plan "
-            "válido o convergente se conserva mientras tenga horizonte vigente."
+            "válido o convergente se conserva mientras tenga horizonte vigente; "
+            "si no cubre la próxima actualización puede activarse el mejor "
+            "esfuerzo disponible."
+        ),
+    ),
+    AlertType(
+        name=PLAN_BEST_EFFORT_ACTIVE,
+        title="Plan de mejor esfuerzo activo",
+        description=(
+            "El controlador ejecuta el mejor plan físicamente validado aunque "
+            "no haya alcanzado convergencia completa."
+        ),
+    ),
+    AlertType(
+        name=PLAN_HEATER_EXCLUDED,
+        title="Acumulador excluido del plan",
+        description=(
+            "Uno o más acumuladores no tienen temperatura interior o SOC "
+            "recientes y quedan fuera del cálculo hasta recuperar telemetría."
         ),
     ),
 )
@@ -369,13 +389,114 @@ def plan_recalculation_degraded_message(
             f"Déficit máximo: {maximum:.2f} °C" if maximum is not None else "Déficit máximo: no disponible",
             f"Fin del horizonte conservado: {remaining}",
             "",
-            "No se activa el candidato degradado; se conserva el último plan "
-            "VALID o CONVERGING mientras tenga slots vigentes. Si no queda "
-            "un sustituto activable al agotarse ese horizonte, las salidas se "
-            "mantendrán apagadas.",
+            "No se activa el candidato degradado mientras el plan VALID o "
+            "CONVERGING conservado cubra la próxima actualización. Cuando deje "
+            "de cubrirla, se podrá activar el mejor esfuerzo físicamente "
+            "validado; un resultado INVALID sigue dejando las salidas apagadas.",
         )
     )
     return subject, body
+
+
+def plan_best_effort_active_message(
+    *,
+    installation: str,
+    at: datetime,
+    plan: Any,
+) -> tuple[str, str]:
+    violations = tuple(getattr(plan, "violations", ()) or ())
+    causes = sorted(
+        {
+            str(getattr(item, "cause", None) or getattr(item, "reason", "desconocida"))
+            for item in violations
+        }
+    )
+    subject = f"[{installation}] Plan de mejor esfuerzo activo"
+    body = "\n".join(
+        (
+            f"Instalación: {installation}",
+            f"Momento: {at.isoformat()}",
+            f"Causas: {', '.join(causes) or 'no determinada'}",
+            "Se ejecuta el mejor plan físicamente validado disponible; "
+            "la planificación volverá a intentar converger en la siguiente actualización.",
+        )
+    )
+    return subject, body
+
+
+def plan_heater_excluded_message(
+    *,
+    installation: str,
+    at: datetime,
+    plan: Any,
+) -> tuple[str, str]:
+    excluded = tuple(getattr(plan, "excluded_heaters", ()) or ())
+    heater_ids = sorted(
+        str(item.get("heater_id"))
+        for item in excluded
+        if isinstance(item, Mapping) and item.get("heater_id")
+    )
+    causes = sorted(
+        str(item.get("cause", "missing_required_state"))
+        for item in excluded
+        if isinstance(item, Mapping)
+    )
+    subject = f"[{installation}] Acumulador excluido del plan"
+    body = "\n".join(
+        (
+            f"Instalación: {installation}",
+            f"Momento: {at.isoformat()}",
+            f"Acumuladores excluidos: {', '.join(heater_ids) or 'no determinados'}",
+            f"Causa: {', '.join(causes) or 'missing_required_state'}",
+            "No se ordena carga ni descarga para ellos hasta recuperar temperatura "
+            "interior y SOC recientes.",
+        )
+    )
+    return subject, body
+
+
+def notify_plan_activation(
+    alerts: AlertService | None,
+    plan: Any,
+    *,
+    installation: str,
+    at: datetime,
+    activation_mode: str,
+) -> None:
+    """Publish the non-blocking alerts associated with an active plan."""
+    if alerts is None:
+        return
+    try:
+        alerts.clear_alert(PLAN_RECALCULATION_INVALID)
+        alerts.clear_alert(PLAN_RECALCULATION_DEGRADED)
+        if activation_mode == "best_effort":
+            subject, body = plan_best_effort_active_message(
+                installation=installation,
+                at=at,
+                plan=plan,
+            )
+            alerts.raise_alert(
+                PLAN_BEST_EFFORT_ACTIVE,
+                subject=subject,
+                body=body,
+            )
+        else:
+            alerts.clear_alert(PLAN_BEST_EFFORT_ACTIVE)
+        if getattr(plan, "excluded_heaters", ()):
+            subject, body = plan_heater_excluded_message(
+                installation=installation,
+                at=at,
+                plan=plan,
+            )
+            alerts.raise_alert(
+                PLAN_HEATER_EXCLUDED,
+                subject=subject,
+                body=body,
+            )
+        else:
+            alerts.clear_alert(PLAN_HEATER_EXCLUDED)
+    except Exception:  # noqa: BLE001 - alerting cannot block activation
+        logger.exception("Could not notify plan activation")
 
 
 def alert_catalogue(enabled: Mapping[str, bool] | None = None) -> list[dict[str, Any]]:
@@ -398,6 +519,11 @@ __all__ = [
     "MAX_ATTEMPTS",
     "PLAN_RECALCULATION_DEGRADED",
     "PLAN_RECALCULATION_INVALID",
+    "PLAN_BEST_EFFORT_ACTIVE",
+    "PLAN_HEATER_EXCLUDED",
+    "plan_best_effort_active_message",
+    "plan_heater_excluded_message",
+    "notify_plan_activation",
     "AlertDeliveryError",
     "AlertRepository",
     "AlertSender",

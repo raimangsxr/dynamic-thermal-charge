@@ -234,6 +234,30 @@ aplican ese límite a las dos medidas antes de considerarlas utilizables.
 - **THEN** la planificación la rechaza como estado requerido no fresco y no
   inventa el valor que correspondería al siguiente slot
 
+#### Scenario: Telemetría parcial por acumulador
+
+- **WHEN** solo uno de varios acumuladores carece de temperatura interior o SOC
+  fresco
+- **THEN** ese acumulador queda en `excluded_heaters` con causa
+  `missing_required_state`, no aparece en decisiones de carga o descarga y el
+  resto se planifica normalmente; el resultado incluye un déficit
+  `excluded_heater` y clasifica el estado físico usando únicamente los
+  acumuladores planificados
+
+#### Scenario: Todas las lecturas quedan excluidas
+
+- **WHEN** ningún acumulador habilitado tiene temperatura interior y SOC frescos
+- **THEN** el resultado es `INVALID`, publica cero intervalos con decisiones y
+  conserva la lista de acumuladores excluidos y sus déficits explicables
+
+#### Scenario: Validación independiente de exclusiones
+
+- **WHEN** se intenta activar un candidato cuya lista de exclusiones, decisiones
+  o número de intervalos no coincide con la petición actual
+- **THEN** la validación independiente lo rechaza; el token de entrada incluye
+  una versión nueva del modelo para invalidar previews calculados con reglas
+  anteriores
+
 ### Requirement: Estados canónicos y convergencia continuada
 
 La planificación pública y persistida usa `VALID`, `CONVERGING`, `DEGRADED` e
@@ -257,6 +281,21 @@ Los planes históricos con `FEASIBLE` se leen y exponen como `VALID`.
   `CONVERGING` con slots vigentes
 - **THEN** el candidato no sustituye al plan activo, la degradación queda
   visible y el sistema continúa recalculando
+
+#### Scenario: Activación de mejor esfuerzo
+
+- **WHEN** un candidato `DEGRADED` está físicamente validado y no existe un plan
+  `VALID` o `CONVERGING` que cubra el siguiente recálculo
+- **THEN** puede activarse solo con confirmación explícita en la API, se persiste
+  con `activation_mode: best_effort`, gobierna relés y descarga como cualquier
+  plan activo y sobrevive a un reinicio
+
+#### Scenario: Precedencia de un plan cubierto
+
+- **WHEN** llega un candidato `DEGRADED` mientras un plan `VALID` o `CONVERGING`
+  cubre el siguiente recálculo
+- **THEN** el candidato queda como diagnóstico y no sustituye las salidas; un
+  candidato posterior `VALID` o `CONVERGING` sí reemplaza un best-effort activo
 
 #### Scenario: Histórico con estado anterior
 

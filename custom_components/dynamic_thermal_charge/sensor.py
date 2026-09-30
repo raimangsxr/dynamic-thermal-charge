@@ -39,6 +39,20 @@ class ControllerStateSensor(DynamicThermalChargeEntity, SensorEntity):
         value = None if snapshot is None else snapshot.get("health")
         return value if value in self._attr_options else None
 
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        snapshot = self._snapshot or {}
+        plan = snapshot.get("plan") or {}
+        return {
+            "plan_status": plan.get("status"),
+            "activation_mode": plan.get("activation_mode"),
+            "best_effort": bool(plan.get("best_effort", False)),
+            "best_effort_reasons": list(plan.get("best_effort_reasons", [])),
+            "excluded_heaters": list(plan.get("excluded_heaters", [])),
+            "controller_current": snapshot.get("controller_current"),
+            "recalculation_pending": snapshot.get("recalculation_pending"),
+        }
+
 
 class TotalPowerSensor(DynamicThermalChargeEntity, SensorEntity):
     _attr_device_class = SensorDeviceClass.POWER
@@ -79,6 +93,19 @@ class AccumulatorSensor(DynamicThermalChargeEntity, SensorEntity):
     @property
     def native_value(self) -> Any:
         return self._value
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        accumulator = self._accumulator(self.accumulator_id) or {}
+        snapshot = self._snapshot or {}
+        plan = snapshot.get("plan") or {}
+        return {
+            "excluded_from_plan": bool(accumulator.get("excluded_from_plan", False)),
+            "exclusion_cause": accumulator.get("exclusion_cause"),
+            "plan_status": plan.get("status"),
+            "activation_mode": plan.get("activation_mode"),
+            "best_effort": bool(plan.get("best_effort", False)),
+        }
 
 
 class AccumulatorTemperatureSensor(AccumulatorSensor):

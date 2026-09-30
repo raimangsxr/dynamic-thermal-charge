@@ -80,6 +80,66 @@ def test_explicitly_empty_temperature_targets_are_not_replaced_by_saved_defaults
     assert result["violations"][0]["reason"] == "missing_temperature_schedule"
 
 
+def test_partial_telemetry_preview_exposes_exclusion_without_planning_that_heater(
+    client, initialised_store
+):
+    system = initialised_store.system_configuration
+    system_snapshot = system.current()
+    system.update_section(
+        "mqtt",
+        {"enabled": True, "host": "broker.test"},
+        expected_revision=system_snapshot.revision,
+        actor="test",
+    )
+    config, _configuration_revision = initialised_store.repository.current()
+    forecast_temperature_c = 20.0
+    points = tuple(
+        HourlyForecastPoint(API_NOW + timedelta(hours=index), forecast_temperature_c)
+        for index in range(25)
+    )
+    SqlHistoryRecorder(
+        initialised_store.application_engine,
+        initialised_store.repository.installation_id(),
+        initialised_store.location,
+    ).record_forecast(SimpleNamespace(
+        date=API_NOW.date(), average_temperature_c=forecast_temperature_c,
+        minimum_temperature_c=forecast_temperature_c,
+        maximum_temperature_c=forecast_temperature_c, source="aemet",
+        location="test", retrieved_at=API_NOW, hourly_points=points,
+    ))
+    excluded_id = "buhardilla"
+    for heater in config.heaters:
+        if heater.id == excluded_id:
+            continue
+        for field, value in (
+            ("indoor_temperature_c", 21.0),
+            ("stored_soc_percent", 100.0),
+        ):
+            initialised_store.planning.record_telemetry(heater.id, field, value, API_NOW)
+
+    revision = initialised_store.planning.site()["revision"]
+    response = client.post(
+        "/api/v1/planning/preview",
+        headers=AUTH,
+        json={"expected_revision": revision},
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["best_effort"] is True
+    assert result["excluded_heaters"] == [
+        {"heater_id": excluded_id, "cause": "missing_required_state"}
+    ]
+    assert any(
+        item["cause"] == "excluded_heater"
+        and item["heater_id"] == excluded_id
+        and item["recommended_action"]
+        for item in result["violations"]
+    )
+    assert all(excluded_id not in item["heater_ids"] for item in result["slots"])
+    assert all(item["heater_id"] != excluded_id for item in result["demand"])
+
+
 def test_preview_rejects_non_aligned_temperature_targets_without_persisting(
     client, initialised_store
 ):
@@ -270,6 +330,74 @@ def test_activation_reuses_completed_preview_without_second_solver_call(
     assert reloaded.status_code == 200, reloaded.text
     assert reloaded.json()["preview_job"]["already_active"] is True
     assert reloaded.json()["preview_job"]["result"]["already_active"] is True
+
+
+def test_degraded_preview_requires_confirmation_and_persists_best_effort(
+    client, initialised_store, monkeypatch
+):
+    from dataclasses import replace
+
+    from dynamic_thermal_charge.api.routes import planning as planning_route
+    from dynamic_thermal_charge.charge_planning import DEGRADED
+
+    _configuration_revision, constraints_revision = _seed_valid_preview_inputs(
+        initialised_store, forecast_temperature_c=20.0
+    )
+    original_build = planning_route.DeterministicChargeOptimizer.build
+
+    def degraded_build(self, request):
+        return replace(original_build(self, request), status=DEGRADED)
+
+    monkeypatch.setattr(
+        planning_route.DeterministicChargeOptimizer,
+        "build",
+        degraded_build,
+    )
+
+    preview = client.post(
+        "/api/v1/planning/preview",
+        headers=AUTH,
+        json={"expected_revision": constraints_revision},
+    )
+    assert preview.status_code == 200, preview.text
+    result = preview.json()
+    assert result["status"] == DEGRADED
+    assert result["best_effort"] is True
+    assert result["best_effort_activatable"] is True
+
+    rejected = client.post(
+        "/api/v1/planning/activate",
+        headers=AUTH,
+        json={
+            "token": result["token"],
+            "expected_revision": constraints_revision,
+        },
+    )
+    assert rejected.status_code == 422
+
+    confirmed_preview = client.post(
+        "/api/v1/planning/preview",
+        headers=AUTH,
+        json={"expected_revision": constraints_revision},
+    )
+    assert confirmed_preview.status_code == 200, confirmed_preview.text
+    confirmed = client.post(
+        "/api/v1/planning/activate",
+        headers=AUTH,
+        json={
+            "token": confirmed_preview.json()["token"],
+            "expected_revision": constraints_revision,
+            "best_effort": True,
+        },
+    )
+
+    assert confirmed.status_code == 200, confirmed.text
+    assert confirmed.json()["activation_mode"] == "best_effort"
+    active = initialised_store.planning.active_plan()
+    assert active is not None
+    assert active["status"] == DEGRADED
+    assert active["activation_mode"] == "best_effort"
+    assert active["best_effort"] is True
 
 
 def test_planning_hides_incompatible_preview_but_keeps_it_queryable_for_audit(

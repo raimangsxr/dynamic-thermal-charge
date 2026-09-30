@@ -71,6 +71,27 @@ def test_a_new_application_database_has_no_recoverable_plan(initialised_store):
     ).load() is None
 
 
+def test_an_all_off_controller_plan_is_persistable_and_recovers_as_no_plan(
+    initialised_store,
+):
+    engine = initialised_store.application_engine or initialised_store.engine
+    installation_id = initialised_store.repository.installation_id()
+    store = SqlActivePlanRepository(engine, installation_id, initialised_store.location)
+    safe_plan = ScheduleResult(
+        slots=(ScheduleSlot(START, START + timedelta(minutes=30), (), 0),),
+        allocated_minutes={"salon": 0},
+        unmet_minutes={},
+    )
+
+    store.save(safe_plan, installation_revision=1)
+
+    recovered = store.load()
+    assert recovered is not None
+    assert [(slot.start, slot.end, slot.heater_ids) for slot in recovered.slots] == [
+        (START, START + timedelta(minutes=30), ())
+    ]
+
+
 def test_a_transient_database_failure_keeps_the_last_plan_in_memory(
     initialised_store, monkeypatch
 ):

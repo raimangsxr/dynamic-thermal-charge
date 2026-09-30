@@ -22,6 +22,7 @@ from ..charge_planning import (
     VALID,
     AutomaticPlan,
 )
+from ..plan_activation import ACTIVATION_AUTOMATIC, ACTIVATION_BEST_EFFORT
 from ..models import (
     ChargeTelemetry,
     TemperatureTarget,
@@ -500,12 +501,21 @@ class SqlPlanningRepository:
         active: bool,
         forecast_ref: ForecastRef | None = None,
         preserve_active: bool = False,
+        activation_mode: str = ACTIVATION_AUTOMATIC,
         audit_details: Mapping[str, Any] | None = None,
         evidence: Mapping[str, Any] | None = None,
     ) -> int:
         now = datetime.now(timezone.utc)
         status = _canonical_plan_status(plan.status)
-        active = active and status in {VALID, CONVERGING}
+        if activation_mode not in {ACTIVATION_AUTOMATIC, ACTIVATION_BEST_EFFORT}:
+            raise ConfigValidationError(
+                "activation_mode must be automatic or best_effort",
+                field="activation_mode",
+            )
+        active = active and (
+            status in {VALID, CONVERGING}
+            or (status == DEGRADED and activation_mode == ACTIVATION_BEST_EFFORT)
+        )
         # New rows use the canonical domain codes.  ``active_plan`` still
         # accepts the historical lower-case values so old installations remain
         # readable after an upgrade.
@@ -522,6 +532,8 @@ class SqlPlanningRepository:
             "optimization_quality": plan.optimization_quality,
             "diagnostics": _json_ready(dict(plan.diagnostics)),
             "evidence": _json_ready(dict(evidence or {})),
+            "activation_mode": activation_mode,
+            "excluded_heaters": _json_ready(list(plan.excluded_heaters)),
         }
         with transaction(self._application, self._application_location) as connection:
             predecessor_plan_id = connection.execute(
@@ -576,6 +588,7 @@ class SqlPlanningRepository:
                 ))
             details = {
                 "status": status,
+                "activation_mode": activation_mode,
                 "violations": violations,
                 "preserve_active": preserve_active,
             }
@@ -1221,6 +1234,17 @@ class SqlPlanningRepository:
             "horizon_end": from_utc(row["horizon_end"]),
             "slot_minutes": int(row["slot_minutes"]),
             "status": status,
+            "activation_mode": str(
+                inputs.get("activation_mode", ACTIVATION_AUTOMATIC)
+            ),
+            # A diagnostic candidate can carry best-effort reasons without
+            # governing the outputs.  Expose the activation mode only for the
+            # active row so projections cannot label an INVALID result as live.
+            "best_effort": bool(row["active"]) and bool(
+                inputs.get("activation_mode") == ACTIVATION_BEST_EFFORT
+                or bool(inputs.get("excluded_heaters"))
+            ),
+            "excluded_heaters": inputs.get("excluded_heaters") or [],
             "reason": row["reason"],
             "active": bool(row["active"]),
             "input_token": row["input_token"],

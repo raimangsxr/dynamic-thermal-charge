@@ -94,8 +94,10 @@ export class Api {
   planningPreviewJobCancel(jobId: string): Observable<PlanningPreviewJobDto> {
     return this.http.post<PlanningPreviewJobDto>(`${BASE}/planning/preview/jobs/${encodeURIComponent(jobId)}/cancel`, {});
   }
-  planningActivate(token: string, temperatureTargets: TemperatureTargetRequest[], expectedRevision: number): Observable<PlanningPreviewDto> {
-    return this.http.post<PlanningPreviewDto>(`${BASE}/planning/activate`, { token, temperature_targets: temperatureTargets, expected_revision: expectedRevision });
+  planningActivate(token: string, temperatureTargets: TemperatureTargetRequest[], expectedRevision: number, bestEffort = false): Observable<PlanningPreviewDto> {
+    const body: Record<string, unknown> = { token, temperature_targets: temperatureTargets, expected_revision: expectedRevision };
+    if (bestEffort) body['best_effort'] = true;
+    return this.http.post<PlanningPreviewDto>(`${BASE}/planning/activate`, body);
   }
 
   controllerLog(query: { limit?: number; beforeId?: number; afterId?: number; level?: ControllerLogLevel; q?: string } = {}): Observable<ControllerLogPageDto> {

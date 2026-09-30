@@ -20,14 +20,24 @@ from .controller import ChargeController
 from .drivers import OutputDriver, RecordingOutputDriver, SimulatedOutputDriver
 from .gpio_driver import GpioOutputDriver
 from .alerts import (
+    PLAN_BEST_EFFORT_ACTIVE,
+    PLAN_HEATER_EXCLUDED,
     PLAN_RECALCULATION_DEGRADED,
     PLAN_RECALCULATION_INVALID,
     AlertService,
     build_alert_service,
     plan_recalculation_degraded_message,
     plan_recalculation_invalid_message,
+    notify_plan_activation,
+)
+from .plan_activation import (
+    ACTIVATION_AUTOMATIC,
+    ACTIVATION_BEST_EFFORT,
+    candidate_activation_mode,
+    seconds_to_next_replan,
 )
 from .charge_planning import (
+    AutomaticPlan,
     CONVERGING,
     DEGRADED,
     INVALID,
@@ -218,6 +228,7 @@ def _run_controller(
                     now,
                     mqtt=live_mqtt,
                     max_age_seconds=live_config.site.indoor_max_age_minutes * 60,
+                    include_unusable=True,
                 )
                 control = (
                     control_repository.control_state()
@@ -325,9 +336,30 @@ def _run_controller(
                         previous_automatic = store.planning.active_plan()
                         previous_schedule = active_plan.load()
                         candidate = automatic[0]
+                        controller_plan = _controller_schedule_for_candidate(
+                            live_config,
+                            candidate,
+                            automatic[1],
+                        )
                         candidate_degraded = candidate.status == DEGRADED
+                        empty_invalid_candidate = (
+                            candidate.status == INVALID and not automatic[1].slots
+                        )
+                        next_refresh_seconds = _seconds_to_next_replan(
+                            now,
+                            replan_minutes=int(planning_site["replan_minutes"]),
+                            slot_minutes=live_config.site.slot_minutes,
+                        )
+                        activation_mode = candidate_activation_mode(
+                            candidate.status,
+                            previous_automatic,
+                            now=now,
+                            next_refresh_seconds=next_refresh_seconds,
+                            has_exclusions=bool(candidate.excluded_heaters),
+                        )
                         preserve_active = (
-                            deviation is not None or candidate_degraded
+                            (deviation is not None and not empty_invalid_candidate)
+                            or (candidate_degraded and activation_mode is None)
                         )
                         retained_horizon_end = (
                             None
@@ -339,8 +371,16 @@ def _run_controller(
                             configuration_revision=live_revision,
                             constraints_revision=planning_site["revision"],
                             reason="periodic" if deviation is None else "deviation",
-                            active=candidate.status in {VALID, CONVERGING},
+                            active=activation_mode is not None,
                             preserve_active=preserve_active,
+                            activation_mode=(
+                                activation_mode
+                                or (
+                                    ACTIVATION_BEST_EFFORT
+                                    if candidate_degraded
+                                    else ACTIVATION_AUTOMATIC
+                                )
+                            ),
                             audit_details=(
                                 None if deviation is None else deviation.audit_details()
                             ),
@@ -361,43 +401,35 @@ def _run_controller(
                                 preserve_active and previous_schedule is not None
                             ),
                             retained_horizon_end=retained_horizon_end,
+                            activation_mode=activation_mode,
                         )
-                        if candidate_degraded:
-                            # The candidate is useful for operator diagnostics,
-                            # but a non-activable result must never overwrite the
-                            # legacy schedule driving the relays.
+                        if candidate_degraded and activation_mode is None:
+                            # A covering VALID/CONVERGING plan still owns the
+                            # relays; keep this candidate for diagnostics.
                             retained = previous_schedule or _empty_schedule(live_config)
                             return PlanRefresh(
                                 plan=retained,
-                                next_refresh_seconds=_seconds_to_next_replan(
-                                    now,
-                                    replan_minutes=int(planning_site["replan_minutes"]),
-                                    slot_minutes=live_config.site.slot_minutes,
-                                ),
+                                next_refresh_seconds=next_refresh_seconds,
                                 plan_ref=None,
                                 installation_revision=live_revision,
                                 persist_plan=False,
                             )
-                        if candidate.status == INVALID and deviation is not None:
+                        if (
+                            candidate.status == INVALID
+                            and deviation is not None
+                            and not empty_invalid_candidate
+                        ):
                             retained = previous_schedule or _empty_schedule(live_config)
                             return PlanRefresh(
                                 plan=retained,
-                                next_refresh_seconds=_seconds_to_next_replan(
-                                    now,
-                                    replan_minutes=int(planning_site["replan_minutes"]),
-                                    slot_minutes=live_config.site.slot_minutes,
-                                ),
+                                next_refresh_seconds=next_refresh_seconds,
                                 plan_ref=None,
                                 installation_revision=live_revision,
                                 persist_plan=False,
                             )
                         return PlanRefresh(
-                            plan=automatic[1],
-                            next_refresh_seconds=_seconds_to_next_replan(
-                                now,
-                                replan_minutes=int(planning_site["replan_minutes"]),
-                                slot_minutes=live_config.site.slot_minutes,
-                            ),
+                            plan=controller_plan,
+                            next_refresh_seconds=next_refresh_seconds,
                             plan_ref=None,
                             installation_revision=live_revision,
                             persist_plan=True,
@@ -516,6 +548,7 @@ def _build_automatic_runtime_plan(
         now,
         mqtt=mqtt_settings,
         max_age_seconds=config.site.indoor_max_age_minutes * 60,
+        include_unusable=True,
     )
     target_map = temperature_targets
     if target_map is None:
@@ -616,6 +649,34 @@ def _empty_schedule(config: AppConfig) -> ScheduleResult:
     )
 
 
+def _controller_schedule_for_candidate(
+    config: AppConfig,
+    candidate: AutomaticPlan,
+    schedule: ScheduleResult,
+) -> ScheduleResult:
+    """Give the controller a durable all-off interval for an empty INVALID plan.
+
+    The room-energy planner intentionally returns zero intervals when no enabled
+    heater has usable telemetry.  The planner result must remain zero-slot
+    ``INVALID`` for the API and validator, while the legacy controller-plan
+    table needs a non-empty window to persist and supersede any older schedule.
+    The single empty interval is only a controller persistence sentinel; it
+    never adds a planning decision.
+    """
+    if candidate.status != INVALID or schedule.slots:
+        return schedule
+
+    start = candidate.horizon_start
+    end = start + timedelta(minutes=max(1, int(candidate.slot_minutes)))
+    return ScheduleResult(
+        slots=(ScheduleSlot(start, end, (), 0),),
+        allocated_minutes={
+            heater.id: 0 for heater in config.heaters if heater.enabled
+        },
+        unmet_minutes={},
+    )
+
+
 def _build_alert_service(store) -> AlertService | None:
     """The controller must start even if alerts cannot be wired."""
     try:
@@ -633,6 +694,7 @@ def _notify_recalculation_result(
     at: datetime,
     previous_plan_preserved: bool = False,
     retained_horizon_end: datetime | None = None,
+    activation_mode: str | None = None,
 ) -> None:
     """Raise or rearm the alert for a non-activable recalculation.
 
@@ -647,9 +709,26 @@ def _notify_recalculation_result(
         if status in {VALID, CONVERGING, "FEASIBLE"}:
             alerts.clear_alert(PLAN_RECALCULATION_INVALID)
             alerts.clear_alert(PLAN_RECALCULATION_DEGRADED)
+            if activation_mode is not None:
+                notify_plan_activation(
+                    alerts,
+                    plan,
+                    installation=installation,
+                    at=at,
+                    activation_mode=activation_mode,
+                )
             return
         if status == DEGRADED:
             alerts.clear_alert(PLAN_RECALCULATION_INVALID)
+            if activation_mode == ACTIVATION_BEST_EFFORT:
+                notify_plan_activation(
+                    alerts,
+                    plan,
+                    installation=installation,
+                    at=at,
+                    activation_mode=activation_mode,
+                )
+                return
             subject, body = plan_recalculation_degraded_message(
                 installation=installation,
                 at=at,
@@ -663,6 +742,9 @@ def _notify_recalculation_result(
             )
             return
         alerts.clear_alert(PLAN_RECALCULATION_DEGRADED)
+        if not previous_plan_preserved:
+            alerts.clear_alert(PLAN_BEST_EFFORT_ACTIVE)
+            alerts.clear_alert(PLAN_HEATER_EXCLUDED)
         violation = next(iter(plan.violations), None)
         subject, body = plan_recalculation_invalid_message(
             installation=installation,
@@ -714,16 +796,11 @@ def _seconds_to_next_slot(now: datetime, slot_minutes: int) -> int:
 def _seconds_to_next_replan(
     now: datetime, *, replan_minutes: int, slot_minutes: int
 ) -> int:
-    """Schedule no sooner than the configured cadence on a slot boundary."""
-    cadence_minutes = max(replan_minutes, slot_minutes)
-    target = now + timedelta(minutes=cadence_minutes)
-    floor = target.replace(
-        second=0,
-        microsecond=0,
-        minute=(target.minute // slot_minutes) * slot_minutes,
+    return seconds_to_next_replan(
+        now,
+        replan_minutes=replan_minutes,
+        slot_minutes=slot_minutes,
     )
-    boundary = floor if floor == target else floor + timedelta(minutes=slot_minutes)
-    return max(slot_minutes * 60, math.ceil((boundary - now).total_seconds()))
 
 
 def _refresh_daily_aemet_forecast(

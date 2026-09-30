@@ -75,6 +75,15 @@ from ...persistence.mapping import (
 )
 from ..read_model import automatic_window, forecast_cycle_context, real_before, wall_clock_end
 from ...planning_coordination import coordinated_plan
+from ...plan_activation import (
+    ACTIVATION_AUTOMATIC,
+    ACTIVATION_BEST_EFFORT,
+    can_activate_plan,
+    candidate_activation_mode,
+    plan_best_effort_reasons,
+    seconds_to_next_replan,
+)
+from ...alerts import build_alert_service, notify_plan_activation
 
 
 router = APIRouter()
@@ -162,12 +171,16 @@ class PreviewJobRunner:
             }
             repository.finish_preview_job(job_id, status="completed", result=payload)
             if plan.status == "INVALID" and plan.violations:
-                reason = plan.violations[0].reason.split(":", 1)[0]
+                reason = _deficit_cause(_violation_payload(plan.violations[0]))
                 failed_step = {
                     "missing_aemet_coverage": "aemet_coverage",
                     "missing_guard_forecast_coverage": "aemet_coverage",
                     "forecast_not_eligible": "aemet_coverage",
                     "missing_required_state": "telemetry",
+                    "missing_temperature_schedule": "input_validation",
+                    "invalid_temperature_schedule": "input_validation",
+                    "infeasible_power_configuration": "input_validation",
+                    "safe_planning_input": "input_validation",
                     "invalid_configuration": "input_validation",
                 }.get(reason, "resolution" if reason.startswith("solver") else None)
                 if failed_step is not None:
@@ -254,6 +267,15 @@ def get_planning(
             absence_reason="invalid_automatic_plan",
             forecast=_forecast_view(latest_forecast),
             plan_status="INVALID",
+            activation_mode=str(
+                latest_automatic.get("activation_mode", ACTIVATION_AUTOMATIC)
+            ),
+            best_effort=(
+                bool(latest_automatic.get("active", False))
+                and bool(latest_automatic.get("best_effort", False))
+            ),
+            best_effort_reasons=_plan_causes(latest_automatic),
+            excluded_heaters=list(latest_automatic.get("excluded_heaters", [])),
             optimization_quality=latest_automatic.get("optimization_quality"),
             deficits=_grouped_deficit_views(
                 _plan_violations(latest_automatic),
@@ -460,7 +482,7 @@ def preview_planning(
         store, app_request.app.state.clock(), site,
         temperature_targets=temperature_targets,
     )
-    if plan.status in {VALID, CONVERGING}:
+    if plan.status in {VALID, CONVERGING, DEGRADED}:
         preview_cache = getattr(app_request.app.state, "preview_plan_cache", None)
         if preview_cache is None:
             preview_cache = {}
@@ -482,6 +504,8 @@ def preview_planning(
         forecast_status=forecast_cycle_context(store.planning),
         timezone_name=config.schedule.timezone if config.schedule is not None else "UTC",
         already_active=_active_preview_token(store) == plan.input_token,
+        active_plan=store.planning.active_plan(),
+        observed_at=app_request.app.state.clock(),
     )
 
 
@@ -612,9 +636,33 @@ def activate_planning(
             builder=lambda: DeterministicChargeOptimizer().build(planning_request),
             lease_seconds=max(30, int(site.get("solver_time_limit_seconds", 120)) + 30),
         )
-    if plan.status not in {VALID, CONVERGING}:
+    active_plan = store.planning.active_plan()
+    next_refresh_seconds = seconds_to_next_replan(
+        observed_at,
+        replan_minutes=int(site.get("replan_minutes", 30)),
+        slot_minutes=int(config.site.slot_minutes),
+    )
+    activation_mode = candidate_activation_mode(
+        plan.status,
+        active_plan,
+        now=observed_at,
+        next_refresh_seconds=next_refresh_seconds,
+        best_effort_requested=request.best_effort,
+        require_best_effort_confirmation=True,
+        has_exclusions=bool(plan.excluded_heaters),
+    )
+    if activation_mode is None:
+        if plan.status == DEGRADED and not request.best_effort:
+            raise ConfigValidationError(
+                "only VALID or CONVERGING plans can be activated without explicit best_effort confirmation",
+                field="best_effort",
+            )
+        if plan.status == DEGRADED:
+            raise ConfigConflictError(
+                "the active VALID or CONVERGING plan still covers the next refresh"
+            )
         raise ConfigValidationError(
-            "only VALID or CONVERGING plans can be activated",
+            "only VALID, CONVERGING or explicitly confirmed best-effort plans can be activated",
             field="planning",
         )
     verified, _validation = independently_validate_plan(planning_request, plan)
@@ -652,11 +700,19 @@ def activate_planning(
         constraints_revision=new_revision,
         reason="activated",
         active=True,
+        activation_mode=activation_mode,
         evidence=planning_evidence(
             planning_request,
             planning_site=site,
             forecast_status=forecast_cycle_context(store.planning),
         ),
+    )
+    notify_plan_activation(
+        build_alert_service(store),
+        plan,
+        installation=store.repository.installation_name(),
+        at=observed_at,
+        activation_mode=activation_mode,
     )
     forecast = SqlStatusReader(
         store.application_engine or store.engine,
@@ -724,8 +780,24 @@ def _plan_violations(plan: dict[str, Any]) -> list[dict[str, Any]] | tuple:
     return plan.get("deficits", [])
 
 
-def _deficit_view(item: PlanningViolation | dict[str, Any]) -> PlanningDeficitView:
+def _plan_causes(plan: dict[str, Any]) -> list[str]:
+    return sorted(
+        {
+            _deficit_cause(_violation_payload(item))
+            for item in _plan_violations(plan)
+        }
+    )
+
+
+def _deficit_view(
+    item: PlanningViolation | dict[str, Any],
+    *,
+    horizon_hours: int = 24,
+) -> PlanningDeficitView:
     payload = _violation_payload(item)
+    cause = _deficit_cause(payload)
+    payload["cause"] = cause
+    payload["recommended_action"] = _recommended_action(cause, horizon_hours=horizon_hours)
     if (
         payload.get("requirement") == "temperature_comfort"
         and payload.get("achievable_value") is not None
@@ -740,19 +812,84 @@ def _deficit_view(item: PlanningViolation | dict[str, Any]) -> PlanningDeficitVi
     return PlanningDeficitView.model_validate(payload)
 
 
+_CAUSE_CODES = {
+    "missing_required_state",
+    "missing_temperature_schedule",
+    "invalid_temperature_schedule",
+    "infeasible_power_configuration",
+    "missing_guard_forecast_coverage",
+    "missing_aemet_coverage",
+    "missing_forecast_coverage",
+    "forecast_not_eligible",
+    "excluded_heater",
+    "safe_planning_input",
+    "solver_time_limit",
+    "solver_unavailable",
+    "solver_failure",
+    "temperature_comfort",
+    "insufficient_capacity_or_power",
+    "insufficient_stored_energy_or_power",
+    "heater_power_exceeds_global_limit",
+    "projected_deficit",
+    "surplus_stored_energy",
+}
+
+
+def _deficit_cause(payload: dict[str, Any]) -> str:
+    if payload.get("requirement") == "excluded_heater":
+        return "excluded_heater"
+    explicit = payload.get("cause")
+    if explicit:
+        return str(explicit)
+    reason = str(payload.get("reason", "safe_planning_input"))
+    prefix = reason.split(":", 1)[0]
+    if prefix in _CAUSE_CODES:
+        return prefix
+    requirement = str(payload.get("requirement", ""))
+    return requirement if requirement in _CAUSE_CODES else prefix or "safe_planning_input"
+
+
+def _recommended_action(cause: str, *, horizon_hours: int = 24) -> str:
+    actions = {
+        "missing_required_state": "Completa la temperatura interior y el SOC recientes del acumulador afectado.",
+        "missing_temperature_schedule": "Configura una consigna semanal habilitada para el acumulador afectado.",
+        "invalid_temperature_schedule": "Corrige las consignas semanales y sus intervalos alineados a la ranura.",
+        "infeasible_power_configuration": "Revisa la potencia contratada, la potencia máxima y la potencia de los acumuladores.",
+        "missing_guard_forecast_coverage": f"Aporta cobertura meteorológica continua para las {horizon_hours} horas configuradas.",
+        "missing_aemet_coverage": f"Espera o recupera la cobertura AEMET de las {horizon_hours} horas configuradas.",
+        "missing_forecast_coverage": f"Recupera el forecast continuo para las {horizon_hours} horas configuradas.",
+        "forecast_not_eligible": "Espera a que el forecast sea elegible para planificación automática.",
+        "excluded_heater": "Revisa el estado requerido del acumulador excluido antes de volver a incluirlo.",
+        "safe_planning_input": "Corrige la entrada de planificación indicada y vuelve a calcular.",
+        "solver_time_limit": "Reduce la complejidad de la planificación o aumenta el tiempo límite del solver.",
+        "solver_unavailable": "Comprueba la instalación del solver y vuelve a calcular.",
+        "solver_failure": "Comprueba el solver y revisa los datos de planificación antes de volver a calcular.",
+        "temperature_comfort": "Revisa la potencia disponible o la consigna que causa el déficit térmico.",
+        "insufficient_capacity_or_power": "Revisa la potencia y capacidad disponibles para alcanzar el SOC mínimo.",
+        "insufficient_stored_energy_or_power": "Revisa la energía almacenada y la potencia disponible antes de la próxima consigna.",
+        "heater_power_exceeds_global_limit": "Reduce la potencia nominal del acumulador o aumenta el límite contratado.",
+        "projected_deficit": "Revisa la telemetría recuperada y vuelve a calcular el plan ante el déficit proyectado.",
+        "surplus_stored_energy": "Recalcula para adaptar la carga a la energía almacenada medida.",
+    }
+    return actions.get(cause, "Revisa el detalle del déficit y vuelve a calcular.")
+
+
 def _raw_deficit_views(
     violations: list[PlanningViolation | dict[str, Any]] | tuple[PlanningViolation | dict[str, Any], ...],
+    *,
+    horizon_hours: int = 24,
 ) -> list[PlanningDeficitView]:
-    return [_deficit_view(item) for item in violations]
+    return [_deficit_view(item, horizon_hours=horizon_hours) for item in violations]
 
 
 def _grouped_deficit_views(
     violations: list[PlanningViolation | dict[str, Any]] | tuple[PlanningViolation | dict[str, Any], ...],
     *,
     slot_minutes: int | None = None,
+    horizon_hours: int = 24,
 ) -> list[PlanningDeficitView]:
     return [
-        _deficit_view(item)
+        _deficit_view(item, horizon_hours=horizon_hours)
         for item in group_planning_violations(violations, slot_minutes=slot_minutes)
     ]
 
@@ -789,6 +926,8 @@ def _automatic_planning_response(
         slot_minutes=automatic["slot_minutes"],
         installation_revision=automatic["configuration_revision"],
         created_at=automatic["created_at"],
+        activation_mode=str(automatic.get("activation_mode", ACTIVATION_AUTOMATIC)),
+        best_effort=bool(automatic.get("best_effort", False)),
         slots=[
             PlanningSlotView(
                 start=item["start"],
@@ -825,9 +964,15 @@ def _automatic_planning_response(
         forecast_next_run_at=cycle_status.get("forecast_next_run_at"),
         plan=automatic_plan,
         plan_status=_canonical_plan_status(automatic["status"]),
+        activation_mode=str(automatic.get("activation_mode", ACTIVATION_AUTOMATIC)),
+        best_effort=bool(automatic.get("best_effort", False)),
+        best_effort_reasons=_plan_causes(automatic),
+        excluded_heaters=list(automatic.get("excluded_heaters", [])),
         optimization_quality=automatic.get("optimization_quality"),
         deficits=_grouped_deficit_views(
-            _plan_violations(automatic), slot_minutes=automatic.get("slot_minutes")
+            _plan_violations(automatic),
+            slot_minutes=automatic.get("slot_minutes"),
+            horizon_hours=horizon_hours,
         ),
         convergence_by_heater=automatic.get("convergence_by_heater", {}),
         convergence_at=automatic.get("convergence_at"),
@@ -900,6 +1045,7 @@ def _enrich(response: PlanningResponse, store: Store, observed_at: datetime) -> 
         ))
     active = planning.active_plan()
     latest = planning.latest_plan() if hasattr(planning, "latest_plan") else None
+    site = planning.site()
     diagnostic = (
         latest
         if latest is not None
@@ -928,15 +1074,37 @@ def _enrich(response: PlanningResponse, store: Store, observed_at: datetime) -> 
         projection = diagnostic or active
         assert projection is not None
         response.plan_status = _canonical_plan_status(projection["status"])
+        projection_is_active = active is not None and projection is active
+        response.activation_mode = (
+            str(projection.get("activation_mode", ACTIVATION_AUTOMATIC))
+            if projection_is_active
+            else None
+        )
+        response.best_effort = bool(projection.get("best_effort", False)) and projection_is_active
+        response.excluded_heaters = list(projection.get("excluded_heaters", []))
+        response.best_effort_reasons = _plan_causes(projection)
+        response.best_effort_activatable = can_activate_plan(
+            response.plan_status,
+            active if projection is not active else None,
+            now=observed_at,
+            next_refresh_seconds=seconds_to_next_replan(
+                observed_at,
+                replan_minutes=int(site.get("replan_minutes", 30)),
+                slot_minutes=int(projection.get("slot_minutes", 30)),
+            ),
+            best_effort_requested=True,
+            has_exclusions=bool(projection.get("excluded_heaters")),
+        )
         response.deficits = _grouped_deficit_views(
-            _plan_violations(projection), slot_minutes=projection.get("slot_minutes")
+            _plan_violations(projection),
+            slot_minutes=projection.get("slot_minutes"),
+            horizon_hours=int(site.get("forecast_horizon_hours", 24)),
         )
         response.convergence_by_heater = projection.get("convergence_by_heater", {})
         response.convergence_at = projection.get("convergence_at")
         response.guaranteed_until = projection.get("guaranteed_until")
         response.optimization_quality = projection.get("optimization_quality")
         response.preview_token = active["input_token"] if active is not None else None
-    site = planning.site()
     response.temperature_targets_revision = site["revision"]
     response.base_load_w = int(site.get("base_load_w", 0))
     response.max_heating_power_w = int(site.get("max_heating_power_w", response.max_total_power_w))
@@ -1091,6 +1259,7 @@ def _build_automatic_request(
             observed_at,
             mqtt=mqtt,
             max_age_seconds=config.site.indoor_max_age_minutes * 60,
+            include_unusable=True,
         ),
         constraints=(),
         temperature_targets=(
@@ -1263,6 +1432,7 @@ def _automatic_plan_from_preview_payload(payload: dict[str, Any]) -> AutomaticPl
             _preview_optional_datetime(item.get("target_window_start")),
             _preview_optional_datetime(item.get("target_window_end")),
             stored_energy_kwh=_preview_optional_float(item.get("stored_energy_kwh")),
+            cause=(None if item.get("cause") is None else str(item.get("cause"))),
         )
         for item in _preview_dict_list(violation_payload)
     )
@@ -1370,6 +1540,14 @@ def _automatic_plan_from_preview_payload(payload: dict[str, Any]) -> AutomaticPl
                 "optimization_quality",
                 (payload.get("diagnostics") or {}).get("optimization_quality", "OPTIMAL"),
             )
+        ),
+        tuple(
+            {
+                "heater_id": str(item.get("heater_id", "")),
+                "cause": str(item.get("cause", "missing_required_state")),
+            }
+            for item in (payload.get("excluded_heaters") or [])
+            if isinstance(item, dict)
         ),
     )
 
@@ -1515,17 +1693,19 @@ def _preview_response(
     forecast_status: dict[str, Any] | None = None,
     timezone_name: str = "UTC",
     already_active: bool = False,
+    active_plan: dict[str, Any] | None = None,
+    observed_at: datetime | None = None,
 ) -> PlanningPreviewResponse:
+    planning_window_hours = 12 if site is None else int(site["planning_window_hours"])
+    horizon_hours = PLANNING_HORIZON_HOURS if site is None else int(site["forecast_horizon_hours"])
     raw_violations = [_violation_payload(item) for item in plan.violations]
-    violations = _raw_deficit_views(raw_violations)
+    violations = _raw_deficit_views(raw_violations, horizon_hours=horizon_hours)
     grouped_violations = [
-        _deficit_view(item)
+        _deficit_view(item, horizon_hours=horizon_hours)
         for item in group_planning_violations(
             raw_violations, slot_minutes=plan.slot_minutes
         )
     ]
-    planning_window_hours = 12 if site is None else int(site["planning_window_hours"])
-    horizon_hours = PLANNING_HORIZON_HOURS if site is None else int(site["forecast_horizon_hours"])
     local_horizon_start = (
         plan.horizon_start.astimezone(ZoneInfo(timezone_name))
         if plan.horizon_start.tzinfo is not None
@@ -1546,7 +1726,7 @@ def _preview_response(
     }
     warnings = []
     for item in grouped_violations:
-        cause = item.reason.split(":", 1)[0]
+        cause = item.cause or _deficit_cause(item.model_dump())
         warnings.append(
             {
                 "cause": cause,
@@ -1558,7 +1738,7 @@ def _preview_response(
                 "target_window_end": item.target_window_end,
                 "affected_from": item.affected_from,
                 "affected_until": item.affected_until,
-                "recommended_action": _recommended_action(cause),
+                "recommended_action": item.recommended_action,
             }
         )
     room_energy_model = bool(
@@ -1586,7 +1766,11 @@ def _preview_response(
         },
         "warnings": warnings,
         "deficit_groups": [item.model_dump(mode="json") for item in grouped_violations],
-        "recommended_action": "Revisa los avisos agrupados y corrige la entrada indicada." if warnings else "No se requieren acciones adicionales.",
+        "recommended_action": (
+            warnings[0]["recommended_action"]
+            if warnings
+            else "No se requieren acciones adicionales."
+        ),
         "power_limits": {
             "contracted_w": None if site is None else int(site["contracted_power_w"]),
             "base_load_w": 0 if site is None else int(site.get("base_load_w", 0)),
@@ -1652,19 +1836,35 @@ def _preview_response(
         diagnostics=dict(plan.diagnostics),
         optimization_quality=plan.optimization_quality,
         already_active=already_active,
+        activation_mode=(
+            ACTIVATION_BEST_EFFORT
+            if plan.status == DEGRADED or plan.excluded_heaters
+            else ACTIVATION_AUTOMATIC
+        ),
+        best_effort=plan.status == DEGRADED or bool(plan.excluded_heaters),
+        best_effort_activatable=(
+            can_activate_plan(
+                plan.status,
+                active_plan,
+                now=observed_at or plan.horizon_start,
+                next_refresh_seconds=(
+                    0
+                    if site is None
+                    else seconds_to_next_replan(
+                        observed_at or plan.horizon_start,
+                        replan_minutes=int(site.get("replan_minutes", 30)),
+                        slot_minutes=plan.slot_minutes,
+                    )
+                ),
+                best_effort_requested=True,
+                has_exclusions=bool(plan.excluded_heaters),
+            )
+            if plan.status == DEGRADED or plan.excluded_heaters
+            else False
+        ),
+        best_effort_reasons=list(plan_best_effort_reasons(plan)),
+        excluded_heaters=[dict(item) for item in plan.excluded_heaters],
     )
-
-
-def _recommended_action(reason: str) -> str:
-    if reason == "missing_aemet_coverage":
-        return "Espera una previsión AEMET horaria completa de 24 horas o revisa la conexión meteorológica."
-    if reason == "missing_required_state":
-        return "Comprueba que cada acumulador publica temperatura interior y SOC reciente."
-    if reason in {"insufficient_capacity_or_power", "insufficient_stored_energy_or_power"}:
-        return "Revisa potencia disponible, capacidad térmica y la programación de temperatura."
-    if reason.startswith("solver"):
-        return "Revisa la configuración del optimizador o contacta con soporte."
-    return "Revisa la entrada indicada y vuelve a calcular."
 
 
 def _job_response(

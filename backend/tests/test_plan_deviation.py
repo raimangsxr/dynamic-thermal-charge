@@ -116,6 +116,23 @@ def test_colder_measured_room_triggers_replanning():
     assert verdict.audit_details()["deviation_reason"] == PROJECTED_DEFICIT
 
 
+def test_a_formerly_excluded_heater_can_trigger_a_projected_deficit():
+    planned = _heater("salon")
+    recovered = _heater("dormitorio")
+    verdict = _evaluate(
+        _plan(heaters=("salon",)),
+        heaters=(planned, recovered),
+        telemetry={
+            "salon": _telemetry("salon", indoor=21.0, soc=100.0),
+            "dormitorio": _telemetry("dormitorio", indoor=15.0, soc=5.0),
+        },
+    )
+
+    assert verdict.replan is True
+    assert verdict.reason == PROJECTED_DEFICIT
+    assert verdict.heater_id == "dormitorio"
+
+
 def test_a_deficit_already_foreseen_by_the_plan_is_not_new():
     heater = _heater()
     plan = _plan(shortfall=10.0)

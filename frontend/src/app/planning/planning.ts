@@ -113,26 +113,25 @@ function previewProblems(preview: PlanningPreviewDto): PlanningDeficitDto[] {
 
 function explainPlanningDeficit(item: PlanningDeficitDto): string {
   const detail = item.reason.includes(':') ? item.reason.split(':', 2)[1].trim() : item.reason;
-  if (item.reason.startsWith('forecast_not_eligible')) return 'La previsión activa no es de AEMET. La planificación automática solo usa forecast horario AEMET.';
-  if (item.reason.startsWith('missing_aemet_coverage')) return 'No hay cobertura horaria AEMET continua desde el inicio del horizonte planificado.';
-  if (item.reason.startsWith('missing_required_state')) return `Falta telemetría MQTT completa y reciente: ${detail}.`;
-  if (item.reason.startsWith('invalid_configuration')) return `Configuración o consigna térmica inválida: ${detail}.`;
-  if (item.reason.startsWith('insufficient_capacity_or_power')) return 'No hay suficiente potencia o capacidad disponible para cumplir el objetivo térmico.';
-  if (item.reason.startsWith('insufficient_stored_energy_or_power')) return 'La energía almacenada o la potencia disponible no cubren la demanda térmica prevista.';
-  if (item.reason.startsWith('heater_power_exceeds_global_limit')) return 'La potencia nominal del acumulador supera el límite disponible de calefacción.';
-  if (item.reason.startsWith('solver_time_limit')) return 'El optimizador alcanzó su límite de tiempo y entregó una solución degradada.';
-  if (item.reason.startsWith('solver_failure') || item.reason.startsWith('solver_unavailable')) return 'El optimizador no pudo resolver el plan; revisa la instalación o contacta soporte.';
-  if (item.reason.startsWith('projected_deficit')) return 'La proyección actual muestra un déficit térmico que el plan anterior no contemplaba.';
-  if (item.reason.startsWith('surplus_stored_energy')) return 'La proyección actual conserva más energía almacenada de la prevista y el plan puede adaptarse.';
+  const cause = item.cause ?? item.reason.split(':', 1)[0];
+  if (cause === 'forecast_not_eligible') return 'La previsión activa no es de AEMET. La planificación automática solo usa forecast horario AEMET.';
+  if (cause === 'missing_aemet_coverage' || cause === 'missing_forecast_coverage' || cause === 'missing_guard_forecast_coverage') return 'No hay cobertura meteorológica continua para todo el horizonte planificado.';
+  if (item.requirement === 'excluded_heater' || cause === 'excluded_heater') {
+    return 'El acumulador se excluyó hasta recuperar temperatura interior y SOC recientes.';
+  }
+  if (cause === 'missing_required_state') return `Falta telemetría MQTT completa y reciente: ${detail}.`;
+  if (cause === 'missing_temperature_schedule') return 'Falta una consigna semanal habilitada para el acumulador afectado.';
+  if (cause === 'invalid_temperature_schedule') return `La consigna térmica no es válida: ${detail}.`;
+  if (cause === 'infeasible_power_configuration') return 'La potencia contratada, máxima o nominal no permite una configuración ejecutable.';
+  if (cause === 'safe_planning_input') return `La entrada de planificación no es segura: ${detail}.`;
+  if (cause === 'insufficient_capacity_or_power') return 'No hay suficiente potencia o capacidad disponible para cumplir el objetivo térmico.';
+  if (cause === 'insufficient_stored_energy_or_power') return 'La energía almacenada o la potencia disponible no cubren la demanda térmica prevista.';
+  if (cause === 'heater_power_exceeds_global_limit') return 'La potencia nominal del acumulador supera el límite disponible de calefacción.';
+  if (cause === 'solver_time_limit') return 'El optimizador alcanzó su límite de tiempo y entregó una solución degradada.';
+  if (cause === 'solver_failure' || cause === 'solver_unavailable') return 'El optimizador no pudo resolver el plan; revisa la instalación o contacta soporte.';
+  if (cause === 'projected_deficit') return 'La proyección actual muestra un déficit térmico que el plan anterior no contemplaba.';
+  if (cause === 'surplus_stored_energy') return 'La proyección actual conserva más energía almacenada de la prevista y el plan puede adaptarse.';
   return detail || item.reason;
-}
-
-function recommendedPlanningAction(cause: string): string | null {
-  if (cause === 'missing_aemet_coverage') return 'Espera una previsión AEMET horaria completa de 24 horas o revisa la conexión meteorológica.';
-  if (cause === 'missing_required_state') return 'Comprueba que cada acumulador publica temperatura interior y SOC reciente.';
-  if (cause === 'insufficient_capacity_or_power' || cause === 'insufficient_stored_energy_or_power') return 'Revisa potencia disponible, capacidad térmica y la consigna programada.';
-  if (cause.startsWith('solver')) return 'Revisa la configuración del optimizador o contacta con soporte.';
-  return null;
 }
 
 @Component({
@@ -526,6 +525,12 @@ export class PlanningDetailDialog implements AfterViewInit, OnDestroy {
     return heaterIds.length ? heaterIds.map((heaterId) => this.heaterText(heaterId, planning)).join(', ') : 'ninguno';
   }
 
+  excludedHeaterText(planning: PlanningDto): string {
+    return (planning.excluded_heaters ?? [])
+      .map((item) => this.heaterText(item.heater_id, planning))
+      .join(', ');
+  }
+
   requirementText(requirement: string): string {
     return requirementLabel(requirement);
   }
@@ -539,13 +544,14 @@ export class PlanningDetailDialog implements AfterViewInit, OnDestroy {
   }
 
   problemAction(item: PlanningDeficitDto, preview: PlanningPreviewDto): string | null {
-    const cause = item.reason.split(':', 1)[0];
+    if (item.recommended_action) return item.recommended_action;
     const warnings = preview.operator_summary['warnings'];
+    const cause = item.cause ?? item.reason.split(':', 1)[0];
     if (Array.isArray(warnings)) {
       const warning = warnings.find((value): value is Record<string, unknown> => typeof value === 'object' && value !== null && value['cause'] === cause);
-      if (typeof warning?.['recommended_action'] === 'string') return warning['recommended_action'];
+      return typeof warning?.['recommended_action'] === 'string' ? warning['recommended_action'] : null;
     }
-    return recommendedPlanningAction(cause);
+    return null;
   }
 
   sourceText(source: string): string {
@@ -948,21 +954,28 @@ export class Planning implements AfterViewInit, OnDestroy {
       this.feedback.info('Esta vista previa ya está activa; no es necesario activarla de nuevo.');
       return;
     }
-    if (!this.canActivateStatus(preview.status)) {
+    if (!this.canActivateStatus(preview.status, preview)) {
       this.actionError.set('');
-      this.feedback.error('Solo se pueden activar vistas previas VALID o CONVERGING.');
+      this.feedback.error(preview.status === 'DEGRADED'
+        ? 'La vista previa degradada necesita confirmación de mejor esfuerzo y no puede sustituir un plan que aún cubra la próxima actualización.'
+        : 'Solo se pueden activar vistas previas VALID, CONVERGING o de mejor esfuerzo confirmable.');
       return;
     }
     this.openConfirmation({
-      title: 'Guardar y activar planificación',
-      message: 'Se guardarán las consignas del borrador y la vista previa reemplazará el plan activo. ¿Quieres continuar?',
-      confirmLabel: 'Guardar y activar',
+      title: this.isBestEffortPreview(preview) ? 'Activar mejor esfuerzo' : 'Guardar y activar planificación',
+      message: this.isBestEffortPreview(preview)
+        ? 'La vista previa no ha convergido por completo, pero su salida ha pasado la validación física. Se activará como mejor esfuerzo y se reintentará la convergencia. ¿Quieres continuar?'
+        : 'Se guardarán las consignas del borrador y la vista previa reemplazará el plan activo. ¿Quieres continuar?',
+      confirmLabel: this.isBestEffortPreview(preview) ? 'Activar mejor esfuerzo' : 'Guardar y activar',
     }, () => this.activateNow(preview, revision));
   }
   private activateNow(preview: PlanningPreviewDto, revision: number): void {
     this.activationInFlight.set(true);
     this.actionError.set(''); this.actionMessage.set('Guardando y activando…');
-    this.api.planningActivate(preview.token, this.apiTargets(), revision).subscribe({
+    const request = this.isBestEffortPreview(preview)
+      ? this.api.planningActivate(preview.token, this.apiTargets(), revision, true)
+      : this.api.planningActivate(preview.token, this.apiTargets(), revision);
+    request.subscribe({
       next: () => {
         this.activationInFlight.set(false);
         this.clearPreviewState();
@@ -1037,9 +1050,17 @@ export class Planning implements AfterViewInit, OnDestroy {
     return planReasonLabel(reason);
   }
 
-  canActivateStatus(status: string | null | undefined): boolean {
+  canActivateStatus(status: string | null | undefined, preview?: PlanningPreviewDto | null): boolean {
     const normalized = normalizePlanStatus(status);
-    return normalized === 'VALID' || normalized === 'CONVERGING';
+    return normalized === 'VALID'
+      || normalized === 'CONVERGING'
+      || (normalized === 'DEGRADED'
+        && preview?.best_effort === true
+        && preview.best_effort_activatable === true);
+  }
+
+  isBestEffortPreview(preview: PlanningPreviewDto | null | undefined): boolean {
+    return preview?.best_effort === true || normalizePlanStatus(preview?.status) === 'DEGRADED';
   }
 
   previewMatchesDraft(): boolean {
@@ -1106,6 +1127,18 @@ export class Planning implements AfterViewInit, OnDestroy {
   heaterText(heaterId: string | null | undefined): string {
     if (!heaterId) return 'Instalación';
     return this.snapshot()?.heaters.find((heater) => heater.id === heaterId)?.name ?? heaterId;
+  }
+
+  excludedHeaterText(planning: PlanningDto): string {
+    return (planning.excluded_heaters ?? [])
+      .map((item) => this.heaterText(item.heater_id))
+      .join(', ');
+  }
+
+  previewExcludedHeaterText(preview: PlanningPreviewDto): string {
+    return (preview.excluded_heaters ?? [])
+      .map((item) => this.heaterText(item.heater_id))
+      .join(', ');
   }
 
   requirementText(requirement: string): string {
@@ -1360,13 +1393,14 @@ export class Planning implements AfterViewInit, OnDestroy {
   }
 
   previewProblemAction(item: PlanningDeficitDto, result: PlanningPreviewDto): string | null {
-    const cause = item.reason.split(':', 1)[0];
+    if (item.recommended_action) return item.recommended_action;
     const warnings = result.operator_summary['warnings'];
+    const cause = item.cause ?? item.reason.split(':', 1)[0];
     if (Array.isArray(warnings)) {
       const warning = warnings.find((value): value is Record<string, unknown> => typeof value === 'object' && value !== null && value['cause'] === cause);
-      if (typeof warning?.['recommended_action'] === 'string') return warning['recommended_action'];
+      return typeof warning?.['recommended_action'] === 'string' ? warning['recommended_action'] : null;
     }
-    return recommendedPlanningAction(cause);
+    return null;
   }
 
   storedEnergyKwh(data: PlanningDto, heaterId: string, slotIndex: number): number | null {
