@@ -484,6 +484,7 @@ def test_status_does_not_revive_legacy_plan_after_an_invalid_automatic_plan(
 
     config, revision = initialised_store.repository.current()
     start = API_NOW
+    heater_id = config.heaters[0].id
     invalid = AutomaticPlan(
         start,
         start + timedelta(minutes=30),
@@ -491,11 +492,24 @@ def test_status_does_not_revive_legacy_plan_after_an_invalid_automatic_plan(
         (
             AutomaticPlanSlot(start, start + timedelta(minutes=30), (), 0, {}, {}),
         ),
-        (PlanningViolation(None, "safe_planning_input", None, None, start, "invalid_configuration"),),
+        (
+            PlanningViolation(
+                heater_id,
+                "excluded_heater",
+                None,
+                None,
+                start,
+                "missing_required_state",
+                cause="missing_required_state",
+            ),
+        ),
         INVALID,
         (),
         "status-invalid",
         start,
+        excluded_heaters=(
+            {"heater_id": heater_id, "cause": "missing_required_state"},
+        ),
     )
     initialised_store.planning.save_plan(
         invalid,
@@ -511,11 +525,13 @@ def test_status_does_not_revive_legacy_plan_after_an_invalid_automatic_plan(
     assert body["plan"] is None
     assert body["plan_status"] == "INVALID"
     assert body["absence_reason"] == "invalid_automatic_plan"
+    assert body["best_effort"] is False
 
     planning = client.get("/api/v1/planning", headers=AUTH)
     assert planning.status_code == 200, planning.text
     assert planning.json()["plan_status"] == "INVALID"
-    assert planning.json()["deficits"][0]["reason"] == "invalid_configuration"
+    assert planning.json()["deficits"][0]["reason"] == "missing_required_state"
+    assert planning.json()["best_effort"] is False
 
 
 def test_activation_rejects_a_degraded_preview_without_changing_the_active_plan(

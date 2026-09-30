@@ -1237,7 +1237,10 @@ class SqlPlanningRepository:
             "activation_mode": str(
                 inputs.get("activation_mode", ACTIVATION_AUTOMATIC)
             ),
-            "best_effort": bool(
+            # A diagnostic candidate can carry best-effort reasons without
+            # governing the outputs.  Expose the activation mode only for the
+            # active row so projections cannot label an INVALID result as live.
+            "best_effort": bool(row["active"]) and bool(
                 inputs.get("activation_mode") == ACTIVATION_BEST_EFFORT
                 or bool(inputs.get("excluded_heaters"))
             ),

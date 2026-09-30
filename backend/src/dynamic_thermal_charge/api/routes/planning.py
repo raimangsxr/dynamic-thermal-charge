@@ -270,7 +270,10 @@ def get_planning(
             activation_mode=str(
                 latest_automatic.get("activation_mode", ACTIVATION_AUTOMATIC)
             ),
-            best_effort=bool(latest_automatic.get("best_effort", False)),
+            best_effort=(
+                bool(latest_automatic.get("active", False))
+                and bool(latest_automatic.get("best_effort", False))
+            ),
             best_effort_reasons=_plan_causes(latest_automatic),
             excluded_heaters=list(latest_automatic.get("excluded_heaters", [])),
             optimization_quality=latest_automatic.get("optimization_quality"),

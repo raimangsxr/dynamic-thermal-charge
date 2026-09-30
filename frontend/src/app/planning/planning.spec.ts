@@ -146,6 +146,21 @@ describe('Planning', () => {
     expect(element.querySelectorAll('[data-testid$="-card"]')).toHaveLength(4);
   });
 
+  it('shows the active best-effort chip, banner and excluded accumulators', async () => {
+    backend.expectOne('/api/v1/planning').flush({
+      ...PLANNING,
+      best_effort: true,
+      activation_mode: 'best_effort',
+      excluded_heaters: [{ heater_id: 'salon', cause: 'missing_required_state' }],
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const element = fixture.nativeElement as HTMLElement;
+    expect(element.querySelector('[data-testid="best-effort-chip"]')?.textContent).toContain('Mejor esfuerzo activo');
+    expect(element.querySelector('[data-testid="planning-best-effort"]')?.textContent).toContain('Salón');
+  });
+
   it('opens a deterministic explanation and recent plan history', async () => {
     backend.expectOne('/api/v1/planning').flush({
       ...PLANNING,
@@ -490,6 +505,39 @@ describe('Planning', () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
   });
 
+  it('translates excluded-heater causes and displays the backend recommended action', async () => {
+    backend.expectOne('/api/v1/planning').flush(TWO_HEATER_PLANNING);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    await selectPlanningTab(fixture, 1);
+
+    const excluded = {
+      ...PREVIEW,
+      status: 'INVALID' as const,
+      deficits: [{
+        ...PREVIEW.deficits[0],
+        heater_id: 'salon',
+        requirement: 'excluded_heater',
+        cause: 'missing_required_state',
+        reason: 'missing_required_state',
+        recommended_action: 'Recupera temperatura interior y SOC recientes.',
+      }],
+      violations: [],
+      excluded_heaters: [{ heater_id: 'salon', cause: 'missing_required_state' }],
+    };
+    fixture.componentInstance.previewJob.set(PREVIEW_JOB(excluded));
+    fixture.componentInstance.preview.set(excluded);
+    fixture.detectChanges();
+
+    (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('[data-testid="preview-problems-button"]')?.click();
+    await fixture.whenStable();
+    const dialog = document.querySelector('mat-dialog-container');
+    expect(dialog?.textContent).toContain('El acumulador se excluyó hasta recuperar temperatura interior y SOC recientes.');
+    expect(dialog?.textContent).toContain('Recupera temperatura interior y SOC recientes.');
+    document.querySelector<HTMLButtonElement>('[data-testid="detail-dialog-close"]')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  });
+
   it('blocks degraded previews while allowing converging previews to activate', async () => {
     backend.expectOne('/api/v1/planning').flush(PLANNING);
     await fixture.whenStable();
@@ -515,6 +563,35 @@ describe('Planning', () => {
     activateButton = (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('[data-testid="activate-button"]');
     expect(activateButton?.disabled).toBe(false);
     expect((fixture.nativeElement as HTMLElement).textContent).toContain('Convergiendo');
+  });
+
+  it('requires confirmation and sends the best-effort activation flag', async () => {
+    backend.expectOne('/api/v1/planning').flush(PLANNING);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    await selectPlanningTab(fixture, 1);
+
+    const bestEffort = {
+      ...PREVIEW,
+      best_effort: true,
+      best_effort_activatable: true,
+      activation_mode: 'best_effort',
+    };
+    fixture.componentInstance.preview.set(bestEffort);
+    fixture.detectChanges();
+
+    const activateButton = (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('[data-testid="activate-button"]');
+    expect(activateButton?.disabled).toBe(false);
+    activateButton?.click();
+    await fixture.whenStable();
+    expect(document.querySelector('mat-dialog-container')?.textContent).toContain('Activar mejor esfuerzo');
+    document.querySelector<HTMLButtonElement>('[data-testid="confirm-delete"]')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    const request = backend.expectOne('/api/v1/planning/activate');
+    expect(request.request.body.best_effort).toBe(true);
+    request.flush(bestEffort);
+    backend.expectOne('/api/v1/planning').flush(PLANNING);
   });
 
   it('blocks activation when the preview no longer matches the draft', async () => {
@@ -753,6 +830,25 @@ describe('Planning', () => {
     expect(element.querySelector('.active-chip')?.textContent).toContain('No válido');
     expect(element.textContent).toContain('salidas permanecen apagadas');
     expect(element.textContent).not.toContain('invalid');
+  });
+
+  it('does not label an inactive INVALID diagnostic as best effort active', () => {
+    backend.expectOne('/api/v1/planning').flush({
+      ...PLANNING,
+      plan: null,
+      plan_status: 'INVALID',
+      absence_reason: 'invalid_automatic_plan',
+      best_effort: true,
+      activation_mode: 'best_effort',
+      excluded_heaters: [{ heater_id: 'salon', cause: 'missing_required_state' }],
+    });
+    fixture.detectChanges();
+
+    const element = fixture.nativeElement as HTMLElement;
+    expect(element.querySelector('[data-testid="best-effort-chip"]')).toBeNull();
+    expect(element.querySelector('[data-testid="planning-best-effort"]')).toBeNull();
+    expect(element.textContent).toContain('El plan automático no es válido');
+    expect(element.textContent).not.toContain('Mejor esfuerzo activo');
   });
 
   it('shows stored room energy in kWh for every interval', () => {

@@ -37,6 +37,7 @@ from .plan_activation import (
     seconds_to_next_replan,
 )
 from .charge_planning import (
+    AutomaticPlan,
     CONVERGING,
     DEGRADED,
     INVALID,
@@ -335,7 +336,15 @@ def _run_controller(
                         previous_automatic = store.planning.active_plan()
                         previous_schedule = active_plan.load()
                         candidate = automatic[0]
+                        controller_plan = _controller_schedule_for_candidate(
+                            live_config,
+                            candidate,
+                            automatic[1],
+                        )
                         candidate_degraded = candidate.status == DEGRADED
+                        empty_invalid_candidate = (
+                            candidate.status == INVALID and not automatic[1].slots
+                        )
                         next_refresh_seconds = _seconds_to_next_replan(
                             now,
                             replan_minutes=int(planning_site["replan_minutes"]),
@@ -349,7 +358,7 @@ def _run_controller(
                             has_exclusions=bool(candidate.excluded_heaters),
                         )
                         preserve_active = (
-                            deviation is not None
+                            (deviation is not None and not empty_invalid_candidate)
                             or (candidate_degraded and activation_mode is None)
                         )
                         retained_horizon_end = (
@@ -405,7 +414,11 @@ def _run_controller(
                                 installation_revision=live_revision,
                                 persist_plan=False,
                             )
-                        if candidate.status == INVALID and deviation is not None:
+                        if (
+                            candidate.status == INVALID
+                            and deviation is not None
+                            and not empty_invalid_candidate
+                        ):
                             retained = previous_schedule or _empty_schedule(live_config)
                             return PlanRefresh(
                                 plan=retained,
@@ -415,7 +428,7 @@ def _run_controller(
                                 persist_plan=False,
                             )
                         return PlanRefresh(
-                            plan=automatic[1],
+                            plan=controller_plan,
                             next_refresh_seconds=next_refresh_seconds,
                             plan_ref=None,
                             installation_revision=live_revision,
@@ -629,6 +642,34 @@ def _room_energy_targets(store, config: AppConfig, control=None) -> dict:
 def _empty_schedule(config: AppConfig) -> ScheduleResult:
     return ScheduleResult(
         slots=(),
+        allocated_minutes={
+            heater.id: 0 for heater in config.heaters if heater.enabled
+        },
+        unmet_minutes={},
+    )
+
+
+def _controller_schedule_for_candidate(
+    config: AppConfig,
+    candidate: AutomaticPlan,
+    schedule: ScheduleResult,
+) -> ScheduleResult:
+    """Give the controller a durable all-off interval for an empty INVALID plan.
+
+    The room-energy planner intentionally returns zero intervals when no enabled
+    heater has usable telemetry.  The planner result must remain zero-slot
+    ``INVALID`` for the API and validator, while the legacy controller-plan
+    table needs a non-empty window to persist and supersede any older schedule.
+    The single empty interval is only a controller persistence sentinel; it
+    never adds a planning decision.
+    """
+    if candidate.status != INVALID or schedule.slots:
+        return schedule
+
+    start = candidate.horizon_start
+    end = start + timedelta(minutes=max(1, int(candidate.slot_minutes)))
+    return ScheduleResult(
+        slots=(ScheduleSlot(start, end, (), 0),),
         allocated_minutes={
             heater.id: 0 for heater in config.heaters if heater.enabled
         },

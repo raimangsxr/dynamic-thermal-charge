@@ -38,7 +38,7 @@
               <p class="hint">El plan aceptado por el controlador y sus indicadores operativos.</p>
             </div>
             @if (data.plan_status) { <span class="status-chip active-chip">{{ planStatus(data.plan_status) }}</span> }
-            @if (data.best_effort) { <span class="status-chip" data-testid="best-effort-chip">Mejor esfuerzo activo</span> }
+            @if (data.plan && data.best_effort) { <span class="status-chip" data-testid="best-effort-chip">Mejor esfuerzo activo</span> }
             @if (data.optimization_quality === 'FEASIBLE_LIMIT') { <span class="hint" data-testid="active-feasible-limit">Plan validado; optimización limitada por tiempo</span> }
           </div>
 
@@ -84,7 +84,7 @@
               <div class="banner-content"><mat-icon aria-hidden="true">autorenew</mat-icon><div><strong>Plan en convergencia</strong><p>El plan sigue siendo utilizable mientras adapta la instalación al objetivo térmico.</p><p>Objetivo alcanzado: {{ convergenceText(data.convergence_by_heater, data.convergence_at) }}@if (data.guaranteed_until) { · cobertura garantizada hasta {{ dateTime(data.guaranteed_until) }} }.</p></div></div>
             </div>
           }
-          @if (data.best_effort) {
+          @if (data.plan && data.best_effort) {
             <div class="banner warn" role="status" data-testid="planning-best-effort">
               <div class="banner-content"><mat-icon aria-hidden="true">warning</mat-icon><div><strong>Mejor esfuerzo activo</strong><p>El controlador ejecuta el mejor plan físicamente validado disponible y seguirá intentando converger.</p>@if (data.excluded_heaters?.length) { <p>Acumuladores excluidos por telemetría incompleta: {{ excludedHeaterText(data) }}</p> }</div></div>
             </div>

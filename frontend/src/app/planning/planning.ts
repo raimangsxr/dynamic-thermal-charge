@@ -116,12 +116,14 @@ function explainPlanningDeficit(item: PlanningDeficitDto): string {
   const cause = item.cause ?? item.reason.split(':', 1)[0];
   if (cause === 'forecast_not_eligible') return 'La previsión activa no es de AEMET. La planificación automática solo usa forecast horario AEMET.';
   if (cause === 'missing_aemet_coverage' || cause === 'missing_forecast_coverage' || cause === 'missing_guard_forecast_coverage') return 'No hay cobertura meteorológica continua para todo el horizonte planificado.';
+  if (item.requirement === 'excluded_heater' || cause === 'excluded_heater') {
+    return 'El acumulador se excluyó hasta recuperar temperatura interior y SOC recientes.';
+  }
   if (cause === 'missing_required_state') return `Falta telemetría MQTT completa y reciente: ${detail}.`;
   if (cause === 'missing_temperature_schedule') return 'Falta una consigna semanal habilitada para el acumulador afectado.';
   if (cause === 'invalid_temperature_schedule') return `La consigna térmica no es válida: ${detail}.`;
   if (cause === 'infeasible_power_configuration') return 'La potencia contratada, máxima o nominal no permite una configuración ejecutable.';
   if (cause === 'safe_planning_input') return `La entrada de planificación no es segura: ${detail}.`;
-  if (cause === 'excluded_heater') return 'El acumulador se excluyó hasta recuperar temperatura interior y SOC recientes.';
   if (cause === 'insufficient_capacity_or_power') return 'No hay suficiente potencia o capacidad disponible para cumplir el objetivo térmico.';
   if (cause === 'insufficient_stored_energy_or_power') return 'La energía almacenada o la potencia disponible no cubren la demanda térmica prevista.';
   if (cause === 'heater_power_exceeds_global_limit') return 'La potencia nominal del acumulador supera el límite disponible de calefacción.';
