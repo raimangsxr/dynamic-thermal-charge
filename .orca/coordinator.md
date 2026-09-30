@@ -82,6 +82,12 @@ Prefer worktree creation through supervised `worker-start` using `new-top-level`
 
 Keep the Coordinator worktree clean.
 
+For every newly created change worktree, explicitly request repository setup with `--setup run`.
+
+The repository setup hook is responsible for provisioning all development dependencies. Never use `--setup skip` for a normal change.
+
+Do not dispatch implementation work into a newly created worktree until its required setup has completed successfully.
+
 ## Parallelism
 
 Default to one implementation worker.
