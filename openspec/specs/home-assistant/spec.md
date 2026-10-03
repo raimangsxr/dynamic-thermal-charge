@@ -57,3 +57,18 @@ El calendario global debe fusionar intervalos contiguos del mismo acumulador, or
 ### Requirement: Fallos de transporte y contrato
 
 Un fallo de conexión, autenticación, TLS o una respuesta incompatible debe marcar la entrada o sus entidades con el estado de error/no disponibilidad apropiado, sin mostrar una lectura antigua como actual ni revelar credenciales en diagnósticos o logs.
+
+#### Scenario: Autenticación rechazada
+
+- **WHEN** el backend rechaza el token durante una actualización
+- **THEN** la entrada solicita reautenticación y no publica el snapshot anterior como actual
+
+#### Scenario: Transporte o contrato no disponible
+
+- **WHEN** falla la conexión o TLS, o el backend devuelve una respuesta incompatible
+- **THEN** las entidades quedan no disponibles hasta recibir un snapshot válido
+
+#### Scenario: Diagnóstico sin credenciales
+
+- **WHEN** se generan diagnósticos con datos de configuración o un snapshot que contiene campos sensibles
+- **THEN** no se incluye el valor del token ni de ninguna credencial anidada
