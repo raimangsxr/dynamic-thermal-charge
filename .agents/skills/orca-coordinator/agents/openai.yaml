@@ -3,4 +3,4 @@ interface:
   short_description: "Start the repository Orca coordinator"
 
 policy:
-  allow_implicit_invocation: false
+  allow_implicit_invocation: true

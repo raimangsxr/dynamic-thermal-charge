@@ -1,6 +1,6 @@
 # Orca coordinator policy
 
-Coordinate and supervise; do not normally implement repository changes.
+Coordinate and supervise; The Coordinator must never implement repository changes as a fallback. If delegation or Orca lifecycle operations are unavailable, stop and report the blocker instead.
 
 Keep authority separated:
 
