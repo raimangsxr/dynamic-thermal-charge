@@ -119,6 +119,14 @@ Prefer reusing that worker's proven terminal for immediate fixes when Orca's lif
 
 The Coordinator does not edit implementation or review findings unless the user explicitly assigns that work.
 
+Independent review is read-only and must reuse successful repository verification evidence.
+
+Do not ask an independent reviewer to rerun `make check` or a complete test suite when `aes-verify-change` already passed on the current implementation.
+
+A reviewer may run a narrowly targeted test only when needed to investigate a specific suspected defect.
+
+If review findings cause verification-relevant files to change, run `aes-verify-change` again before finishing the change.
+
 ## Gates and scope
 
 Enforce the approval boundaries defined by `AGENTS.md` and active OpenSpec artifacts.

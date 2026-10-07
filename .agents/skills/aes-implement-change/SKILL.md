@@ -32,7 +32,7 @@ For each task:
 
 1. inspect the smallest relevant area;
 2. implement the simplest solution consistent with existing patterns;
-3. add/update focused tests when behavior changed;
+3. During implementation, run only the narrowest tests useful for fast feedback. Do not run `make test` or `make check` as a routine final verification step. The full repository quality gate is owned by `aes-verify-change`. If no genuinely focused test command is available, defer the full-suite run to verification instead of running it redundantly.
 4. mark the corresponding `T*` checkbox complete only when the task is actually done.
 
 Do not add speculative extensibility, unrelated refactors, optional features, or documentation beyond what the contract requires.

@@ -1,6 +1,6 @@
 ---
 name: aes-create-pr
-description: Finalize a task branch, rerun the quality gate, push it, and open a concise GitHub PR without ever merging main.
+description: Finalize a verified task branch, reuse valid verification evidence, push it, and open a concise GitHub PR without ever merging main.
 metadata:
   version: "1.0.0"
 ---
@@ -18,17 +18,17 @@ Read `AGENTS.md`. Confirm:
 
 Do not discard or rewrite unrelated user work.
 
-## 2. Final quality gate
+## 2. Verification preflight
 
-Run:
+Confirm that `aes-verify-change` completed successfully and its final `make check` passed.
 
-```bash
-make check
-```
+Do not rerun `make check` merely because the PR stage has started.
 
-Do not create the PR if the quality gate fails. Fix in-scope failures first; surface unrelated blockers clearly.
+Reuse the successful verification result when no implementation, tests, dependency manifests, migrations, build configuration, deployment configuration, or other verification-relevant files changed afterwards.
 
-Stage the expected final files. If anything remains uncommitted, create one coherent Conventional Commit for the change. Preserve any intentional checkpoint commits; do not squash or rewrite them unless the user asks.
+Changes limited to OpenSpec archival/consolidation, living specs, README or other documentation do not invalidate the existing quality-gate result.
+
+If verification evidence is missing or verification-relevant files changed after the last successful gate, stop and return the change to `aes-verify-change` rather than performing verification inside this skill.
 
 ## 3. Push and open PR
 

@@ -15,7 +15,7 @@
 
 ### Implementation and quality
 - For approved STANDARD/COMPLEX work, use `aes-implement-change`, then `aes-verify-change`, `aes-finish-change`, and `aes-create-pr` as applicable.
-- Tests must prove changed behavior where practical. Before a PR, `make check` must pass.
+- Tests must prove changed behavior where practical. `make check` is the single full repository quality gate and must pass after the final verification-relevant change before a PR. Do not rerun a successful full gate solely because a later workflow stage started; reuse it while no verification-relevant files have changed.
 - Use `make setup`, `make dev`, `make test`, `make lint`, and `make check` as the project command contract.
 - Persistent model/schema changes use migrations; SQLAlchemy projects use Alembic.
 - Prefer database-backed configuration for runtime application behavior when reasonable. Keep secrets/bootstrap/environment concerns outside it. Ask if placement is ambiguous.

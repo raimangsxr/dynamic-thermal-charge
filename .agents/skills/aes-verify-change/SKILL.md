@@ -33,15 +33,26 @@ Remove accidental scope and unnecessary complexity discovered in the diff when s
 
 ## 3. Run deterministic checks
 
-Run focused tests while fixing issues, then always run:
+While resolving issues, use only the narrowest relevant tests for fast feedback.
+
+Do not run `make test`, the complete backend suite, or the complete frontend
+suite immediately before `make check`; `make check` already owns the full
+repository test execution.
+
+After the implementation is final, run exactly one full quality gate:
 
 ```bash
-make check
+log="${TMPDIR:-/tmp}/aes-make-check.log"
+
+if make check >"$log" 2>&1; then
+  echo "make check: PASS"
+else
+  status=$?
+  echo "make check: FAIL"
+  tail -n 120 "$log"
+  exit "$status"
+fi
 ```
-
-Fix failures caused by the change. If a failure is unrelated/pre-existing and cannot safely be fixed within scope, report it clearly instead of hiding it.
-
-Verify README is current when its documented installation/configuration/usage/operation changed.
 
 ## 4. Finish
 
