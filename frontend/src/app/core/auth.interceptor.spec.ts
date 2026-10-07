@@ -10,7 +10,8 @@ import {
   provideHttpClientTesting,
 } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { Router } from '@angular/router';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Auth } from './auth';
 import { authInterceptor } from './auth.interceptor';
@@ -29,6 +30,7 @@ describe('authInterceptor', () => {
       providers: [
         provideHttpClient(withInterceptors([authInterceptor])),
         provideHttpClientTesting(),
+        { provide: Router, useValue: { navigateByUrl: vi.fn().mockResolvedValue(true) } },
       ],
     });
     http = TestBed.inject(HttpClient);
@@ -78,6 +80,8 @@ describe('authInterceptor', () => {
   it('signs out when the API rejects a rotated credential mid-use', () => {
     auth.signIn(TOKEN);
     expect(auth.authenticated()).toBe(true);
+    const router = TestBed.inject(Router);
+    const navigate = vi.spyOn(router, 'navigateByUrl');
 
     let failed = false;
     http.get('/api/v1/config').subscribe({ error: () => (failed = true) });
@@ -90,7 +94,9 @@ describe('authInterceptor', () => {
 
     expect(failed).toBe(true);
     expect(auth.authenticated()).toBe(false);
+    expect(auth.credentialError()).toBe('La credencial no es válida o ha caducado.');
     expect(sessionStorage.getItem('dtc.api-token')).toBeNull();
+    expect(navigate).toHaveBeenCalledWith('/login');
   });
 
   it('keeps the session on errors that are not about the credential', () => {

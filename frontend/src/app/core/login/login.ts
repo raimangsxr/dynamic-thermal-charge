@@ -27,8 +27,8 @@ import { Auth } from '../auth';
           [(ngModel)]="value"
           required
         />
-        @if (message()) {
-          <p class="error" role="alert">{{ message() }}</p>
+        @if (message() || auth.credentialError(); as error) {
+          <p class="error" role="alert" data-testid="login-error">{{ error }}</p>
         }
         <button type="submit">Entrar</button>
       </form>
@@ -48,7 +48,7 @@ import { Auth } from '../auth';
   `,
 })
 export class Login {
-  private readonly auth = inject(Auth);
+  readonly auth = inject(Auth);
   private readonly router = inject(Router);
 
   value = '';
