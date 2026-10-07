@@ -29,6 +29,7 @@ import { Poller } from '../core/poll';
 import { OutputIndicator } from '../shared/output-indicator/output-indicator';
 import { formatAge, formatInstant } from '../shared/age/age';
 import { ControllerHealth } from './controller-health/controller-health';
+import { ControllerHealthIndicator } from './controller-health/controller-health-indicator';
 import { formatTemperature } from '../shared/temperature/temperature';
 import {
   forecastNextRunLabel,
@@ -42,7 +43,7 @@ import {
 
 @Component({
   selector: 'dtc-status',
-  imports: [MatButtonModule, MatIconModule, ControllerHealth, OutputIndicator],
+  imports: [MatButtonModule, MatIconModule, ControllerHealth, ControllerHealthIndicator, OutputIndicator],
   templateUrl: './status.html',
   styleUrl: './status.css',
 })

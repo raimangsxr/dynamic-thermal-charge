@@ -8,10 +8,18 @@
         <p class="observed">Última lectura: {{ instant(data.observed_at) }} · horas de instalación: {{ data.timezone || 'Europe/Madrid' }}</p>
       }
     </div>
-    <button mat-stroked-button type="button" (click)="refresh()" [disabled]="refreshing()" aria-label="Volver a leer el estado de la instalación" data-testid="refresh-status">
-      <mat-icon aria-hidden="true">refresh</mat-icon>
-      {{ refreshing() ? 'Actualizando…' : 'Actualizar' }}
-    </button>
+    <div class="page-header-actions">
+      @if (snapshot() || failure()) {
+        <dtc-controller-health-indicator
+          [health]="snapshot()?.controller ?? null"
+          [readFailed]="failure() !== null"
+        />
+      }
+      <button mat-stroked-button type="button" (click)="refresh()" [disabled]="refreshing()" aria-label="Volver a leer el estado de la instalación" data-testid="refresh-status">
+        <mat-icon aria-hidden="true">refresh</mat-icon>
+        {{ refreshing() ? 'Actualizando…' : 'Actualizar' }}
+      </button>
+    </div>
   </header>
 
   @if (loading() && !snapshot()) {
