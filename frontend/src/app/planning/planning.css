@@ -1,15 +1,18 @@
 :host { display: block; }
-.planning { width: min(100% - 2rem, 78rem); margin: 0 auto; padding: 1.5rem 0 3.5rem; }
+.planning { width: min(100% - 2rem, 78rem); min-width: 0; margin: 0 auto; padding: 1.5rem 0 3.5rem; overflow-x: clip; }
 .page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1.5rem; margin-bottom: 1.25rem; }
 .page-header > div { min-width: 0; }
 .page-header button { flex: 0 0 auto; }
+.page-header-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .65rem; }
 .eyebrow { margin: 0 0 .25rem; color: var(--primary); font-size: .74rem; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
 h1 { margin: 0; font-size: clamp(1.7rem, 4vw, 2.35rem); letter-spacing: -.02em; }
 h2 { margin: 0; color: var(--ink); font-size: 1.3rem; letter-spacing: -.01em; }
 h3 { margin: 0; color: var(--ink); font-size: 1rem; }
 .intro, .section-lead, .hint, .window, .summary-list dt, .next-forecast { color: var(--muted); }
 .intro { max-width: 58rem; margin: .45rem 0 0; line-height: 1.45; }
-.planning-tabs { display: block; margin-top: 1.25rem; }
+.planning-tabs { display: block; min-width: 0; margin-top: .25rem; }
+:host ::ng-deep .planning-tabs > .mat-mdc-tab-header { display: none; }
+:host ::ng-deep .planning-tabs .mat-mdc-tab-body-content { overflow-x: hidden; }
 .tab-panel { padding: 1rem 0 2rem; }
 .tab-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; margin-bottom: 1.25rem; }
 .tab-heading > div { min-width: 0; }
@@ -18,7 +21,7 @@ h3 { margin: 0; color: var(--ink); font-size: 1rem; }
 .active-chip { background: #e8f0ff; color: var(--primary); }
 .summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .8rem; margin-top: 1rem; }
 .single-summary-grid { grid-template-columns: minmax(0, 1fr); }
-.summary-card { display: flex; min-height: 10.5rem; flex-direction: column; align-items: flex-start; padding: 1rem; border: 1px solid var(--border); border-radius: .7rem; background: linear-gradient(145deg, #fff, #f8faff); box-shadow: none; }
+.summary-card { display: flex; min-height: 10.5rem; flex-direction: column; align-items: flex-start; padding: 1rem; border: 1px solid var(--border); border-radius: .7rem; background: var(--surface); box-shadow: none; }
 .summary-card p { flex: 1 1 auto; margin: .45rem 0 0; color: var(--muted); font-size: .84rem; line-height: 1.4; }
 .card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
 .card-header > div { min-width: 0; }
@@ -36,8 +39,9 @@ h3 { margin: 0; color: var(--ink); font-size: 1rem; }
 .section-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
 .section-header > div { min-width: 0; }
 .section-header > div:first-child { flex: 1 1 auto; }
-.section-header > button, .section-header > div:last-child { flex: 0 0 auto; }
-.section-header > div:last-child { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .5rem; }
+.section-header > button, .section-header > div:last-child:not(:first-child) { flex: 0 0 auto; }
+.section-header > div:last-child:not(:first-child) { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .5rem; }
+.section-header .hint { margin-top: .35rem; }
 .section-header .hint { font-size: 1rem; }
 .topic-row { display: grid; grid-template-columns: minmax(7rem, auto) minmax(0, 1fr); align-items: start; gap: .75rem 1rem; padding: .9rem 0; border-top: 1px solid var(--border); }
 .topic-row .heater-name { color: var(--ink); font-size: .92rem; font-weight: 650; }
@@ -160,7 +164,6 @@ th, td { padding: .65rem .75rem; border-bottom: 1px solid var(--border); text-al
 }
 
 @media (max-width: 56rem) {
-  .target-master-detail { grid-template-columns: minmax(0, 1fr); }
   .target-detail-content { grid-template-columns: minmax(0, 1fr); }
 }
 

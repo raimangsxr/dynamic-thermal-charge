@@ -86,7 +86,7 @@ mantiene una consigna durante los huecos y nunca usa telemetría de temperatura
 del acumulador ni deriva una temperatura desde el SOC. Los intervalos de un
 mismo acumulador no pueden solaparse, incluso al cruzar medianoche.
 
-La interfaz inline de Nueva planificación presenta las reglas en una lista
+El paso `Consignas` presenta las reglas en una lista
 vertical con una única vista de detalle editable para la consigna seleccionada.
 La lista resume acumulador, temperatura, días, horario y estado; conserva los
 índices de día lunes=0 a domingo=6 y representa `end_time: "24:00"` como
@@ -692,7 +692,11 @@ recomendada cuando exista; `deficits` tiene prioridad sobre `violations` como
 fuente de problemas. Los problemas del modelo energético incluyen la energía
 almacenada observada cuando está disponible y conservan `null` cuando no existe
 una medida válida; la interfaz muestra este último caso como “no disponible” y
-traduce `room_model` a un nombre comprensible para el operador.
+traduce `room_model` a un nombre comprensible para el operador. El resultado
+activable o bloqueado se muestra antes que los pasos técnicos del cálculo. Los
+problemas con la misma causa se agrupan y enumeran los acumuladores afectados;
+si no hay intervalos no se renderiza un gráfico vacío, sino una explicación
+accionable.
 
 #### Scenario: Preview degradada con problemas
 
@@ -707,28 +711,29 @@ traduce `room_model` a un nombre comprensible para el operador.
 
 ### Requirement: Separación de contextos en la vista de planificación
 
-La vista de Planificación debe ofrecer tres pestañas accesibles, en este orden:
-Planificación activa, Nueva planificación y Previsión meteorológica. Debe abrir
-en Planificación activa; esta pestaña solo muestra el plan aceptado y sus
-gráficos, Nueva planificación concentra consignas térmicas y preview, y Previsión
-meteorológica concentra el resumen y gráfico meteorológico. Cambiar de pestaña
-no debe perder la edición ni el trabajo de preview en curso.
+La vista de Planificación debe abrir en un flujo guiado de tres pasos:
+`Consignas`, `Comprobar` y `Activar`. Solo se muestra como contexto principal el
+paso en curso; la activación no está disponible hasta que una vista previa
+activable corresponda al borrador actual. El plan activo, las cuatro gráficas,
+las planificaciones recientes y la previsión meteorológica viven en la vista
+secundaria de solo consulta `Análisis y datos`. Cambiar entre ambos contextos no
+debe perder la edición ni el trabajo de preview en curso.
 
 #### Scenario: Llegada a la vista de planificación
 
 - **WHEN** el operador entra en Planificación
-- **THEN** se selecciona Planificación activa y no se mezcla su contenido con
-  consignas, preview o detalle meteorológico
+- **THEN** se muestra `Consignas` como primer paso y no se mezclan el histórico,
+  la previsión ni las gráficas con el flujo operativo
 
 #### Scenario: Consulta o edición separada
 
-- **WHEN** el operador selecciona Nueva planificación o Previsión meteorológica
-- **THEN** ve únicamente el ámbito correspondiente y puede volver al plan
-  activo conservando el estado de edición y de preview
+- **WHEN** el operador abre `Análisis y datos` o vuelve al flujo guiado
+- **THEN** ve únicamente el contexto correspondiente y conserva el estado de
+  edición y de preview
 
 ### Requirement: Detalle tabular de la planificación activa
 
-La pestaña Planificación activa debe reservar sus tarjetas para las gráficas y
+La sección de plan activo en `Análisis y datos` debe reservar sus tarjetas para las gráficas y
 ofrecer el detalle de cada una mediante su botón “Ver detalle”. Cada diálogo de
 detalle de gráfica debe mostrar únicamente una tabla accesible, con el intervalo
 como cabecera de fila y una columna por acumulador cuando aplique. El diálogo
@@ -753,7 +758,7 @@ eje común de 0–100% y su tabla conserva los kWh de inicio y fin.
 
 ### Requirement: Feedback de las acciones del editor de planificación
 
-El editor de Nueva planificación debe hacer visible el resultado de sus
+El flujo guiado de planificación debe hacer visible el resultado de sus
 acciones. Descartar debe restaurar inmediatamente las consignas guardadas y
 retirar la preview local; Guardar y activar debe indicar el estado en curso, el
 éxito o el error sin confundir una preview persistida con el resultado de la

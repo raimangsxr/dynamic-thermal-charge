@@ -3,10 +3,17 @@
     <div>
       <p class="eyebrow">Panel operativo</p>
       <h1>Planificación</h1>
-      <p class="intro">Consulta el balance energético y térmico, prepara consignas y revisa la previsión.</p>
+      <p class="intro">{{ selectedTab() === 1 ? 'Define consignas, comprueba el resultado y activa el plan.' : 'Consulta el plan activo, las gráficas y los datos que utiliza la planificación.' }}</p>
       @if (snapshot(); as data) { <p class="observed">Horas de instalación: {{ data.timezone || 'Europe/Madrid' }}</p> }
     </div>
-    <button mat-stroked-button type="button" (click)="refresh()"><mat-icon aria-hidden="true">refresh</mat-icon> Actualizar</button>
+    <div class="page-header-actions">
+      @if (selectedTab() === 1) {
+        <button mat-stroked-button type="button" (click)="showAnalysisPlan()" data-testid="open-analysis-button"><mat-icon aria-hidden="true">monitoring</mat-icon> Análisis y datos</button>
+      } @else {
+        <button mat-stroked-button type="button" (click)="showWorkflow()" data-testid="back-to-workflow-button"><mat-icon aria-hidden="true">arrow_back</mat-icon> Volver al flujo</button>
+      }
+      <button mat-stroked-button type="button" (click)="refresh()"><mat-icon aria-hidden="true">refresh</mat-icon> Actualizar</button>
+    </div>
   </header>
 
   @if (loading() && !snapshot()) {
@@ -31,6 +38,13 @@
       data-testid="planning-tabs">
       <mat-tab label="Planificación activa">
         <div class="tab-panel active-tab" data-testid="active-planning-tab">
+          <header class="analysis-header">
+            <div><p class="eyebrow">Consulta</p><h2>Análisis y datos</h2><p class="hint">Información operativa y técnica fuera del recorrido de activación.</p></div>
+            <nav class="analysis-nav" aria-label="Secciones de análisis">
+              <button mat-flat-button color="primary" type="button" aria-current="page">Plan activo y gráficas</button>
+              <button mat-stroked-button type="button" (click)="showAnalysisForecast()">Previsión meteorológica</button>
+            </nav>
+          </header>
           <div class="tab-heading">
             <div>
               <p class="eyebrow">En curso</p>
@@ -135,16 +149,20 @@
 
       <mat-tab label="Nueva planificación">
         <div class="tab-panel new-planning-tab" data-testid="new-planning-tab">
-          <div class="tab-heading">
-            <div>
-              <p class="eyebrow">Edición y simulación</p>
-              <h2>Nueva planificación</h2>
-              <p class="hint">Ajusta las consignas semanales y comprueba el resultado antes de reemplazar el plan activo.</p>
-            </div>
-            @if (preview(); as candidate) { <span class="status-chip" [attr.data-status]="candidate.status">Vista previa: {{ planStatus(candidate.status) }}@if (previewAlreadyActive()) { · ya activa }</span> }
-          </div>
+          <nav class="planning-stepper" aria-label="Pasos de la planificación" data-testid="planning-stepper">
+            <button class="planning-step" [class.planning-step-active]="planningStep() === 0" [class.planning-step-complete]="planningStep() > 0" type="button" (click)="goToPlanningStep(0)" [attr.aria-current]="planningStep() === 0 ? 'step' : null" data-testid="planning-step-targets">
+              <span class="step-number">1</span><span><strong>Consignas</strong><small>Edita las temperaturas y horarios</small></span>
+            </button>
+            <button class="planning-step" [class.planning-step-active]="planningStep() === 1" [class.planning-step-complete]="planningStep() > 1" type="button" (click)="goToPlanningStep(1)" [disabled]="!previewJob() && !preview()" [attr.aria-current]="planningStep() === 1 ? 'step' : null" data-testid="planning-step-check">
+              <span class="step-number">2</span><span><strong>Comprobar</strong><small>Revisa el resultado y resuelve incidencias</small></span>
+            </button>
+            <button class="planning-step" [class.planning-step-active]="planningStep() === 2" type="button" (click)="goToPlanningStep(2)" [disabled]="!canAdvanceToActivation()" [attr.aria-current]="planningStep() === 2 ? 'step' : null" data-testid="planning-step-activate">
+              <span class="step-number">3</span><span><strong>Activar</strong><small>Sustituye el plan activo por el nuevo</small></span>
+            </button>
+          </nav>
 
-          <section class="constraints" aria-labelledby="targets-title">
+          @if (planningStep() === 0) {
+          <section class="constraints guided-step-panel" aria-labelledby="targets-title" data-testid="targets-step">
             <div class="section-header">
               <div>
                 <h3 id="targets-title">Consignas semanales de temperatura</h3>
@@ -199,7 +217,7 @@
                       </div>
                       <span class="target-state" [class.target-state-enabled]="isTargetEnabled(target)">{{ isTargetEnabled(target) ? 'Activa' : 'Inactiva' }}</span>
                     </header>
-                    <p class="target-detail-hint">Los cambios se aplican al borrador. Usa «Recalcular vista previa» para comprobarlos.</p>
+                    <p class="target-detail-hint">Los cambios se aplican al borrador. Usa «Comprobar cambios» para revisarlos.</p>
 
                     <div class="target-detail-content" data-testid="target-detail-form">
                       <section class="target-block" [attr.aria-labelledby]="'target-values-title-' + index">
@@ -274,72 +292,134 @@
               </div>
             }
 
-            <div class="planning-actions" role="group" aria-label="Acciones de la planificación" data-testid="planning-actions">
-              <button mat-flat-button color="primary" type="button" (click)="recalculate()" [disabled]="activationInFlight()" data-testid="recalculate-button">Recalcular vista previa</button>
-              <button mat-button type="button" (click)="discardChanges()" [disabled]="activationInFlight()" data-testid="discard-button">Descartar</button>
-              <button mat-flat-button color="primary" type="button" [disabled]="activationInFlight() || !preview() || !canActivateStatus(preview()?.status, preview()) || !previewMatchesDraft() || previewAlreadyActive()" (click)="activate()" data-testid="activate-button">{{ activationInFlight() ? 'Guardando…' : isBestEffortPreview(preview()) ? 'Activar mejor esfuerzo' : 'Guardar y activar' }}</button>
+            <div class="planning-actions sticky-actions" role="group" aria-label="Acciones de las consignas" data-testid="planning-actions">
+              <div class="action-context">
+                <strong>{{ draftDiffersFromSaved() ? 'Cambios sin comprobar' : 'Consignas preparadas' }}</strong>
+                <span>{{ draftDiffersFromSaved() ? 'Comprueba los cambios para conocer su resultado antes de activar.' : 'Puedes comprobar estas consignas sin modificar el plan activo.' }}</span>
+              </div>
+              <button mat-button type="button" (click)="discardChanges()" [disabled]="activationInFlight() || !hasPendingPlanningChanges()" data-testid="discard-button">Descartar</button>
+              <button mat-flat-button color="primary" type="button" (click)="recalculate()" [disabled]="activationInFlight()" data-testid="recalculate-button">Comprobar cambios</button>
             </div>
             @if (actionMessage()) { <p class="action-feedback" role="status" aria-live="polite" data-testid="planning-action-status">{{ actionMessage() }}</p> }
             @if (actionError()) { <p class="action-feedback warning" role="alert" data-testid="planning-action-error">{{ actionError() }}</p> }
           </section>
+          }
 
+          @if (planningStep() === 1) {
           @if (previewJob(); as job) {
             <section class="preview-job" aria-labelledby="preview-job-title" data-testid="preview-job">
               <div class="section-header"><div><h3 id="preview-job-title">Vista previa del horizonte: {{ jobStatusText(job.status) }}</h3><p class="hint">Trabajo {{ job.job_id }} · se conserva al recargar esta pantalla.</p></div><div>@if (hasPreviewFailure(job)) { <button mat-stroked-button type="button" (click)="openPreviewFailure(job)" data-testid="preview-failure-button">Ver detalle del fallo</button> }<button mat-stroked-button type="button" (click)="cancelPreview()" [disabled]="job.status !== 'queued' && job.status !== 'running'" data-testid="cancel-preview-button">Cancelar cálculo</button></div></div>
+              @if (job.result; as result) {
+                <div class="preview-result-banner" [class.preview-result-ready]="canActivateStatus(result.status, result) && previewMatchesDraft()" role="status" data-testid="operator-summary">
+                  <mat-icon aria-hidden="true">{{ canActivateStatus(result.status, result) && previewMatchesDraft() ? 'check_circle' : 'error' }}</mat-icon>
+                  <div>
+                    <h3>{{ canActivateStatus(result.status, result) && previewMatchesDraft() ? 'Listo para activar' : 'No se puede activar' }}</h3>
+                    @if (previewProblemGroups(result)[0]; as firstProblem) { <strong>{{ firstProblem.title }}</strong><p>{{ firstProblem.description }}</p> }
+                    @else { <p>La vista previa ha superado las comprobaciones y corresponde al borrador actual.</p> }
+                    @if (!previewMatchesDraft()) { <p data-testid="preview-stale-draft">Las consignas han cambiado desde este cálculo. Recalcula antes de continuar.</p> }
+                  </div>
+                </div>
+
+                <div class="preview-review-grid">
+                  <section class="review-panel" aria-labelledby="checked-targets-title">
+                    <div class="review-panel-heading"><mat-icon aria-hidden="true">task_alt</mat-icon><div><h3 id="checked-targets-title">Consignas comprobadas</h3><p>Estas son las reglas utilizadas para calcular.</p></div></div>
+                    <div class="review-target-list" data-testid="target-markers">
+                      @for (target of result.temperature_targets; track $index) {
+                        <div class="review-target-row"><strong>{{ heaterText(target.heater_id) }}</strong><span>{{ target.target_temperature_c }} °C</span><small>{{ targetDaysSummary(target) }} · {{ target.start_time }}–{{ targetEndLabel(target.end_time) }}</small></div>
+                      } @empty { <p class="empty">No se utilizaron consignas de temperatura.</p> }
+                    </div>
+                  </section>
+
+                  <section class="review-panel" aria-labelledby="preview-problems-title">
+                    <div class="review-panel-heading"><mat-icon aria-hidden="true">report</mat-icon><div><h3 id="preview-problems-title">Incidencias que requieren atención</h3><p>Revisa los acumuladores afectados antes de volver a calcular.</p></div></div>
+                    @if (previewProblemGroups(result).length) {
+                      <div class="problem-groups" data-testid="preview-problem-groups">
+                        @for (group of previewProblemGroups(result); track group.key) {
+                          <div class="problem-group">
+                            <h4>{{ group.title }}</h4>
+                            <p>{{ group.description }}</p>
+                            @for (heaterId of group.heaterIds; track heaterId) {
+                              <div class="problem-device-row" data-testid="preview-problem-device"><strong>{{ heaterText(heaterId) }}</strong><span>{{ group.state }}</span><button mat-stroked-button type="button" (click)="openPreviewProblems(result)" data-testid="preview-problems-button">Ver datos</button></div>
+                            }
+                          </div>
+                        }
+                      </div>
+                    } @else { <p class="success-copy">No se han detectado incidencias bloqueantes.</p> }
+                  </section>
+                </div>
+
+                @if (previewWindowSlots(result).length) {
+                  <div class="preview-visualization" data-testid="preview-visualization">
+                    <div class="card-header"><h3 id="preview-visualization-title">Vista previa por acumulador</h3><button mat-stroked-button type="button" (click)="openPreviewChartDetails()" data-testid="preview-chart-detail-button">Ver detalle</button></div>
+                    <p class="hint">Potencia, energía almacenada y balance térmico por intervalo.</p>
+                    <div class="chart-wrap"><canvas #previewChart aria-label="Gráfico de potencia, energía y temperatura por acumulador"></canvas></div>
+                  </div>
+                } @else {
+                  <div class="preview-empty" role="status" data-testid="preview-chart-empty"><mat-icon aria-hidden="true">insert_chart_outlined</mat-icon><div><strong>No hay intervalos que representar</strong><p>Resuelve las incidencias del cálculo para obtener una visualización del plan.</p></div></div>
+                }
+              }
               <ol class="checks" data-testid="preview-checks">
                 @for (check of job.checks; track check.name) { <li class="check" [attr.data-state]="check.status"><span>{{ checkText(check.name) }}</span><strong>{{ checkStatusText(check.status) }}</strong>@if (check.detail) { <small>{{ check.detail }}</small> } @if (check.status === 'error') { <button mat-stroked-button type="button" (click)="openPreviewFailure(job, check)" data-testid="preview-check-failure-button">Ver detalle</button> }</li> }
               </ol>
-              @if (job.result; as result) {
-                <div class="operator-result" data-testid="operator-summary"><strong>Resultado para el operador</strong><p>Ventana {{ dateTime(result.window_start) }}–{{ dateTime(result.window_end) }} · horizonte {{ dateTime(result.horizon_start) }}–{{ dateTime(result.horizon_end) }} · previsión: {{ operatorForecastText(result.operator_summary) }}</p><p>Carga prevista: {{ previewSummaryText(result.operator_summary) }}</p><p>{{ result.operator_summary['recommended_action'] }}</p>@if (result.already_active || previewAlreadyActive()) { <p class="hint" data-testid="preview-already-active">Esta vista previa ya está activa; no se ofrece una activación duplicada.</p> }</div>
-                @if (result.excluded_heaters?.length) { <p class="warning" data-testid="preview-excluded-heaters">Acumuladores excluidos por telemetría incompleta: {{ previewExcludedHeaterText(result) }}</p> }
-                @if (result.optimization_quality === 'FEASIBLE_LIMIT') { <p class="hint" data-testid="preview-feasible-limit">Plan físicamente validado; la optimización secundaria se detuvo al alcanzar el límite de tiempo.</p> }
-                @if (isConvergingStatus(result.status)) { <p class="warning" data-testid="preview-converging">Puede activarse: converge en {{ convergenceText(result.convergence_by_heater, result.convergence_at) }}@if (result.guaranteed_until) { y mantiene el objetivo hasta {{ dateTime(result.guaranteed_until) }} }.</p> }
-                @if (isDegradedStatus(result.status)) { <p class="warning" data-testid="preview-degraded">{{ result.best_effort_activatable ? 'Puede activarse como mejor esfuerzo tras confirmarlo; la validación física ha pasado.' : 'No se puede activar: el plan activo todavía cubre la próxima actualización o falta confirmación de mejor esfuerzo.' }}</p> }
-                @if (isInvalidStatus(result.status)) { <p class="error" data-testid="preview-invalid">No se puede activar: faltan entradas válidas o una solución verificable.</p> }
-                @if (result.temperature_targets.length) { <div class="semantic-table chart-table" role="table" data-testid="target-markers" aria-label="Consignas de temperatura por acumulador"><div role="row" class="semantic-row header"><span role="columnheader">Acumulador</span><span role="columnheader">Objetivo</span><span role="columnheader">Inicio</span><span role="columnheader">Fin</span></div>@for (target of result.temperature_targets; track $index) { <div role="row" class="semantic-row"><span role="cell">{{ heaterText(target.heater_id) }}</span><span role="cell">{{ target.target_temperature_c }} °C</span><span role="cell">{{ target.start_time }}</span><span role="cell">{{ targetEndLabel(target.end_time) }}</span></div> }</div> }
-                @if (previewProblems(result).length) { <button mat-stroked-button type="button" class="preview-problems-button" (click)="openPreviewProblems(result)" data-testid="preview-problems-button">Ver detalle de problemas ({{ previewProblems(result).length }})</button> }
-                <div class="preview-visualization" data-testid="preview-visualization">
-                  <div class="card-header"><h3 id="preview-visualization-title">Vista previa por acumulador</h3><button mat-stroked-button type="button" (click)="openPreviewChartDetails()" data-testid="preview-chart-detail-button">Ver detalle</button></div>
-                  <p class="hint">Potencia, energía almacenada y balance térmico por intervalo.</p>
-                  <div class="chart-wrap"><canvas #previewChart aria-label="Gráfico de potencia, energía y temperatura por acumulador"></canvas></div>
-                </div>
-              }
             </section>
           }
           @if (preview(); as candidate) {
-            <div class="preview" role="status">
-              <strong>Vista previa: {{ planStatus(candidate.status) }}</strong>
-              @if (previewAlreadyActive()) { <span class="hint" data-testid="preview-already-active-label"> · ya activa; no hay nada que guardar</span> }
-              · {{ previewIntervalCount(candidate) }} intervalos de {{ candidate.slot_minutes }} minutos
-              @if (candidate.optimization_quality === 'FEASIBLE_LIMIT') {
-                <span class="hint" data-testid="candidate-feasible-limit"> · Plan validado; optimización limitada por tiempo</span>
-              }
-              @if (previewProblems(candidate).length) {
-                <span class="warning"> · Problemas detectados: {{ previewProblems(candidate).length }}</span>
-              }
-              @if (isConvergingStatus(candidate.status)) {
-                <span class="warning" data-testid="candidate-converging"> · Puede activarse: converge en {{ convergenceText(candidate.convergence_by_heater, candidate.convergence_at) }}</span>
-              }
-              @if (isDegradedStatus(candidate.status)) {
-                <span class="warning" data-testid="candidate-degraded"> · {{ candidate.best_effort_activatable ? 'Activable como mejor esfuerzo tras confirmación' : 'No activable: se conserva el último plan VALID o CONVERGING' }}</span>
-              }
-              @if (candidate.excluded_heaters?.length) { <span class="warning" data-testid="candidate-excluded-heaters"> · Excluidos: {{ previewExcludedHeaterText(candidate) }}</span> }
-              @if (isInvalidStatus(candidate.status) && previewProblems(candidate).length) {
-                <ul class="preview-reasons">
-                  @for (item of previewProblems(candidate); track $index) {
-                    <li>{{ deficitExplanation(item) }}</li>
-                  }
-                </ul>
-              }
-              @if (!previewMatchesDraft()) { <p class="warning" data-testid="preview-stale-draft">La vista previa no coincide con las consignas del borrador. Recalcula antes de activar.</p> }
+            <div class="preview-meta" role="status">
+              <strong>Vista previa: {{ planStatus(candidate.status) }}</strong><span>{{ previewIntervalCount(candidate) }} intervalos de {{ candidate.slot_minutes }} minutos</span>
+              @if (candidate.optimization_quality === 'FEASIBLE_LIMIT') { <span data-testid="candidate-feasible-limit">Optimización limitada por tiempo</span> }
+              @if (previewAlreadyActive()) { <span data-testid="preview-already-active-label">Esta vista previa ya está activa</span> }
             </div>
             @if (!data.plan) { <p class="window" data-testid="planning-window">Vista previa · ventana {{ dateTime(candidate.window_start) }}–{{ dateTime(candidate.window_end) }} · horizonte {{ dateTime(candidate.horizon_start) }}–{{ dateTime(candidate.horizon_end) }}</p> }
+          }
+
+          <div class="planning-actions sticky-actions" role="group" aria-label="Acciones de comprobación" data-testid="check-actions">
+            <div class="action-context">
+              <strong>{{ canAdvanceToActivation() ? 'Comprobación completada' : 'Revisión necesaria' }}</strong>
+              <span>{{ canAdvanceToActivation() ? 'El resultado corresponde al borrador actual y puede activarse.' : activationBlockReason() }}</span>
+            </div>
+            <button mat-stroked-button type="button" (click)="goToPlanningStep(0)">Volver a consignas</button>
+            <button mat-flat-button color="primary" type="button" (click)="recalculate()" [disabled]="activationInFlight()" data-testid="recalculate-button">Recalcular</button>
+            <button mat-flat-button color="primary" type="button" (click)="goToPlanningStep(2)" [disabled]="!canAdvanceToActivation()" data-testid="continue-activate-button">Continuar a activar</button>
+          </div>
+          @if (actionMessage()) { <p class="action-feedback" role="status" aria-live="polite" data-testid="planning-action-status">{{ actionMessage() }}</p> }
+          @if (actionError()) { <p class="action-feedback warning" role="alert" data-testid="planning-action-error">{{ actionError() }}</p> }
+          }
+
+          @if (planningStep() === 2) {
+            <section class="activation-step guided-step-panel" aria-labelledby="activation-title" data-testid="activation-step">
+              <div class="activation-summary">
+                <mat-icon aria-hidden="true">verified</mat-icon>
+                <div><p class="eyebrow">Último paso</p><h2 id="activation-title">Revisa y activa la planificación</h2><p>La vista previa corresponde a las consignas actuales. Al confirmar, sustituirá el plan activo.</p></div>
+              </div>
+              @if (preview(); as candidate) {
+                <dl class="activation-details">
+                  <div><dt>Estado</dt><dd>{{ planStatus(candidate.status) }}</dd></div>
+                  <div><dt>Ventana</dt><dd>{{ dateTime(candidate.window_start) }}–{{ dateTime(candidate.window_end) }}</dd></div>
+                  <div><dt>Intervalos</dt><dd>{{ previewIntervalCount(candidate) }} de {{ candidate.slot_minutes }} minutos</dd></div>
+                  <div><dt>Consignas</dt><dd>{{ candidate.temperature_targets.length }}</dd></div>
+                </dl>
+              }
+            </section>
+            <div class="planning-actions sticky-actions" role="group" aria-label="Acciones de activación" data-testid="activation-actions">
+              <div class="action-context"><strong>Listo para sustituir el plan activo</strong><span>La activación solicitará una confirmación explícita.</span></div>
+              <button mat-stroked-button type="button" (click)="goToPlanningStep(1)">Volver a comprobar</button>
+              <button mat-flat-button color="primary" type="button" [disabled]="activationInFlight() || !canAdvanceToActivation()" (click)="activate()" data-testid="activate-button">{{ activationInFlight() ? 'Activando…' : isBestEffortPreview(preview()) ? 'Activar mejor esfuerzo' : 'Activar planificación' }}</button>
+            </div>
+            @if (actionMessage()) { <p class="action-feedback" role="status" aria-live="polite" data-testid="planning-action-status">{{ actionMessage() }}</p> }
+            @if (actionError()) { <p class="action-feedback warning" role="alert" data-testid="planning-action-error">{{ actionError() }}</p> }
           }
         </div>
       </mat-tab>
 
       <mat-tab label="Previsión meteorológica">
         <div class="tab-panel forecast-tab" data-testid="forecast-tab">
+          <header class="analysis-header">
+            <div><p class="eyebrow">Consulta</p><h2>Análisis y datos</h2><p class="hint">Información operativa y técnica fuera del recorrido de activación.</p></div>
+            <nav class="analysis-nav" aria-label="Secciones de análisis">
+              <button mat-stroked-button type="button" (click)="showAnalysisPlan()">Plan activo y gráficas</button>
+              <button mat-flat-button color="primary" type="button" aria-current="page">Previsión meteorológica</button>
+            </nav>
+          </header>
           <div class="tab-heading">
             <div>
               <p class="eyebrow">Datos de contexto</p>

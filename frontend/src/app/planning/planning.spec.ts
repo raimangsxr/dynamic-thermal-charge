@@ -98,6 +98,22 @@ async function selectPlanningTab(fixture: ComponentFixture<Planning>, index: num
   await fixture.whenStable();
 }
 
+async function showAnalysisPlan(fixture: ComponentFixture<Planning>): Promise<void> {
+  fixture.componentInstance.showAnalysisPlan();
+  fixture.detectChanges();
+  await fixture.whenStable();
+}
+
+function showCheckStep(fixture: ComponentFixture<Planning>): void {
+  fixture.componentInstance.goToPlanningStep(1);
+  fixture.detectChanges();
+}
+
+function showActivationStep(fixture: ComponentFixture<Planning>): void {
+  fixture.componentInstance.goToPlanningStep(2);
+  fixture.detectChanges();
+}
+
 describe('Planning', () => {
   let fixture: ComponentFixture<Planning>;
   let backend: HttpTestingController;
@@ -115,35 +131,22 @@ describe('Planning', () => {
     fixture.detectChanges();
   });
 
-  it('loads the protected planning projection with the active tab selected by default', () => {
+  it('opens the focused consignment step and keeps analysis out of the primary flow', () => {
     backend.expectOne('/api/v1/planning').flush(PLANNING);
     fixture.detectChanges();
     const element = fixture.nativeElement as HTMLElement;
     expect(element.querySelector('[data-testid="planning-tabs"]')).not.toBeNull();
-    expect(Array.from(element.querySelectorAll('[role="tab"]')).map((tab) => tab.textContent?.trim())).toEqual([
-      'Planificación activa', 'Nueva planificación', 'Previsión meteorológica',
-    ]);
-    expect(fixture.componentInstance.selectedTab()).toBe(0);
-    expect(element.querySelector('[data-testid="active-planning-tab"]')).not.toBeNull();
-    expect(element.querySelector('[data-testid="planning-summary"]')).not.toBeNull();
-    expect(element.querySelector('[data-testid="planning-detail-button"]')).not.toBeNull();
-    expect(element.querySelector('[data-testid="temperature-card"]')).not.toBeNull();
-    expect(element.querySelector('[data-testid="heater-card"]')).not.toBeNull();
-    expect(element.querySelector('[data-testid="aggregate-card"]')).not.toBeNull();
-    expect(element.querySelector('[data-testid="cumulative-card"]')).not.toBeNull();
-    expect(element.querySelector('[aria-labelledby="temperature-title"]')).not.toBeNull();
-    expect(element.querySelector('[aria-labelledby="heater-title"]')).not.toBeNull();
-    expect(element.querySelector('[aria-labelledby="aggregate-title"]')).not.toBeNull();
-    expect(element.querySelector('[aria-labelledby="cumulative-title"]')).not.toBeNull();
-    expect(element.querySelector('[data-testid="planning-deficit"]')?.textContent).toContain('Carga no atendida');
-    expect(element.querySelector('[data-testid="temperature-table"]')).toBeNull();
-    expect(element.querySelector('[data-testid="heater-table"]')).toBeNull();
-    expect(element.querySelector('[data-testid="aggregate-table"]')).toBeNull();
-    expect(element.querySelector('[data-testid="cumulative-table"]')).toBeNull();
+    expect(fixture.componentInstance.selectedTab()).toBe(1);
+    expect(fixture.componentInstance.planningStep()).toBe(0);
+    expect(element.querySelector('[data-testid="planning-stepper"]')).not.toBeNull();
+    expect(element.querySelector('[data-testid="targets-step"]')).not.toBeNull();
+    expect(element.querySelector('[data-testid="open-analysis-button"]')).not.toBeNull();
+    expect(element.querySelector('[data-testid="active-planning-tab"]')).toBeNull();
+    expect(element.querySelector('[data-testid="temperature-card"]')).toBeNull();
+    expect(element.querySelector('[data-testid="plan-history"]')).toBeNull();
     expect(element.querySelector('[data-testid="forecast-summary"]')).toBeNull();
     expect(element.querySelector('[data-testid="forecast-chart-card"]')).toBeNull();
-    expect(element.querySelector('[data-testid="new-planning-tab"]')).toBeNull();
-    expect(element.querySelectorAll('[data-testid$="-card"]')).toHaveLength(4);
+    expect(element.querySelector('[data-testid="new-planning-tab"]')).not.toBeNull();
   });
 
   it('shows the active best-effort chip, banner and excluded accumulators', async () => {
@@ -155,6 +158,7 @@ describe('Planning', () => {
     });
     await fixture.whenStable();
     fixture.detectChanges();
+    await showAnalysisPlan(fixture);
 
     const element = fixture.nativeElement as HTMLElement;
     expect(element.querySelector('[data-testid="best-effort-chip"]')?.textContent).toContain('Mejor esfuerzo activo');
@@ -170,6 +174,7 @@ describe('Planning', () => {
       items: [{ id: 7, source: 'automatic', created_at: PLANNING.observed_at, window_start: PLANNING.plan!.window_start, window_end: PLANNING.plan!.window_end, slot_minutes: 30, installation_revision: 4, forecast_id: 2, status: 'VALID', reason: 'deviation', active: true }],
       limit_applied: 10, has_more: false, next_cursor: null,
     });
+    await showAnalysisPlan(fixture);
     fixture.detectChanges();
     expect(fixture.nativeElement.querySelector('[data-testid="plan-history"]')?.textContent).toContain('Replanificación');
     (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('[data-testid="plan-explanation-button"]')?.click();
@@ -196,23 +201,26 @@ describe('Planning', () => {
   it('creates active charts initially and renders forecast charts when its tab is selected', async () => {
     backend.expectOne('/api/v1/planning').flush(PLANNING);
     await fixture.whenStable();
+    chartState.configs.length = 0;
+    await showAnalysisPlan(fixture);
 
-    expect(chartState.configs).toHaveLength(4);
+    const activeCharts = chartState.configs.slice(-4);
+    expect(activeCharts).toHaveLength(4);
     expect(fixture.componentInstance.slotLabel(PLANNING.plan!.slots[0])).toBe(
       fixture.componentInstance.dateTime(PLANNING.plan!.slots[0].start),
     );
     expect(fixture.componentInstance.slotLabel(PLANNING.plan!.slots[0])).not.toContain('–');
-    expect(chartState.configs[1].data.labels).toEqual([
+    expect(activeCharts[1].data.labels).toEqual([
       fixture.componentInstance.dateTime(PLANNING.timeline[0].start),
       '',
       '',
     ]);
-    expect(chartState.configs[2].type).toBe('line');
-    expect(chartState.configs[2].data.datasets[0].data?.[0]).toBe(2.8);
-    expect(chartState.configs[3].data.datasets[0].data).toHaveLength(3);
-    expect(chartState.configs[3].data.datasets[0].data?.[0] as number).toBeCloseTo(10.9 / 22.4 * 100);
-    expect(chartState.configs[3].data.datasets[0].data?.[1] as number).toBeCloseTo(10.5 / 22.4 * 100);
-    expect(chartState.configs[3].data.datasets[0].data?.[2] as number).toBeCloseTo(9.8 / 22.4 * 100);
+    expect(activeCharts[2].type).toBe('line');
+    expect(activeCharts[2].data.datasets[0].data?.[0]).toBe(2.8);
+    expect(activeCharts[3].data.datasets[0].data).toHaveLength(3);
+    expect(activeCharts[3].data.datasets[0].data?.[0] as number).toBeCloseTo(10.9 / 22.4 * 100);
+    expect(activeCharts[3].data.datasets[0].data?.[1] as number).toBeCloseTo(10.5 / 22.4 * 100);
+    expect(activeCharts[3].data.datasets[0].data?.[2] as number).toBeCloseTo(9.8 / 22.4 * 100);
 
     chartState.configs.length = 0;
     await selectPlanningTab(fixture, 2);
@@ -241,13 +249,8 @@ describe('Planning', () => {
   it('renders one compact preview chart and keeps preview tables in the detail dialog', async () => {
     backend.expectOne('/api/v1/planning').flush({ ...TWO_HEATER_PLANNING, preview_job: PREVIEW_JOB(PREVIEW) });
     await fixture.whenStable();
-    expect(fixture.nativeElement.querySelector('[data-testid="active-planning-tab"]')).not.toBeNull();
-    expect(fixture.nativeElement.querySelector('[data-testid="temperature-card"]')).not.toBeNull();
-    expect(fixture.nativeElement.querySelector('[data-testid="preview-visualization"]')).toBeNull();
-
-    chartState.configs.length = 0;
-    await selectPlanningTab(fixture, 1);
-    fixture.detectChanges();
+    expect(fixture.componentInstance.planningStep()).toBe(1);
+    expect(fixture.nativeElement.querySelector('[data-testid="preview-visualization"]')).not.toBeNull();
 
     const element = fixture.nativeElement as HTMLElement;
     expect(fixture.componentInstance.previewWindowSlots(PREVIEW)).toHaveLength(2);
@@ -264,7 +267,7 @@ describe('Planning', () => {
     expect(element.querySelector('[data-testid="charge-matrix"]')).toBeNull();
     expect(element.querySelector('[data-testid="preview-slots-table"]')).toBeNull();
     expect(element.querySelectorAll('[data-testid="forecast-table"]')).toHaveLength(0);
-    expect(element.querySelector('.preview[role="status"]')?.textContent).toContain('2 intervalos de 30 minutos');
+    expect(element.querySelector('.preview-meta')?.textContent).toContain('2 intervalos de 30 minutos');
 
     const previewChart = chartState.configs.find((config) => config.data.datasets.length === 2);
     expect(previewChart).toBeDefined();
@@ -280,21 +283,23 @@ describe('Planning', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    await selectPlanningTab(fixture, 1);
+    fixture.componentInstance.goToPlanningStep(0);
     fixture.componentInstance.addTarget('salon');
     fixture.detectChanges();
     expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="new-planning-tab"]')).not.toBeNull();
-    expect((fixture.nativeElement as HTMLElement).querySelectorAll('[data-testid="target-list-item"]')).toHaveLength(2);
+    expect(fixture.componentInstance.draftTargets()).toHaveLength(2);
     expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="target-detail-form"]')).not.toBeNull();
-    expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="preview-visualization"]')).not.toBeNull();
+    expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="preview-visualization"]')).toBeNull();
 
-    await selectPlanningTab(fixture, 0);
+    await showAnalysisPlan(fixture);
     expect(fixture.componentInstance.selectedTab()).toBe(0);
     expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="temperature-card"]')).not.toBeNull();
     expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="preview-visualization"]')).toBeNull();
 
-    await selectPlanningTab(fixture, 1);
-    expect((fixture.nativeElement as HTMLElement).querySelectorAll('[data-testid="target-list-item"]')).toHaveLength(2);
+    fixture.componentInstance.showWorkflow();
+    fixture.componentInstance.goToPlanningStep(1);
+    fixture.detectChanges();
+    expect(fixture.componentInstance.draftTargets()).toHaveLength(2);
     expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="preview-visualization"]')).not.toBeNull();
   });
 
@@ -467,6 +472,9 @@ describe('Planning', () => {
     fixture.detectChanges();
     await selectPlanningTab(fixture, 1);
     fixture.componentInstance.previewJob.set(PREVIEW_JOB(PREVIEW));
+    fixture.componentInstance.preview.set(PREVIEW);
+    fixture.componentInstance.previewJob.set(PREVIEW_JOB(PREVIEW));
+    showCheckStep(fixture);
     fixture.detectChanges();
 
     const element = fixture.nativeElement as HTMLElement;
@@ -494,9 +502,9 @@ describe('Planning', () => {
     };
     fixture.componentInstance.previewJob.set(PREVIEW_JOB(invalid));
     fixture.componentInstance.preview.set(invalid);
-    fixture.detectChanges();
+    showCheckStep(fixture);
     expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="preview-problems-button"]')).not.toBeNull();
-    expect((fixture.nativeElement as HTMLElement).querySelector('.preview-reasons')?.textContent).toContain('La energía almacenada o la potencia disponible');
+    expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="preview-problem-groups"]')?.textContent).toContain('La energía almacenada o la potencia disponible');
     const invalidButton = (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('[data-testid="preview-problems-button"]');
     invalidButton?.click();
     await fixture.whenStable();
@@ -527,7 +535,7 @@ describe('Planning', () => {
     };
     fixture.componentInstance.previewJob.set(PREVIEW_JOB(excluded));
     fixture.componentInstance.preview.set(excluded);
-    fixture.detectChanges();
+    showCheckStep(fixture);
 
     (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('[data-testid="preview-problems-button"]')?.click();
     await fixture.whenStable();
@@ -538,6 +546,40 @@ describe('Planning', () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
   });
 
+  it('groups four excluded heaters by cause and replaces an empty chart with guidance', async () => {
+    const fourHeaterPlanning: PlanningDto = {
+      ...TWO_HEATER_PLANNING,
+      heaters: [
+        ...TWO_HEATER_PLANNING.heaters,
+        { id: 'habitaciones', name: 'Habitaciones', power_w: 1800, capacity_kwh: 14.4, priority: 70, enabled: true },
+        { id: 'buhardilla', name: 'Buhardilla', power_w: 1600, capacity_kwh: 12.8, priority: 60, enabled: true },
+      ],
+    };
+    backend.expectOne('/api/v1/planning').flush(fourHeaterPlanning);
+    await fixture.whenStable();
+
+    const excluded = {
+      ...PREVIEW,
+      status: 'INVALID' as const,
+      slots: [],
+      deficits: [],
+      violations: [],
+      excluded_heaters: ['salon', 'cocina', 'habitaciones', 'buhardilla'].map((heater_id) => ({
+        heater_id,
+        cause: 'missing_required_state',
+      })),
+    };
+    fixture.componentInstance.preview.set(excluded);
+    fixture.componentInstance.previewJob.set(PREVIEW_JOB(excluded));
+    showCheckStep(fixture);
+
+    const element = fixture.nativeElement as HTMLElement;
+    expect(element.querySelectorAll('.problem-group')).toHaveLength(1);
+    expect(element.querySelectorAll('[data-testid="preview-problem-device"]')).toHaveLength(4);
+    expect(element.querySelector('[data-testid="preview-chart-empty"]')?.textContent).toContain('No hay intervalos que representar');
+    expect(element.querySelector('[data-testid="preview-visualization"]')).toBeNull();
+  });
+
   it('blocks degraded previews while allowing converging previews to activate', async () => {
     backend.expectOne('/api/v1/planning').flush(PLANNING);
     await fixture.whenStable();
@@ -545,23 +587,25 @@ describe('Planning', () => {
     await selectPlanningTab(fixture, 1);
 
     fixture.componentInstance.preview.set(PREVIEW);
-    fixture.detectChanges();
-    let activateButton = (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('[data-testid="activate-button"]');
-    expect(activateButton?.disabled).toBe(true);
-    expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="candidate-degraded"]')?.textContent).toContain('No activable');
+    showCheckStep(fixture);
+    let continueButton = (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('[data-testid="continue-activate-button"]');
+    expect(continueButton?.disabled).toBe(true);
+    expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="check-actions"]')?.textContent).toContain('Resuelve las incidencias');
 
-    fixture.componentInstance.preview.set({
+    const converging = {
       ...PREVIEW,
-      status: 'CONVERGING',
+      status: 'CONVERGING' as const,
       deficits: [],
       violations: [],
       convergence_by_heater: { salon: '2026-01-16T02:00:00Z' },
       convergence_at: '2026-01-16T02:00:00Z',
       guaranteed_until: '2026-01-17T00:00:00Z',
-    });
-    fixture.detectChanges();
-    activateButton = (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('[data-testid="activate-button"]');
-    expect(activateButton?.disabled).toBe(false);
+    };
+    fixture.componentInstance.preview.set(converging);
+    fixture.componentInstance.previewJob.set(PREVIEW_JOB(converging));
+    showCheckStep(fixture);
+    continueButton = (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('[data-testid="continue-activate-button"]');
+    expect(continueButton?.disabled).toBe(false);
     expect((fixture.nativeElement as HTMLElement).textContent).toContain('Convergiendo');
   });
 
@@ -578,7 +622,7 @@ describe('Planning', () => {
       activation_mode: 'best_effort',
     };
     fixture.componentInstance.preview.set(bestEffort);
-    fixture.detectChanges();
+    showActivationStep(fixture);
 
     const activateButton = (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('[data-testid="activate-button"]');
     expect(activateButton?.disabled).toBe(false);
@@ -602,13 +646,13 @@ describe('Planning', () => {
 
     fixture.componentInstance.preview.set({ ...PREVIEW, status: 'FEASIBLE', deficits: [], violations: [] });
     fixture.componentInstance.editTarget(0, 'target_temperature_c', 19.5);
-    fixture.detectChanges();
+    showCheckStep(fixture);
 
     const element = fixture.nativeElement as HTMLElement;
     expect(fixture.componentInstance.previewMatchesDraft()).toBe(false);
-    expect(element.querySelector<HTMLButtonElement>('[data-testid="activate-button"]')?.disabled).toBe(true);
-    expect(element.querySelector('[data-testid="preview-stale-draft"]')?.textContent).toContain('Recalcula');
-    element.querySelector<HTMLButtonElement>('[data-testid="activate-button"]')?.click();
+    expect(element.querySelector<HTMLButtonElement>('[data-testid="continue-activate-button"]')?.disabled).toBe(true);
+    expect(element.querySelector('[data-testid="check-actions"]')?.textContent).toContain('Recalcula');
+    element.querySelector<HTMLButtonElement>('[data-testid="continue-activate-button"]')?.click();
     backend.expectNone('/api/v1/planning/activate');
   });
 
@@ -620,12 +664,12 @@ describe('Planning', () => {
 
     fixture.componentInstance.snapshot.set({ ...PLANNING, preview_token: PREVIEW.token, temperature_targets_revision: 4 });
     fixture.componentInstance.preview.set({ ...PREVIEW, status: 'FEASIBLE', deficits: [], violations: [] });
-    fixture.detectChanges();
+    showCheckStep(fixture);
 
     const element = fixture.nativeElement as HTMLElement;
     expect(fixture.componentInstance.previewAlreadyActive()).toBe(true);
-    expect(element.querySelector<HTMLButtonElement>('[data-testid="activate-button"]')?.disabled).toBe(true);
-    expect(element.querySelector('[data-testid="preview-already-active-label"]')?.textContent).toContain('ya activa');
+    expect(element.querySelector<HTMLButtonElement>('[data-testid="continue-activate-button"]')?.disabled).toBe(true);
+    expect(element.querySelector('[data-testid="preview-already-active-label"]')?.textContent).toContain('ya está activa');
     fixture.componentInstance.activate();
     backend.expectNone('/api/v1/planning/activate');
     expect(document.querySelector('.dtc-snackbar-container')?.textContent).toContain('ya está activa');
@@ -634,8 +678,10 @@ describe('Planning', () => {
   it('does not show the problem button for a feasible preview', async () => {
     backend.expectOne('/api/v1/planning').flush(PLANNING);
     await selectPlanningTab(fixture, 1);
-    fixture.componentInstance.previewJob.set(PREVIEW_JOB({ ...PREVIEW, status: 'FEASIBLE', deficits: [], violations: [] }));
-    fixture.detectChanges();
+    const feasible = { ...PREVIEW, status: 'FEASIBLE' as const, deficits: [], violations: [] };
+    fixture.componentInstance.previewJob.set(PREVIEW_JOB(feasible));
+    fixture.componentInstance.preview.set(feasible);
+    showCheckStep(fixture);
     expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="preview-problems-button"]')).toBeNull();
   });
 
@@ -712,6 +758,7 @@ describe('Planning', () => {
     backend.expectOne('/api/v1/planning').flush(PLANNING);
     fixture.detectChanges();
     await fixture.whenStable();
+    await showAnalysisPlan(fixture);
     const dialog = TestBed.inject(MatDialog);
     const open = vi.spyOn(dialog, 'open').mockReturnValue({} as never);
     const element = fixture.nativeElement as HTMLElement;
@@ -726,7 +773,7 @@ describe('Planning', () => {
     await selectPlanningTab(fixture, 1);
     fixture.componentInstance.previewJob.set(PREVIEW_JOB(PREVIEW));
     fixture.componentInstance.preview.set(PREVIEW);
-    fixture.detectChanges();
+    showCheckStep(fixture);
     (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('[data-testid="preview-chart-detail-button"]')?.click();
 
     expect(open).toHaveBeenCalledTimes(6);
@@ -749,6 +796,7 @@ describe('Planning', () => {
     backend.expectOne('/api/v1/planning').flush(PLANNING);
     await fixture.whenStable();
     fixture.detectChanges();
+    await showAnalysisPlan(fixture);
     const element = fixture.nativeElement as HTMLElement;
     const details = [
       { testId: 'temperature-chart-detail-button', headers: ['Intervalo', 'Salón interior inicio (°C)', 'Salón interior fin (°C)', 'Salón objetivo (°C)', 'Exterior (°C)'], values: ['18.5', '18.9', '21.0', '3.0'] },
@@ -785,6 +833,7 @@ describe('Planning', () => {
     backend.expectOne('/api/v1/planning').flush(planningWithoutTemperature);
     await fixture.whenStable();
     fixture.detectChanges();
+    await showAnalysisPlan(fixture);
     (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('[data-testid="temperature-chart-detail-button"]')?.click();
     await fixture.whenStable();
 
@@ -794,18 +843,19 @@ describe('Planning', () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
   });
 
-  it('states explicitly when there is no plan instead of fabricating rows', () => {
+  it('states explicitly when there is no plan instead of fabricating rows', async () => {
     backend.expectOne('/api/v1/planning').flush({
       observed_at: PLANNING.observed_at, max_total_power_w: 5200,
       plan: null, forecast: null, allocations: [], heaters: [],
       absence_reason: 'no_current_or_next_plan',
     });
     fixture.detectChanges();
+    await showAnalysisPlan(fixture);
     expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="planning-empty"]')?.textContent).toContain('No hay un plan');
     expect((fixture.nativeElement as HTMLElement).querySelector('table')).toBeNull();
   });
 
-  it('labels an invalid automatic plan and explains why outputs stay off', () => {
+  it('labels an invalid automatic plan and explains why outputs stay off', async () => {
     backend.expectOne('/api/v1/planning').flush({
       ...PLANNING,
       plan: null,
@@ -826,13 +876,14 @@ describe('Planning', () => {
       }],
     });
     fixture.detectChanges();
+    await showAnalysisPlan(fixture);
     const element = fixture.nativeElement as HTMLElement;
     expect(element.querySelector('.active-chip')?.textContent).toContain('No válido');
     expect(element.textContent).toContain('salidas permanecen apagadas');
     expect(element.textContent).not.toContain('invalid');
   });
 
-  it('does not label an inactive INVALID diagnostic as best effort active', () => {
+  it('does not label an inactive INVALID diagnostic as best effort active', async () => {
     backend.expectOne('/api/v1/planning').flush({
       ...PLANNING,
       plan: null,
@@ -843,6 +894,7 @@ describe('Planning', () => {
       excluded_heaters: [{ heater_id: 'salon', cause: 'missing_required_state' }],
     });
     fixture.detectChanges();
+    await showAnalysisPlan(fixture);
 
     const element = fixture.nativeElement as HTMLElement;
     expect(element.querySelector('[data-testid="best-effort-chip"]')).toBeNull();
@@ -933,7 +985,7 @@ describe('Planning', () => {
       deficits: [],
       violations: [],
     });
-    fixture.detectChanges();
+    showActivationStep(fixture);
 
     (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('[data-testid="activate-button"]')?.click();
     await fixture.whenStable();
@@ -962,7 +1014,7 @@ describe('Planning', () => {
       violations: [],
       temperature_targets: [{ ...PREVIEW.temperature_targets[0], target_temperature_c: 19.5, start_time: '07:00', end_time: '09:00' }],
     });
-    fixture.detectChanges();
+    showActivationStep(fixture);
 
     const activateButton = (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('[data-testid="activate-button"]');
     expect(activateButton?.disabled).toBe(false);
@@ -1000,7 +1052,7 @@ describe('Planning', () => {
 
     fixture.componentInstance.snapshot.set({ ...PLANNING, temperature_targets_revision: 4 });
     fixture.componentInstance.preview.set({ ...PREVIEW, status: 'FEASIBLE', deficits: [], violations: [] });
-    fixture.detectChanges();
+    showActivationStep(fixture);
     const activateButton = (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('[data-testid="activate-button"]');
     activateButton?.click();
     await fixture.whenStable();
@@ -1089,7 +1141,7 @@ describe('Planning', () => {
       }], result: null, operator_summary: {}, error_code: 'preview_failed',
       error_detail: 'El trabajo de vista previa terminó con error.',
     });
-    fixture.detectChanges();
+    showCheckStep(fixture);
     const button = (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('[data-testid="preview-check-failure-button"]');
     expect(button).not.toBeNull();
     button?.click();

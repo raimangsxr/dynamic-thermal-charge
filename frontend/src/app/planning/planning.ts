@@ -90,6 +90,14 @@ interface PreviewChartPoint {
   charge_energy_kwh: number | null;
 }
 
+interface PreviewProblemGroup {
+  key: string;
+  title: string;
+  description: string;
+  state: string;
+  heaterIds: string[];
+}
+
 interface ExplanationRow {
   key: string;
   start: string;
@@ -702,7 +710,8 @@ export class Planning implements AfterViewInit, OnDestroy {
   readonly actionError = signal('');
   readonly activationInFlight = signal(false);
   readonly previewJob = signal<PlanningPreviewJobDto | null>(null);
-  readonly selectedTab = signal(0);
+  readonly selectedTab = signal(1);
+  readonly planningStep = signal<0 | 1 | 2>(0);
   readonly selectedTargetIndex = signal<number | null>(null);
   readonly planHistory = signal<PlanHistoryDto[]>([]);
   readonly explanationError = signal('');
@@ -741,6 +750,25 @@ export class Planning implements AfterViewInit, OnDestroy {
 
   onTabChange(index: number): void {
     this.selectedTab.set(index);
+    this.scheduleChartRender();
+  }
+
+  showWorkflow(): void {
+    this.onTabChange(1);
+  }
+
+  showAnalysisPlan(): void {
+    this.onTabChange(0);
+  }
+
+  showAnalysisForecast(): void {
+    this.onTabChange(2);
+  }
+
+  goToPlanningStep(step: 0 | 1 | 2): void {
+    if (step === 1 && !this.previewJob() && !this.preview()) return;
+    if (step === 2 && !this.canAdvanceToActivation()) return;
+    this.planningStep.set(step);
     this.scheduleChartRender();
   }
 
@@ -899,6 +927,7 @@ export class Planning implements AfterViewInit, OnDestroy {
   }
 
   recalculate(): void {
+    this.planningStep.set(1);
     this.dismissedPreviewJobId = null;
     this.actionError.set(''); this.actionMessage.set('Iniciando vista previa…'); this.preview.set(null);
     this.api.planningPreviewJobStart(this.apiTargets(), this.snapshot()?.temperature_targets_revision).subscribe({
@@ -979,6 +1008,7 @@ export class Planning implements AfterViewInit, OnDestroy {
       next: () => {
         this.activationInFlight.set(false);
         this.clearPreviewState();
+        this.planningStep.set(0);
         this.refresh({ restorePreview: false });
         this.actionMessage.set('');
         this.feedback.success('Planificación guardada y activada correctamente.');
@@ -1009,7 +1039,14 @@ export class Planning implements AfterViewInit, OnDestroy {
     this.clearPreviewState();
     this.actionError.set('');
     this.actionMessage.set('');
+    this.planningStep.set(0);
     this.feedback.success('Cambios descartados. Se han restaurado las consignas guardadas.');
+  }
+
+  draftDiffersFromSaved(): boolean {
+    const planning = this.snapshot();
+    return planning !== null
+      && JSON.stringify(this.apiTargets()) !== JSON.stringify(this.draftTargetsFrom(planning));
   }
 
   hasPendingPlanningChanges(): boolean {
@@ -1057,6 +1094,23 @@ export class Planning implements AfterViewInit, OnDestroy {
       || (normalized === 'DEGRADED'
         && preview?.best_effort === true
         && preview.best_effort_activatable === true);
+  }
+
+  canAdvanceToActivation(): boolean {
+    const candidate = this.preview();
+    return candidate !== null
+      && this.previewMatchesDraft()
+      && !this.previewAlreadyActive()
+      && this.canActivateStatus(candidate.status, candidate);
+  }
+
+  activationBlockReason(): string {
+    const candidate = this.preview();
+    if (!candidate) return 'Calcula una vista previa antes de activar.';
+    if (!this.previewMatchesDraft()) return 'Las consignas han cambiado. Recalcula antes de activar.';
+    if (this.previewAlreadyActive()) return 'Esta vista previa ya está activa.';
+    if (!this.canActivateStatus(candidate.status, candidate)) return 'Resuelve las incidencias indicadas y vuelve a calcular.';
+    return '';
   }
 
   isBestEffortPreview(preview: PlanningPreviewDto | null | undefined): boolean {
@@ -1392,6 +1446,35 @@ export class Planning implements AfterViewInit, OnDestroy {
     return previewProblems(result);
   }
 
+  previewProblemGroups(result: PlanningPreviewDto): PreviewProblemGroup[] {
+    const groups = new Map<string, PreviewProblemGroup>();
+    const add = (key: string, heaterId: string | null | undefined, description: string): void => {
+      const title = key === 'missing_required_state' || key === 'excluded_heater'
+        ? 'Falta telemetría reciente'
+        : key === 'insufficient_stored_energy_or_power'
+          ? 'Energía o potencia insuficiente'
+        : key === 'missing_temperature_schedule'
+          ? 'Faltan consignas semanales'
+          : key === 'missing_aemet_coverage' || key === 'missing_forecast_coverage' || key === 'missing_guard_forecast_coverage'
+            ? 'Falta cobertura meteorológica'
+            : requirementLabel(key);
+      const state = key === 'missing_required_state' || key === 'excluded_heater' ? 'Sin datos recientes' : 'Requiere revisión';
+      const group = groups.get(key) ?? { key, title, description, state, heaterIds: [] };
+      if (heaterId && !group.heaterIds.includes(heaterId)) group.heaterIds.push(heaterId);
+      groups.set(key, group);
+    };
+    for (const item of previewProblems(result)) {
+      const key = item.requirement === 'excluded_heater'
+        ? 'missing_required_state'
+        : item.cause ?? item.reason.split(':', 1)[0] ?? item.requirement;
+      add(key, item.heater_id, explainPlanningDeficit(item));
+    }
+    for (const item of result.excluded_heaters ?? []) {
+      add(item.cause || 'excluded_heater', item.heater_id, 'El acumulador necesita temperatura interior y SOC recientes antes de incluirlo en el plan.');
+    }
+    return [...groups.values()];
+  }
+
   previewProblemAction(item: PlanningDeficitDto, result: PlanningPreviewDto): string | null {
     if (item.recommended_action) return item.recommended_action;
     const warnings = result.operator_summary['warnings'];
@@ -1545,7 +1628,7 @@ export class Planning implements AfterViewInit, OnDestroy {
   }
 
   displayTimeline(data: PlanningDto): PlanningTimelineSlotDto[] {
-    return data.timeline.map((slot) => ({
+    return (data.timeline ?? []).map((slot) => ({
       ...slot,
       temperature_c: slot.temperature_c === null ? null : truncateTemperature(slot.temperature_c),
       indoor_temperature_c_by_heater: Object.fromEntries(Object.entries(slot.indoor_temperature_c_by_heater).map(([id, value]) => [id, truncateTemperature(value)])),
@@ -1569,6 +1652,7 @@ export class Planning implements AfterViewInit, OnDestroy {
     try { sessionStorage.setItem(this.previewStorageKey, job.job_id); } catch { /* storage may be disabled */ }
     if (job.result) {
       this.preview.set(job.result);
+      this.planningStep.set(1);
       this.previewPoller.stop();
       this.actionMessage.set('');
       this.scheduleChartRender();
