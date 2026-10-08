@@ -867,7 +867,15 @@ export class Planning implements AfterViewInit, OnDestroy {
     this.feedback.success('Consigna eliminada del borrador.');
   }
   editTarget(index: number, field: keyof TemperatureTargetDraft, value: unknown): void {
-    this.draftTargets.update((items) => items.map((item, itemIndex) => itemIndex === index ? { ...item, [field]: field === 'target_temperature_c' ? Number(value) : value } as TemperatureTargetDraft : item));
+    this.draftTargets.update((items) => items.map((item, itemIndex) => {
+      if (itemIndex !== index) return item;
+      const nextValue = field === 'target_temperature_c'
+        ? Number(value)
+        : field === 'end_time' && value === '00:00' && item.end_time === '24:00'
+          ? '24:00'
+          : value;
+      return { ...item, [field]: nextValue } as TemperatureTargetDraft;
+    }));
   }
   toggleDay(index: number, day: number): void {
     this.draftTargets.update((items) => items.map((item, itemIndex) => {
@@ -892,34 +900,16 @@ export class Planning implements AfterViewInit, OnDestroy {
     return selectedDays.join(', ');
   }
 
-  targetEndLabel(endTime: string): string {
-    return endTime === '24:00' ? '24:00 (medianoche)' : endTime;
+  isFullDayTarget(target: Pick<TemperatureTargetDraft, 'start_time' | 'end_time'>): boolean {
+    return target.start_time === '00:00' && target.end_time === '24:00';
   }
 
   targetTimeSummary(target: TemperatureTargetDraft): string {
-    return `${target.start_time}–${this.targetEndLabel(target.end_time)}`;
-  }
-
-  targetCrossesMidnight(target: TemperatureTargetDraft): boolean {
-    return target.end_time !== '24:00' && target.start_time > target.end_time;
-  }
-
-  targetScheduleDescription(target: TemperatureTargetDraft): string {
-    if (this.targetCrossesMidnight(target)) return `Cruza medianoche: comienza a las ${target.start_time} y termina a las ${target.end_time}.`;
-    if (target.end_time === '24:00') return `Termina en medianoche (24:00), después de las ${target.start_time}.`;
-    return `Intervalo local de ${target.start_time} a ${target.end_time}.`;
-  }
-
-  isMidnight(target: TemperatureTargetDraft): boolean {
-    return target.end_time === '24:00';
+    return this.isFullDayTarget(target) ? '00:00–00:00 (día siguiente)' : `${target.start_time}–${target.end_time}`;
   }
 
   targetEndInputValue(target: TemperatureTargetDraft): string {
-    return this.isMidnight(target) ? '00:00' : target.end_time;
-  }
-
-  toggleMidnight(index: number, enabled: boolean): void {
-    this.editTarget(index, 'end_time', enabled ? '24:00' : '00:00');
+    return target.end_time === '24:00' ? '00:00' : target.end_time;
   }
 
   isTargetEnabled(target: TemperatureTargetDraft): boolean {

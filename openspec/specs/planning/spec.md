@@ -89,9 +89,10 @@ mismo acumulador no pueden solaparse, incluso al cruzar medianoche.
 El paso `Consignas` presenta las reglas en una lista
 vertical con una única vista de detalle editable para la consigna seleccionada.
 La lista resume acumulador, temperatura, días, horario y estado; conserva los
-índices de día lunes=0 a domingo=6 y representa `end_time: "24:00"` como
-medianoche sin alterar el payload. El inicio se muestra como incluido y el fin
-como excluido; los cambios no inician una vista previa hasta que el operador la
+índices de día lunes=0 a domingo=6 y representa solo la combinación canónica
+`start_time: "00:00", end_time: "24:00"` como `00:00–00:00 (día siguiente)`
+sin alterar el payload. El inicio se muestra como incluido y el fin como
+excluido; los cambios no inician una vista previa hasta que el operador la
 solicita.
 
 Cada extremo de una consigna habilitada debe coincidir con un límite de
