@@ -3,8 +3,6 @@
     <div>
       <p class="eyebrow">Panel operativo</p>
       <h1>Planificación</h1>
-      <p class="intro">{{ selectedTab() === 1 ? 'Define consignas, comprueba el resultado y activa el plan.' : 'Consulta el plan activo, las gráficas y los datos que utiliza la planificación.' }}</p>
-      @if (snapshot(); as data) { <p class="observed">Horas de instalación: {{ data.timezone || 'Europe/Madrid' }}</p> }
     </div>
     <div class="page-header-actions">
       @if (selectedTab() === 1) {
@@ -358,29 +356,35 @@
                   <div class="preview-empty" role="status" data-testid="preview-chart-empty"><mat-icon aria-hidden="true">insert_chart_outlined</mat-icon><div><strong>No hay intervalos que representar</strong><p>Resuelve las incidencias del cálculo para obtener una visualización del plan.</p></div></div>
                 }
               }
-              <ol class="checks" data-testid="preview-checks">
-                @for (check of job.checks; track check.name) { <li class="check" [attr.data-state]="check.status"><span>{{ checkText(check.name) }}</span><strong>{{ checkStatusText(check.status) }}</strong>@if (check.detail) { <small>{{ check.detail }}</small> } @if (check.status === 'error') { <button mat-stroked-button type="button" (click)="openPreviewFailure(job, check)" data-testid="preview-check-failure-button">Ver detalle</button> }</li> }
-              </ol>
+              @if (job.result || job.status === 'completed' || job.status === 'error' || job.status === 'cancelled' || job.status === 'interrupted') {
+                <ol class="checks" data-testid="preview-checks">
+                  @for (check of job.checks; track check.name) { <li class="check" [attr.data-state]="check.status"><span>{{ checkText(check.name) }}</span><strong>{{ checkStatusText(check.status) }}</strong>@if (check.detail) { <small>{{ check.detail }}</small> } @if (check.status === 'error') { <button mat-stroked-button type="button" (click)="openPreviewFailure(job, check)" data-testid="preview-check-failure-button">Ver detalle</button> }</li> }
+                </ol>
+              }
             </section>
           }
           @if (preview(); as candidate) {
-            <div class="preview-meta" role="status">
-              <strong>Vista previa: {{ planStatus(candidate.status) }}</strong><span>{{ previewIntervalCount(candidate) }} intervalos de {{ candidate.slot_minutes }} minutos</span>
-              @if (candidate.optimization_quality === 'FEASIBLE_LIMIT') { <span data-testid="candidate-feasible-limit">Optimización limitada por tiempo</span> }
-              @if (previewAlreadyActive()) { <span data-testid="preview-already-active-label">Esta vista previa ya está activa</span> }
-            </div>
-            @if (!data.plan) { <p class="window" data-testid="planning-window">Vista previa · ventana {{ dateTime(candidate.window_start) }}–{{ dateTime(candidate.window_end) }} · horizonte {{ dateTime(candidate.horizon_start) }}–{{ dateTime(candidate.horizon_end) }}</p> }
+            <section class="preview-meta-section" aria-labelledby="preview-meta-title">
+              <div class="preview-meta" role="status">
+                <strong id="preview-meta-title">Vista previa: {{ planStatus(candidate.status) }}</strong><span>{{ previewIntervalCount(candidate) }} intervalos de {{ candidate.slot_minutes }} minutos</span>
+                @if (candidate.optimization_quality === 'FEASIBLE_LIMIT') { <span data-testid="candidate-feasible-limit">Optimización limitada por tiempo</span> }
+                @if (previewAlreadyActive()) { <span data-testid="preview-already-active-label">Esta vista previa ya está activa</span> }
+              </div>
+              @if (!data.plan) { <p class="window" data-testid="planning-window">Vista previa · ventana {{ dateTime(candidate.window_start) }}–{{ dateTime(candidate.window_end) }} · horizonte {{ dateTime(candidate.horizon_start) }}–{{ dateTime(candidate.horizon_end) }}</p> }
+            </section>
           }
 
-          <div class="planning-actions sticky-actions" role="group" aria-label="Acciones de comprobación" data-testid="check-actions">
-            <div class="action-context">
-              <strong>{{ canAdvanceToActivation() ? 'Comprobación completada' : 'Revisión necesaria' }}</strong>
-              <span>{{ canAdvanceToActivation() ? 'El resultado corresponde al borrador actual y puede activarse.' : activationBlockReason() }}</span>
+          <section class="planning-actions-section" aria-labelledby="check-actions-title">
+            <div class="planning-actions sticky-actions" role="group" aria-label="Acciones de comprobación" data-testid="check-actions">
+              <div class="action-context">
+                <strong id="check-actions-title">{{ canAdvanceToActivation() ? 'Comprobación completada' : 'Revisión necesaria' }}</strong>
+                <span>{{ canAdvanceToActivation() ? 'El resultado corresponde al borrador actual y puede activarse.' : activationBlockReason() }}</span>
+              </div>
+              <button mat-stroked-button type="button" (click)="goToPlanningStep(0)">Volver a consignas</button>
+              <button mat-flat-button color="primary" type="button" (click)="recalculate()" [disabled]="activationInFlight()" data-testid="recalculate-button">Recalcular</button>
+              <button mat-flat-button color="primary" type="button" (click)="goToPlanningStep(2)" [disabled]="!canAdvanceToActivation()" data-testid="continue-activate-button">Continuar a activar</button>
             </div>
-            <button mat-stroked-button type="button" (click)="goToPlanningStep(0)">Volver a consignas</button>
-            <button mat-flat-button color="primary" type="button" (click)="recalculate()" [disabled]="activationInFlight()" data-testid="recalculate-button">Recalcular</button>
-            <button mat-flat-button color="primary" type="button" (click)="goToPlanningStep(2)" [disabled]="!canAdvanceToActivation()" data-testid="continue-activate-button">Continuar a activar</button>
-          </div>
+          </section>
           @if (actionMessage()) { <p class="action-feedback" role="status" aria-live="polite" data-testid="planning-action-status">{{ actionMessage() }}</p> }
           @if (actionError()) { <p class="action-feedback warning" role="alert" data-testid="planning-action-error">{{ actionError() }}</p> }
           }

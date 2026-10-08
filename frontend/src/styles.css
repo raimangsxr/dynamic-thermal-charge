@@ -41,10 +41,8 @@ dtc-planning .analysis-header .hint { margin-top: .35rem; }
 dtc-planning .analysis-nav { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .6rem; }
 dtc-planning .planning-stepper { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: .5rem 0 1.5rem; }
 dtc-planning .planning-step { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: .75rem; min-width: 0; min-height: 5.6rem; padding: .75rem 1rem; border: 0; border-bottom: 2px solid var(--border); border-radius: 0; background: transparent; text-align: left; }
-dtc-planning .planning-step:not(:last-child)::after { content: ''; position: absolute; top: 1.72rem; left: 3.15rem; right: -.25rem; z-index: -1; height: 2px; background: var(--border); }
 dtc-planning .planning-step:disabled { cursor: not-allowed; opacity: .62; }
 dtc-planning .planning-step-active { border-bottom-color: var(--primary); background: #f3f7fd; }
-dtc-planning .planning-step-complete::after { background: var(--primary) !important; }
 dtc-planning .planning-step > span:last-child { display: grid; gap: .15rem; min-width: 0; }
 dtc-planning .planning-step strong { color: var(--ink); font-size: .95rem; }
 dtc-planning .planning-step small { color: var(--muted); font-size: .82rem; line-height: 1.35; }
