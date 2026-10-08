@@ -1185,6 +1185,65 @@ describe('Planning', () => {
     expect(element.querySelector('[data-testid="preview-checks"]')).toBeNull();
   });
 
+  it('opens and dismisses terminal diagnostics through hover, focus, touch, Escape and focusout', async () => {
+    backend.expectOne('/api/v1/planning').flush(PLANNING);
+    await fixture.whenStable();
+    const terminal = { ...PREVIEW_JOB(PREVIEW), checks: [{ name: 'telemetry', status: 'completed' as const, detail: 'Telemetría válida.', started_at: PLANNING.observed_at, finished_at: PLANNING.observed_at }] };
+    fixture.componentInstance.previewJob.set(terminal);
+    fixture.componentInstance.preview.set(PREVIEW);
+    showCheckStep(fixture);
+
+    const element = fixture.nativeElement as HTMLElement;
+    const region = element.querySelector<HTMLElement>('.preview-diagnostics');
+    const button = element.querySelector<HTMLButtonElement>('[data-testid="preview-diagnostics-button"]');
+    expect(region).not.toBeNull();
+    expect(button).not.toBeNull();
+
+    region?.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+    fixture.detectChanges();
+    expect(element.querySelector('[data-testid="preview-diagnostics-panel"]')).not.toBeNull();
+    region?.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+    fixture.detectChanges();
+    expect(element.querySelector('[data-testid="preview-diagnostics-panel"]')).toBeNull();
+
+    button?.focus();
+    fixture.detectChanges();
+    expect(element.querySelector('[data-testid="preview-diagnostics-panel"]')).not.toBeNull();
+    button?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    fixture.detectChanges();
+    expect(element.querySelector('[data-testid="preview-diagnostics-panel"]')).toBeNull();
+    expect(document.activeElement).toBe(button);
+
+    button?.click();
+    fixture.detectChanges();
+    expect(element.querySelector('[data-testid="preview-diagnostics-panel"]')).not.toBeNull();
+    const external = document.createElement('button');
+    document.body.appendChild(external);
+    region?.dispatchEvent(new FocusEvent('focusout', { bubbles: true, relatedTarget: external }));
+    fixture.detectChanges();
+    expect(element.querySelector('[data-testid="preview-diagnostics-panel"]')).toBeNull();
+    external.remove();
+
+    button?.click();
+    fixture.detectChanges();
+    expect(element.querySelector('[data-testid="preview-diagnostics-panel"]')).not.toBeNull();
+    button?.click();
+    fixture.detectChanges();
+    expect(element.querySelector('[data-testid="preview-diagnostics-panel"]')).toBeNull();
+
+    button?.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    fixture.detectChanges();
+    expect(element.querySelector('[data-testid="preview-diagnostics-panel"]')).not.toBeNull();
+    button?.click();
+    fixture.detectChanges();
+    expect(element.querySelector('[data-testid="preview-diagnostics-panel"]')).not.toBeNull();
+    button?.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    fixture.detectChanges();
+    expect(element.querySelector('[data-testid="preview-diagnostics-panel"]')).toBeNull();
+    button?.click();
+    expect(document.activeElement).toBe(button);
+  });
+
   it('keeps the check actions in normal document flow', async () => {
     backend.expectOne('/api/v1/planning').flush(PLANNING);
     await fixture.whenStable();

@@ -314,8 +314,8 @@
               } @else if (job.result; as result) {
                 <div class="preview-terminal-toolbar">
                   <h3 id="preview-job-title">Resultado de la vista previa: {{ jobStatusText(job.status) }}</h3>
-                  <div class="preview-diagnostics" (mouseenter)="openPreviewDiagnostics()" (mouseleave)="closePreviewDiagnostics()" (focusin)="openPreviewDiagnostics()">
-                    <button mat-icon-button type="button" (click)="togglePreviewDiagnostics()" [attr.aria-expanded]="previewDiagnosticsOpen()" aria-controls="preview-diagnostics-panel" aria-label="Mostrar estado y comprobaciones del cálculo" data-testid="preview-diagnostics-button"><mat-icon aria-hidden="true">calculate</mat-icon></button>
+                  <div class="preview-diagnostics" (mouseenter)="openPreviewDiagnostics()" (mouseleave)="closePreviewDiagnostics()" (focusin)="openPreviewDiagnostics()" (focusout)="closePreviewDiagnosticsOnFocusOut($event)" (keydown)="dismissPreviewDiagnostics($event)">
+                    <button mat-icon-button type="button" (pointerdown)="beginPreviewDiagnosticsPointerActivation()" (pointercancel)="cancelPreviewDiagnosticsPointerActivation()" (click)="togglePreviewDiagnostics()" [attr.aria-expanded]="previewDiagnosticsOpen()" aria-controls="preview-diagnostics-panel" aria-label="Mostrar estado y comprobaciones del cálculo" data-testid="preview-diagnostics-button"><mat-icon aria-hidden="true">calculate</mat-icon></button>
                     @if (previewDiagnosticsOpen()) {
                       <div class="preview-diagnostics-panel" id="preview-diagnostics-panel" role="dialog" aria-label="Estado y comprobaciones del cálculo" data-testid="preview-diagnostics-panel">
                         <strong>Estado del cálculo: {{ jobStatusText(job.status) }}</strong>
@@ -376,8 +376,8 @@
               } @else {
                 <div class="preview-terminal-toolbar">
                   <h3 id="preview-job-title">Vista previa: {{ jobStatusText(job.status) }}</h3>
-                  <div class="preview-diagnostics" (mouseenter)="openPreviewDiagnostics()" (mouseleave)="closePreviewDiagnostics()" (focusin)="openPreviewDiagnostics()">
-                    <button mat-icon-button type="button" (click)="togglePreviewDiagnostics()" [attr.aria-expanded]="previewDiagnosticsOpen()" aria-controls="preview-diagnostics-panel" aria-label="Mostrar estado y comprobaciones del cálculo" data-testid="preview-diagnostics-button"><mat-icon aria-hidden="true">calculate</mat-icon></button>
+                  <div class="preview-diagnostics" (mouseenter)="openPreviewDiagnostics()" (mouseleave)="closePreviewDiagnostics()" (focusin)="openPreviewDiagnostics()" (focusout)="closePreviewDiagnosticsOnFocusOut($event)" (keydown)="dismissPreviewDiagnostics($event)">
+                    <button mat-icon-button type="button" (pointerdown)="beginPreviewDiagnosticsPointerActivation()" (pointercancel)="cancelPreviewDiagnosticsPointerActivation()" (click)="togglePreviewDiagnostics()" [attr.aria-expanded]="previewDiagnosticsOpen()" aria-controls="preview-diagnostics-panel" aria-label="Mostrar estado y comprobaciones del cálculo" data-testid="preview-diagnostics-button"><mat-icon aria-hidden="true">calculate</mat-icon></button>
                     @if (previewDiagnosticsOpen()) {
                       <div class="preview-diagnostics-panel" id="preview-diagnostics-panel" role="dialog" aria-label="Estado y comprobaciones del cálculo" data-testid="preview-diagnostics-panel">
                         <strong>Estado del cálculo: {{ jobStatusText(job.status) }}</strong>
