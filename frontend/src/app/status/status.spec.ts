@@ -140,6 +140,152 @@ describe('Status', () => {
   it('shows an explicit loading state before the first snapshot', () => {
     fixture.detectChanges();
     expect(testId(fixture.nativeElement as HTMLElement, 'status-loading')).not.toBeNull();
+    expect(testId(fixture.nativeElement as HTMLElement, 'controller-health-indicator')).toBeNull();
+  });
+
+  it.each([
+    ['live', false, 'green', 'estable'],
+    ['live_degraded', false, 'yellow', 'degradado'],
+    ['stale', false, 'red', 'sin señal actual'],
+    ['never_seen', false, 'red', 'nunca visto'],
+    ['live', true, 'yellow', 'varios sospechados'],
+  ] as const)('derives the accessible indicator for %s', (liveness, multiple, color, label) => {
+    const dto = liveness === 'stale' || liveness === 'never_seen'
+      ? notCurrent(liveness)
+      : statusDto({
+          controller: {
+            ...statusDto().controller,
+            liveness,
+            degraded: liveness === 'live_degraded',
+            multiple_controllers_suspected: multiple,
+          },
+        });
+    const element = load(dto);
+    const indicator = testId(element, 'controller-health-indicator');
+    const trigger = testId(element, 'controller-health-trigger');
+    expect(indicator?.getAttribute('data-health-state')).toBe(color);
+    expect(trigger?.textContent).toContain(label);
+    expect(trigger?.getAttribute('aria-label')).toContain(label);
+    expect(trigger?.getAttribute('aria-describedby')).toBeNull();
+    expect(testId(element, 'controller-health-detail')?.hasAttribute('hidden')).toBe(true);
+    expect(testId(element, 'controller-health-detail')?.getAttribute('aria-hidden')).toBe('true');
+    if (liveness === 'live' && multiple) {
+      trigger?.dispatchEvent(new Event('mouseenter'));
+      fixture.detectChanges();
+      expect(testId(element, 'controller-health-detail')?.textContent).toContain('riesgo eléctrico');
+    }
+    if (label === 'degradado') {
+      expect(testId(element, 'controller-health-detail')?.textContent).toContain('Sigue ejecutando su plan');
+    }
+  });
+
+  it.each(['stale', 'never_seen'] as const)(
+    'keeps %s red when multiple controllers are suspected',
+    (liveness) => {
+      const dto = notCurrent(liveness);
+      const element = load({
+        ...dto,
+        controller: { ...dto.controller, multiple_controllers_suspected: true },
+      });
+      expect(testId(element, 'controller-health-indicator')?.getAttribute('data-health-state')).toBe('red');
+      expect(testId(element, 'controller-health-trigger')?.textContent).toContain(
+        liveness === 'stale' ? 'sin señal actual' : 'nunca visto',
+      );
+    },
+  );
+
+  it('shows the indicator red after an initial read failure', () => {
+    const element = fail(503, null);
+    const indicator = testId(element, 'controller-health-indicator');
+    const trigger = testId(element, 'controller-health-trigger');
+    expect(indicator?.getAttribute('data-health-state')).toBe('red');
+    expect(trigger?.textContent).toContain('no confirmado');
+    expect(trigger?.getAttribute('aria-label')).toBe('Controlador: estado no confirmado');
+  });
+
+  it('reveals the complete health detail on hover', () => {
+    const element = load(notCurrent('stale'));
+    const trigger = testId(element, 'controller-health-trigger');
+    const detail = testId(element, 'controller-health-detail');
+    expect(trigger?.getAttribute('aria-expanded')).toBe('false');
+    expect(trigger?.getAttribute('aria-describedby')).toBeNull();
+    expect(detail?.hasAttribute('hidden')).toBe(true);
+    expect(detail?.getAttribute('aria-hidden')).toBe('true');
+    expect(detail?.textContent).toContain('No se sabe qué está pasando ahora');
+    expect(detail?.textContent).toContain('último dato conocido');
+
+    trigger?.dispatchEvent(new Event('mouseenter'));
+    fixture.detectChanges();
+    expect(detail?.classList.contains('health-indicator-details-visible')).toBe(true);
+    expect(detail?.hasAttribute('hidden')).toBe(false);
+    expect(detail?.getAttribute('aria-hidden')).toBe('false');
+    expect(trigger?.getAttribute('aria-describedby')).toBe('controller-health-detail');
+    expect(trigger?.getAttribute('aria-expanded')).toBe('true');
+    expect(trigger?.getAttribute('aria-label')).toBe('Controlador: sin señal actual');
+  });
+
+  it('reveals the complete health detail on tap', () => {
+    const element = load(notCurrent('stale'));
+    const trigger = testId(element, 'controller-health-trigger');
+    const detail = testId(element, 'controller-health-detail');
+    trigger?.click();
+    fixture.detectChanges();
+    expect(detail?.classList.contains('health-indicator-details-visible')).toBe(true);
+    expect(detail?.hasAttribute('hidden')).toBe(false);
+    expect(trigger?.getAttribute('aria-describedby')).toBe('controller-health-detail');
+    expect(trigger?.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('reveals the complete health detail on keyboard activation', () => {
+    const element = load(notCurrent('stale'));
+    const trigger = testId(element, 'controller-health-trigger');
+    const detail = testId(element, 'controller-health-detail');
+    trigger?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
+    fixture.detectChanges();
+    expect(detail?.classList.contains('health-indicator-details-visible')).toBe(true);
+    expect(detail?.hasAttribute('hidden')).toBe(false);
+    expect(trigger?.getAttribute('aria-describedby')).toBe('controller-health-detail');
+    expect(trigger?.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('reveals the complete health detail with Space', () => {
+    const element = load(notCurrent('stale'));
+    const trigger = testId(element, 'controller-health-trigger');
+    const detail = testId(element, 'controller-health-detail');
+    trigger?.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', code: 'Space', cancelable: true }));
+    fixture.detectChanges();
+    expect(detail?.hasAttribute('hidden')).toBe(false);
+    expect(detail?.getAttribute('aria-hidden')).toBe('false');
+    expect(trigger?.getAttribute('aria-describedby')).toBe('controller-health-detail');
+    expect(trigger?.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('shows the detail when the control receives focus', () => {
+    const element = load(notCurrent('stale'));
+    const trigger = testId(element, 'controller-health-trigger');
+    const detail = testId(element, 'controller-health-detail');
+    trigger?.dispatchEvent(new FocusEvent('focus'));
+    fixture.detectChanges();
+    expect(detail?.classList.contains('health-indicator-details-visible')).toBe(true);
+    expect(detail?.hasAttribute('hidden')).toBe(false);
+    expect(trigger?.getAttribute('aria-describedby')).toBe('controller-health-detail');
+  });
+
+  it('keeps the detail open when the pointer leaves while focus remains', () => {
+    const element = load(notCurrent('stale'));
+    const indicator = testId(element, 'controller-health-indicator');
+    const trigger = testId(element, 'controller-health-trigger');
+    const detail = testId(element, 'controller-health-detail');
+
+    trigger?.dispatchEvent(new FocusEvent('focus'));
+    indicator?.dispatchEvent(new Event('mouseenter'));
+    indicator?.dispatchEvent(new Event('mouseleave'));
+    fixture.detectChanges();
+
+    expect(detail?.hasAttribute('hidden')).toBe(false);
+    expect(detail?.getAttribute('aria-hidden')).toBe('false');
+    expect(trigger?.getAttribute('aria-expanded')).toBe('true');
+    expect(trigger?.getAttribute('aria-describedby')).toBe('controller-health-detail');
   });
 
   it('shows the power, the plan and the forecast when the state is current', () => {
@@ -361,6 +507,33 @@ describe('Status', () => {
     expect(failure).not.toBeNull();
     expect(failure?.textContent).toContain('ya no es actual');
     expect(failure?.textContent).toContain('No se puede contactar');
+
+    const indicator = testId(element, 'controller-health-indicator');
+    expect(indicator?.getAttribute('data-health-state')).toBe('red');
+    expect(testId(element, 'controller-health-trigger')?.getAttribute('aria-label')).toBe(
+      'Controlador: estado no confirmado',
+    );
+    expect(testId(element, 'controller-health-trigger')?.getAttribute('aria-describedby')).toBeNull();
+    expect(testId(element, 'controller-health-detail')?.textContent).toContain(
+      'El controlador responde con normalidad',
+    );
+    expect(testId(element, 'controller-health-detail')?.textContent).toContain(
+      'La vista conserva la última lectura como información no actual',
+    );
+
+    // A later successful read replaces the error state with the new liveness.
+    fixture.componentInstance.refresh();
+    backend.expectOne('/api/v1/status').flush({
+      ...statusDto(),
+      controller: {
+        ...statusDto().controller,
+        liveness: 'live_degraded',
+        degraded: true,
+      },
+    });
+    fixture.detectChanges();
+    expect(testId(element, 'controller-health-indicator')?.getAttribute('data-health-state')).toBe('yellow');
+    expect(testId(element, 'controller-health-trigger')?.textContent).toContain('degradado');
   });
 
   it('does not claim staleness before it has ever loaded anything', () => {

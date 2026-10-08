@@ -18,9 +18,11 @@ const STORAGE_KEY = 'dtc.api-token';
 @Injectable({ providedIn: 'root' })
 export class Auth {
   private readonly stored = signal<string | null>(this.read());
+  private readonly rejection = signal('');
 
   readonly token = this.stored.asReadonly();
   readonly authenticated = computed(() => this.stored() !== null);
+  readonly credentialError = this.rejection.asReadonly();
 
   /** Remember the credential for this tab. */
   signIn(token: string): void {
@@ -28,6 +30,7 @@ export class Auth {
     if (trimmed.length === 0) {
       return;
     }
+    this.rejection.set('');
     try {
       globalThis.sessionStorage?.setItem(STORAGE_KEY, trimmed);
     } catch {
@@ -39,6 +42,17 @@ export class Auth {
 
   /** Forget it. Called on explicit sign-out and when the API rejects it. */
   signOut(): void {
+    this.rejection.set('');
+    this.clearCredential();
+  }
+
+  /** Forget a credential rejected by the API and explain why login returned. */
+  rejectCredential(): void {
+    this.clearCredential();
+    this.rejection.set('La credencial no es válida o ha caducado.');
+  }
+
+  private clearCredential(): void {
     try {
       globalThis.sessionStorage?.removeItem(STORAGE_KEY);
     } catch {

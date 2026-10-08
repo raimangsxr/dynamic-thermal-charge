@@ -63,6 +63,22 @@ describe('Auth', () => {
     expect(sessionStorage.getItem('dtc.api-token')).toBeNull();
   });
 
+  it('explains a credential rejected by the API', () => {
+    const service = auth();
+    service.signIn(TOKEN);
+    service.rejectCredential();
+    expect(service.authenticated()).toBe(false);
+    expect(service.credentialError()).toBe('La credencial no es válida o ha caducado.');
+    expect(sessionStorage.getItem('dtc.api-token')).toBeNull();
+  });
+
+  it('clears a previous rejection when another credential is entered', () => {
+    const service = auth();
+    service.rejectCredential();
+    service.signIn(TOKEN);
+    expect(service.credentialError()).toBe('');
+  });
+
   it('ignores an empty credential', () => {
     const service = auth();
     service.signIn('   ');

@@ -16,12 +16,67 @@ import { MatIconModule } from '@angular/material/icon';
 import type { ControllerHealthDto } from '../../core/api.types';
 import { formatAge, formatInstant } from '../../shared/age/age';
 
-interface Presentation {
+export interface ControllerHealthPresentation {
   readonly icon: string;
   readonly heading: string;
   readonly detail: string;
   readonly check: string;
   readonly severity: 'ok' | 'warn' | 'alert';
+}
+
+export function describeControllerHealth(
+  health: ControllerHealthDto,
+): ControllerHealthPresentation {
+  const age = formatAge(health.age_seconds);
+  const seen = formatInstant(health.last_seen_at);
+
+  switch (health.liveness) {
+    case 'live':
+      return {
+        icon: 'check_circle',
+        heading: 'El controlador responde con normalidad',
+        detail: `Última señal ${age}. Arrancó ${formatInstant(health.started_at)}` +
+          (health.driver_kind ? ` con salidas ${driverText(health.driver_kind)}.` : '.'),
+        check: '',
+        severity: 'ok',
+      };
+    case 'live_degraded':
+      return {
+        icon: 'warning',
+        heading: 'El controlador responde, pero está degradado',
+        detail:
+          `Última señal ${age}. Sigue ejecutando su plan, pero no alcanza ` +
+          'algo que necesita.',
+        check: 'la base de datos, y el proveedor meteorológico si es remoto',
+        severity: 'warn',
+      };
+    case 'stale':
+      return {
+        icon: 'sync_problem',
+        heading: 'No se sabe qué está pasando ahora',
+        detail:
+          `El controlador no da señales desde ${seen} (${age}). Puede estar ` +
+          'parado o colgado.',
+        check: 'que el servicio del controlador esté en marcha',
+        severity: 'alert',
+      };
+    case 'never_seen':
+      return {
+        icon: 'error_outline',
+        heading: 'El controlador no ha arrancado nunca',
+        detail:
+          'Nunca ha publicado una señal de vida contra esta base de datos, así ' +
+          'que no hay ningún estado que mostrar.',
+        check:
+          'que el servicio esté instalado y arrancado, y que apunte a esta ' +
+          'misma base de datos',
+        severity: 'alert',
+      };
+  }
+}
+
+function driverText(kind: 'simulated' | 'gpio'): string {
+  return kind === 'gpio' ? 'reales (GPIO)' : 'simuladas';
 }
 
 @Component({
@@ -67,57 +122,5 @@ interface Presentation {
 export class ControllerHealth {
   readonly health = input.required<ControllerHealthDto>();
 
-  readonly presentation = computed<Presentation>(() => {
-    const current = this.health();
-    const age = formatAge(current.age_seconds);
-    const seen = formatInstant(current.last_seen_at);
-
-    switch (current.liveness) {
-      case 'live':
-        return {
-          icon: 'check_circle',
-          heading: 'El controlador responde con normalidad',
-          detail: `Última señal ${age}. Arrancó ${formatInstant(current.started_at)}` +
-            (current.driver_kind ? ` con salidas ${this.driverText(current.driver_kind)}.` : '.'),
-          check: '',
-          severity: 'ok',
-        };
-      case 'live_degraded':
-        return {
-          icon: 'warning',
-          heading: 'El controlador responde, pero está degradado',
-          detail:
-            `Última señal ${age}. Sigue ejecutando su plan, pero no alcanza ` +
-            'algo que necesita.',
-          check: 'la base de datos, y el proveedor meteorológico si es remoto',
-          severity: 'warn',
-        };
-      case 'stale':
-        return {
-          icon: 'sync_problem',
-          heading: 'No se sabe qué está pasando ahora',
-          detail:
-            `El controlador no da señales desde ${seen} (${age}). Puede estar ` +
-            'parado o colgado.',
-          check: 'que el servicio del controlador esté en marcha',
-          severity: 'alert',
-        };
-      case 'never_seen':
-        return {
-          icon: 'error_outline',
-          heading: 'El controlador no ha arrancado nunca',
-          detail:
-            'Nunca ha publicado una señal de vida contra esta base de datos, así ' +
-            'que no hay ningún estado que mostrar.',
-          check:
-            'que el servicio esté instalado y arrancado, y que apunte a esta ' +
-            'misma base de datos',
-          severity: 'alert',
-        };
-    }
-  });
-
-  private driverText(kind: 'simulated' | 'gpio'): string {
-    return kind === 'gpio' ? 'reales (GPIO)' : 'simuladas';
-  }
+  readonly presentation = computed(() => describeControllerHealth(this.health()));
 }

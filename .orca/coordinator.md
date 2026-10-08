@@ -1,6 +1,6 @@
 # Orca coordinator policy
 
-Coordinate and supervise; do not normally implement repository changes.
+Coordinate and supervise; The Coordinator must never implement repository changes as a fallback. If delegation or Orca lifecycle operations are unavailable, stop and report the blocker instead.
 
 Keep authority separated:
 
@@ -118,6 +118,14 @@ Route review findings back to the appropriate implementation owner.
 Prefer reusing that worker's proven terminal for immediate fixes when Orca's lifecycle contract permits it.
 
 The Coordinator does not edit implementation or review findings unless the user explicitly assigns that work.
+
+Independent review is read-only and must reuse successful repository verification evidence.
+
+Do not ask an independent reviewer to rerun `make check` or a complete test suite when `aes-verify-change` already passed on the current implementation.
+
+A reviewer may run a narrowly targeted test only when needed to investigate a specific suspected defect.
+
+If review findings cause verification-relevant files to change, run `aes-verify-change` again before finishing the change.
 
 ## Gates and scope
 

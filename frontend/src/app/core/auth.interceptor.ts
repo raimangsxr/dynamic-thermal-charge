@@ -15,6 +15,7 @@ import {
   type HttpRequest,
 } from '@angular/common/http';
 import { inject } from '@angular/core';
+import { Router } from '@angular/router';
 import { catchError, throwError } from 'rxjs';
 
 import { Auth } from './auth';
@@ -24,6 +25,7 @@ export const authInterceptor: HttpInterceptorFn = (
   next: HttpHandlerFn,
 ) => {
   const auth = inject(Auth);
+  const router = inject(Router);
   const token = auth.token();
 
   const authorized =
@@ -37,7 +39,8 @@ export const authInterceptor: HttpInterceptorFn = (
         // The credential is gone or was rotated on the server. Clearing the
         // session sends the operator back to the sign-in screen with an
         // explanation, instead of leaving every view showing a technical error.
-        auth.signOut();
+        auth.rejectCredential();
+        void router.navigateByUrl('/login');
       }
       return throwError(() => error);
     }),

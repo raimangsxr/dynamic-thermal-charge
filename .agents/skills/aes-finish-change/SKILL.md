@@ -9,6 +9,10 @@ metadata:
 
 Use after `aes-verify-change` succeeds and before opening the PR.
 
+Do not rerun tests or `make check`; this skill operates on an already verified change.
+
+If finishing the change unexpectedly requires modifying implementation, tests, dependencies, migrations, build or deployment configuration, stop and return to implementation/verification instead.
+
 ## 1. Decide whether a living spec adds value
 
 Read the verified `change.md` and existing `openspec/specs/` only for affected capabilities.
