@@ -543,8 +543,11 @@ al expirar el límite de tiempo puede seguir siendo activable como
 La activación debe poder reutilizar un preview durable completado cuando el
 token de entrada vigente, las revisiones de configuración y objetivos térmicos
 y el payload de consignas coinciden. En cualquier otro caso debe mantener la
-validación normal y nunca activar un resultado obsoleto o `INVALID`. Si cambian
-las entradas durante la activación, la API debe rechazarla con un conflicto
+validación normal y nunca activar un resultado obsoleto o `INVALID`. La
+planificación solo recupera como candidata actual una preview cuyo token
+coincide con todas las entradas vigentes, incluida la telemetría utilizable;
+una preview obsoleta permanece consultable por su identificador, pero se pide
+recalcular. Si cambian las entradas durante la activación, la API debe rechazarla con un conflicto
 estable y accionable que indique recalcular, conservando el preview para que el
 operador pueda corregirlo y reintentarlo.
 
@@ -696,7 +699,11 @@ traduce `room_model` a un nombre comprensible para el operador. El resultado
 activable o bloqueado se muestra antes que los pasos técnicos del cálculo. Los
 problemas con la misma causa se agrupan y enumeran los acumuladores afectados;
 si no hay intervalos no se renderiza un gráfico vacío, sino una explicación
-accionable.
+accionable. El paso de comprobación distingue reposo, cálculo en curso y
+resultado terminal: las comprobaciones permanecen en el estado transitorio y,
+tras terminar, se consultan bajo demanda desde un botón de calculadora
+accesible; un terminal sin resultado solo muestra su desenlace y las acciones
+de volver o recalcular.
 
 #### Scenario: Preview degradada con problemas
 
@@ -717,7 +724,10 @@ paso en curso; la activación no está disponible hasta que una vista previa
 activable corresponda al borrador actual. El plan activo, las cuatro gráficas,
 las planificaciones recientes y la previsión meteorológica viven en la vista
 secundaria de solo consulta `Análisis y datos`. Cambiar entre ambos contextos no
-debe perder la edición ni el trabajo de preview en curso.
+debe perder la edición ni el trabajo de preview en curso. Solo el paso
+seleccionado usa `aria-current="step"` y el tratamiento visual principal; las
+acciones del paso `Comprobar` permanecen en el flujo normal del documento, sin
+sticky ni elevación.
 
 #### Scenario: Llegada a la vista de planificación
 

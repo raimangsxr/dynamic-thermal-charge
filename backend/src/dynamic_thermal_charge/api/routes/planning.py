@@ -1109,6 +1109,17 @@ def _enrich(response: PlanningResponse, store: Store, observed_at: datetime) -> 
     response.base_load_w = int(site.get("base_load_w", 0))
     response.max_heating_power_w = int(site.get("max_heating_power_w", response.max_total_power_w))
     active_token = None if active is None else active.get("input_token")
+    current_input_token = input_token(
+        _build_automatic_request(
+            store,
+            observed_at,
+            site,
+            temperature_targets={
+                heater.id: tuple(heater.temperature_targets)
+                for heater in config.heaters
+            },
+        )
+    )
     latest_job = planning.latest_preview_job(
         configuration_revision=configuration_revision,
         constraints_revision=int(site["revision"]),
@@ -1116,6 +1127,7 @@ def _enrich(response: PlanningResponse, store: Store, observed_at: datetime) -> 
             {heater.id: tuple(heater.temperature_targets) for heater in config.heaters}
         ),
         active_input_token=active_token,
+        input_token=current_input_token,
     )
     response.preview_job = (
         _job_response(

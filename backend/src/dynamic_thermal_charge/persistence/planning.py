@@ -985,6 +985,7 @@ class SqlPlanningRepository:
         constraints_revision: int | None = None,
         temperature_targets: list[dict[str, Any]] | None = None,
         active_input_token: str | None = None,
+        input_token: str | None = None,
     ) -> dict[str, Any] | None:
         """Return the newest preview compatible with the current editor state.
 
@@ -1022,6 +1023,13 @@ class SqlPlanningRepository:
                     job["request"].get("temperature_targets", [])
                 )
                 != expected_targets
+            ):
+                continue
+            result = job.get("result")
+            if (
+                input_token is not None
+                and isinstance(result, dict)
+                and result.get("token") != input_token
             ):
                 continue
             return job

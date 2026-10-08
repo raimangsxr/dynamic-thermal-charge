@@ -432,6 +432,42 @@ def test_planning_hides_incompatible_preview_but_keeps_it_queryable_for_audit(
     assert audit.json()["result"]["token"] == result["token"]
 
 
+def test_planning_hides_old_missing_telemetry_preview_after_live_telemetry_recovers(
+    client, initialised_store,
+):
+    configuration_revision, constraints_revision = _seed_valid_preview_inputs(
+        initialised_store, forecast_temperature_c=20.0
+    )
+    initialised_store.planning.invalidate_telemetry(
+        "salon", "indoor_temperature_c", API_NOW
+    )
+    preview = client.post(
+        "/api/v1/planning/preview",
+        headers=AUTH,
+        json={"expected_revision": constraints_revision},
+    )
+    assert preview.status_code == 200, preview.text
+    result = preview.json()
+    assert result["excluded_heaters"] == [
+        {"heater_id": "salon", "cause": "missing_required_state"}
+    ]
+    job_id = _persist_preview_job(
+        initialised_store, result, configuration_revision, constraints_revision,
+    )
+
+    initialised_store.planning.record_telemetry(
+        "salon", "indoor_temperature_c", 21.0, API_NOW
+    )
+
+    reloaded = client.get("/api/v1/planning", headers=AUTH)
+    assert reloaded.status_code == 200, reloaded.text
+    assert reloaded.json()["preview_job"] is None
+
+    audit = client.get(f"/api/v1/planning/preview/jobs/{job_id}", headers=AUTH)
+    assert audit.status_code == 200, audit.text
+    assert audit.json()["result"]["token"] == result["token"]
+
+
 def test_changed_telemetry_cannot_activate_cached_preview(
     client, initialised_store, monkeypatch,
 ):

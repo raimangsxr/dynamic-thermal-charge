@@ -1130,6 +1130,75 @@ describe('Planning', () => {
     expect(fixture.componentInstance.intervalTooltipLabel(labels, 7)).toBe('intervalo-7');
   });
 
+  it('keeps the selected workflow step as the only primary step and hides technical identifiers', async () => {
+    backend.expectOne('/api/v1/planning').flush(PLANNING);
+    await fixture.whenStable();
+    fixture.componentInstance.previewJob.set(PREVIEW_JOB(PREVIEW));
+    showCheckStep(fixture);
+
+    const element = fixture.nativeElement as HTMLElement;
+    const steps = Array.from(element.querySelectorAll<HTMLButtonElement>('.planning-step'));
+    expect(steps.filter((step) => step.getAttribute('aria-current') === 'step')).toHaveLength(1);
+    expect(element.querySelector<HTMLButtonElement>('[data-testid="planning-step-check"]')?.classList.contains('planning-step-active')).toBe(true);
+    expect(element.querySelector<HTMLButtonElement>('[data-testid="planning-step-targets"]')?.classList.contains('planning-step-active')).toBe(false);
+    expect(Array.from(element.querySelectorAll('[data-testid="preview-job"] p.hint')).some((hint) => hint.textContent?.includes('preview-job'))).toBe(false);
+    expect(element.querySelector('[data-testid="preview-job"]')?.textContent).not.toContain('Trabajo preview-job');
+
+    fixture.componentInstance.previewJob.set(null);
+    fixture.componentInstance.preview.set(null);
+    fixture.componentInstance.planningStep.set(1);
+    fixture.detectChanges();
+    expect(element.querySelector('[data-testid="preview-chart-empty"]')).toBeNull();
+    expect(element.querySelector('[data-testid="preview-job"]')?.textContent).not.toContain('completada');
+    expect(element.querySelector('[data-testid="preview-job"] p.hint')).toBeNull();
+  });
+
+  it('shows checks only while calculating and exposes terminal checks from the calculator popup', async () => {
+    backend.expectOne('/api/v1/planning').flush(PLANNING);
+    await fixture.whenStable();
+    const activeJob = { ...PREVIEW_JOB(PREVIEW), status: 'running' as const, result: null, checks: [{ name: 'telemetry', status: 'running' as const, detail: 'Comprobando telemetría.', started_at: PLANNING.observed_at, finished_at: null }] };
+    fixture.componentInstance.previewJob.set(activeJob);
+    showCheckStep(fixture);
+    let element = fixture.nativeElement as HTMLElement;
+    expect(element.querySelector('[data-testid="preview-checks"]')).not.toBeNull();
+    expect(element.querySelector('[data-testid="preview-chart-empty"]')).toBeNull();
+    expect(element.querySelector('[data-testid="check-actions"]')).toBeNull();
+    expect(element.querySelector('[data-testid="refresh-preview-button"]')).not.toBeNull();
+
+    const terminal = { ...PREVIEW_JOB(PREVIEW), checks: [{ name: 'telemetry', status: 'completed' as const, detail: 'Telemetría válida.', started_at: PLANNING.observed_at, finished_at: PLANNING.observed_at }] };
+    fixture.componentInstance.previewJob.set(terminal);
+    fixture.componentInstance.preview.set(PREVIEW);
+    fixture.detectChanges();
+    element = fixture.nativeElement as HTMLElement;
+    expect(element.querySelector('[data-testid="preview-checks"]')).toBeNull();
+    expect(element.querySelector('[data-testid="preview-diagnostics-button"]')).not.toBeNull();
+    expect(element.querySelector('[data-testid="preview-diagnostics-panel"]')).toBeNull();
+    element.querySelector<HTMLButtonElement>('[data-testid="preview-diagnostics-button"]')?.click();
+    fixture.detectChanges();
+    expect(element.querySelector('[data-testid="preview-diagnostics-panel"]')?.textContent).toContain('Telemetría válida.');
+
+    fixture.componentInstance.previewJob.set({ ...terminal, status: 'cancelled', result: null });
+    fixture.componentInstance.preview.set(null);
+    fixture.detectChanges();
+    expect(element.querySelector('[data-testid="preview-terminal-summary"]')).not.toBeNull();
+    expect(element.querySelector('[data-testid="preview-chart-empty"]')).toBeNull();
+    expect(element.querySelector('[data-testid="preview-checks"]')).toBeNull();
+  });
+
+  it('keeps the check actions in normal document flow', async () => {
+    backend.expectOne('/api/v1/planning').flush(PLANNING);
+    await fixture.whenStable();
+    fixture.componentInstance.preview.set({ ...PREVIEW, status: 'FEASIBLE', deficits: [], violations: [] });
+    fixture.componentInstance.previewJob.set(PREVIEW_JOB(PREVIEW));
+    showCheckStep(fixture);
+
+    const actions = (fixture.nativeElement as HTMLElement).querySelector<HTMLElement>('[data-testid="check-actions"]');
+    expect(actions?.classList.contains('sticky-actions')).toBe(false);
+    expect(actions?.textContent).toContain('Volver a consignas');
+    expect(actions?.textContent).toContain('Recalcular');
+    expect(actions?.textContent).toContain('Continuar a activar');
+  });
+
   it('offers failure details for a failed preview step and includes the general error', async () => {
     backend.expectOne('/api/v1/planning').flush(PLANNING);
     await fixture.whenStable();
@@ -1146,6 +1215,8 @@ describe('Planning', () => {
       error_detail: 'El trabajo de vista previa terminó con error.',
     });
     showCheckStep(fixture);
+    (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('[data-testid="preview-diagnostics-button"]')?.click();
+    fixture.detectChanges();
     const button = (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('[data-testid="preview-check-failure-button"]');
     expect(button).not.toBeNull();
     button?.click();
