@@ -79,6 +79,7 @@ setup_one() {
     if [ ! -x "$dir/.venv/bin/python" ]; then
       (cd "$dir" && "$PYTHON_BIN" -m venv .venv)
     fi
+    (cd "$dir" && .venv/bin/python -m pip install --upgrade pip)
     if [ -f "$dir/requirements-dev.txt" ]; then
       (cd "$dir" && .venv/bin/python -m pip install -r requirements-dev.txt)
     elif [ -f "$dir/requirements.txt" ]; then

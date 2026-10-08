@@ -33,5 +33,5 @@ AI_ANGULAR_DEV_CMD := npm run start
 
 # Python used to create development virtual environments. Keep the default
 # portable; developers can override it when a specific interpreter is needed.
-AI_PYTHON_BIN ?= python3
+AI_PYTHON_BIN ?= /opt/homebrew/bin/python3.14
 export AI_PYTHON_BIN
