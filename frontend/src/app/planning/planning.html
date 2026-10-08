@@ -164,7 +164,7 @@
             <div class="section-header">
               <div>
                 <h3 id="targets-title">Consignas semanales de temperatura</h3>
-                <p class="hint">Define la temperatura objetivo, el intervalo horario local y los días. El inicio se incluye y el fin se excluye; los intervalos pueden cruzar medianoche.</p>
+                <p class="hint">Define la temperatura objetivo, el intervalo horario local y los días.</p>
               </div>
             </div>
 
@@ -189,15 +189,19 @@
                   </div>
                   <div class="target-list" role="list" data-testid="target-list">
                     @for (target of draftTargets(); track $index; let index = $index) {
-                      <div role="listitem">
-                        <button class="target-list-item" [class.target-list-item-selected]="isTargetSelected(index)" type="button" (click)="selectTarget(index)" [attr.aria-pressed]="isTargetSelected(index)" [attr.aria-label]="'Seleccionar consigna ' + (index + 1) + ': ' + heaterText(target.heater_id) + ', ' + formatTemperature(target.target_temperature_c) + ' grados, ' + targetDaysSummary(target) + ', ' + targetTimeSummary(target)" [attr.data-target-index]="index" [attr.data-state]="isTargetEnabled(target) ? 'enabled' : 'disabled'" data-testid="target-list-item">
+                      <div class="target-list-row" role="listitem" [attr.data-target-index]="index">
+                        <button class="target-list-item" [class.target-list-item-selected]="isTargetSelected(index)" type="button" (click)="selectTarget(index)" [attr.aria-pressed]="isTargetSelected(index)" [attr.aria-label]="'Seleccionar consigna ' + (index + 1) + ': ' + heaterText(target.heater_id) + ', ' + formatTemperature(target.target_temperature_c) + ' grados, ' + targetDaysSummary(target) + ', ' + targetTimeSummary(target)" [attr.data-state]="isTargetEnabled(target) ? 'enabled' : 'disabled'" data-testid="target-list-item">
                           <span class="target-list-item-main">
                             <strong>{{ heaterText(target.heater_id) }} · {{ formatTemperature(target.target_temperature_c) }} °C</strong>
                             <span>{{ targetDaysSummary(target) }}</span>
                           </span>
                           <span class="target-list-item-time">{{ targetTimeSummary(target) }}</span>
-                          <span class="target-state" [class.target-state-enabled]="isTargetEnabled(target)">{{ isTargetEnabled(target) ? 'Activa' : 'Inactiva' }}</span>
+                          <span class="target-state" [class.target-state-enabled]="isTargetEnabled(target)" role="status">{{ isTargetEnabled(target) ? 'Activa' : 'Inactiva' }}</span>
                         </button>
+                        <div class="target-list-actions" role="group" [attr.aria-label]="'Acciones de la consigna ' + (index + 1) + ' de ' + heaterText(target.heater_id)">
+                          <button mat-icon-button type="button" (click)="$event.stopPropagation(); duplicateTarget(index)" [attr.aria-label]="'Duplicar consigna ' + (index + 1) + ' de ' + heaterText(target.heater_id)" data-testid="target-list-duplicate-button"><mat-icon aria-hidden="true">content_copy</mat-icon></button>
+                          <button mat-icon-button type="button" (click)="$event.stopPropagation(); removeTarget(index)" [attr.aria-label]="'Eliminar consigna ' + (index + 1) + ' de ' + heaterText(target.heater_id)" data-testid="target-list-remove-button"><mat-icon aria-hidden="true">delete_outline</mat-icon></button>
+                        </div>
                       </div>
                     }
                   </div>
@@ -213,14 +217,17 @@
                         <h4 id="target-detail-title">{{ heaterText(target.heater_id) }} · {{ formatTemperature(target.target_temperature_c) }} °C</h4>
                         <p class="target-card-summary">{{ targetDaysSummary(target) }} · {{ targetTimeSummary(target) }}</p>
                       </div>
-                      <span class="target-state" [class.target-state-enabled]="isTargetEnabled(target)">{{ isTargetEnabled(target) ? 'Activa' : 'Inactiva' }}</span>
+                      <label class="target-enabled-toggle" [for]="'target-enabled-' + index">
+                        <input [id]="'target-enabled-' + index" type="checkbox" [checked]="isTargetEnabled(target)" (change)="editTarget(index, 'enabled', !isTargetEnabled(target))" [attr.aria-label]="'Activar consigna ' + (index + 1)" data-testid="target-enabled-toggle" />
+                        <span>{{ isTargetEnabled(target) ? 'Activa' : 'Inactiva' }}</span>
+                      </label>
                     </header>
                     <p class="target-detail-hint">Los cambios se aplican al borrador. Usa «Comprobar cambios» para revisarlos.</p>
 
                     <div class="target-detail-content" data-testid="target-detail-form">
-                      <section class="target-block" [attr.aria-labelledby]="'target-values-title-' + index">
-                        <h5 [id]="'target-values-title-' + index">Acumulador y temperatura</h5>
-                        <div class="target-fields target-values-fields">
+                      <section class="target-block target-values-schedule-block" [attr.aria-labelledby]="'target-values-title-' + index">
+                        <h5 [id]="'target-values-title-' + index">Datos de la consigna</h5>
+                        <div class="target-fields target-values-schedule-fields">
                           <label class="target-field" [for]="'target-heater-' + index">
                             <span>Acumulador</span>
                             <select [id]="'target-heater-' + index" [ngModel]="target.heater_id" (ngModelChange)="editTarget(index, 'heater_id', $event)">
@@ -231,32 +238,19 @@
                             <span>Temperatura objetivo (°C)</span>
                             <input [id]="'target-temperature-' + index" type="number" min="-50" max="80" step="0.1" [ngModel]="target.target_temperature_c" (ngModelChange)="editTarget(index, 'target_temperature_c', $event)" data-testid="target-temperature-input" />
                           </label>
-                        </div>
-                      </section>
-
-                      <section class="target-block" [attr.aria-labelledby]="'target-schedule-title-' + index">
-                        <h5 [id]="'target-schedule-title-' + index">Horario local</h5>
-                        <p class="field-help" [id]="'target-schedule-help-' + index">El inicio se incluye y el fin se excluye. Activa medianoche para enviar un fin explícito de 24:00.</p>
-                        <div class="target-fields target-time-fields">
                           <label class="target-field" [for]="'target-start-time-' + index">
                             <span>Inicio (incluido)</span>
-                            <input [id]="'target-start-time-' + index" type="time" [ngModel]="target.start_time" (ngModelChange)="editTarget(index, 'start_time', $event)" [attr.aria-describedby]="'target-schedule-help-' + index" data-testid="target-start-time-input" />
+                            <input [id]="'target-start-time-' + index" type="time" [ngModel]="target.start_time" (ngModelChange)="editTarget(index, 'start_time', $event)" data-testid="target-start-time-input" />
                           </label>
                           <label class="target-field" [for]="'target-end-time-' + index">
                             <span>Fin (excluido)</span>
-                            <input [id]="'target-end-time-' + index" type="time" [ngModel]="targetEndInputValue(target)" (ngModelChange)="editTarget(index, 'end_time', $event)" [disabled]="isMidnight(target)" [attr.aria-describedby]="'target-schedule-help-' + index" data-testid="target-end-time-input" />
-                          </label>
-                          <label class="midnight-control" [for]="'target-midnight-' + index">
-                            <input [id]="'target-midnight-' + index" type="checkbox" [checked]="isMidnight(target)" (change)="toggleMidnight(index, $any($event.target).checked)" [attr.aria-label]="'Terminar la consigna ' + (index + 1) + ' a medianoche (24:00)'" data-testid="target-midnight-toggle" />
-                            <span>Termina a medianoche <strong>(24:00)</strong></span>
+                            <input [id]="'target-end-time-' + index" type="time" [ngModel]="targetEndInputValue(target)" (ngModelChange)="editTarget(index, 'end_time', $event)" data-testid="target-end-time-input" />
                           </label>
                         </div>
-                        <p class="schedule-note" [class.schedule-crosses-midnight]="targetCrossesMidnight(target)" data-testid="target-schedule-note">{{ targetScheduleDescription(target) }}</p>
                       </section>
 
                       <fieldset class="target-block target-days-block" [attr.aria-labelledby]="'target-days-title-' + index">
                         <legend [id]="'target-days-title-' + index">Días de aplicación</legend>
-                        <p class="field-help">Selecciona uno o varios días de la semana.</p>
                         <div class="weekday-pills" role="group" [attr.aria-label]="'Días de aplicación de la consigna ' + (index + 1)">
                           @for (day of [0,1,2,3,4,5,6]; track day) {
                             <label class="weekday-pill" [class.weekday-pill-selected]="target.weekdays.includes(day)" [for]="'target-day-' + index + '-' + day">
@@ -269,14 +263,6 @@
                         <p class="selected-days-summary">Seleccionados: {{ targetDaysSummary(target) }}</p>
                       </fieldset>
 
-                      <section class="target-block target-status-block" [attr.aria-labelledby]="'target-status-title-' + index">
-                        <h5 [id]="'target-status-title-' + index">Estado</h5>
-                        <label class="enabled-control" [for]="'target-enabled-' + index">
-                          <input [id]="'target-enabled-' + index" type="checkbox" [checked]="isTargetEnabled(target)" (change)="editTarget(index, 'enabled', !isTargetEnabled(target))" [attr.aria-label]="'Activar consigna ' + (index + 1)" />
-                          <span>Consigna activa</span>
-                        </label>
-                        <p class="field-help">Las consignas inactivas se conservan, pero no se aplican al calcular.</p>
-                      </section>
                     </div>
 
                     <footer class="target-detail-actions">
@@ -323,7 +309,7 @@
                     <div class="review-panel-heading"><mat-icon aria-hidden="true">task_alt</mat-icon><div><h3 id="checked-targets-title">Consignas comprobadas</h3><p>Estas son las reglas utilizadas para calcular.</p></div></div>
                     <div class="review-target-list" data-testid="target-markers">
                       @for (target of result.temperature_targets; track $index) {
-                        <div class="review-target-row"><strong>{{ heaterText(target.heater_id) }}</strong><span>{{ target.target_temperature_c }} °C</span><small>{{ targetDaysSummary(target) }} · {{ target.start_time }}–{{ targetEndLabel(target.end_time) }}</small></div>
+                        <div class="review-target-row"><strong>{{ heaterText(target.heater_id) }}</strong><span>{{ target.target_temperature_c }} °C</span><small>{{ targetDaysSummary(target) }} · {{ targetTimeSummary(target) }}</small></div>
                       } @empty { <p class="empty">No se utilizaron consignas de temperatura.</p> }
                     </div>
                   </section>

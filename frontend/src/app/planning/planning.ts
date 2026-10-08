@@ -813,7 +813,20 @@ export class Planning implements AfterViewInit, OnDestroy {
   }
 
   private draftTargetsFrom(planning: PlanningDto): TemperatureTargetDraft[] {
-    return (planning.temperature_targets ?? []).map((item) => ({ heater_id: item.heater_id, target_temperature_c: item.target_temperature_c, start_time: item.start_time, end_time: item.end_time, weekdays: [...item.weekdays], enabled: item.enabled }));
+    return (planning.temperature_targets ?? []).map((item) => ({
+      heater_id: item.heater_id,
+      target_temperature_c: item.target_temperature_c,
+      ...this.normalizedTargetTimes(item.start_time, item.end_time),
+      weekdays: [...item.weekdays],
+      enabled: item.enabled,
+    }));
+  }
+
+  private normalizedTargetTimes(start_time: string, end_time: string): Pick<TemperatureTargetDraft, 'start_time' | 'end_time'> {
+    if (start_time === '00:00' && (end_time === '00:00' || end_time === '24:00')) {
+      return { start_time, end_time: '24:00' };
+    }
+    return { start_time, end_time: end_time === '24:00' ? '00:00' : end_time };
   }
 
   addTarget(heaterId = ''): void {
@@ -867,7 +880,16 @@ export class Planning implements AfterViewInit, OnDestroy {
     this.feedback.success('Consigna eliminada del borrador.');
   }
   editTarget(index: number, field: keyof TemperatureTargetDraft, value: unknown): void {
-    this.draftTargets.update((items) => items.map((item, itemIndex) => itemIndex === index ? { ...item, [field]: field === 'target_temperature_c' ? Number(value) : value } as TemperatureTargetDraft : item));
+    this.draftTargets.update((items) => items.map((item, itemIndex) => {
+      if (itemIndex !== index) return item;
+      const nextValue = field === 'target_temperature_c'
+        ? Number(value)
+        : value;
+      const nextTarget = { ...item, [field]: nextValue } as TemperatureTargetDraft;
+      return field === 'start_time' || field === 'end_time'
+        ? { ...nextTarget, ...this.normalizedTargetTimes(nextTarget.start_time, nextTarget.end_time) }
+        : nextTarget;
+    }));
   }
   toggleDay(index: number, day: number): void {
     this.draftTargets.update((items) => items.map((item, itemIndex) => {
@@ -892,34 +914,16 @@ export class Planning implements AfterViewInit, OnDestroy {
     return selectedDays.join(', ');
   }
 
-  targetEndLabel(endTime: string): string {
-    return endTime === '24:00' ? '24:00 (medianoche)' : endTime;
+  isFullDayTarget(target: Pick<TemperatureTargetDraft, 'start_time' | 'end_time'>): boolean {
+    return target.start_time === '00:00' && target.end_time === '24:00';
   }
 
   targetTimeSummary(target: TemperatureTargetDraft): string {
-    return `${target.start_time}–${this.targetEndLabel(target.end_time)}`;
-  }
-
-  targetCrossesMidnight(target: TemperatureTargetDraft): boolean {
-    return target.end_time !== '24:00' && target.start_time > target.end_time;
-  }
-
-  targetScheduleDescription(target: TemperatureTargetDraft): string {
-    if (this.targetCrossesMidnight(target)) return `Cruza medianoche: comienza a las ${target.start_time} y termina a las ${target.end_time}.`;
-    if (target.end_time === '24:00') return `Termina en medianoche (24:00), después de las ${target.start_time}.`;
-    return `Intervalo local de ${target.start_time} a ${target.end_time}.`;
-  }
-
-  isMidnight(target: TemperatureTargetDraft): boolean {
-    return target.end_time === '24:00';
+    return this.isFullDayTarget(target) ? '00:00–00:00 (día siguiente)' : `${target.start_time}–${target.end_time}`;
   }
 
   targetEndInputValue(target: TemperatureTargetDraft): string {
-    return this.isMidnight(target) ? '00:00' : target.end_time;
-  }
-
-  toggleMidnight(index: number, enabled: boolean): void {
-    this.editTarget(index, 'end_time', enabled ? '24:00' : '00:00');
+    return target.end_time === '24:00' ? '00:00' : target.end_time;
   }
 
   isTargetEnabled(target: TemperatureTargetDraft): boolean {
@@ -1072,7 +1076,12 @@ export class Planning implements AfterViewInit, OnDestroy {
   }
 
   private apiTargets(): TemperatureTargetRequest[] {
-    return this.draftTargets().map((item) => ({ ...item, target_temperature_c: Number(item.target_temperature_c), enabled: item.enabled ?? true }));
+    return this.draftTargets().map((item) => ({
+      ...item,
+      ...this.normalizedTargetTimes(item.start_time, item.end_time),
+      target_temperature_c: Number(item.target_temperature_c),
+      enabled: item.enabled ?? true,
+    }));
   }
 
   sourceText(source: string): string {
@@ -1142,8 +1151,7 @@ export class Planning implements AfterViewInit, OnDestroy {
     const payload = items.map((item) => ({
       heater_id: item.heater_id,
       target_temperature_c: Number(item.target_temperature_c),
-      start_time: item.start_time,
-      end_time: item.end_time,
+      ...this.normalizedTargetTimes(item.start_time, item.end_time),
       weekdays: [...item.weekdays].map(Number).sort((left, right) => left - right),
       enabled: item.enabled !== false,
     }));

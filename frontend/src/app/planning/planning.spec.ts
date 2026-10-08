@@ -332,7 +332,7 @@ describe('Planning', () => {
     expect(element.querySelector('[data-testid="planning-actions"]')).not.toBeNull();
   });
 
-  it('renders readable list summaries, full weekday labels and grouped accessible actions', async () => {
+  it('renders readable list summaries, the two-column editor and grouped accessible actions', async () => {
     backend.expectOne('/api/v1/planning').flush({
       ...PLANNING,
       temperature_targets: [{ id: 1, heater_id: 'salon', target_temperature_c: 20.5, start_time: '22:00', end_time: '02:00', weekdays: [0, 2, 6], enabled: false }],
@@ -342,19 +342,86 @@ describe('Planning', () => {
     await selectPlanningTab(fixture, 1);
 
     const element = fixture.nativeElement as HTMLElement;
-    const listItem = element.querySelector('[data-testid="target-list-item"]');
+    const listRow = element.querySelector('[data-testid="target-list"] > [role="listitem"]');
+    const listItem = listRow?.querySelector('[data-testid="target-list-item"]');
     const detail = element.querySelector('[data-testid="target-detail-panel"]');
     expect(listItem?.textContent).toContain('Salón · 20.5 °C');
     expect(listItem?.textContent).toContain('Lunes, Miércoles, Domingo');
     expect(listItem?.textContent).toContain('22:00–02:00');
-    expect(detail?.textContent).toContain('Cruza medianoche');
+    expect(detail?.textContent).not.toContain('Cruza medianoche');
+    expect(detail?.textContent).not.toContain('Estado');
+    expect(detail?.textContent).not.toContain('medianoche');
     expect(listItem?.getAttribute('data-state')).toBe('disabled');
     expect(listItem?.querySelector('.target-state')?.textContent).toContain('Inactiva');
+    expect(listRow?.querySelector('.target-list-actions')).not.toBeNull();
+    expect(detail?.querySelector('[data-testid="target-enabled-toggle"]')).not.toBeNull();
+    expect(detail?.querySelectorAll('.target-detail-content > .target-block')).toHaveLength(2);
+    expect(detail?.querySelector('.target-values-schedule-block')).not.toBeNull();
+    expect(detail?.querySelector('.target-days-block')).not.toBeNull();
+    expect(detail?.querySelector('.target-values-schedule-block')?.textContent).toContain('Acumulador');
+    expect(detail?.querySelector('.target-values-schedule-block')?.textContent).toContain('Temperatura objetivo');
+    expect(detail?.querySelector('.target-values-schedule-block')?.textContent).toContain('Inicio (incluido)');
+    expect(detail?.querySelector('.target-values-schedule-block')?.textContent).toContain('Fin (excluido)');
+    expect(detail?.querySelector('[data-testid="target-midnight-toggle"]')).toBeNull();
+    expect(detail?.querySelector('[data-testid="target-schedule-note"]')).toBeNull();
+    expect(detail?.querySelector('.target-status-block')).toBeNull();
     expect(Array.from(detail?.querySelectorAll<HTMLInputElement>('[data-testid="target-day-toggle"]') ?? []).map((input) => input.getAttribute('aria-label'))).toEqual([
       'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo',
     ]);
     expect(detail?.querySelector<HTMLButtonElement>('[data-testid="duplicate-target-button"]')?.getAttribute('aria-label')).toBe('Duplicar consigna 1');
     expect(detail?.querySelector<HTMLButtonElement>('[data-testid="remove-target-button"]')?.getAttribute('aria-label')).toBe('Quitar consigna 1');
+  });
+
+  it('keeps quick actions outside selection controls and updates the row state immediately', async () => {
+    backend.expectOne('/api/v1/planning').flush({
+      ...TWO_HEATER_PLANNING,
+      temperature_targets: [
+        { id: 1, heater_id: 'salon', target_temperature_c: 20, start_time: '08:00', end_time: '10:00', weekdays: [0, 1], enabled: true },
+        { id: 2, heater_id: 'cocina', target_temperature_c: 19, start_time: '10:00', end_time: '12:00', weekdays: [2, 3], enabled: false },
+      ],
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+    await selectPlanningTab(fixture, 1);
+
+    const element = fixture.nativeElement as HTMLElement;
+    const listRows = element.querySelectorAll('[data-testid="target-list"] > [role="listitem"]');
+    expect(listRows).toHaveLength(2);
+    expect(listRows[0]?.querySelector('.target-list-item .target-list-actions')).toBeNull();
+    expect(listRows[0]?.querySelector('button button, button input, button select')).toBeNull();
+    expect(listRows[1]?.querySelector<HTMLButtonElement>('[data-testid="target-list-duplicate-button"]')?.getAttribute('aria-label')).toContain('Duplicar consigna 2');
+    expect(listRows[1]?.querySelector<HTMLButtonElement>('[data-testid="target-list-remove-button"]')?.getAttribute('aria-label')).toContain('Eliminar consigna 2');
+
+    const enabledToggle = element.querySelector<HTMLInputElement>('[data-testid="target-enabled-toggle"]');
+    expect(enabledToggle?.checked).toBe(true);
+    enabledToggle?.click();
+    fixture.detectChanges();
+    expect(element.querySelector('[data-testid="target-list-item"]')?.textContent).toContain('Inactiva');
+    expect(element.querySelector('[data-testid="target-list-item"]')?.getAttribute('data-state')).toBe('disabled');
+    expect(fixture.componentInstance.preview()).toBeNull();
+    expect(fixture.componentInstance.previewJob()).toBeNull();
+
+    fixture.componentInstance.selectTarget(0);
+    element.querySelectorAll<HTMLButtonElement>('[data-testid="target-list-duplicate-button"]')[1]?.click();
+    fixture.detectChanges();
+    expect(fixture.componentInstance.draftTargets()).toHaveLength(3);
+    expect(element.querySelectorAll('[data-testid="target-list-item"]')[1]?.getAttribute('aria-pressed')).toBe('false');
+    fixture.componentInstance.selectTarget(0);
+
+    element.querySelectorAll<HTMLButtonElement>('[data-testid="target-list-remove-button"]')[1]?.click();
+    await fixture.whenStable();
+    document.querySelector<HTMLButtonElement>('[data-testid="confirm-cancel"]')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(fixture.componentInstance.draftTargets()).toHaveLength(3);
+    expect(fixture.componentInstance.selectedTargetPosition()).toBe(0);
+
+    element.querySelectorAll<HTMLButtonElement>('[data-testid="target-list-remove-button"]')[1]?.click();
+    await fixture.whenStable();
+    document.querySelector<HTMLButtonElement>('[data-testid="confirm-delete"]')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(fixture.componentInstance.draftTargets()).toHaveLength(2);
+    expect(fixture.componentInstance.selectedTargetPosition()).toBe(0);
+    expect(fixture.componentInstance.preview()).toBeNull();
   });
 
   it('changes the selected detail without recalculating and keeps selection deterministic', async () => {
@@ -415,7 +482,7 @@ describe('Planning', () => {
     expect(element.querySelector('[data-testid="targets-empty"]')).not.toBeNull();
   });
 
-  it('represents midnight explicitly and preserves the API value when toggled', async () => {
+  it('formats only the canonical full-day interval and preserves its API value when editing 00:00', async () => {
     backend.expectOne('/api/v1/planning').flush(PLANNING);
     await fixture.whenStable();
     fixture.detectChanges();
@@ -423,24 +490,77 @@ describe('Planning', () => {
 
     const element = fixture.nativeElement as HTMLElement;
     const endInput = element.querySelector<HTMLInputElement>('[data-testid="target-end-time-input"]');
-    const midnightToggle = element.querySelector<HTMLInputElement>('[data-testid="target-midnight-toggle"]');
-    expect(element.querySelector('[data-testid="target-schedule-note"]')?.textContent).toContain('medianoche (24:00)');
+    expect(element.querySelector('[data-testid="target-list-item"]')?.textContent).toContain('00:00–00:00 (día siguiente)');
+    expect(element.querySelector('[data-testid="target-detail-panel"]')?.textContent).toContain('00:00–00:00 (día siguiente)');
     expect(endInput?.value).toBe('00:00');
-    expect(endInput?.disabled).toBe(true);
-    expect(midnightToggle?.checked).toBe(true);
+    expect(endInput?.disabled).toBe(false);
+    expect(element.querySelector('[data-testid="target-midnight-toggle"]')).toBeNull();
+    expect(element.querySelector('[data-testid="target-schedule-note"]')).toBeNull();
 
-    fixture.componentInstance.toggleMidnight(0, false);
-    fixture.componentInstance.editTarget(0, 'end_time', '21:30');
-    fixture.componentInstance.recalculate();
-    const ordinaryRequest = backend.expectOne('/api/v1/planning/preview/jobs');
-    expect(ordinaryRequest.request.body.temperature_targets[0].end_time).toBe('21:30');
-    ordinaryRequest.flush(PREVIEW_JOB(PREVIEW));
-
-    fixture.componentInstance.toggleMidnight(0, true);
+    fixture.componentInstance.editTarget(0, 'end_time', '00:00');
+    expect(fixture.componentInstance.draftTargets()[0]?.end_time).toBe('24:00');
     fixture.componentInstance.recalculate();
     const midnightRequest = backend.expectOne('/api/v1/planning/preview/jobs');
     expect(midnightRequest.request.body.temperature_targets[0].end_time).toBe('24:00');
     midnightRequest.flush(PREVIEW_JOB(PREVIEW));
+  });
+
+  it('normalizes the end when editing a canonical full-day start away from midnight', async () => {
+    backend.expectOne('/api/v1/planning').flush(PLANNING);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    await selectPlanningTab(fixture, 1);
+
+    fixture.componentInstance.editTarget(0, 'start_time', '08:00');
+    expect(fixture.componentInstance.draftTargets()[0]).toMatchObject({ start_time: '08:00', end_time: '00:00' });
+
+    fixture.componentInstance.recalculate();
+    const request = backend.expectOne('/api/v1/planning/preview/jobs');
+    expect(request.request.body.temperature_targets[0]).toMatchObject({ start_time: '08:00', end_time: '00:00' });
+    request.flush(PREVIEW_JOB({
+      ...PREVIEW,
+      temperature_targets: [{ ...PREVIEW.temperature_targets[0], start_time: '08:00', end_time: '00:00' }],
+    }));
+    expect(fixture.componentInstance.previewMatchesDraft()).toBe(true);
+  });
+
+  it('restores the canonical full-day end after changing 00:00 to 02:00 and back', async () => {
+    backend.expectOne('/api/v1/planning').flush(PLANNING);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    await selectPlanningTab(fixture, 1);
+
+    fixture.componentInstance.editTarget(0, 'end_time', '02:00');
+    expect(fixture.componentInstance.draftTargets()[0]?.end_time).toBe('02:00');
+    fixture.componentInstance.editTarget(0, 'end_time', '00:00');
+    expect(fixture.componentInstance.draftTargets()[0]?.end_time).toBe('24:00');
+
+    fixture.componentInstance.recalculate();
+    const request = backend.expectOne('/api/v1/planning/preview/jobs');
+    expect(request.request.body.temperature_targets[0].end_time).toBe('24:00');
+    request.flush(PREVIEW_JOB(PREVIEW));
+    expect(fixture.componentInstance.previewMatchesDraft()).toBe(true);
+  });
+
+  it('preserves ordinary and crossing-midnight values without starting preview on edit', async () => {
+    backend.expectOne('/api/v1/planning').flush({
+      ...PLANNING,
+      temperature_targets: [{ id: 1, heater_id: 'salon', target_temperature_c: 20, start_time: '22:00', end_time: '02:00', weekdays: [1, 3], enabled: true }],
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+    await selectPlanningTab(fixture, 1);
+
+    expect(fixture.componentInstance.targetTimeSummary(fixture.componentInstance.draftTargets()[0]!)).toBe('22:00–02:00');
+    fixture.componentInstance.editTarget(0, 'end_time', '03:30');
+    expect(fixture.componentInstance.draftTargets()[0]?.end_time).toBe('03:30');
+    fixture.componentInstance.draftTargets.set([{ heater_id: 'salon', target_temperature_c: 20, start_time: '08:00', end_time: '24:00', weekdays: [1, 3], enabled: true }]);
+    expect(fixture.componentInstance.targetTimeSummary(fixture.componentInstance.draftTargets()[0]!)).toBe('08:00–24:00');
+    expect(fixture.componentInstance.targetEndInputValue(fixture.componentInstance.draftTargets()[0]!)).toBe('00:00');
+    fixture.componentInstance.editTarget(0, 'end_time', '00:00');
+    expect(fixture.componentInstance.draftTargets()[0]?.end_time).toBe('00:00');
+    expect(fixture.componentInstance.preview()).toBeNull();
+    expect(fixture.componentInstance.previewJob()).toBeNull();
   });
 
   it('duplicates an interval as an independent exact draft copy', () => {
