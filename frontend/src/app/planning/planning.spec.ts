@@ -268,6 +268,10 @@ describe('Planning', () => {
     expect(element.querySelector('[data-testid="preview-slots-table"]')).toBeNull();
     expect(element.querySelectorAll('[data-testid="forecast-table"]')).toHaveLength(0);
     expect(element.querySelector('.preview-meta')?.textContent).toContain('2 intervalos de 30 minutos');
+    expect(element.querySelector('.preview-meta-section')).toBeNull();
+    expect(element.querySelector('.planning-actions-section')).toBeNull();
+    expect(element.querySelector('.preview-meta')?.closest('[data-testid="preview-job"]')).not.toBeNull();
+    expect(element.querySelector('[data-testid="check-actions"]')?.closest('[data-testid="preview-job"]')).not.toBeNull();
 
     const previewChart = chartState.configs.find((config) => config.data.datasets.length === 2);
     expect(previewChart).toBeDefined();
