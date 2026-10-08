@@ -710,6 +710,7 @@ export class Planning implements AfterViewInit, OnDestroy {
   readonly actionError = signal('');
   readonly activationInFlight = signal(false);
   readonly previewJob = signal<PlanningPreviewJobDto | null>(null);
+  readonly previewDiagnosticsOpen = signal(false);
   readonly selectedTab = signal(1);
   readonly planningStep = signal<0 | 1 | 2>(0);
   readonly selectedTargetIndex = signal<number | null>(null);
@@ -734,6 +735,7 @@ export class Planning implements AfterViewInit, OnDestroy {
   private readonly previewStorageKey = 'dtc.planning.preview-job';
   private previewPollInFlight = false;
   private dismissedPreviewJobId: string | null = null;
+  private previewDiagnosticsPointerActivation = false;
 
   constructor() {
     this.refresh();
@@ -770,6 +772,56 @@ export class Planning implements AfterViewInit, OnDestroy {
     if (step === 2 && !this.canAdvanceToActivation()) return;
     this.planningStep.set(step);
     this.scheduleChartRender();
+  }
+
+  isPreviewInProgress(status: string): boolean {
+    return ['queued', 'running', 'cancelling'].includes(status);
+  }
+
+  isPreviewTerminal(status: string): boolean {
+    return ['completed', 'error', 'cancelled', 'interrupted'].includes(status);
+  }
+
+  beginPreviewDiagnosticsPointerActivation(): void {
+    this.previewDiagnosticsPointerActivation = true;
+    this.previewDiagnosticsOpen.update((open) => !open);
+  }
+
+  cancelPreviewDiagnosticsPointerActivation(): void {
+    if (this.previewDiagnosticsPointerActivation) this.previewDiagnosticsOpen.update((open) => !open);
+    this.previewDiagnosticsPointerActivation = false;
+  }
+
+  togglePreviewDiagnostics(): void {
+    if (this.previewDiagnosticsPointerActivation) {
+      this.previewDiagnosticsPointerActivation = false;
+      return;
+    }
+    this.previewDiagnosticsOpen.update((open) => !open);
+  }
+
+  openPreviewDiagnostics(): void {
+    if (this.previewDiagnosticsPointerActivation) return;
+    this.previewDiagnosticsOpen.set(true);
+  }
+
+  closePreviewDiagnostics(): void {
+    this.previewDiagnosticsOpen.set(false);
+    this.previewDiagnosticsPointerActivation = false;
+  }
+
+  closePreviewDiagnosticsOnFocusOut(event: FocusEvent): void {
+    const region = event.target instanceof Element ? event.target.closest('.preview-diagnostics') : null;
+    if (region && event.relatedTarget instanceof Node && region.contains(event.relatedTarget)) return;
+    this.closePreviewDiagnostics();
+  }
+
+  dismissPreviewDiagnostics(event: KeyboardEvent): void {
+    if (event.key === 'Escape') this.closePreviewDiagnostics();
+  }
+
+  refreshPreviewStatus(): void {
+    this.pollPreviewJob();
   }
 
   refresh(options: PlanningRefreshOptions = {}): void {
@@ -1650,6 +1702,8 @@ export class Planning implements AfterViewInit, OnDestroy {
     if (job) this.dismissedPreviewJobId = job.job_id;
     this.preview.set(null);
     this.previewJob.set(null);
+    this.previewDiagnosticsOpen.set(false);
+    this.previewDiagnosticsPointerActivation = false;
     this.previewPoller.stop();
     try { sessionStorage.removeItem(this.previewStorageKey); } catch { /* storage may be disabled */ }
   }
@@ -1657,6 +1711,7 @@ export class Planning implements AfterViewInit, OnDestroy {
   private acceptPreviewJob(job: PlanningPreviewJobDto): void {
     if (job.job_id === this.dismissedPreviewJobId) return;
     this.previewJob.set(job);
+    if (!this.isPreviewTerminal(job.status)) this.previewDiagnosticsOpen.set(false);
     try { sessionStorage.setItem(this.previewStorageKey, job.job_id); } catch { /* storage may be disabled */ }
     if (job.result) {
       this.preview.set(job.result);

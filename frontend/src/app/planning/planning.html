@@ -292,8 +292,26 @@
           @if (planningStep() === 1) {
             <section class="preview-job" [attr.aria-labelledby]="previewJob() ? 'preview-job-title' : null" [attr.aria-label]="previewJob() ? null : 'Vista previa del horizonte'" data-testid="preview-job">
             @if (previewJob(); as job) {
-              <div class="section-header"><div><h3 id="preview-job-title">Vista previa del horizonte: {{ jobStatusText(job.status) }}</h3><p class="hint">Trabajo {{ job.job_id }} · se conserva al recargar esta pantalla.</p></div><div>@if (hasPreviewFailure(job)) { <button mat-stroked-button type="button" (click)="openPreviewFailure(job)" data-testid="preview-failure-button">Ver detalle del fallo</button> }<button mat-stroked-button type="button" (click)="cancelPreview()" [disabled]="job.status !== 'queued' && job.status !== 'running'" data-testid="cancel-preview-button">Cancelar cálculo</button></div></div>
-              @if (job.result; as result) {
+              @if (isPreviewInProgress(job.status)) {
+                <div class="section-header"><div><h3 id="preview-job-title">Vista previa del horizonte: {{ jobStatusText(job.status) }}</h3><p class="hint">El cálculo conserva sus comprobaciones mientras termina.</p></div><div>@if (hasPreviewFailure(job)) { <button mat-stroked-button type="button" (click)="openPreviewFailure(job)" data-testid="preview-failure-button">Ver detalle del fallo</button> }<button mat-stroked-button type="button" (click)="cancelPreview()" [disabled]="job.status !== 'queued' && job.status !== 'running'" data-testid="cancel-preview-button">Cancelar cálculo</button><button mat-stroked-button type="button" (click)="refreshPreviewStatus()" data-testid="refresh-preview-button">Consultar estado</button></div></div>
+                <ol class="checks" data-testid="preview-checks">
+                  @for (check of job.checks; track check.name) { <li class="check" [attr.data-state]="check.status"><span>{{ checkText(check.name) }}</span><strong>{{ checkStatusText(check.status) }}</strong>@if (check.detail) { <small>{{ check.detail }}</small> } @if (check.status === 'error') { <button mat-stroked-button type="button" (click)="openPreviewFailure(job, check)" data-testid="preview-check-failure-button">Ver detalle</button> }</li> }
+                </ol>
+              } @else if (job.result; as result) {
+                <div class="preview-terminal-toolbar">
+                  <h3 id="preview-job-title">Resultado de la vista previa: {{ jobStatusText(job.status) }}</h3>
+                  <div class="preview-diagnostics" (mouseenter)="openPreviewDiagnostics()" (mouseleave)="closePreviewDiagnostics()" (focusin)="openPreviewDiagnostics()" (focusout)="closePreviewDiagnosticsOnFocusOut($event)" (keydown)="dismissPreviewDiagnostics($event)">
+                    <button mat-icon-button type="button" (pointerdown)="beginPreviewDiagnosticsPointerActivation()" (pointercancel)="cancelPreviewDiagnosticsPointerActivation()" (click)="togglePreviewDiagnostics()" [attr.aria-expanded]="previewDiagnosticsOpen()" aria-controls="preview-diagnostics-panel" aria-label="Mostrar estado y comprobaciones del cálculo" data-testid="preview-diagnostics-button"><mat-icon aria-hidden="true">calculate</mat-icon></button>
+                    @if (previewDiagnosticsOpen()) {
+                      <div class="preview-diagnostics-panel" id="preview-diagnostics-panel" role="dialog" aria-label="Estado y comprobaciones del cálculo" data-testid="preview-diagnostics-panel">
+                        <strong>Estado del cálculo: {{ jobStatusText(job.status) }}</strong>
+                        <ol class="checks" data-testid="preview-diagnostics-checks">
+                          @for (check of job.checks; track check.name) { <li class="check" [attr.data-state]="check.status"><span>{{ checkText(check.name) }}</span><strong>{{ checkStatusText(check.status) }}</strong>@if (check.detail) { <small>{{ check.detail }}</small> } @if (check.status === 'error') { <button mat-stroked-button type="button" (click)="openPreviewFailure(job, check)" data-testid="preview-check-failure-button">Ver detalle</button> }</li> }
+                        </ol>
+                      </div>
+                    }
+                  </div>
+                </div>
                 <div class="preview-result-banner" [class.preview-result-ready]="canActivateStatus(result.status, result) && previewMatchesDraft()" role="status" data-testid="operator-summary">
                   <mat-icon aria-hidden="true">{{ canActivateStatus(result.status, result) && previewMatchesDraft() ? 'check_circle' : 'error' }}</mat-icon>
                   <div>
@@ -341,11 +359,25 @@
                 } @else {
                   <div class="preview-empty" role="status" data-testid="preview-chart-empty"><mat-icon aria-hidden="true">insert_chart_outlined</mat-icon><div><strong>No hay intervalos que representar</strong><p>Resuelve las incidencias del cálculo para obtener una visualización del plan.</p></div></div>
                 }
-              }
-              @if (job.result || job.status === 'completed' || job.status === 'error' || job.status === 'cancelled' || job.status === 'interrupted') {
-                <ol class="checks" data-testid="preview-checks">
-                  @for (check of job.checks; track check.name) { <li class="check" [attr.data-state]="check.status"><span>{{ checkText(check.name) }}</span><strong>{{ checkStatusText(check.status) }}</strong>@if (check.detail) { <small>{{ check.detail }}</small> } @if (check.status === 'error') { <button mat-stroked-button type="button" (click)="openPreviewFailure(job, check)" data-testid="preview-check-failure-button">Ver detalle</button> }</li> }
-                </ol>
+              } @else {
+                <div class="preview-terminal-toolbar">
+                  <h3 id="preview-job-title">Vista previa: {{ jobStatusText(job.status) }}</h3>
+                  <div class="preview-diagnostics" (mouseenter)="openPreviewDiagnostics()" (mouseleave)="closePreviewDiagnostics()" (focusin)="openPreviewDiagnostics()" (focusout)="closePreviewDiagnosticsOnFocusOut($event)" (keydown)="dismissPreviewDiagnostics($event)">
+                    <button mat-icon-button type="button" (pointerdown)="beginPreviewDiagnosticsPointerActivation()" (pointercancel)="cancelPreviewDiagnosticsPointerActivation()" (click)="togglePreviewDiagnostics()" [attr.aria-expanded]="previewDiagnosticsOpen()" aria-controls="preview-diagnostics-panel" aria-label="Mostrar estado y comprobaciones del cálculo" data-testid="preview-diagnostics-button"><mat-icon aria-hidden="true">calculate</mat-icon></button>
+                    @if (previewDiagnosticsOpen()) {
+                      <div class="preview-diagnostics-panel" id="preview-diagnostics-panel" role="dialog" aria-label="Estado y comprobaciones del cálculo" data-testid="preview-diagnostics-panel">
+                        <strong>Estado del cálculo: {{ jobStatusText(job.status) }}</strong>
+                        <ol class="checks" data-testid="preview-diagnostics-checks">
+                          @for (check of job.checks; track check.name) { <li class="check" [attr.data-state]="check.status"><span>{{ checkText(check.name) }}</span><strong>{{ checkStatusText(check.status) }}</strong>@if (check.detail) { <small>{{ check.detail }}</small> } @if (check.status === 'error') { <button mat-stroked-button type="button" (click)="openPreviewFailure(job, check)" data-testid="preview-check-failure-button">Ver detalle</button> }</li> }
+                        </ol>
+                      </div>
+                    }
+                  </div>
+                </div>
+                <div class="preview-terminal-summary" role="status" data-testid="preview-terminal-summary">
+                  <mat-icon aria-hidden="true">{{ job.status === 'completed' ? 'info' : 'error' }}</mat-icon>
+                  <p>{{ job.status === 'completed' ? 'El cálculo terminó sin un resultado disponible.' : 'La vista previa terminó sin resultado. Puedes volver a las consignas o recalcular.' }}</p>
+                </div>
               }
             }
           @if (preview(); as candidate) {
@@ -357,7 +389,8 @@
             @if (!data.plan) { <p class="window" data-testid="planning-window">Vista previa · ventana {{ dateTime(candidate.window_start) }}–{{ dateTime(candidate.window_end) }} · horizonte {{ dateTime(candidate.horizon_start) }}–{{ dateTime(candidate.horizon_end) }}</p> }
           }
 
-            <div class="planning-actions sticky-actions" role="group" aria-label="Acciones de comprobación" data-testid="check-actions">
+            @if (!previewJob() || isPreviewTerminal(previewJob()?.status ?? '')) {
+            <div class="planning-actions check-actions" role="group" aria-label="Acciones de comprobación" data-testid="check-actions">
               <div class="action-context">
                 <strong id="check-actions-title">{{ canAdvanceToActivation() ? 'Comprobación completada' : 'Revisión necesaria' }}</strong>
                 <span>{{ canAdvanceToActivation() ? 'El resultado corresponde al borrador actual y puede activarse.' : activationBlockReason() }}</span>
@@ -366,6 +399,7 @@
               <button mat-flat-button color="primary" type="button" (click)="recalculate()" [disabled]="activationInFlight()" data-testid="recalculate-button">Recalcular</button>
               <button mat-flat-button color="primary" type="button" (click)="goToPlanningStep(2)" [disabled]="!canAdvanceToActivation()" data-testid="continue-activate-button">Continuar a activar</button>
             </div>
+            }
             </section>
           @if (actionMessage()) { <p class="action-feedback" role="status" aria-live="polite" data-testid="planning-action-status">{{ actionMessage() }}</p> }
           @if (actionError()) { <p class="action-feedback warning" role="alert" data-testid="planning-action-error">{{ actionError() }}</p> }
