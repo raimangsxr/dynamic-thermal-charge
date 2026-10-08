@@ -505,6 +505,43 @@ describe('Planning', () => {
     midnightRequest.flush(PREVIEW_JOB(PREVIEW));
   });
 
+  it('normalizes the end when editing a canonical full-day start away from midnight', async () => {
+    backend.expectOne('/api/v1/planning').flush(PLANNING);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    await selectPlanningTab(fixture, 1);
+
+    fixture.componentInstance.editTarget(0, 'start_time', '08:00');
+    expect(fixture.componentInstance.draftTargets()[0]).toMatchObject({ start_time: '08:00', end_time: '00:00' });
+
+    fixture.componentInstance.recalculate();
+    const request = backend.expectOne('/api/v1/planning/preview/jobs');
+    expect(request.request.body.temperature_targets[0]).toMatchObject({ start_time: '08:00', end_time: '00:00' });
+    request.flush(PREVIEW_JOB({
+      ...PREVIEW,
+      temperature_targets: [{ ...PREVIEW.temperature_targets[0], start_time: '08:00', end_time: '00:00' }],
+    }));
+    expect(fixture.componentInstance.previewMatchesDraft()).toBe(true);
+  });
+
+  it('restores the canonical full-day end after changing 00:00 to 02:00 and back', async () => {
+    backend.expectOne('/api/v1/planning').flush(PLANNING);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    await selectPlanningTab(fixture, 1);
+
+    fixture.componentInstance.editTarget(0, 'end_time', '02:00');
+    expect(fixture.componentInstance.draftTargets()[0]?.end_time).toBe('02:00');
+    fixture.componentInstance.editTarget(0, 'end_time', '00:00');
+    expect(fixture.componentInstance.draftTargets()[0]?.end_time).toBe('24:00');
+
+    fixture.componentInstance.recalculate();
+    const request = backend.expectOne('/api/v1/planning/preview/jobs');
+    expect(request.request.body.temperature_targets[0].end_time).toBe('24:00');
+    request.flush(PREVIEW_JOB(PREVIEW));
+    expect(fixture.componentInstance.previewMatchesDraft()).toBe(true);
+  });
+
   it('preserves ordinary and crossing-midnight values without starting preview on edit', async () => {
     backend.expectOne('/api/v1/planning').flush({
       ...PLANNING,
@@ -521,7 +558,7 @@ describe('Planning', () => {
     expect(fixture.componentInstance.targetTimeSummary(fixture.componentInstance.draftTargets()[0]!)).toBe('08:00–24:00');
     expect(fixture.componentInstance.targetEndInputValue(fixture.componentInstance.draftTargets()[0]!)).toBe('00:00');
     fixture.componentInstance.editTarget(0, 'end_time', '00:00');
-    expect(fixture.componentInstance.draftTargets()[0]?.end_time).toBe('24:00');
+    expect(fixture.componentInstance.draftTargets()[0]?.end_time).toBe('00:00');
     expect(fixture.componentInstance.preview()).toBeNull();
     expect(fixture.componentInstance.previewJob()).toBeNull();
   });
