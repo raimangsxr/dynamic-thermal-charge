@@ -807,6 +807,7 @@ export class Planning implements AfterViewInit, OnDestroy {
 
   closePreviewDiagnostics(): void {
     this.previewDiagnosticsOpen.set(false);
+    this.previewDiagnosticsPointerActivation = false;
   }
 
   closePreviewDiagnosticsOnFocusOut(event: FocusEvent): void {
