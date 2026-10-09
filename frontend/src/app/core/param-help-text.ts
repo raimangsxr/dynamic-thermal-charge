@@ -33,9 +33,9 @@ const HEATER: Record<string, string> = {
   static_emission_percent:
     'Emisión que el acumulador conserva con la carga agotada, en porcentaje de la máxima. Fija el suelo de la curva de emisión.',
   room_thermal_capacity_kwh_per_c:
-    'Capacidad térmica efectiva de la sala (kWh/°C). El balance usa esta constante para convertir calor neto en variación de temperatura.',
+    'Capacidad térmica efectiva de la sala (kWh/°C): energía física necesaria para elevar un grado la temperatura interior. En planificación, una capacidad de 5 en vez de 2,5 hace que la misma energía neta produzca aproximadamente la mitad de variación de temperatura.',
   room_heat_loss_kw_per_c:
-    'Coeficiente de intercambio térmico de la sala (kW/°C). La pérdida se firma según la diferencia entre interior y exterior.',
+    'Coeficiente de intercambio térmico de la sala (kW/°C): pérdida de potencia por cada grado de diferencia entre interior y exterior. En planificación, 0,24 en vez de 0,12 duplica la energía que el balance resta durante el mismo intervalo y puede exigir más carga.',
   priority:
     'Orden de preferencia cuando la potencia disponible no alcanza para todos. Menor número = mayor prioridad.',
   enabled:

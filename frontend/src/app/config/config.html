@@ -119,29 +119,61 @@
         <form class="heater-form" (ngSubmit)="saveHeater()" data-testid="heater-form">
           <div class="form-heading"><div><h3>{{ heaterFormMode() === 'add' ? 'Nuevo acumulador' : 'Editar acumulador' }}</h3><p>Los cambios se validan en el backend usando la revisión actual.</p></div><button mat-icon-button type="button" (click)="cancelHeaterForm()" aria-label="Cancelar formulario" matTooltip="Cancelar"><mat-icon aria-hidden="true">close</mat-icon></button></div>
           @for (formGroup of heaterFormGroups; track formGroup.title) {
-            <div class="field-group form-group"><h4>{{ formGroup.title }}</h4><div class="fields form-grid">
-              @for (fieldKey of formGroup.fields; track fieldKey) {
-                @if (heaterMeta(fieldKey); as meta) {
-                  <div class="form-field-cell">
-                    <div class="field-label-row"><label [for]="'heater-' + meta.key">{{ meta.label }}</label><dtc-param-help [field]="helpField(meta)" [label]="meta.label" /></div>
-                    <mat-form-field appearance="outline" subscriptSizing="dynamic">
-                      @if (meta.type === 'select') {
-                        <mat-select [id]="'heater-' + meta.key" [name]="meta.key" [ngModel]="form[meta.key]" (ngModelChange)="updateHeaterForm(meta.key, $event)" [disabled]="!writable()">
-                          @for (option of meta.selectOptions ?? []; track option.label) { <mat-option [value]="option.value">{{ option.label }}</mat-option> }
-                        </mat-select>
-                      } @else {
-                        <input matInput [id]="'heater-' + meta.key" [name]="meta.key" [type]="meta.type" [step]="meta.step" [min]="meta.min" [max]="meta.max" [required]="meta.required ?? false" [readonly]="meta.readonlyOnEdit && heaterFormMode() === 'edit'" [ngModel]="form[meta.key]" (ngModelChange)="updateHeaterForm(meta.key, $event)" [disabled]="!writable()" />
-                      }
-                      @if (meta.hint) { <mat-hint>{{ meta.hint }}</mat-hint> }
-                    </mat-form-field>
-                  </div>
+            @if (formGroup.title === 'Modelo térmico de la estancia') {
+              <details class="field-group form-group thermal-model-group" open>
+                <summary><h4>{{ formGroup.title }}</h4><p class="group-description">{{ formGroup.description }}</p></summary>
+                <div class="fields form-grid">
+                  @for (fieldKey of formGroup.fields; track fieldKey) {
+                    @if (heaterMeta(fieldKey); as meta) {
+                      <div class="form-field-cell">
+                        <div class="field-label-row"><label [for]="'heater-' + meta.key">{{ meta.label }}</label><dtc-param-help [field]="helpField(meta)" [label]="meta.label" /></div>
+                        <mat-form-field appearance="outline" subscriptSizing="dynamic">
+                          @if (meta.type === 'select') {
+                            <mat-select [id]="'heater-' + meta.key" [name]="meta.key" [ngModel]="form[meta.key]" (ngModelChange)="updateHeaterForm(meta.key, $event)" [disabled]="!writable()">
+                              @for (option of meta.selectOptions ?? []; track option.label) { <mat-option [value]="option.value">{{ option.label }}</mat-option> }
+                            </mat-select>
+                          } @else {
+                            <input matInput [id]="'heater-' + meta.key" [name]="meta.key" [type]="meta.type" [attr.step]="meta.step ?? null" [attr.min]="meta.min ?? null" [attr.max]="meta.max ?? null" [required]="meta.required ?? false" [readonly]="meta.readonlyOnEdit && heaterFormMode() === 'edit'" [ngModel]="form[meta.key]" (ngModelChange)="updateHeaterForm(meta.key, $event)" [disabled]="!writable()" />
+                          }
+                          @if (meta.hint) { <mat-hint>{{ meta.hint }}</mat-hint> }
+                        </mat-form-field>
+                      </div>
+                    }
+                  }
+                </div>
+              </details>
+            } @else {
+              <div class="field-group form-group"><h4>{{ formGroup.title }}</h4><p class="group-description">{{ formGroup.description }}</p><div class="fields form-grid">
+                @for (fieldKey of formGroup.fields; track fieldKey) {
+                  @if (heaterMeta(fieldKey); as meta) {
+                    <div class="form-field-cell">
+                      <div class="field-label-row"><label [for]="'heater-' + meta.key">{{ meta.label }}</label><dtc-param-help [field]="helpField(meta)" [label]="meta.label" /></div>
+                      <mat-form-field appearance="outline" subscriptSizing="dynamic">
+                        @if (meta.type === 'select') {
+                          <mat-select [id]="'heater-' + meta.key" [name]="meta.key" [ngModel]="form[meta.key]" (ngModelChange)="updateHeaterForm(meta.key, $event)" [disabled]="!writable()">
+                            @for (option of meta.selectOptions ?? []; track option.label) { <mat-option [value]="option.value">{{ option.label }}</mat-option> }
+                          </mat-select>
+                        } @else {
+                          <input matInput [id]="'heater-' + meta.key" [name]="meta.key" [type]="meta.type" [attr.step]="meta.step ?? null" [attr.min]="meta.min ?? null" [attr.max]="meta.max ?? null" [required]="meta.required ?? false" [readonly]="meta.readonlyOnEdit && heaterFormMode() === 'edit'" [ngModel]="form[meta.key]" (ngModelChange)="updateHeaterForm(meta.key, $event)" [disabled]="!writable()" />
+                        }
+                        @if (meta.hint) { <mat-hint>{{ meta.hint }}</mat-hint> }
+                      </mat-form-field>
+                    </div>
+                  }
                 }
-              }
-            </div></div>
+              </div></div>
+            }
           }
           @if (heaterFormError()) { <p class="field-error" role="alert" data-testid="heater-form-error">{{ heaterFormError() }}</p> }
           <div class="form-actions"><button mat-flat-button color="primary" type="submit" [disabled]="heaterSaving() || !writable()">{{ heaterFormMode() === 'add' ? 'Crear acumulador' : 'Guardar cambios' }}</button><button mat-button type="button" (click)="cancelHeaterForm()">Cancelar</button></div>
         </form>
+      }
+
+      @if (duplicateThermalDefaults()) {
+        <div class="banner warn" role="alert" data-testid="duplicate-thermal-defaults-warning">
+          <strong>Varios acumuladores usan los valores térmicos predeterminados.</strong>
+          <p>Hay al menos dos acumuladores con 2,5 kWh/°C de capacidad y 0,12 kW/°C de pérdida. Revisa estos coeficientes para que la planificación represente cada estancia.</p>
+        </div>
       }
 
       <div class="heater-list">

@@ -152,9 +152,9 @@ const HEATER_FORM_FIELDS: readonly HeaterFormFieldMeta[] = [
   },
   {
     key: 'room_thermal_capacity_kwh_per_c', label: 'Capacidad térmica de la sala (kWh/°C)', type: 'number', min: '0.0001', step: '0.1', required: true,
-    hint: 'Energía necesaria para elevar un grado la temperatura interior.',
+    hint: 'Energía necesaria para elevar un grado la temperatura interior. En planificación, pasar de 2,5 a 5 kWh/°C hace que la misma energía produzca aproximadamente la mitad de cambio de temperatura.',
   },
-  { key: 'room_heat_loss_kw_per_c', label: 'Pérdida térmica de la sala (kW/°C)', type: 'number', min: '0', step: '0.01', required: true, hint: 'Intercambio térmico firmado frente al exterior.' },
+  { key: 'room_heat_loss_kw_per_c', label: 'Pérdida térmica de la sala (kW/°C)', type: 'number', min: '0', step: '0.01', required: true, hint: 'Intercambio térmico firmado frente al exterior. En planificación, pasar de 0,12 a 0,24 kW/°C duplica la energía que se pierde por cada grado de diferencia.' },
   { key: 'priority', label: 'Prioridad', type: 'number', hint: 'Un número menor significa mayor prioridad.' },
   {
     key: 'enabled', label: 'Estado', type: 'select',
@@ -172,9 +172,16 @@ const HEATER_FORM_FIELDS: readonly HeaterFormFieldMeta[] = [
 ];
 
 const HEATER_FORM_GROUPS = [
-  { title: 'Identificación y acumulador', fields: ['id', 'name', 'model', 'power_kw', 'full_charge_hours', 'full_discharge_hours', 'static_emission_percent'] },
-  { title: 'Modelo térmico y prioridad', fields: ['room_thermal_capacity_kwh_per_c', 'room_heat_loss_kw_per_c', 'priority', 'enabled'] },
-  { title: 'Salida', fields: ['output', 'pin', 'active_high'] },
+  {
+    title: 'Datos del acumulador',
+    description: 'Propiedades físicas, comportamiento de carga y descarga, prioridad, estado y salida del equipo.',
+    fields: ['id', 'name', 'model', 'power_kw', 'full_charge_hours', 'full_discharge_hours', 'static_emission_percent', 'priority', 'enabled', 'output', 'pin', 'active_high'],
+  },
+  {
+    title: 'Modelo térmico de la estancia',
+    description: 'Coeficientes por acumulador que describen el balance energético de su estancia.',
+    fields: ['room_thermal_capacity_kwh_per_c', 'room_heat_loss_kw_per_c'],
+  },
 ] as const;
 
 const EMAIL_SECURITY_MODES: readonly Option[] = [
@@ -355,6 +362,9 @@ export class Config {
   readonly dirty = computed(() => Object.keys(this.pending()).length > 0);
   readonly planningDirty = computed(() => Object.keys(this.planningDraft()).length > 0);
   readonly loading = computed(() => this.configLoading() || this.systemLoading());
+  readonly duplicateThermalDefaults = computed(() => (this.config()?.heaters ?? []).filter(
+    (heater) => (heater.room_thermal_capacity_kwh_per_c ?? 2.5) === 2.5 && (heater.room_heat_loss_kw_per_c ?? 0.12) === 0.12,
+  ).length >= 2);
 
   constructor() { this.load(); }
 
@@ -676,7 +686,7 @@ export class Config {
     this.heaterFormMode.set('edit');
     this.heaterFormError.set('');
     this.heaterForm.set({
-      id: heater.id, name: heater.name, model: heater.model ?? '', power_kw: String(heater.power_kw), full_charge_hours: String(heater.full_charge_hours), full_discharge_hours: String(heater.full_discharge_hours), static_emission_percent: String(heater.static_emission_percent), room_thermal_capacity_kwh_per_c: String(heater.room_thermal_capacity_kwh_per_c), room_heat_loss_kw_per_c: String(heater.room_heat_loss_kw_per_c), priority: String(heater.priority), enabled: heater.enabled, output: heater.output.kind, pin: heater.output.pin === null ? '' : String(heater.output.pin), active_high: heater.output.active_high,
+      id: heater.id, name: heater.name, model: heater.model ?? '', power_kw: String(heater.power_kw), full_charge_hours: String(heater.full_charge_hours), full_discharge_hours: String(heater.full_discharge_hours), static_emission_percent: String(heater.static_emission_percent), room_thermal_capacity_kwh_per_c: String(heater.room_thermal_capacity_kwh_per_c ?? 2.5), room_heat_loss_kw_per_c: String(heater.room_heat_loss_kw_per_c ?? 0.12), priority: String(heater.priority), enabled: heater.enabled, output: heater.output.kind, pin: heater.output.pin === null ? '' : String(heater.output.pin), active_high: heater.output.active_high,
     });
   }
   cancelHeaterForm(): void { this.heaterForm.set(null); this.heaterFormMode.set(null); this.heaterFormError.set(''); }

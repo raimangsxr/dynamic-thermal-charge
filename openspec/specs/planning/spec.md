@@ -75,6 +75,40 @@ publicado. La falta de previsión para su inicio hace que el resultado sea
   horizonte queda por delante de él
 - **THEN** el calor entregado en ese intervalo es cero
 
+### Requirement: Configuración térmica independiente por acumulador
+
+Cada acumulador conserva de forma independiente los coeficientes
+`room_thermal_capacity_kwh_per_c` (kWh/°C) y `room_heat_loss_kw_per_c` (kW/°C)
+en su perfil térmico. Las lecturas, las ediciones de un solo campo y las
+sustituciones completas exponen y mantienen esos valores sin introducir una
+entidad de habitación o zona. Los perfiles históricos que carecen de esos
+campos usan 2,5 kWh/°C y 0,12 kW/°C, respectivamente, y los valores no
+predeterminados válidos sobreviven a la recarga.
+
+La capacidad térmica debe ser finita y estrictamente positiva; la pérdida
+térmica debe ser finita y no negativa. Una escritura inválida se rechaza sin
+guardar cambios parciales ni avanzar la revisión de configuración.
+
+#### Scenario: Valores térmicos no predeterminados
+
+- **WHEN** un acumulador se guarda con capacidad térmica o pérdida térmica no
+  predeterminada
+- **THEN** las lecturas posteriores y la planificación usan esos dos valores
+  del acumulador sin sustituirlos por los valores predeterminados
+
+#### Scenario: Perfil histórico sin coeficientes
+
+- **WHEN** un perfil histórico no contiene uno o ambos coeficientes térmicos
+- **THEN** la lectura y la siguiente escritura resuelven los campos ausentes a
+  2,5 kWh/°C y 0,12 kW/°C sin perder el resto de la configuración
+
+#### Scenario: Coeficiente térmico inválido
+
+- **WHEN** una escritura contiene una capacidad no finita o no positiva, o una
+  pérdida no finita o negativa
+- **THEN** se rechaza y permanecen intactos la configuración anterior y su
+  revisión
+
 ### Requirement: Consignas semanales y fuente del objetivo
 
 Cada acumulador habilitado debe tener una o más consignas semanales de

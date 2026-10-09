@@ -9,6 +9,7 @@ import { TestBed, type ComponentFixture } from '@angular/core/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { ApiErrorCode, ChangeDto, ConfigDto, PlanningSiteConfigDto, SystemConfigurationDto, TopologyDto } from '../core/api.types';
+import { paramHelpText } from '../core/param-help-text';
 import { Config } from './config';
 import { ELECTRICAL_FIELDS, needsConfirmation } from './electrical-fields';
 
@@ -224,6 +225,63 @@ describe('Config', () => {
     expect(element.textContent).toContain('rev. 3');
     expect(element.textContent).toContain('0023_coherent_mqtt_topics');
     expect(element.querySelector('[data-heater="salon"]')).not.toBeNull();
+  });
+
+  it('renders exactly the two conceptual heater groups and a collapsible thermal group', () => {
+    const element = load();
+    fixture.componentInstance.chooseArea('heaters');
+    fixture.componentInstance.openAddHeater();
+    fixture.detectChanges();
+
+    expect([...element.querySelectorAll('.heater-form .field-group h4')].map((heading) => heading.textContent?.trim())).toEqual([
+      'Datos del acumulador',
+      'Modelo térmico de la estancia',
+    ]);
+    expect(element.querySelectorAll('.heater-form .field-group')).toHaveLength(2);
+    expect(element.querySelector('.heater-form .thermal-model-group[open]')).not.toBeNull();
+    expect(element.querySelector('#heater-power_kw')).not.toBeNull();
+    expect(element.querySelector('#heater-output')).not.toBeNull();
+    expect(element.querySelector('#heater-room_thermal_capacity_kwh_per_c')).not.toBeNull();
+    expect(element.querySelector('#heater-room_heat_loss_kw_per_c')).not.toBeNull();
+  });
+
+  it('keeps the selected thermal input constraints and explains planning impact', () => {
+    const element = load();
+    fixture.componentInstance.chooseArea('heaters');
+    fixture.componentInstance.openAddHeater();
+    fixture.detectChanges();
+
+    const capacity = element.querySelector<HTMLInputElement>('#heater-room_thermal_capacity_kwh_per_c');
+    const loss = element.querySelector<HTMLInputElement>('#heater-room_heat_loss_kw_per_c');
+    expect(capacity?.getAttribute('min')).toBe('0.0001');
+    expect(capacity?.getAttribute('step')).toBe('0.1');
+    expect(capacity?.getAttribute('max')).toBeNull();
+    expect(loss?.getAttribute('min')).toBe('0');
+    expect(loss?.getAttribute('step')).toBe('0.01');
+    expect(loss?.getAttribute('max')).toBeNull();
+    expect(paramHelpText('room_thermal_capacity_kwh_per_c')).toContain('planificación');
+    expect(paramHelpText('room_thermal_capacity_kwh_per_c')).toContain('Capacidad térmica');
+    expect(paramHelpText('room_heat_loss_kw_per_c')).toContain('planificación');
+    expect(paramHelpText('room_heat_loss_kw_per_c')).toContain('Coeficiente de intercambio');
+  });
+
+  it('warns from saved values when multiple heaters retain both thermal defaults', () => {
+    const first = configDto().heaters[0];
+    const second = { ...first, id: 'entrada', name: 'Entrada' };
+    const element = load(configDto({ heaters: [first, second] }));
+    fixture.componentInstance.chooseArea('heaters');
+    fixture.detectChanges();
+    expect(element.querySelector('[data-testid="duplicate-thermal-defaults-warning"]')).not.toBeNull();
+
+    fixture.componentInstance.openEditHeater({ ...second, room_heat_loss_kw_per_c: 0.2 });
+    fixture.detectChanges();
+    expect(element.querySelector('[data-testid="duplicate-thermal-defaults-warning"]')).not.toBeNull();
+
+    fixture.componentInstance.config.set(configDto({
+      heaters: [first, { ...second, room_thermal_capacity_kwh_per_c: 3.1 }],
+    }));
+    fixture.detectChanges();
+    expect(element.querySelector('[data-testid="duplicate-thermal-defaults-warning"]')).toBeNull();
   });
 
   /* --------------------------------------------------------------- editing */
