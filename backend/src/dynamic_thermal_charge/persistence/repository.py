@@ -23,6 +23,7 @@ from ..models import (
     AppConfig,
     Heater,
     IndoorReading,
+    ThermalProfile,
     validate_temperature_target_alignment,
     validate_temperature_targets,
 )
@@ -928,6 +929,24 @@ class SqlConfigRepository:
             )
         ).first()
         if row is None:
+            if table_name == "thermal":
+                defaults = {
+                    "room_thermal_capacity_kwh_per_c": 2.5,
+                    "room_heat_loss_kw_per_c": 0.12,
+                }
+                defaults[column] = parsed
+                thermal_table_for_insert, thermal_values = self._compatible_table_and_params(
+                    connection,
+                    thermal_table,
+                    thermal_params(
+                        ThermalProfile(**defaults),
+                        int(heater_key),
+                    ),
+                )
+                connection.execute(
+                    insert(thermal_table_for_insert).values(**thermal_values)
+                )
+                return None, parsed
             raise ConfigValidationError(
                 f"heater {heater_id!r} has no {table_name} settings to edit; add them "
                 "by recreating the heater with the required options",

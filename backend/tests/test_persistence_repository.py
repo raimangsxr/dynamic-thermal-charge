@@ -6,7 +6,7 @@ import threading
 from datetime import datetime, time, timezone
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 from dynamic_thermal_charge.models import Heater, OutputConfig, TemperatureTarget, ThermalProfile
 from dynamic_thermal_charge.persistence import (
@@ -52,6 +52,37 @@ def test_the_configuration_read_back_matches_what_was_seeded(initialised_store):
     assert config == example_installation()
 
 
+@pytest.mark.parametrize(
+    ("thermal_row", "expected"),
+    [
+        (None, (2.5, 0.12)),
+        ({"room_thermal_capacity_kwh_per_c": 3.1}, (3.1, 0.12)),
+        ({"room_heat_loss_kw_per_c": 0.2}, (2.5, 0.2)),
+    ],
+)
+def test_legacy_heater_rows_fill_missing_room_coefficients_with_defaults(thermal_row, expected):
+    from dynamic_thermal_charge.persistence.mapping import heater_from_rows
+
+    heater = heater_from_rows(
+        {
+            "heater_id": "legacy",
+            "name": "Legacy",
+            "model": None,
+            "power_w": 1000,
+            "full_charge_minutes": 60,
+            "full_discharge_minutes": 600,
+            "static_emission_percent": 20,
+            "priority": 1,
+            "enabled": True,
+        },
+        {"kind": "simulated", "pin": None, "active_high": True},
+        thermal_row,
+    )
+
+    assert heater.room_thermal_capacity_kwh_per_c == expected[0]
+    assert heater.room_heat_loss_kw_per_c == expected[1]
+
+
 def test_the_plan_from_the_database_matches_the_plan_from_the_same_values(
     initialised_store,
 ):
@@ -95,6 +126,34 @@ def test_a_heater_field_changes_only_that_heater(initialised_store):
             assert changed[heater.id].room_heat_loss_kw_per_c == 0.2
         else:
             assert changed[heater.id] == heater, "an unrelated heater changed"
+
+
+def test_a_legacy_heater_without_a_thermal_profile_can_receive_a_single_field_edit(
+    initialised_store,
+):
+    from dynamic_thermal_charge.persistence.schema import heater as heater_table, thermal_profile
+
+    with initialised_store.engine.begin() as connection:
+        heater_key = connection.execute(
+            select(heater_table.c.id).where(heater_table.c.heater_id == "entrada")
+        ).scalar_one()
+        connection.execute(
+            delete(thermal_profile).where(thermal_profile.c.heater_id == heater_key)
+        )
+
+    repository = initialised_store.repository
+    before, revision = repository.current()
+    legacy = next(heater for heater in before.heaters if heater.id == "entrada")
+    assert legacy.room_thermal_capacity_kwh_per_c == 2.5
+    assert legacy.room_heat_loss_kw_per_c == 0.12
+
+    repository.set_field(revision, "heater", "entrada", "room_heat_loss_kw_per_c", "0.2")
+
+    after, new_revision = repository.current()
+    edited = next(heater for heater in after.heaters if heater.id == "entrada")
+    assert edited.room_thermal_capacity_kwh_per_c == 2.5
+    assert edited.room_heat_loss_kw_per_c == 0.2
+    assert new_revision == revision + 1
 
 
 def test_a_legacy_telemetry_topic_is_rejected(initialised_store):
@@ -236,8 +295,10 @@ def _snapshot(store):
         ("installation", None, "retention_days", "0", ConfigValidationError),
         ("heater", "entrada", "pin", "17", ConfigValidationError),
         ("heater", "entrada", "room_thermal_capacity_kwh_per_c", "0", ConfigValidationError),
+        ("heater", "entrada", "room_thermal_capacity_kwh_per_c", "Infinity", ConfigValidationError),
         ("heater", "entrada", "power_kw", "-1", ConfigValidationError),
         ("heater", "salon", "room_heat_loss_kw_per_c", "-1", ConfigValidationError),
+        ("heater", "salon", "room_heat_loss_kw_per_c", "NaN", ConfigValidationError),
         ("heater", "salon", "design_outdoor_temperature_c", "30", ConfigValidationError),
         ("installation", None, "nonexistent_field", "1", ConfigValidationError),
         ("heater", "cocina", "priority", "1", ConfigValidationError),

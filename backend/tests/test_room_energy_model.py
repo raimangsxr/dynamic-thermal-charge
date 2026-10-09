@@ -184,6 +184,76 @@ def test_room_energy_step_reproduces_signed_exchange_and_storage_balance():
     assert interval.indoor_temperature_next_c == pytest.approx(20.64)
 
 
+def test_room_energy_step_consumes_non_default_per_heater_coefficients():
+    heater = replace(
+        _heater(),
+        thermal=ThermalProfile(
+            room_thermal_capacity_kwh_per_c=5.0,
+            room_heat_loss_kw_per_c=0.18,
+        ),
+    )
+
+    interval = room_energy_step(
+        heater,
+        start=START,
+        outdoor_temperature_c=15.0,
+        target_temperature_c=None,
+        indoor_temperature_c=20.0,
+        stored_energy_kwh=0.0,
+        slot_minutes=60,
+        heat_delivered_kwh=0.0,
+    )
+
+    assert interval.thermal_loss_kwh == pytest.approx(0.9)
+    assert interval.indoor_temperature_next_c == pytest.approx(19.82)
+
+
+def test_room_energy_planner_consumes_non_default_per_heater_coefficients():
+    # Keep an active target so the full planner materialises a room interval,
+    # while the deliberately low target makes the physical balance choose no
+    # heater output and leaves the coefficient effect observable directly.
+    default_heater = _heater(target=-50.0)
+    custom_heater = replace(
+        default_heater,
+        thermal=ThermalProfile(
+            room_thermal_capacity_kwh_per_c=5.0,
+            room_heat_loss_kw_per_c=0.18,
+        ),
+    )
+
+    default = RoomEnergyPlanner().build(
+        _request(
+            heaters=(default_heater,),
+            outdoor=15.0,
+            telemetry={"salon": _telemetry("salon", indoor=20.0, soc=0.0)},
+        )
+    )
+    custom = RoomEnergyPlanner().build(
+        _request(
+            heaters=(custom_heater,),
+            outdoor=15.0,
+            telemetry={"salon": _telemetry("salon", indoor=20.0, soc=0.0)},
+        )
+    )
+
+    assert default.demand[0].thermal_loss_kwh == pytest.approx(0.6)
+    assert custom.demand[0].thermal_loss_kwh == pytest.approx(0.9)
+    assert default.demand[0].indoor_temperature_next_c == pytest.approx(19.76)
+    assert custom.demand[0].indoor_temperature_next_c == pytest.approx(19.82)
+
+
+@pytest.mark.parametrize(
+    ("capacity", "heat_loss"),
+    [(float("nan"), 0.12), (float("inf"), 0.12), (2.5, float("nan")), (2.5, float("inf"))],
+)
+def test_room_thermal_profile_rejects_non_finite_coefficients(capacity, heat_loss):
+    with pytest.raises(ValueError, match="finite"):
+        ThermalProfile(
+            room_thermal_capacity_kwh_per_c=capacity,
+            room_heat_loss_kw_per_c=heat_loss,
+        )
+
+
 def test_active_temperature_target_respects_interval_boundaries():
     targets = (
         TemperatureTarget(18.0, time(0, 0), time(7, 0)),

@@ -14,7 +14,7 @@ decision.
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any
+from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 
@@ -537,8 +537,8 @@ class AddHeaterRequest(BaseModel):
     output: str = "simulated"
     pin: int | None = None
     active_high: bool = True
-    room_thermal_capacity_kwh_per_c: float = Field(gt=0, default=2.5)
-    room_heat_loss_kw_per_c: float = Field(ge=0, default=0.12)
+    room_thermal_capacity_kwh_per_c: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 2.5
+    room_heat_loss_kw_per_c: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 0.12
     temperature_targets: list[TemperatureTargetRequest] = Field(default_factory=list)
 
 
@@ -556,8 +556,8 @@ class UpdateHeaterRequest(BaseModel):
     output: str = "simulated"
     pin: int | None = None
     active_high: bool = True
-    room_thermal_capacity_kwh_per_c: float = Field(gt=0, default=2.5)
-    room_heat_loss_kw_per_c: float = Field(ge=0, default=0.12)
+    room_thermal_capacity_kwh_per_c: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 2.5
+    room_heat_loss_kw_per_c: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 0.12
     temperature_targets: list[TemperatureTargetRequest] | None = None
 
 

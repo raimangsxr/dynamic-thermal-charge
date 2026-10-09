@@ -232,6 +232,89 @@ def test_a_heater_can_be_replaced_in_one_revisioned_request(client):
     assert updated["temperature_targets"][0]["start_time"] == "07:00"
 
 
+def test_room_coefficients_round_trip_independently_through_patch_and_put(client):
+    initial = client.get("/api/v1/config/heaters/salon", headers=AUTH).json()
+
+    changed_capacity = _patch(
+        client,
+        "room_thermal_capacity_kwh_per_c",
+        "3.4",
+        heater="salon",
+    )
+    assert changed_capacity.status_code == 200, changed_capacity.text
+    after_capacity = client.get("/api/v1/config/heaters/salon", headers=AUTH).json()
+    assert after_capacity["room_thermal_capacity_kwh_per_c"] == 3.4
+    assert after_capacity["room_heat_loss_kw_per_c"] == initial["room_heat_loss_kw_per_c"]
+
+    changed_heat_loss = _patch(
+        client,
+        "room_heat_loss_kw_per_c",
+        "0.21",
+        heater="salon",
+    )
+    assert changed_heat_loss.status_code == 200, changed_heat_loss.text
+    after_patch = client.get("/api/v1/config/heaters/salon", headers=AUTH).json()
+    assert after_patch["room_thermal_capacity_kwh_per_c"] == 3.4
+    assert after_patch["room_heat_loss_kw_per_c"] == 0.21
+
+    revision = _config(client)["config_revision"]
+    response = client.put(
+        "/api/v1/config/heaters/salon",
+        headers=AUTH,
+        json={
+            "revision": revision,
+            "name": after_patch["name"],
+            "model": after_patch["model"],
+            "power_kw": after_patch["power_kw"],
+            "full_charge_hours": after_patch["full_charge_hours"],
+            "full_discharge_hours": after_patch["full_discharge_hours"],
+            "static_emission_percent": after_patch["static_emission_percent"],
+            "priority": after_patch["priority"],
+            "enabled": after_patch["enabled"],
+            "output": after_patch["output"]["kind"],
+            "pin": after_patch["output"]["pin"],
+            "active_high": after_patch["output"]["active_high"],
+            "room_thermal_capacity_kwh_per_c": 4.2,
+            "room_heat_loss_kw_per_c": 0.31,
+        },
+    )
+    assert response.status_code == 200, response.text
+    after_put = client.get("/api/v1/config/heaters/salon", headers=AUTH).json()
+    assert after_put["room_thermal_capacity_kwh_per_c"] == 4.2
+    assert after_put["room_heat_loss_kw_per_c"] == 0.31
+
+
+def test_non_finite_room_coefficients_are_rejected_without_a_revision_or_partial_write(client):
+    before = _config(client)
+    heater = before["heaters"][0]
+    payload = {
+        "revision": before["config_revision"],
+        "name": heater["name"],
+        "model": heater["model"],
+        "power_kw": heater["power_kw"],
+        "full_charge_hours": heater["full_charge_hours"],
+        "full_discharge_hours": heater["full_discharge_hours"],
+        "static_emission_percent": heater["static_emission_percent"],
+        "priority": heater["priority"],
+        "enabled": heater["enabled"],
+        "output": heater["output"]["kind"],
+        "pin": heater["output"]["pin"],
+        "active_high": heater["output"]["active_high"],
+        "room_thermal_capacity_kwh_per_c": "Infinity",
+        "room_heat_loss_kw_per_c": heater["room_heat_loss_kw_per_c"],
+    }
+    response = client.put(
+        "/api/v1/config/heaters/salon",
+        headers=AUTH,
+        json=payload,
+    )
+
+    assert response.status_code == 422
+    after = _config(client)
+    assert after["config_revision"] == before["config_revision"]
+    assert after["heaters"][0] == heater
+
+
 def test_legacy_telemetry_topic_field_is_rejected(client):
     changed = _patch(client, "telemetry_topic", "ha/old", heater="salon")
     assert changed.status_code == 404
@@ -326,6 +409,75 @@ def test_a_heater_can_be_added(client):
     added = client.get("/api/v1/config/heaters/cocina", headers=AUTH).json()
     assert added["output"]["pin"] == 24
     assert "thermal" not in added
+
+
+def test_non_default_room_coefficients_round_trip_through_create_and_read(client):
+    revision = _config(client)["config_revision"]
+    response = client.post(
+        "/api/v1/config/heaters",
+        headers=AUTH,
+        json={**NEW_HEATER, "revision": revision},
+    )
+    assert response.status_code == 201, response.text
+
+    added = client.get("/api/v1/config/heaters/cocina", headers=AUTH).json()
+    assert added["room_thermal_capacity_kwh_per_c"] == NEW_HEATER[
+        "room_thermal_capacity_kwh_per_c"
+    ]
+    assert added["room_heat_loss_kw_per_c"] == NEW_HEATER["room_heat_loss_kw_per_c"]
+    collection = {
+        heater["id"]: heater for heater in _config(client)["heaters"]
+    }
+    assert collection["cocina"]["room_thermal_capacity_kwh_per_c"] == 2.8
+    assert collection["cocina"]["room_heat_loss_kw_per_c"] == 0.15
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected_capacity", "expected_heat_loss"),
+    [
+        ("room_thermal_capacity_kwh_per_c", "3.4", 3.4, 0.12),
+        ("room_heat_loss_kw_per_c", "0.21", 2.5, 0.21),
+    ],
+)
+def test_api_legacy_missing_profile_accepts_single_field_edits(
+    client,
+    initialised_store,
+    field,
+    value,
+    expected_capacity,
+    expected_heat_loss,
+):
+    from sqlalchemy import delete, select
+
+    from dynamic_thermal_charge.persistence.schema import heater as heater_table
+    from dynamic_thermal_charge.persistence.schema import thermal_profile
+
+    with initialised_store.engine.begin() as connection:
+        heater_key = connection.execute(
+            select(heater_table.c.id).where(heater_table.c.heater_id == "entrada")
+        ).scalar_one()
+        connection.execute(
+            delete(thermal_profile).where(thermal_profile.c.heater_id == heater_key)
+        )
+
+    before = _config(client)
+    legacy = client.get("/api/v1/config/heaters/entrada", headers=AUTH).json()
+    assert legacy["room_thermal_capacity_kwh_per_c"] == 2.5
+    assert legacy["room_heat_loss_kw_per_c"] == 0.12
+
+    response = _patch(
+        client,
+        field,
+        value,
+        revision=before["config_revision"],
+        heater="entrada",
+    )
+    assert response.status_code == 200, response.text
+
+    updated = client.get("/api/v1/config/heaters/entrada", headers=AUTH).json()
+    assert updated["room_thermal_capacity_kwh_per_c"] == expected_capacity
+    assert updated["room_heat_loss_kw_per_c"] == expected_heat_loss
+    assert _config(client)["config_revision"] == before["config_revision"] + 1
 
 
 def test_a_heater_can_be_removed_keeping_its_history(client, recorder, initialised_store):

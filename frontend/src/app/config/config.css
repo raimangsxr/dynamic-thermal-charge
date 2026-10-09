@@ -71,6 +71,11 @@ h4 { font-size: .84rem; letter-spacing: .03em; text-transform: uppercase; }
 .form-heading { margin-bottom: .3rem; }
 .form-heading p { margin: .3rem 0 0; color: var(--muted); font-size: .88rem; }
 .form-group { margin-top: 1rem; padding-top: .85rem; }
+.thermal-model-group { padding-right: .75rem; padding-bottom: .75rem; }
+.thermal-model-group > summary { cursor: pointer; list-style-position: inside; }
+.thermal-model-group > summary h4 { display: inline; }
+.thermal-model-group > summary .group-description { margin-left: 1.35rem; }
+.thermal-model-group[open] > summary { margin-bottom: .75rem; }
 .form-grid { margin-top: .75rem; }
 .form-field-cell mat-form-field { width: 100%; }
 .form-field-cell mat-form-field .mat-mdc-form-field-subscript-wrapper { min-height: 0; }
