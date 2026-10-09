@@ -45,6 +45,7 @@ from .charge_planning import (
     VALID,
     DeterministicChargeOptimizer,
     PlanningInput,
+    deserialize_automatic_plan,
     resolve_planning_telemetry,
 )
 from .planning_coordination import coordinated_plan
@@ -357,6 +358,21 @@ def _run_controller(
                             next_refresh_seconds=next_refresh_seconds,
                             has_exclusions=bool(candidate.excluded_heaters),
                         )
+                        if (
+                            deviation is not None
+                            and activation_mode is not None
+                            and previous_automatic is not None
+                        ):
+                            candidate = _preserve_active_automatic_slot(
+                                candidate,
+                                previous_automatic,
+                                now,
+                            )
+                            controller_plan = _preserve_active_controller_slot(
+                                controller_plan,
+                                previous_schedule,
+                                now,
+                            )
                         preserve_active = (
                             (deviation is not None and not empty_invalid_candidate)
                             or (candidate_degraded and activation_mode is None)
@@ -618,6 +634,130 @@ def _build_automatic_runtime_plan(
                 else None
             ),
         ),
+    )
+
+
+def _active_slot(slots, now: datetime):
+    """Return the unique slot governing ``now`` under half-open bounds."""
+    moment = _instant(now)
+    for slot in slots:
+        start = getattr(slot, "start", None)
+        end = getattr(slot, "end", None)
+        if start is None and isinstance(slot, dict):
+            start = slot.get("start")
+            end = slot.get("end")
+        if (
+            isinstance(start, datetime)
+            and isinstance(end, datetime)
+            and _instant(start) <= moment < _instant(end)
+        ):
+            return slot
+    return None
+
+
+def _future_slots(slots, start: datetime):
+    """Discard candidate intervals before the retained slot's end."""
+    boundary = _instant(start)
+    return tuple(
+        slot
+        for slot in slots
+        if isinstance(getattr(slot, "start", None), datetime)
+        and _instant(slot.start) >= boundary
+    )
+
+
+def _preserve_active_controller_slot(
+    candidate: ScheduleResult,
+    previous: ScheduleResult | None,
+    now: datetime,
+) -> ScheduleResult:
+    """Join the running controller slot to a candidate starting at its end."""
+    if previous is None:
+        return candidate
+    active = _active_slot(previous.slots, now)
+    if active is None:
+        return candidate
+    future = _future_slots(candidate.slots, active.end)
+    if future and _instant(future[0].start) != _instant(active.end):
+        return candidate
+    slots = (active,) + future
+    heater_ids = {
+        heater_id
+        for slot in slots
+        for heater_id in slot.heater_ids
+    }
+    allocated_minutes = {
+        heater_id: sum(
+            round(
+                (
+                    _instant(slot.end) - _instant(slot.start)
+                ).total_seconds()
+                / 60
+            )
+            for slot in slots
+            if heater_id in slot.heater_ids
+        )
+        for heater_id in heater_ids | set(candidate.allocated_minutes)
+    }
+    return ScheduleResult(
+        slots=slots,
+        allocated_minutes=allocated_minutes,
+        unmet_minutes=dict(candidate.unmet_minutes),
+    )
+
+
+def _preserve_active_automatic_slot(
+    candidate: AutomaticPlan,
+    previous: dict,
+    now: datetime,
+) -> AutomaticPlan:
+    """Join a persisted governing slot to the recalculated future horizon."""
+    active = _active_slot(previous.get("slots", ()), now)
+    if active is None:
+        return candidate
+    try:
+        previous_plan = deserialize_automatic_plan(previous)
+    except (KeyError, TypeError, ValueError, IndexError):
+        logger.warning("Could not decode the active plan slot for deviation replan")
+        return candidate
+    retained = _active_slot(previous_plan.slots, now)
+    if retained is None:
+        return candidate
+    future = _future_slots(candidate.slots, retained.end)
+    if future and _instant(future[0].start) != _instant(retained.end):
+        return candidate
+    retained_demand = tuple(
+        item
+        for item in previous_plan.demand
+        if isinstance(getattr(item, "start", None), datetime)
+        and _instant(item.start) == _instant(retained.start)
+    )
+    future_demand = tuple(
+        item
+        for item in candidate.demand
+        if isinstance(getattr(item, "start", None), datetime)
+        and _instant(item.start) >= _instant(retained.end)
+    )
+    demand = retained_demand + future_demand
+    if retained_demand and future_demand:
+        retained_is_room_energy = hasattr(
+            retained_demand[0], "indoor_temperature_next_c"
+        )
+        future_is_room_energy = hasattr(
+            future_demand[0], "indoor_temperature_next_c"
+        )
+        if retained_is_room_energy != future_is_room_energy:
+            # Old installations may still have a legacy demand trace while a
+            # deviation candidate is already using the room-energy model. A
+            # mixed trace cannot be deserialised losslessly; slot-level values
+            # still preserve the governing interval, so keep only the new
+            # homogeneous future trace.
+            demand = future_demand
+    return replace(
+        candidate,
+        horizon_start=retained.start,
+        slots=(retained,) + future,
+        demand=demand,
     )
 
 
