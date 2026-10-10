@@ -10,7 +10,7 @@ Model roles:
 
 * Coordinator: `gpt-5.6-sol` / `medium`
 * STANDARD specification workers: `gpt-5.6-luna` / `max`
-* QUICK, STANDARD and COMPLEX implementation/fix workers: `gpt-5.6-luna` / `xhigh`
+* QUICK, STANDARD and COMPLEX implementation/fix workers: `gpt-5.6-luna` / `max`
 * COMPLEX planning/design workers: `gpt-5.6-sol` / `medium`
 * Independent reviewers: `gpt-5.6-luna` / `max`
 
