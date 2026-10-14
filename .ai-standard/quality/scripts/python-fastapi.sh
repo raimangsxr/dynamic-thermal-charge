@@ -11,6 +11,12 @@ if [ -z "$action" ]; then
 fi
 if [ "$#" -eq 0 ]; then set -- .; fi
 
+environment_error() {
+  local dir=$1
+  echo "ERROR: Python environment for $dir is unavailable or broken; run '$0 setup $dir'. If $dir/.venv is stale, remove it and rerun setup to recreate it." >&2
+  exit 2
+}
+
 prefix_for() {
   local dir=$1
   PREFIX=()
@@ -20,7 +26,11 @@ prefix_for() {
   elif [ -f "$dir/poetry.lock" ]; then
     command -v poetry >/dev/null 2>&1 || { echo "ERROR: poetry.lock found in $dir but poetry is not installed" >&2; exit 2; }
     PREFIX=(poetry run)
-  elif [ -x "$dir/.venv/bin/python" ]; then
+  elif [ -e "$dir/.venv" ] || [ -L "$dir/.venv" ]; then
+    [ -x "$dir/.venv/bin/python" ] || environment_error "$dir"
+    if ! (cd "$dir" && .venv/bin/python -c 'pass') >/dev/null 2>&1; then
+      environment_error "$dir"
+    fi
     PREFIX=(.venv/bin)
   fi
 }
@@ -49,6 +59,11 @@ run_tool() {
   fi
 }
 
+has_python_module() {
+  local dir=$1 module=$2
+  run_python "$dir" -c 'import importlib.util, sys; sys.exit(0 if importlib.util.find_spec(sys.argv[1]) else 1)' "$module" >/dev/null
+}
+
 has_tool() {
   local dir=$1 tool=$2
   prefix_for "$dir"
@@ -63,7 +78,12 @@ has_tool() {
 
 configured() {
   local dir=$1 pattern=$2
-  [ -f "$dir/pyproject.toml" ] && grep -Eiq "$pattern" "$dir/pyproject.toml"
+  [ -f "$dir/pyproject.toml" ] && grep -Eiq -- "$pattern" "$dir/pyproject.toml"
+}
+
+pytest_cov_required() {
+  local dir=$1
+  [ -f "$dir/pyproject.toml" ] && grep -Eiq -- "(^|[[:space:]\"'])--cov([^[:alnum:]_-]|\$)" "$dir/pyproject.toml"
 }
 
 setup_one() {
@@ -96,12 +116,17 @@ test_one() {
   local dir=$1
   echo "==> Python tests: $dir"
   if [ -d "$dir/tests" ] || configured "$dir" 'pytest|tool\.pytest'; then
-    if has_tool "$dir" pytest; then
-      run_python "$dir" -m pytest
-    else
-      echo "ERROR: tests/ or pytest config found in $dir but pytest is unavailable" >&2
+    has_python_module "$dir" pytest || {
+      echo "ERROR: tests/ or pytest config found in $dir but pytest is unavailable in the selected Python environment; run '$0 setup $dir'. If $dir/.venv is stale, remove it and rerun setup to recreate it." >&2
       exit 2
+    }
+    if pytest_cov_required "$dir"; then
+      has_python_module "$dir" pytest_cov || {
+        echo "ERROR: $dir/pyproject.toml enables pytest coverage (--cov), but pytest-cov is unavailable in the selected Python environment; run '$0 setup $dir'. If $dir/.venv is stale, remove it and rerun setup to recreate it." >&2
+        exit 2
+      }
     fi
+    run_python "$dir" -m pytest
   else
     echo "INFO: no pytest suite detected in $dir"
   fi
