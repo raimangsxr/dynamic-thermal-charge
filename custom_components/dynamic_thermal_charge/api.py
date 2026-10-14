@@ -111,6 +111,16 @@ class DynamicThermalChargeClient:
             {"expected_revision": revision},
         )
 
+    async def async_start_calibration(self, accumulator_id: str) -> dict[str, Any]:
+        return await self._command(
+            f"/rooms/{_path_segment(accumulator_id)}/calibration", {}
+        )
+
+    async def async_cancel_calibration(self, accumulator_id: str) -> dict[str, Any]:
+        return await self._request(
+            "DELETE", f"/rooms/{_path_segment(accumulator_id)}/calibration"
+        )
+
     async def async_set_mode(self, accumulator_id: str, mode: str, revision: int) -> dict[str, Any]:
         return await self._command(
             f"/operational/accumulators/{_path_segment(accumulator_id)}/mode",

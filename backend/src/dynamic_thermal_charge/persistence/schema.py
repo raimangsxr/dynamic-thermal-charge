@@ -238,6 +238,46 @@ thermal_profile = Table(
     ),
 )
 
+# ``thermal_profile`` is kept as a detached compatibility definition for
+# migrations that read installations created before the room aggregate.  New
+# canonical stores create ``room`` instead and the versioned upgrade removes
+# the legacy table after copying its values.
+configuration_metadata.remove(thermal_profile)
+
+room = Table(
+    "room",
+    configuration_metadata,
+    Column("id", Integer, primary_key=True),
+    Column(
+        "heater_id",
+        Integer,
+        ForeignKey("heater.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    ),
+    Column("room_thermal_capacity_kwh_per_c", Float, nullable=False, server_default="2.5"),
+    Column("room_heat_loss_kw_per_c", Float, nullable=False, server_default="0.12"),
+    Column("status", String(24), nullable=False, server_default="approximate"),
+    Column("terminal_result_json", Text, nullable=True),
+    Column("terminal_cause", String(512), nullable=True),
+    Column("terminal_at", DateTime, nullable=True),
+    Column("applied_session_id", String(36), nullable=True),
+    Column("updated_at", DateTime, nullable=False),
+    CheckConstraint(
+        "room_thermal_capacity_kwh_per_c > 0",
+        name="ck_room_capacity_positive",
+    ),
+    CheckConstraint(
+        "room_heat_loss_kw_per_c >= 0",
+        name="ck_room_loss_nonnegative",
+    ),
+    CheckConstraint(
+        "status IN ('approximate','estimated','calibrating','calibrated','failed','cancelled','manually_adjusted')",
+        name="ck_room_status",
+    ),
+    Index("ix_room_heater", "heater_id"),
+)
+
 # Weekly indoor-temperature intervals replace the old percentage charge rules.
 # ``heater_id`` is intentionally a domain id, like the historical planning
 # tables, so a removed heater cannot make the configuration store unreadable.
@@ -334,6 +374,19 @@ heater_telemetry = Table(
         name="ck_telemetry_damper",
     ),
     Index("ix_heater_telemetry_installation", "installation_id", "heater_id"),
+)
+
+outdoor_temperature = Table(
+    "outdoor_temperature",
+    application_metadata,
+    Column("installation_id", Integer, primary_key=True),
+    Column("temperature_c", Float, nullable=False),
+    Column("received_at", DateTime, nullable=False),
+    Column("updated_at", DateTime, nullable=False),
+    CheckConstraint(
+        "temperature_c >= -60 AND temperature_c <= 60",
+        name="ck_outdoor_temperature_range",
+    ),
 )
 
 forecast_cycle = Table(
@@ -463,6 +516,121 @@ alert_episode = Table(
     Column("since", DateTime, nullable=True),
     Column("last_enqueued_at", DateTime, nullable=True),
     UniqueConstraint("installation_id", "alert_type", name="uq_alert_episode"),
+)
+
+# Automatic thermal calibration is operational state, not history.  Active
+# sessions and raw samples are deleted at every terminal transition; only the
+# compact terminal result remains in ``room``.
+thermal_calibration_session = Table(
+    "thermal_calibration_session",
+    application_metadata,
+    Column("id", String(36), primary_key=True),
+    Column("installation_id", Integer, nullable=False),
+    Column("heater_id", String(64), nullable=False),
+    Column("status", String(16), nullable=False, server_default="active"),
+    Column("phase", String(16), nullable=False),
+    Column("started_at", DateTime, nullable=False),
+    Column("updated_at", DateTime, nullable=False),
+    Column("phase_deadline_at", DateTime, nullable=True),
+    Column("lease_owner", String(64), nullable=True),
+    Column("lease_expires_at", DateTime, nullable=True),
+    Column("missing_since_json", Text, nullable=False, server_default="{}"),
+    Column("commands_json", Text, nullable=False, server_default="{}"),
+    Column("metrics_json", Text, nullable=False, server_default="{}"),
+    Column("terminal_cause", String(512), nullable=True),
+    UniqueConstraint("installation_id", "heater_id", name="uq_calibration_active_heater"),
+    CheckConstraint("status = 'active'", name="ck_calibration_session_status"),
+    CheckConstraint(
+        "phase IN ('baseline','charge','release','cool','fit','applying')",
+        name="ck_calibration_session_phase",
+    ),
+    Index("ix_calibration_session_installation", "installation_id", "updated_at"),
+)
+
+thermal_calibration_sample = Table(
+    "thermal_calibration_sample",
+    application_metadata,
+    Column("id", Integer, primary_key=True),
+    Column(
+        "session_id",
+        String(36),
+        ForeignKey("thermal_calibration_session.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("observed_at", DateTime, nullable=False),
+    Column("indoor_temperature_c", Float, nullable=False),
+    Column("outdoor_temperature_c", Float, nullable=False),
+    Column("soc_percent", Float, nullable=False),
+    Column("discharge_enabled", Boolean, nullable=False),
+    Column("damper_position_percent", Float, nullable=True),
+    Column("heat_delivered_kwh", Float, nullable=False, server_default="0"),
+    Column("synchronized", Boolean, nullable=False, server_default="1"),
+    Column("phase", String(16), nullable=True),
+    CheckConstraint("soc_percent >= 0 AND soc_percent <= 100", name="ck_calibration_sample_soc"),
+    CheckConstraint("heat_delivered_kwh >= 0", name="ck_calibration_sample_heat"),
+    Index("ix_calibration_sample_session_time", "session_id", "observed_at"),
+)
+
+operator_notification = Table(
+    "operator_notification",
+    application_metadata,
+    Column("id", Integer, primary_key=True),
+    Column("installation_id", Integer, nullable=False),
+    Column("session_id", String(36), nullable=True),
+    Column("kind", String(64), nullable=False),
+    Column("title", String(512), nullable=False),
+    Column("body", Text, nullable=False),
+    Column("created_at", DateTime, nullable=False),
+    Column("acknowledged_at", DateTime, nullable=True),
+    UniqueConstraint("installation_id", "session_id", name="uq_operator_notification_session"),
+    Index("ix_operator_notification_installation", "installation_id", "created_at"),
+)
+
+web_push_subscription = Table(
+    "web_push_subscription",
+    application_metadata,
+    Column("id", Integer, primary_key=True),
+    Column("installation_id", Integer, nullable=False),
+    Column("user_id", String(160), nullable=False),
+    Column("browser_id", String(160), nullable=False),
+    Column("endpoint", Text, nullable=False),
+    Column("p256dh", Text, nullable=False),
+    Column("auth", Text, nullable=False),
+    Column("status", String(16), nullable=False, server_default="active"),
+    Column("created_at", DateTime, nullable=False),
+    Column("updated_at", DateTime, nullable=False),
+    Column("last_error", String(512), nullable=True),
+    UniqueConstraint(
+        "installation_id", "user_id", "browser_id", name="uq_web_push_browser"
+    ),
+    UniqueConstraint("installation_id", "endpoint", name="uq_web_push_endpoint"),
+    CheckConstraint(
+        "status IN ('active','revoked','expired','error')",
+        name="ck_web_push_subscription_status",
+    ),
+)
+
+web_push_attempt = Table(
+    "web_push_attempt",
+    application_metadata,
+    Column("id", Integer, primary_key=True),
+    Column(
+        "subscription_id",
+        Integer,
+        ForeignKey("web_push_subscription.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("session_id", String(36), nullable=False),
+    Column("status", String(16), nullable=False, server_default="pending"),
+    Column("attempted_at", DateTime, nullable=True),
+    Column("error", String(512), nullable=True),
+    UniqueConstraint(
+        "session_id", "subscription_id", name="uq_web_push_attempt_session_browser"
+    ),
+    CheckConstraint(
+        "status IN ('pending','sent','denied','unsupported','expired','error')",
+        name="ck_web_push_attempt_status",
+    ),
 )
 preview_job_step = Table(
     "preview_job_step",
@@ -973,6 +1141,15 @@ CONSTRAINT_FIELDS: dict[str, tuple[str, str]] = {
         "room_heat_loss_kw_per_c",
         "room_heat_loss_kw_per_c must be non-negative",
     ),
+    "ck_room_capacity_positive": (
+        "room_thermal_capacity_kwh_per_c",
+        "room_thermal_capacity_kwh_per_c must be positive",
+    ),
+    "ck_room_loss_nonnegative": (
+        "room_heat_loss_kw_per_c",
+        "room_heat_loss_kw_per_c must be non-negative",
+    ),
+    "ck_room_status": ("status", "the room status is not recognised"),
     "ck_alert_delivery_status": (
         "status",
         "the alert delivery status must be pending, sent or failed",
@@ -1036,6 +1213,54 @@ CONSTRAINT_FIELDS: dict[str, tuple[str, str]] = {
     "ck_planning_calculation_status": ("planning", "the planning calculation status is not recognised"),
     "ck_planning_lease_kind": ("planning", "the planning lease kind is not recognised"),
     "uq_planning_calculation_token": ("planning", "a planning calculation token must be unique"),
+    "ck_outdoor_temperature_range": (
+        "temperature_c",
+        "outdoor temperature must be between -60 and 60",
+    ),
+    "uq_calibration_active_heater": (
+        "heater_id",
+        "only one calibration session may be active per accumulator",
+    ),
+    "ck_calibration_session_status": (
+        "status",
+        "the calibration session status is not recognised",
+    ),
+    "ck_calibration_session_phase": (
+        "phase",
+        "the calibration session phase is not recognised",
+    ),
+    "ck_calibration_sample_soc": (
+        "soc_percent",
+        "calibration SOC must be between 0 and 100",
+    ),
+    "ck_calibration_sample_heat": (
+        "heat_delivered_kwh",
+        "calibration heat delivered cannot be negative",
+    ),
+    "uq_operator_notification_session": (
+        "session_id",
+        "a calibration session may have only one operator notification",
+    ),
+    "uq_web_push_browser": (
+        "browser_id",
+        "a browser may have only one active Push subscription",
+    ),
+    "uq_web_push_endpoint": (
+        "endpoint",
+        "a Push endpoint may belong to only one subscription",
+    ),
+    "ck_web_push_subscription_status": (
+        "status",
+        "the Push subscription status is not recognised",
+    ),
+    "uq_web_push_attempt_session_browser": (
+        "session_id",
+        "a Push attempt may occur once per session and browser",
+    ),
+    "ck_web_push_attempt_status": (
+        "status",
+        "the Push attempt status is not recognised",
+    ),
 }
 
 
@@ -1065,7 +1290,7 @@ CONFIG_TABLES = (
     weather_config,
     heater,
     output_config,
-    thermal_profile,
+    room,
     charge_planning_site,
     temperature_target,
     heater_charge_config,
@@ -1077,6 +1302,7 @@ CONFIG_TABLES = (
 APPLICATION_TABLES = (
     indoor_reading,
     heater_telemetry,
+    outdoor_temperature,
     forecast,
     forecast_hour,
     forecast_cycle,
@@ -1099,6 +1325,11 @@ APPLICATION_TABLES = (
     planning_lease,
     process_applied_revision,
     reconciled_event,
+    thermal_calibration_session,
+    thermal_calibration_sample,
+    operator_notification,
+    web_push_subscription,
+    web_push_attempt,
 )
 HISTORY_TABLES = (
     forecast,

@@ -49,6 +49,9 @@ declare const __APP_VERSION__: string;
             <a class="nav-link" routerLink="/planificacion" routerLinkActive="active" (click)="closeDrawer(drawer)">
               <mat-icon aria-hidden="true">schedule</mat-icon><span>Planificación</span>
             </a>
+            <a class="nav-link" routerLink="/calibracion" routerLinkActive="active" (click)="closeDrawer(drawer)">
+              <mat-icon aria-hidden="true">thermostat</mat-icon><span>Calibración térmica</span>
+            </a>
             <a class="nav-link" routerLink="/configuracion" routerLinkActive="active" (click)="closeDrawer(drawer)">
               <mat-icon aria-hidden="true">tune</mat-icon><span>Configuración</span>
             </a>

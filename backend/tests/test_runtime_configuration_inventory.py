@@ -47,5 +47,6 @@ def test_secret_classification_covers_every_current_credential():
         "DTC_MQTT_USERNAME",
         "DTC_MQTT_PASSWORD",
         "AEMET_API_KEY",
+        "DTC_VAPID_PRIVATE_KEY",
     }
     assert {name for name, item in LEGACY_ENVIRONMENT_INPUTS.items() if item.secret} == expected

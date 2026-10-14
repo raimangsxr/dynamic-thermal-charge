@@ -37,7 +37,7 @@ def _patch_batch(client, values, revision=None):
 def test_the_whole_configuration_is_readable(client):
     body = _config(client)
     assert body["config_revision"] == 1
-    assert body["schema_revision"] == "0024_planning_calculation_coordination"
+    assert body["schema_revision"] == "0025_automatic_thermal_calibration"
     assert "state_file" not in body
     assert body["max_total_power_kw"] == 5.2
     assert body["slot_minutes"] == 30
@@ -132,6 +132,7 @@ def test_a_new_domain_field_cannot_appear_in_the_api_unnoticed():
         "full_charge_minutes": "full_charge_hours",
         "full_discharge_minutes": "full_discharge_hours",
         "thermal": None,
+        "room": None,
         # These fields are retained only as non-API compatibility attributes
         # while old domain callers are retired.
         "target_charge": None,
@@ -439,7 +440,7 @@ def test_non_default_room_coefficients_round_trip_through_create_and_read(client
         ("room_heat_loss_kw_per_c", "0.21", 2.5, 0.21),
     ],
 )
-def test_api_legacy_missing_profile_accepts_single_field_edits(
+def test_api_missing_room_accepts_single_field_edits(
     client,
     initialised_store,
     field,
@@ -450,14 +451,14 @@ def test_api_legacy_missing_profile_accepts_single_field_edits(
     from sqlalchemy import delete, select
 
     from dynamic_thermal_charge.persistence.schema import heater as heater_table
-    from dynamic_thermal_charge.persistence.schema import thermal_profile
+    from dynamic_thermal_charge.persistence.schema import room
 
     with initialised_store.engine.begin() as connection:
         heater_key = connection.execute(
             select(heater_table.c.id).where(heater_table.c.heater_id == "entrada")
         ).scalar_one()
         connection.execute(
-            delete(thermal_profile).where(thermal_profile.c.heater_id == heater_key)
+            delete(room).where(room.c.heater_id == heater_key)
         )
 
     before = _config(client)

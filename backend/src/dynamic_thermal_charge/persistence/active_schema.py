@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import json
 import re
 from uuid import uuid4
@@ -20,8 +21,8 @@ from .topology import BootstrapCorruptError, BootstrapIncompatibleError
 from . import SchemaStatus, SchemaVersionError
 
 
-CONFIGURATION_SCHEMA_REVISION = 16
-APPLICATION_SCHEMA_REVISION = 11
+CONFIGURATION_SCHEMA_REVISION = 17
+APPLICATION_SCHEMA_REVISION = 12
 POSTGRES_CONFIGURATION_SCHEMA = "dtc_config"
 POSTGRES_APPLICATION_SCHEMA = "dtc_app"
 
@@ -301,6 +302,28 @@ def _upgrade_application_schema(engine: Engine, revision: int, expected: int) ->
             engine, tables=[planning_calculation, planning_lease]
         )
         revision = 11
+    if revision == 11 and expected >= 12:
+        from .schema import (
+            operator_notification,
+            outdoor_temperature,
+            thermal_calibration_sample,
+            thermal_calibration_session,
+            web_push_attempt,
+            web_push_subscription,
+        )
+
+        application_metadata.create_all(
+            engine,
+            tables=[
+                thermal_calibration_session,
+                outdoor_temperature,
+                thermal_calibration_sample,
+                operator_notification,
+                web_push_subscription,
+                web_push_attempt,
+            ],
+        )
+        revision = 12
     if revision != expected:
         raise BootstrapIncompatibleError(
             f"application schema revision {revision} has no registered upgrade path to {expected}"
@@ -711,6 +734,54 @@ def _upgrade_configuration_schema(engine: Engine, revision: int, expected: int) 
             "provider = 'aemet'",
         )
         revision = 16
+    if revision == 16 and expected >= 17:
+        from .schema import room, thermal_profile
+
+        inspector = inspect(engine)
+        if not inspector.has_table(room.name):
+            room.create(engine)
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        with engine.begin() as connection:
+            existing = {
+                int(row[0])
+                for row in connection.execute(select(room.c.heater_id)).all()
+            }
+            thermal_rows = {}
+            if inspector.has_table(thermal_profile.name):
+                thermal_rows = {
+                    int(row["heater_id"]): row
+                    for row in connection.execute(select(thermal_profile)).mappings()
+                }
+            heaters = connection.execute(
+                text("SELECT id FROM heater ORDER BY id")
+            ).scalars().all()
+            for heater_id in heaters:
+                if int(heater_id) in existing:
+                    continue
+                source = thermal_rows.get(int(heater_id))
+                capacity = float(
+                    2.5 if source is None else source.get("room_thermal_capacity_kwh_per_c", 2.5)
+                )
+                loss = float(
+                    0.12 if source is None else source.get("room_heat_loss_kw_per_c", 0.12)
+                )
+                status = (
+                    "approximate"
+                    if abs(capacity - 2.5) <= 1e-12 and abs(loss - 0.12) <= 1e-12
+                    else "manually_adjusted"
+                )
+                connection.execute(
+                    room.insert().values(
+                        heater_id=int(heater_id),
+                        room_thermal_capacity_kwh_per_c=capacity,
+                        room_heat_loss_kw_per_c=loss,
+                        status=status,
+                        updated_at=now,
+                    )
+                )
+            if inspector.has_table(thermal_profile.name):
+                thermal_profile.drop(connection)
+        revision = 17
     if revision != expected:
         raise BootstrapIncompatibleError(
             f"configuration schema revision {revision} has no registered upgrade path to {expected}"

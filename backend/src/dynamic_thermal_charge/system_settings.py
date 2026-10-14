@@ -68,6 +68,7 @@ class MqttSystemSettings:
     prefix: str = "telemetria"
     discovery_prefix: str = "homeassistant"
     publish_seconds: float = 15.0
+    outdoor_topic: str | None = None
 
     def __post_init__(self) -> None:
         if self.enabled and not self.host:
@@ -78,6 +79,8 @@ class MqttSystemSettings:
             raise ValueError("MQTT prefixes cannot be empty")
         if self.publish_seconds <= 0:
             raise ValueError("mqtt.publish_seconds must be positive")
+        if self.outdoor_topic is not None and not self.outdoor_topic.strip():
+            raise ValueError("mqtt.outdoor_topic cannot be empty")
 @dataclass(frozen=True)
 class WeatherSystemSettings:
     provider: str = "aemet"
@@ -289,6 +292,7 @@ ACTIVATION_POLICIES: dict[str, ActivationPolicy] = {
     "mqtt.prefix": ActivationPolicy.HOT,
     "mqtt.discovery_prefix": ActivationPolicy.HOT,
     "mqtt.publish_seconds": ActivationPolicy.HOT,
+    "mqtt.outdoor_topic": ActivationPolicy.HOT,
     "weather.provider": ActivationPolicy.NEXT_CYCLE,
     "weather.municipality_code": ActivationPolicy.NEXT_CYCLE,
     "weather.timeout_seconds": ActivationPolicy.NEXT_CYCLE,

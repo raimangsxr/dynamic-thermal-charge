@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Callable, Protocol
 
 
@@ -27,6 +28,7 @@ class IncomingMessage:
     topic: str
     payload: bytes
     retain: bool = False
+    received_at: datetime | None = None
 
 
 MessageHandler = Callable[[IncomingMessage], None]

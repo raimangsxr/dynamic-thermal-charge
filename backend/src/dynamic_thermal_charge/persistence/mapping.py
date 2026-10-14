@@ -13,6 +13,7 @@ instants, and travel as ``HH:MM`` text.
 from __future__ import annotations
 
 from datetime import datetime, time, timezone
+import json
 from typing import Any, Mapping, Sequence
 from uuid import uuid4
 
@@ -23,6 +24,7 @@ from ..models import (
     LoggingConfig,
     OutputConfig,
     RuntimeConfig,
+    Room,
     ScheduleConfig,
     SiteConfig,
     TemperatureTarget,
@@ -204,6 +206,7 @@ def heater_from_rows(
     output_row: Mapping[str, Any] | None,
     thermal_row: Mapping[str, Any] | None,
     target_rows: Sequence[Mapping[str, Any]] = (),
+    room_row: Mapping[str, Any] | None = None,
 ) -> Heater:
     heater_id = str(heater_row["heater_id"])
     if output_row is None:
@@ -217,14 +220,41 @@ def heater_from_rows(
             active_high=bool(output_row["active_high"]),
         )
         thermal = None
-        if thermal_row is not None:
-            thermal = ThermalProfile(
+        room = None
+        source = room_row or thermal_row
+        if source is not None:
+            terminal_result = source.get("terminal_result_json")
+            if isinstance(terminal_result, str):
+                try:
+                    terminal_result = json.loads(terminal_result)
+                except json.JSONDecodeError:
+                    terminal_result = None
+            room = Room(
                 room_thermal_capacity_kwh_per_c=float(
-                    thermal_row.get("room_thermal_capacity_kwh_per_c", 2.5)
+                    source.get("room_thermal_capacity_kwh_per_c", 2.5)
                 ),
                 room_heat_loss_kw_per_c=float(
-                    thermal_row.get("room_heat_loss_kw_per_c", 0.12)
+                    source.get("room_heat_loss_kw_per_c", 0.12)
                 ),
+                status=str(source.get("status", "approximate")),
+                applied_session_id=(
+                    None
+                    if source.get("applied_session_id") is None
+                    else str(source.get("applied_session_id"))
+                ),
+                terminal_result=(
+                    terminal_result if isinstance(terminal_result, dict) else None
+                ),
+                terminal_cause=(
+                    None
+                    if source.get("terminal_cause") is None
+                    else str(source.get("terminal_cause"))
+                ),
+                terminal_at=from_utc(source.get("terminal_at")),
+            )
+            thermal = ThermalProfile(
+                room_thermal_capacity_kwh_per_c=room.room_thermal_capacity_kwh_per_c,
+                room_heat_loss_kw_per_c=room.room_heat_loss_kw_per_c,
             )
         targets = tuple(
             TemperatureTarget(
@@ -259,6 +289,7 @@ def heater_from_rows(
             priority=int(heater_row["priority"]),
             enabled=bool(heater_row["enabled"]),
             thermal=thermal,
+            room=room,
             temperature_targets=targets,
             output=output,
         )
@@ -271,6 +302,7 @@ def config_from_rows(
         tuple[Mapping[str, Any], Mapping[str, Any] | None, Mapping[str, Any] | None]
     ],
     temperature_targets: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
+    rooms: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> AppConfig:
     """Build the whole configuration, or raise with the offending field."""
     site = site_from_row(installation_row)
@@ -282,6 +314,7 @@ def config_from_rows(
             output_row,
             thermal_row,
             () if temperature_targets is None else temperature_targets.get(str(heater_row["heater_id"]), ()),
+            None if rooms is None else rooms.get(str(heater_row["heater_id"])),
         )
         for heater_row, output_row, thermal_row in heater_rows
     )
@@ -403,6 +436,25 @@ def thermal_params(profile: ThermalProfile, heater_key: int) -> dict[str, Any]:
     }
 
 
+def room_params(room: Room, heater_key: int, now: datetime) -> dict[str, Any]:
+    """Map the canonical room aggregate to its configuration row."""
+    return {
+        "heater_id": heater_key,
+        "room_thermal_capacity_kwh_per_c": room.room_thermal_capacity_kwh_per_c,
+        "room_heat_loss_kw_per_c": room.room_heat_loss_kw_per_c,
+        "status": room.status,
+        "terminal_result_json": (
+            None
+            if room.terminal_result is None
+            else json.dumps(room.terminal_result, sort_keys=True, separators=(",", ":"))
+        ),
+        "terminal_cause": room.terminal_cause,
+        "terminal_at": None if room.terminal_at is None else to_utc(room.terminal_at),
+        "applied_session_id": room.applied_session_id,
+        "updated_at": to_utc(now),
+    }
+
+
 __all__ = [
     "config_from_rows",
     "format_time",
@@ -416,6 +468,7 @@ __all__ = [
     "parse_time",
     "parse_temperature_target_end_time",
     "parse_weekdays",
+    "room_params",
     "site_from_row",
     "thermal_params",
     "to_utc",

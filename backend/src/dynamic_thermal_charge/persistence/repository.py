@@ -11,6 +11,7 @@ silently lose one another (FR-040, research.md D9).
 from __future__ import annotations
 
 import logging
+import json
 import re
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping
@@ -23,6 +24,7 @@ from ..models import (
     AppConfig,
     Heater,
     IndoorReading,
+    Room,
     ThermalProfile,
     validate_temperature_target_alignment,
     validate_temperature_targets,
@@ -46,6 +48,7 @@ from .mapping import (
     parse_time,
     parse_weekdays,
     thermal_params,
+    room_params,
     from_utc,
     to_utc,
     weather_params,
@@ -58,6 +61,7 @@ from .schema import (
     installation as installation_table,
     output_config as output_table,
     thermal_profile as thermal_table,
+    room as room_table,
     temperature_target,
     weather_config as weather_table,
     relay_test_control,
@@ -245,12 +249,18 @@ class SqlConfigRepository:
             output_row = connection.execute(
                 select(output_table).where(output_table.c.heater_id == heater_row["id"])
             ).mappings().first()
-            thermal_row = connection.execute(
-                self._select_present(connection, thermal_table).where(
-                    thermal_table.c.heater_id == heater_row["id"]
-                )
-            ).mappings().first()
-            combined.append((heater_row, output_row, thermal_row))
+            room_row = None
+            if inspect(connection).has_table(room_table.name):
+                room_row = connection.execute(
+                    select(room_table).where(room_table.c.heater_id == heater_row["id"])
+                ).mappings().first()
+            if room_row is None and inspect(connection).has_table(thermal_table.name):
+                room_row = connection.execute(
+                    self._select_present(connection, thermal_table).where(
+                        thermal_table.c.heater_id == heater_row["id"]
+                    )
+                ).mappings().first()
+            combined.append((heater_row, output_row, room_row))
 
         config = config_from_rows(
             installation_row,
@@ -283,6 +293,135 @@ class SqlConfigRepository:
         if name is None:
             raise ConfigStoreEmptyError("the configuration database holds no installation")
         return str(name)
+
+    def room(self, heater_id: str) -> dict[str, Any] | None:
+        """Return the canonical room row keyed by the public heater id."""
+        with store_errors(self._location):
+            with self._engine.connect() as connection:
+                row = connection.execute(
+                    select(room_table, heater_table.c.heater_id.label("heater_domain_id"))
+                    .join(heater_table, room_table.c.heater_id == heater_table.c.id)
+                    .where(
+                        (heater_table.c.installation_id == self.installation_id())
+                        & (heater_table.c.heater_id == heater_id)
+                    )
+                ).mappings().first()
+        return None if row is None else dict(row)
+
+    def update_room(
+        self,
+        heater_id: str,
+        *,
+        capacity_kwh_per_c: float,
+        loss_kw_per_c: float,
+        expected_revision: int,
+        status: str = "manually_adjusted",
+    ) -> ConfigChange:
+        try:
+            candidate = Room(
+                room_thermal_capacity_kwh_per_c=float(capacity_kwh_per_c),
+                room_heat_loss_kw_per_c=float(loss_kw_per_c),
+                status=status,
+            )
+        except (TypeError, ValueError) as exc:
+            raise ConfigValidationError(str(exc), field="room") from exc
+        with transaction(self._engine, self._location) as connection:
+            _before, current_revision = self._read(connection)
+            self._require_revision(current_revision, expected_revision)
+            installation_id = self._locked_installation_id(connection)
+            heater_key = connection.execute(
+                select(heater_table.c.id).where(
+                    (heater_table.c.installation_id == installation_id)
+                    & (heater_table.c.heater_id == heater_id)
+                )
+            ).scalar()
+            if heater_key is None:
+                raise ConfigValidationError("heater does not exist", field="heater_id", heater_id=heater_id)
+            if connection.execute(
+                select(room_table.c.id).where(room_table.c.heater_id == heater_key)
+            ).first() is None:
+                raise ConfigValidationError("room does not exist", field="room", heater_id=heater_id)
+            old_row = connection.execute(
+                select(room_table).where(room_table.c.heater_id == heater_key)
+            ).mappings().one()
+            now = self._clock()
+            connection.execute(
+                update(room_table)
+                .where(room_table.c.heater_id == heater_key)
+                .values(
+                    room_thermal_capacity_kwh_per_c=candidate.room_thermal_capacity_kwh_per_c,
+                    room_heat_loss_kw_per_c=candidate.room_heat_loss_kw_per_c,
+                    status=candidate.status,
+                    terminal_result_json=(
+                        None
+                        if candidate.status in {"manually_adjusted", "estimated", "calibrating"}
+                        else room_table.c.terminal_result_json
+                    ),
+                    terminal_cause=(
+                        None
+                        if candidate.status in {"manually_adjusted", "estimated", "calibrating"}
+                        else room_table.c.terminal_cause
+                    ),
+                    terminal_at=(
+                        None
+                        if candidate.status in {"manually_adjusted", "estimated", "calibrating"}
+                        else room_table.c.terminal_at
+                    ),
+                    applied_session_id=(
+                        None
+                        if candidate.status in {"manually_adjusted", "estimated", "calibrating"}
+                        else room_table.c.applied_session_id
+                    ),
+                    updated_at=to_utc(now),
+                )
+            )
+            # Manual and guided room edits affect the physical planning model
+            # immediately; request a fresh plan in the same configuration
+            # transaction as the coefficient change.
+            connection.execute(
+                update(installation_table)
+                .where(installation_table.c.id == installation_id)
+                .values(
+                    recalculation_requested_generation=(
+                        installation_table.c.recalculation_requested_generation + 1
+                    ),
+                    updated_at=to_utc(now),
+                )
+            )
+            if inspect(connection).has_table(thermal_table.name):
+                connection.execute(
+                    update(thermal_table)
+                    .where(thermal_table.c.heater_id == heater_key)
+                    .values(
+                        room_thermal_capacity_kwh_per_c=candidate.room_thermal_capacity_kwh_per_c,
+                        room_heat_loss_kw_per_c=candidate.room_heat_loss_kw_per_c,
+                    )
+                )
+            change = ConfigChange(
+                entity="room",
+                entity_key=heater_id,
+                field=None,
+                old_value=json.dumps(
+                    {
+                        "capacity_kwh_per_c": old_row["room_thermal_capacity_kwh_per_c"],
+                        "loss_kw_per_c": old_row["room_heat_loss_kw_per_c"],
+                    },
+                    sort_keys=True,
+                ),
+                new_value=json.dumps(
+                    {
+                        "capacity_kwh_per_c": candidate.room_thermal_capacity_kwh_per_c,
+                        "loss_kw_per_c": candidate.room_heat_loss_kw_per_c,
+                    },
+                    sort_keys=True,
+                ),
+                action="set",
+                revision_before=current_revision,
+                revision_after=current_revision + 1,
+            )
+            self._commit_revision(connection, installation_id, current_revision, change)
+            self._read(connection)
+        return change
 
     # --------------------------------------------------------------- create
 
@@ -376,15 +515,32 @@ class SqlConfigRepository:
                     )
                 )
             )
-        if heater.thermal is not None:
-            thermal_insert_table, thermal_values = self._compatible_table_and_params(
+        room = heater.room or Room(
+            room_thermal_capacity_kwh_per_c=heater.room_thermal_capacity_kwh_per_c,
+            room_heat_loss_kw_per_c=heater.room_heat_loss_kw_per_c,
+        )
+        if inspect(connection).has_table(room_table.name):
+            room_insert_table, room_values = self._compatible_table_and_params(
                 connection,
-                thermal_table,
-                thermal_params(heater.thermal, heater_key),
+                room_table,
+                room_params(room, heater_key, self._clock()),
             )
             connection.execute(
-                insert(thermal_insert_table).values(**thermal_values)
+                insert(room_insert_table).values(**room_values)
             )
+            if inspect(connection).has_table(thermal_table.name):
+                connection.execute(
+                    insert(thermal_table).values(
+                        heater_id=heater_key,
+                        room_thermal_capacity_kwh_per_c=room.room_thermal_capacity_kwh_per_c,
+                        room_heat_loss_kw_per_c=room.room_heat_loss_kw_per_c,
+                    )
+                )
+        elif heater.thermal is not None:
+            thermal_insert_table, thermal_values = self._compatible_table_and_params(
+                connection, thermal_table, thermal_params(heater.thermal, heater_key)
+            )
+            connection.execute(insert(thermal_insert_table).values(**thermal_values))
         self._replace_temperature_targets(
             connection, installation_id, heater.id, heater.temperature_targets
         )
@@ -692,18 +848,42 @@ class SqlConfigRepository:
                             )
                         )
                     )
-            connection.execute(
-                delete(thermal_table).where(thermal_table.c.heater_id == heater_key)
+            room = heater.room or Room(
+                room_thermal_capacity_kwh_per_c=heater.room_thermal_capacity_kwh_per_c,
+                room_heat_loss_kw_per_c=heater.room_heat_loss_kw_per_c,
             )
-            if heater.thermal is not None:
-                thermal_update_table, thermal_values = self._compatible_table_and_params(
-                    connection,
-                    thermal_table,
-                    thermal_params(heater.thermal, int(heater_key)),
-                )
+            if inspect(connection).has_table(room_table.name):
                 connection.execute(
-                    insert(thermal_update_table).values(**thermal_values)
+                    delete(room_table).where(room_table.c.heater_id == heater_key)
                 )
+                room_update_table, room_values = self._compatible_table_and_params(
+                    connection,
+                    room_table,
+                    room_params(room, int(heater_key), self._clock()),
+                )
+                connection.execute(insert(room_update_table).values(**room_values))
+                if inspect(connection).has_table(thermal_table.name):
+                    connection.execute(
+                        delete(thermal_table).where(thermal_table.c.heater_id == heater_key)
+                    )
+                    connection.execute(
+                        insert(thermal_table).values(
+                            heater_id=heater_key,
+                            room_thermal_capacity_kwh_per_c=room.room_thermal_capacity_kwh_per_c,
+                            room_heat_loss_kw_per_c=room.room_heat_loss_kw_per_c,
+                        )
+                    )
+            else:
+                connection.execute(
+                    delete(thermal_table).where(thermal_table.c.heater_id == heater_key)
+                )
+                if heater.thermal is not None:
+                    thermal_update_table, thermal_values = self._compatible_table_and_params(
+                        connection,
+                        thermal_table,
+                        thermal_params(heater.thermal, int(heater_key)),
+                    )
+                    connection.execute(insert(thermal_update_table).values(**thermal_values))
             self._replace_temperature_targets(
                 connection, installation_id, heater.id, heater.temperature_targets
             )
@@ -918,7 +1098,7 @@ class SqlConfigRepository:
         table = {
             "heater": heater_table,
             "output": output_table,
-            "thermal": thermal_table,
+            "thermal": room_table if inspect(connection).has_table(room_table.name) else thermal_table,
             "charge": heater_charge_config,
         }[table_name]
         key_column = table.c.id if table_name in {"heater", "output"} else table.c.heater_id
@@ -935,16 +1115,35 @@ class SqlConfigRepository:
                     "room_heat_loss_kw_per_c": 0.12,
                 }
                 defaults[column] = parsed
-                thermal_table_for_insert, thermal_values = self._compatible_table_and_params(
-                    connection,
-                    thermal_table,
-                    thermal_params(
-                        ThermalProfile(**defaults),
-                        int(heater_key),
-                    ),
-                )
+                if table is room_table:
+                    room_table_for_insert, thermal_values = self._compatible_table_and_params(
+                        connection,
+                        room_table,
+                        room_params(
+                            Room(**defaults, status="manually_adjusted"),
+                            int(heater_key),
+                            self._clock(),
+                        ),
+                    )
+                    if inspect(connection).has_table(thermal_table.name):
+                        connection.execute(
+                            delete(thermal_table).where(thermal_table.c.heater_id == heater_key)
+                        )
+                        connection.execute(
+                            insert(thermal_table).values(
+                                heater_id=heater_key,
+                                room_thermal_capacity_kwh_per_c=defaults["room_thermal_capacity_kwh_per_c"],
+                                room_heat_loss_kw_per_c=defaults["room_heat_loss_kw_per_c"],
+                            )
+                        )
+                else:
+                    room_table_for_insert, thermal_values = self._compatible_table_and_params(
+                        connection,
+                        thermal_table,
+                        thermal_params(ThermalProfile(**defaults), int(heater_key)),
+                    )
                 connection.execute(
-                    insert(thermal_table_for_insert).values(**thermal_values)
+                    insert(room_table_for_insert).values(**thermal_values)
                 )
                 return None, parsed
             raise ConfigValidationError(
@@ -958,6 +1157,46 @@ class SqlConfigRepository:
             .where(key_column == (heater_id if table_name == "charge" else key_value))
             .values(**{column: parsed})
         )
+        if table_name == "thermal" and table is room_table:
+            connection.execute(
+                update(room_table)
+                .where(room_table.c.heater_id == heater_key)
+                .values(
+                    status="manually_adjusted",
+                    terminal_result_json=None,
+                    terminal_cause=None,
+                    terminal_at=None,
+                    applied_session_id=None,
+                    updated_at=to_utc(self._clock()),
+                )
+            )
+            if inspect(connection).has_table(thermal_table.name):
+                room_values = connection.execute(
+                    select(room_table).where(room_table.c.heater_id == heater_key)
+                ).mappings().first()
+                mirror_values = {
+                    "room_thermal_capacity_kwh_per_c": room_values[
+                        "room_thermal_capacity_kwh_per_c"
+                    ],
+                    "room_heat_loss_kw_per_c": room_values[
+                        "room_heat_loss_kw_per_c"
+                    ],
+                }
+                connection.execute(
+                    update(thermal_table)
+                    .where(thermal_table.c.heater_id == heater_key)
+                    .values(**mirror_values)
+                )
+            connection.execute(
+                update(installation_table)
+                .where(installation_table.c.id == installation_id)
+                .values(
+                    recalculation_requested_generation=(
+                        installation_table.c.recalculation_requested_generation + 1
+                    ),
+                    updated_at=to_utc(self._clock()),
+                )
+            )
         return row[0], parsed
 
 

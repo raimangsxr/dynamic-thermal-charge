@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable, Iterable, Mapping
+from dataclasses import replace
+from datetime import timedelta
 from typing import Any
 
 from ..api.liveness import ControllerView
@@ -108,6 +110,7 @@ class MqttPublisher:
         discovery: Callable[[], Iterable[DiscoveryEntity]] | None = None,
         subscriptions: Callable[[], Iterable[str]] | None = None,
         discharge: Callable[[], Iterable[DischargeCommand]] | None = None,
+        command_confirmation: Callable[[str, bool], object] | None = None,
     ) -> None:
         self._client = client
         self._topics = topics
@@ -115,6 +118,7 @@ class MqttPublisher:
         self._discovery = discovery or (lambda: ())
         self._subscriptions = subscriptions or (lambda: ())
         self._discharge = discharge or (lambda: ())
+        self._command_confirmation = command_confirmation
         self._inventory: set[str] = set()
         self._failure: str | None = None
         self._discharge_failures: set[str] = set()
@@ -169,6 +173,18 @@ class MqttPublisher:
                 self._publish_command(
                     command.setpoint_topic, command.setpoint_payload
                 )
+                if self._command_confirmation is not None:
+                    try:
+                        self._command_confirmation(command.heater_id, command.enabled)
+                    except Exception:
+                        # Transport confirmation already succeeded; persistence
+                        # of the optional calibration acknowledgement must not
+                        # stop MQTT publication or alter control safety.
+                        logger.warning(
+                            "Could not persist discharge confirmation for %s",
+                            command.heater_id,
+                            exc_info=True,
+                        )
             except MqttError:
                 failures.add(command.heater_id)
         if failures != self._discharge_failures:
@@ -268,6 +284,8 @@ class StoreSnapshotReader:
         plan_provider: Callable[[], Mapping[str, Any] | None] | None = None,
         control_state_provider: Callable[[], Any] | None = None,
         relay_test_provider: Callable[[], Mapping[str, Any] | None] | None = None,
+        outdoor_topic_provider: Callable[[], str | None] | None = None,
+        calibration_provider: Callable[[AppConfig], Mapping[str, Any]] | None = None,
     ) -> None:
         self._config_repository = config_repository
         self._schema_gate = schema_gate
@@ -278,6 +296,8 @@ class StoreSnapshotReader:
         self._plan_provider = plan_provider or (lambda: None)
         self._control_state_provider = control_state_provider or (lambda: None)
         self._relay_test_provider = relay_test_provider or (lambda: None)
+        self._outdoor_topic_provider = outdoor_topic_provider or (lambda: None)
+        self._calibration_provider = calibration_provider or (lambda _config: {})
         self._previous_heartbeat: Heartbeat | None = None
         self._config: AppConfig | None = None
         self._state_is_current: bool | None = None
@@ -311,7 +331,12 @@ class StoreSnapshotReader:
         raw_plan = self._status_reader.plan_in_progress(now)
         plan = self._plan(raw_plan)
         self._state_is_current = bool(controller.state_is_current)
-        return project_state(config, controller, last_states, plan=plan)
+        installation, heaters = project_state(config, controller, last_states, plan=plan)
+        calibration = self._calibration_provider(config)
+        for heater_id, payload in calibration.items():
+            if heater_id in heaters:
+                heaters[heater_id]["calibration"] = payload
+        return installation, heaters
 
     def discharge_commands(self) -> tuple[DischargeCommand, ...]:
         """Resolve the discharge command of every accumulator for now."""
@@ -321,7 +346,7 @@ class StoreSnapshotReader:
         heater_ids = tuple(heater.id for heater in self._config.heaters)
         control = self._control_state_provider()
         relay_test = self._relay_test_provider()
-        return resolve_discharge_commands(
+        commands = resolve_discharge_commands(
             heater_ids,
             plan=self._plan_provider(),
             at=self._clock(),
@@ -341,6 +366,49 @@ class StoreSnapshotReader:
             controller_state_is_current=bool(self._state_is_current),
             relay_test_in_progress=_relay_test_in_progress(relay_test),
         )
+        # Calibration owns only its selected accumulator.  Safety, global
+        # control and relay-test checks above remain authoritative; stale
+        # commands are treated as OFF after a controller restart.
+        if (
+            not _relay_test_in_progress(relay_test)
+            and bool(self._state_is_current)
+            and (control is None or bool(getattr(control, "automatic_control_enabled", True)))
+        ):
+            projection = self._calibration_provider(self._config)
+            now = self._clock()
+            adjusted: list[DischargeCommand] = []
+            for command in commands:
+                value = projection.get(command.heater_id) if isinstance(projection, Mapping) else None
+                calibration = value if isinstance(value, Mapping) else None
+                payload = calibration.get("commands") if calibration is not None else None
+                authorized_at = _parse_instant(
+                    payload.get("authorized_at") if isinstance(payload, Mapping) else None
+                )
+                if isinstance(payload, Mapping) and (
+                    bool(payload.get("discharge"))
+                    and authorized_at is not None
+                    and timedelta(0) <= now - authorized_at <= timedelta(seconds=30)
+                ):
+                    adjusted.append(
+                        replace(
+                            command,
+                            enabled=True,
+                            setpoint_c=(
+                                None
+                                if payload.get("setpoint_temperature_c") is None
+                                else float(payload["setpoint_temperature_c"])
+                            ),
+                        )
+                    )
+                elif isinstance(calibration, Mapping) and "commands" in calibration:
+                    # An active baseline/charge/cool phase owns this heater's
+                    # planned discharge too.  Do not let a stale plan keep
+                    # releasing heat while the calibration output is OFF.
+                    adjusted.append(replace(command, enabled=False, setpoint_c=None))
+                else:
+                    adjusted.append(command)
+            return tuple(adjusted)
+        return commands
 
     def discovery(
         self, topics: TopicLayout, installation_name: str
@@ -348,7 +416,12 @@ class StoreSnapshotReader:
         if self._config is None:
             self()
         assert self._config is not None
-        return discovery_entities(self._config, installation_name, topics)
+        return discovery_entities(
+            self._config,
+            installation_name,
+            topics,
+            include_calibration=True,
+        )
 
     def subscriptions(self, topics: TopicLayout) -> tuple[str, ...]:
         if self._config is None:
@@ -358,6 +431,9 @@ class StoreSnapshotReader:
         for heater in self._config.heaters:
             result.append(topics.command(heater.id, "enabled"))
             result.append(topics.accumulator_topics(heater.id).telemetry)
+        outdoor_topic = self._outdoor_topic_provider()
+        if outdoor_topic:
+            result.append(outdoor_topic)
         return tuple(result)
 
     @staticmethod
@@ -392,6 +468,20 @@ def _relay_test_in_progress(view: Mapping[str, Any] | None) -> bool:
         return True
     safety = view.get("safety")
     return bool(isinstance(safety, Mapping) and safety.get("fault_latched"))
+
+
+def _parse_instant(value: object):
+    from datetime import datetime, timezone
+
+    if isinstance(value, datetime):
+        return value
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
 
 
 __all__ = ["MqttPublisher", "StoreSnapshotReader", "project_state"]

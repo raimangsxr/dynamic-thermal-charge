@@ -41,11 +41,16 @@
       "instant_power_w": {"name": "Potencia"},
       "damper_position_percent": {"name": "Posición de compuerta"},
       "next_charge_at": {"name": "Próxima carga"},
-      "next_soc_target_percent": {"name": "Próximo objetivo de SOC"}
+      "next_soc_target_percent": {"name": "Próximo objetivo de SOC"},
+      "calibration_status": {"name": "Estado de calibración"},
+      "calibration_phase": {"name": "Fase de calibración"},
+      "calibration_progress": {"name": "Progreso de calibración"},
+      "calibration_capacity": {"name": "Capacidad calibrada"},
+      "calibration_loss": {"name": "Pérdida térmica calibrada"}
     },
     "binary_sensor": {"charging": {"name": "Cargando"}},
     "switch": {"automatic_control": {"name": "Control automático"}},
-    "button": {"recalculate": {"name": "Recalcular"}},
+    "button": {"recalculate": {"name": "Recalcular"}, "start_calibration": {"name": "Iniciar calibración térmica"}, "cancel_calibration": {"name": "Cancelar calibración térmica"}},
     "climate": {"accumulator_climate": {"name": "Clima"}},
     "calendar": {"global_calendar": {"name": "Calendario de carga"}}
   }

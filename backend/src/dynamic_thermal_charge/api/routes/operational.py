@@ -56,6 +56,14 @@ class OperationalHeater(BaseModel):
     next_soc_target_percent: float | None = None
     excluded_from_plan: bool = False
     exclusion_cause: str | None = None
+    calibration_status: str = "approximate"
+    calibration_session_id: str | None = None
+    calibration_phase: str | None = None
+    calibration_progress: float | None = None
+    calibration_capacity_kwh_per_c: float | None = None
+    calibration_loss_kw_per_c: float | None = None
+    calibration_quality: dict[str, object] | None = None
+    calibration_result: dict[str, object] | None = None
 
 
 class OperationalPower(BaseModel):
@@ -175,6 +183,7 @@ def get_operational_snapshot(
     current = controller.state_is_current
     plan = _operational_plan(store, observed_at)
     active_targets = _active_targets(config, store.planning.temperature_targets(enabled_only=True), observed_at)
+    calibration = store.calibration.projection(config)
     future_by_heater: dict[str, list[PlanInterval]] = {}
     if plan is not None:
         for interval in plan.intervals:
@@ -206,6 +215,7 @@ def get_operational_snapshot(
             ),
             None,
         )
+        calibration_value = calibration.get(heater.id, {})
         accumulators.append(
             OperationalHeater(
                 id=heater.id,
@@ -225,6 +235,42 @@ def get_operational_snapshot(
                 next_soc_target_percent=None if next_interval is None else next_interval.target_soc_percent,
                 excluded_from_plan=exclusion is not None,
                 exclusion_cause=None if exclusion is None else exclusion.get("cause"),
+                calibration_status=str(calibration_value.get("status", "approximate")),
+                calibration_session_id=(
+                    None
+                    if calibration_value.get("session_id") is None
+                    else str(calibration_value["session_id"])
+                ),
+                calibration_phase=(
+                    None
+                    if calibration_value.get("phase") is None
+                    else str(calibration_value["phase"])
+                ),
+                calibration_progress=(
+                    None
+                    if calibration_value.get("progress") is None
+                    else float(calibration_value["progress"])
+                ),
+                calibration_capacity_kwh_per_c=(
+                    None
+                    if calibration_value.get("capacity_kwh_per_c") is None
+                    else float(calibration_value["capacity_kwh_per_c"])
+                ),
+                calibration_loss_kw_per_c=(
+                    None
+                    if calibration_value.get("loss_kw_per_c") is None
+                    else float(calibration_value["loss_kw_per_c"])
+                ),
+                calibration_quality=(
+                    calibration_value.get("quality")
+                    if isinstance(calibration_value.get("quality"), dict)
+                    else None
+                ),
+                calibration_result=(
+                    calibration_value.get("result")
+                    if isinstance(calibration_value.get("result"), dict)
+                    else None
+                ),
             )
         )
 

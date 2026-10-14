@@ -19,6 +19,11 @@ export const routes: Routes = [
     loadComponent: () => import('./planning/planning').then((m) => m.Planning),
   },
   {
+    path: 'calibracion',
+    canActivate: [requireCredential],
+    loadComponent: () => import('./calibration/calibration').then((m) => m.Calibration),
+  },
+  {
     path: 'configuracion',
     canActivate: [requireCredential],
     loadComponent: () => import('./config/config').then((m) => m.Config),

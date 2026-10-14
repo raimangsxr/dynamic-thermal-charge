@@ -17,6 +17,7 @@ class MqttSettings:
     prefix: str = "telemetria"
     discovery_prefix: str = "homeassistant"
     publish_seconds: float = 15.0
+    outdoor_topic: str | None = None
 
 
 def mqtt_runtime_signature(snapshot) -> tuple[object, ...]:
@@ -36,6 +37,7 @@ def mqtt_runtime_signature(snapshot) -> tuple[object, ...]:
         getattr(mqtt, "prefix", "telemetria"),
         getattr(mqtt, "discovery_prefix", "homeassistant"),
         getattr(mqtt, "publish_seconds", 15.0),
+        getattr(mqtt, "outdoor_topic", None),
         secret_value("mqtt_username"),
         secret_value("mqtt_password"),
     )
@@ -61,6 +63,7 @@ def settings_from_repository(repository) -> MqttSettings:
         prefix=configured.prefix.strip("/"),
         discovery_prefix=configured.discovery_prefix.strip("/"),
         publish_seconds=configured.publish_seconds,
+        outdoor_topic=configured.outdoor_topic,
     )
 
 

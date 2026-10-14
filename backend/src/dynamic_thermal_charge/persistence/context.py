@@ -60,6 +60,28 @@ class StorageGeneration:
             self.engines.application_location,
         )
 
+    @property
+    def calibration(self):
+        from .calibration import SqlCalibrationRepository
+
+        return SqlCalibrationRepository(
+            self.engines.configuration,
+            self.engines.application,
+            self.configuration.installation_id(),
+            self.engines.configuration_location,
+            self.engines.application_location,
+        )
+
+    @property
+    def outdoor_temperature(self):
+        from .outdoor import SqlOutdoorTemperatureRepository
+
+        return SqlOutdoorTemperatureRepository(
+            self.engines.application,
+            self.configuration.installation_id(),
+            self.engines.application_location,
+        )
+
     def close(self) -> None:
         if self.closed:
             return

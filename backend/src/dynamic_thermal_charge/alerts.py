@@ -30,6 +30,7 @@ PLAN_RECALCULATION_INVALID = "plan_recalculation_invalid"
 PLAN_RECALCULATION_DEGRADED = "plan_recalculation_degraded"
 PLAN_BEST_EFFORT_ACTIVE = "plan_best_effort_active"
 PLAN_HEATER_EXCLUDED = "plan_heater_excluded"
+THERMAL_CALIBRATION_TERMINAL = "thermal_calibration_terminal"
 
 # Retries stop here: a mail server that refused five times with growing waits
 # is not going to accept the sixth attempt inside the same episode.
@@ -80,6 +81,14 @@ ALERT_TYPES: tuple[AlertType, ...] = (
         description=(
             "Uno o más acumuladores no tienen temperatura interior o SOC "
             "recientes y quedan fuera del cálculo hasta recuperar telemetría."
+        ),
+    ),
+    AlertType(
+        name=THERMAL_CALIBRATION_TERMINAL,
+        title="Calibración térmica finalizada",
+        description=(
+            "Una calibración térmica terminó y requiere atención en la bandeja "
+            "de la instalación."
         ),
     ),
 )
@@ -221,6 +230,27 @@ class AlertService:
         logger.info("Alert %s queued for delivery", alert_type)
         return True
 
+    def enqueue_message(self, alert_type: str, *, subject: str, body: str) -> bool:
+        """Queue an independent message without sharing an episode latch.
+
+        Terminal calibration notifications are one message per session.  They
+        use the same durable SMTP queue and catalogue settings as alerts, but
+        must not suppress a later session merely because an earlier one is
+        still unresolved.
+        """
+        if alert_type not in ALERT_TYPES_BY_NAME:
+            raise ValueError(f"unknown alert type {alert_type!r}")
+        settings = self._settings()
+        if not settings.deliverable or not self._repository.type_enabled(alert_type):
+            return False
+        self._repository.enqueue(
+            alert_type,
+            subject=subject,
+            body=body,
+            at=self._clock(),
+        )
+        return True
+
     def clear_alert(self, alert_type: str) -> None:
         """Rearm an alert: the next occurrence is a new episode."""
         if alert_type not in ALERT_TYPES_BY_NAME:
@@ -343,6 +373,23 @@ def plan_recalculation_invalid_message(
             f"Detalle: {detail}",
             "",
             consequence,
+        )
+    )
+    return subject, body
+
+
+def thermal_calibration_terminal_message(
+    *, installation: str, heater_id: str, status: str, cause: str | None, at: datetime
+) -> tuple[str, str]:
+    """Build the independent SMTP notification for a terminal calibration."""
+    subject = f"[{installation}] Calibración térmica {status} ({heater_id})"
+    body = "\n".join(
+        (
+            f"Instalación: {installation}",
+            f"Acumulador: {heater_id}",
+            f"Estado: {status}",
+            f"Momento: {at.isoformat()}",
+            f"Causa: {cause or 'sin detalle'}",
         )
     )
     return subject, body
@@ -521,8 +568,10 @@ __all__ = [
     "PLAN_RECALCULATION_INVALID",
     "PLAN_BEST_EFFORT_ACTIVE",
     "PLAN_HEATER_EXCLUDED",
+    "THERMAL_CALIBRATION_TERMINAL",
     "plan_best_effort_active_message",
     "plan_heater_excluded_message",
+    "thermal_calibration_terminal_message",
     "notify_plan_activation",
     "AlertDeliveryError",
     "AlertRepository",

@@ -294,6 +294,56 @@ export interface ConfigDto {
   heaters: HeaterDto[];
 }
 
+export type RoomStatus = 'approximate' | 'estimated' | 'calibrating' | 'calibrated' | 'failed' | 'cancelled' | 'manually_adjusted' | string;
+export interface CalibrationQualityDto {
+  sample_count: number;
+  elapsed_hours: number;
+  heating_windows: number;
+  cooling_windows: number;
+  indoor_range_c: number;
+  differential_range_c: number;
+  heat_delivered_kwh: number;
+  rmse_c: number | null;
+  bias_c: number | null;
+  capacity_confidence_relative: number | null;
+  loss_confidence_relative: number | null;
+  condition_number: number | null;
+  sufficient: boolean;
+  reason: string | null;
+}
+export interface CalibrationSessionDto {
+  id: string;
+  status: string;
+  phase: string;
+  started_at: string;
+  updated_at: string;
+  phase_deadline_at: string | null;
+  missing_since: Record<string, string>;
+  commands: Record<string, unknown>;
+  metrics: Record<string, unknown>;
+  terminal_cause: string | null;
+}
+export interface RoomDto {
+  heater_id: string;
+  capacity_kwh_per_c: number;
+  loss_kw_per_c: number;
+  status: RoomStatus;
+  terminal_result: Record<string, unknown> | null;
+  terminal_cause: string | null;
+  terminal_at: string | null;
+  applied_session_id: string | null;
+  session: CalibrationSessionDto | null;
+  quality: CalibrationQualityDto | null;
+  input_ages_minutes: Record<string, number | null>;
+}
+export interface RoomPatchRequest { expected_revision: number; capacity_kwh_per_c: number; loss_kw_per_c: number; }
+export interface RoomEstimateRequest { expected_revision: number; surface_m2: number; walls_exterior: number; windows_m2: number; insulation: 'poor' | 'medium' | 'good'; height_m: number; other_heat_sources_kw: number; }
+export interface CalibrationActionDto { accepted: boolean; revision: number; room: RoomDto; }
+export interface OperatorNotificationDto { id: number; session_id: string | null; kind: string; title: string; body: string; created_at: string; acknowledged_at: string | null; }
+export interface OperatorNotificationPageDto { items: OperatorNotificationDto[]; }
+export interface PushRegistrationRequest { browser_id: string; endpoint: string; keys: { p256dh: string; auth: string }; }
+export interface PushRegistrationDto { browser_id: string; status: string; }
+
 export interface SetFieldRequest {
   /** Mandatory: the optimistic lock. Never omit it. */
   revision: number;

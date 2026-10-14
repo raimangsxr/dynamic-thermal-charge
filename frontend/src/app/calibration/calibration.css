@@ -1,0 +1,18 @@
+.calibration-page { max-width: 76rem; margin: 0 auto; padding: 2rem clamp(1rem, 3vw, 3rem); }
+.page-heading { display:flex; gap:1rem; justify-content:space-between; align-items:flex-start; margin-bottom:1.5rem; }
+.eyebrow { color:var(--primary); text-transform:uppercase; letter-spacing:.08em; font-size:.75rem; font-weight:700; }
+h1 { margin:.2rem 0 .4rem; } h2 { margin:0; } p { color:var(--muted); }
+.push-actions, .actions { display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; }
+button { border:1px solid var(--primary); border-radius:.45rem; padding:.55rem .8rem; background:var(--primary); color:#fff; cursor:pointer; } button:disabled { opacity:.5; cursor:not-allowed; }
+.message { padding:.75rem; border-left:3px solid var(--primary); background:var(--surface); }
+.notifications { margin:1rem 0; } .notifications article { display:flex; justify-content:space-between; gap:1rem; align-items:center; padding:.7rem; border:1px solid var(--border); border-radius:.5rem; margin:.5rem 0; } .notifications p { margin:.2rem 0 0; }
+.room-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(19rem,1fr)); gap:1rem; }
+.room-card { border:1px solid var(--border); border-radius:.75rem; padding:1rem; background:var(--surface); box-shadow:0 2px 10px #15223a10; }
+.room-card header { display:flex; justify-content:space-between; gap:.5rem; } .room-card header p { margin:.25rem 0; font-size:.85rem; }
+.status { border-radius:1rem; padding:.25rem .55rem; background:#edf2f7; font-size:.8rem; height:max-content; }
+.status[data-status="calibrating"] { background:#fff1c7; } .status[data-status="calibrated"] { background:#d9f5e5; }
+.progress { margin:.6rem 0; } .cause { color:var(--danger); }
+dl { display:grid; grid-template-columns:repeat(3,1fr); gap:.5rem; } dt { font-size:.75rem; color:var(--muted); } dd { margin:.15rem 0 0; font-weight:600; }
+.actions { margin:.9rem 0; } details { border-top:1px solid var(--border); padding-top:.8rem; } summary { cursor:pointer; font-weight:600; }
+.advanced { display:grid; grid-template-columns:repeat(2,1fr); gap:.6rem; padding:.8rem 0; } label { display:grid; gap:.2rem; font-size:.85rem; } input, select { padding:.45rem; border:1px solid var(--border); border-radius:.35rem; background:var(--canvas); }
+@media (max-width: 50rem) { .page-heading { display:block; } .push-actions { margin-top:1rem; } }

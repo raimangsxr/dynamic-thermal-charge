@@ -1,0 +1,24 @@
+<main class="calibration-page">
+  <header class="page-heading">
+    <div><p class="eyebrow">Modelo térmico</p><h1>Calibración automática</h1><p>Una estancia por acumulador. La calibración ejecuta ciclos controlados y nunca sustituye un resultado fallido automáticamente.</p></div>
+    <div class="push-actions"><button type="button" (click)="registerPush()">Activar avisos del navegador</button><button type="button" (click)="revokePush()">Revocar avisos</button>@if (pushStatus(); as status) { <span role="status">{{ status }}</span> }</div>
+  </header>
+  @if (message(); as text) { <p class="message" role="status">{{ text }}</p> }
+  @if (notifications().length) { <section class="notifications" aria-label="Avisos"><h2>Avisos</h2>@for (notification of notifications(); track notification.id) { <article><div><strong>{{ notification.title }}</strong><p>{{ notification.body }}</p></div><button type="button" (click)="acknowledge(notification)">Acusar</button></article> }</section> }
+  @if (loading()) { <p>Cargando estancias…</p> }
+  <section class="room-grid" aria-label="Estancias">
+    @for (card of cards(); track card.heater.id) {
+      <article class="room-card" [attr.data-room]="card.heater.id">
+        <header><div><h2>{{ card.heater.name }}</h2><p>{{ card.heater.id }}</p></div><strong class="status" [attr.data-status]="card.room.status">{{ card.room.status }}</strong></header>
+        @if (card.room.session; as session) { <p class="progress">Fase: {{ session.phase }} · {{ progress(session) | number:'1.0-0' }}%</p> }
+        @if (card.room.terminal_cause) { <p class="cause">{{ card.room.terminal_cause }}</p> }
+        <dl><div><dt>Capacidad</dt><dd>{{ card.room.capacity_kwh_per_c }} kWh/°C</dd></div><div><dt>Pérdida</dt><dd>{{ card.room.loss_kw_per_c }} kW/°C</dd></div><div><dt>Calidad</dt><dd>{{ card.room.quality?.sufficient ? 'suficiente' : 'pendiente' }}</dd></div></dl>
+        <p class="ages">Entradas: interior {{ card.room.input_ages_minutes['indoor_temperature'] === null ? 'sin dato' : (card.room.input_ages_minutes['indoor_temperature'] | number:'1.0-0') + ' min' }} · SOC {{ card.room.input_ages_minutes['soc'] === null ? 'sin dato' : (card.room.input_ages_minutes['soc'] | number:'1.0-0') + ' min' }} · exterior {{ card.room.input_ages_minutes['outdoor_temperature'] === null ? 'sin dato' : (card.room.input_ages_minutes['outdoor_temperature'] | number:'1.0-0') + ' min' }}</p>
+        @if (card.room.quality; as quality) { <p class="quality">Muestras {{ quality.sample_count }} · {{ quality.elapsed_hours | number:'1.1-1' }} h · calentamiento {{ quality.heating_windows }} · enfriamiento {{ quality.cooling_windows }} · RMSE {{ quality.rmse_c ?? '—' }} · sesgo {{ quality.bias_c ?? '—' }}</p> }
+        @if (card.room.terminal_result; as result) { <details class="result"><summary>Resultado aplicado</summary><pre>{{ result | json }}</pre></details> }
+        <div class="actions">@if (card.room.session) { <button type="button" (click)="cancel(card)">Cancelar</button> } @else { <button type="button" (click)="start(card)" [disabled]="card.room.status === 'calibrating'">Iniciar calibración</button> }</div>
+        <details><summary>Parámetros avanzados y estimación inicial</summary><div class="advanced"><label>Capacidad <input type="number" [(ngModel)]="card.room.capacity_kwh_per_c" /></label><label>Pérdida <input type="number" [(ngModel)]="card.room.loss_kw_per_c" /></label><label>Superficie m² <input type="number" [(ngModel)]="card.estimate.surface_m2" min="0.01" /></label><label>Paredes exteriores <input type="number" [(ngModel)]="card.estimate.walls_exterior" min="0" max="4" /></label><label>Ventanas m² <input type="number" [(ngModel)]="card.estimate.windows_m2" min="0" /></label><label>Aislamiento <select [(ngModel)]="card.estimate.insulation"><option value="poor">poor</option><option value="medium">medium</option><option value="good">good</option></select></label><label>Altura m <input type="number" [(ngModel)]="card.estimate.height_m" min="2" max="6" /></label><label>Fuentes internas kW <input type="number" [(ngModel)]="card.estimate.other_heat_sources_kw" min="0" /></label></div><div class="actions"><button type="button" (click)="saveAdvanced(card)">Guardar coeficientes</button><button type="button" (click)="estimate(card)">Aplicar estimación</button></div></details>
+      </article>
+    }
+  </section>
+</main>

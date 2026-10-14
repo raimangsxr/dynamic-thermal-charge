@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
+from datetime import datetime, timezone
 from threading import Thread
 from typing import Any
 
@@ -129,6 +130,7 @@ class PahoMqttClient:
                 topic=str(message.topic),
                 payload=bytes(message.payload),
                 retain=bool(message.retain),
+                received_at=datetime.now(timezone.utc),
             )
         )
 

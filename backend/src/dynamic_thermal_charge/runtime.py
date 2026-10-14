@@ -17,6 +17,7 @@ from typing import Callable, Iterator
 from zoneinfo import ZoneInfo
 
 from .controller import ChargeController
+from .calibration_runtime import CalibrationCoordinator
 from .drivers import OutputDriver, RecordingOutputDriver, SimulatedOutputDriver
 from .gpio_driver import GpioOutputDriver
 from .alerts import (
@@ -190,12 +191,32 @@ def _run_controller(
                 }
 
             control_repository = getattr(store, "home_assistant", None)
+            calibration = CalibrationCoordinator(
+                store,
+                owner=heartbeat.runner_id,
+                clock=lambda: datetime.now(timezone.utc),
+                alerts=alerts,
+            )
             controller = ChargeController(
                 tuple(heater.id for heater in config.heaters if heater.enabled),
                 driver,
                 relay_tests=store.relay_tests,
                 runner_id=heartbeat.runner_id,
                 allowed_outputs_provider=allowed_outputs,
+                calibration_provider=calibration.outputs,
+                calibration_ownership_provider=lambda: set(
+                    calibration.owned_heater_ids(at=datetime.now(timezone.utc))
+                ),
+                calibration_confirmation_provider=(
+                    lambda heater_id, _enabled, at: store.calibration.confirm_command(
+                        heater_id, "charge", at=at
+                    )
+                ),
+                calibration_failure_callback=(
+                    lambda heater_id, at, cause: calibration.fail_active_relay(
+                        heater_id, at=at, cause=cause
+                    )
+                ),
             )
             watchdog = ForecastWatchdog(
                 provider,
@@ -329,6 +350,9 @@ def _run_controller(
                         planning_site,
                         temperature_targets=room_energy_targets,
                         mqtt=live_mqtt,
+                        calibration_excluded_heater_ids=_calibration_excluded_heaters(
+                            store, live_config
+                        ),
                     )
                     if automatic is not None:
                         deviation = (
@@ -526,6 +550,25 @@ def _run_controller(
                 driver.close()
 
 
+def _calibration_excluded_heaters(store, config: AppConfig) -> tuple[str, ...]:
+    """Return the durable calibration ownership set for planner arbitration."""
+    calibration = getattr(store, "calibration", None)
+    if calibration is None:
+        return ()
+    excluded: list[str] = []
+    for heater in config.heaters:
+        try:
+            if calibration.active(heater.id) is not None:
+                excluded.append(heater.id)
+        except Exception:
+            # A store read failure must not make an old plan accidentally
+            # compete with a calibration that may still own a relay.  The
+            # controller's provider separately forces outputs off on errors.
+            logger.error("Could not read calibration ownership", exc_info=True)
+            return tuple(item.id for item in config.heaters)
+    return tuple(sorted(excluded))
+
+
 def _build_automatic_runtime_plan(
     store,
     config: AppConfig,
@@ -535,6 +578,7 @@ def _build_automatic_runtime_plan(
     *,
     temperature_targets=None,
     mqtt: MqttSystemSettings | None = None,
+    calibration_excluded_heater_ids: tuple[str, ...] = (),
 ):
     """Build the controller-facing schedule from the automatic plan value."""
     control_repository = getattr(store, "home_assistant", None)
@@ -596,6 +640,7 @@ def _build_automatic_runtime_plan(
         temperature_targets=target_map,
         room_energy_model=True,
         telemetry_max_age_seconds=config.site.indoor_max_age_minutes * 60,
+        calibration_excluded_heater_ids=tuple(sorted(calibration_excluded_heater_ids)),
     )
     plan = coordinated_plan(
         store.planning,

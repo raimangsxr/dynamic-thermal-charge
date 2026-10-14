@@ -197,6 +197,7 @@ def run_mqtt() -> None:
     from .mqtt.client import PahoMqttClient
     from .mqtt.commands import CommandProcessor
     from .mqtt.indoor import ChargeTelemetryMessageProcessor
+    from .mqtt.outdoor import OutdoorTemperatureMessageProcessor
     from .mqtt.publisher import MqttPublisher, StoreSnapshotReader
     from .mqtt.service import MqttService, MqttSupervisor
     from .mqtt.settings import settings_from_repository
@@ -236,6 +237,8 @@ def run_mqtt() -> None:
                 if getattr(store, "relay_tests", None) is None
                 else store.relay_tests.current
             ),
+            outdoor_topic_provider=lambda: settings.outdoor_topic,
+            calibration_provider=lambda config: store.calibration.projection(config),
         )
         transport = PahoMqttClient(settings)
 
@@ -249,6 +252,11 @@ def run_mqtt() -> None:
             discovery=lambda: snapshots.discovery(topics, store.repository.installation_name()),
             subscriptions=all_subscriptions,
             discharge=snapshots.discharge_commands,
+            command_confirmation=(
+                lambda heater_id, _enabled: store.calibration.confirm_command(
+                    heater_id, "discharge"
+                )
+            ),
         )
         commands = CommandProcessor(store.repository, topics, republish=publisher.republish_heater)
         charge_telemetry = ChargeTelemetryMessageProcessor(
@@ -256,6 +264,11 @@ def run_mqtt() -> None:
             store.planning,
             topics=topics,
             readings=store.indoor_readings,
+            clock=lambda: datetime.now(timezone.utc),
+        )
+        outdoor_processor = OutdoorTemperatureMessageProcessor(
+            store.outdoor_temperature,
+            topic=settings.outdoor_topic,
             clock=lambda: datetime.now(timezone.utc),
         )
 
@@ -271,6 +284,7 @@ def run_mqtt() -> None:
             publish_seconds=settings.publish_seconds,
             command_handler=commands.handle,
             indoor_handler=handle_telemetry,
+            outdoor_handler=outdoor_processor.handle,
         )
 
     supervisor = MqttSupervisor(store.system_configuration, build_service)

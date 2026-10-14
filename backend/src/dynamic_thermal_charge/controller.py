@@ -20,6 +20,10 @@ class ChargeController:
         relay_tests=None,
         runner_id: str = "controller",
         allowed_outputs_provider=None,
+        calibration_provider=None,
+        calibration_ownership_provider=None,
+        calibration_confirmation_provider=None,
+        calibration_failure_callback=None,
     ) -> None:
         self._heater_ids = heater_ids
         self._heater_id_set = set(heater_ids)
@@ -31,6 +35,13 @@ class ChargeController:
         self._relay_test_session_id: str | None = None
         self._failed_outputs: set[str] = set()
         self._allowed_outputs_provider = allowed_outputs_provider
+        # ``None`` means no calibration owns the relays this cycle.  A set
+        # means calibration owns the relay arbitration, including an empty set
+        # for a safe OFF phase.
+        self._calibration_provider = calibration_provider
+        self._calibration_ownership_provider = calibration_ownership_provider
+        self._calibration_confirmation_provider = calibration_confirmation_provider
+        self._calibration_failure_callback = calibration_failure_callback
 
     @property
     def active_outputs(self) -> set[str]:
@@ -70,6 +81,7 @@ class ChargeController:
                 # reported as open, because instantaneous power is derived from
                 # what the controller believes is active.
                 failed.add(heater_id)
+                self._notify_calibration_off_failure(heater_id, at)
         for heater_id in sorted(desired - applied):
             if self._switch(heater_id, True, at):
                 applied.add(heater_id)
@@ -84,6 +96,18 @@ class ChargeController:
         """Drive one output, reporting whether the driver accepted it."""
         try:
             self._driver.set_state(heater_id, enabled, at)
+            if self._calibration_confirmation_provider is not None:
+                try:
+                    self._calibration_confirmation_provider(heater_id, enabled, at)
+                except Exception:
+                    # A missing acknowledgement is handled by the next
+                    # calibration tick as an unsafe/unconfirmed command; it
+                    # must never make the normal controller loop fail here.
+                    logger.warning(
+                        "Could not persist calibration confirmation for %s",
+                        heater_id,
+                        exc_info=True,
+                    )
             return True
         except Exception:
             # The operator-facing message is emitted once per transition by
@@ -110,6 +134,35 @@ class ChargeController:
         else:
             logger.info("Every output accepted its command again")
         self._failed_outputs = failed
+
+    def _notify_calibration_off_failure(self, heater_id: str, at: datetime) -> None:
+        """Fail calibration ownership when its output cannot be switched off."""
+        if (
+            self._calibration_failure_callback is None
+            or self._calibration_ownership_provider is None
+        ):
+            return
+        try:
+            owned = set(self._calibration_ownership_provider())
+        except Exception:
+            logger.error(
+                "Could not read calibration ownership after output %s refused OFF",
+                heater_id,
+                exc_info=True,
+            )
+            return
+        if heater_id not in owned:
+            return
+        try:
+            self._calibration_failure_callback(heater_id, at, "relay_off_failed")
+        except Exception:
+            # A callback failure must not stop the normal controller loop.  The
+            # output remains logically active and is retried on the next cycle.
+            logger.error(
+                "Could not durably fail calibration for output %s",
+                heater_id,
+                exc_info=True,
+            )
 
     def _apply_relay_test(self, at: datetime) -> bool:
         """Apply DB intentions only while test coordination owns the controller."""
@@ -272,6 +325,7 @@ class ChargeController:
             except Exception:
                 logger.exception("Failed to force output %s OFF", heater_id)
                 results[heater_id] = False
+                self._notify_calibration_off_failure(heater_id, at)
         self._active.clear()
         return results
 
@@ -314,6 +368,37 @@ class ChargeController:
         self._relay_test_latch_local = False
 
     def _desired_outputs(self, plan: ScheduleResult | None, at: datetime) -> set[str]:
+        planned = self._planned_outputs(plan, at)
+        if self._calibration_provider is not None:
+            try:
+                # Read ownership before ticking the protocol: a terminal
+                # transition may delete the session during ``outputs`` and we
+                # still must not reintroduce that heater's stale plan in this
+                # same safety cycle.
+                owned = (
+                    set(self._calibration_ownership_provider())
+                    if self._calibration_ownership_provider is not None
+                    else None
+                )
+                calibration_outputs = self._calibration_provider(at)
+            except Exception:
+                logger.error(
+                    "Could not read calibration relay ownership; forcing all outputs off",
+                    exc_info=True,
+                )
+                return set()
+            if calibration_outputs is not None:
+                if owned is None:
+                    # Preserve the historical provider contract for embedders
+                    # that only return a replacement set.
+                    return set(calibration_outputs) & self._heater_id_set
+                return (
+                    (planned - (owned & self._heater_id_set))
+                    | (set(calibration_outputs) & self._heater_id_set)
+                )
+        return planned
+
+    def _planned_outputs(self, plan: ScheduleResult | None, at: datetime) -> set[str]:
         if plan is None:
             return set()
         try:

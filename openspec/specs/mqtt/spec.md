@@ -4,6 +4,26 @@ Publicar el estado de la instalación de forma resiliente ante conexiones MQTT a
 
 ## Requirements
 
+### Requirement: Outdoor temperature for calibration
+
+Cuando se configura un topic exterior, MQTT acepta únicamente el objeto JSON
+exacto `{"outdoor_temperature_c": number}` con un valor finito entre -60 y
+60 °C. Se rechazan mensajes retenidos, anteriores al arranque MQTT, futuros,
+mal formados o con claves extra; solo se conserva la última muestra fresca de
+15 minutos en el almacén de aplicación.
+
+#### Scenario: Outdoor sample rejected
+
+- **WHEN** llega una muestra retenida, fuera de rango o con claves adicionales
+- **THEN** se ignora sin sobrescribir la última lectura válida
+
+### Requirement: Calibration state projection
+
+El estado retenido y el descubrimiento por acumulador exponen estado, fase,
+progreso, coeficientes y calidad de calibración. La descarga de una fase de
+liberación se publica solo si su autorización reciente sigue vigente y nunca
+supera la precedencia del control global o la prueba de relés.
+
 ### Requirement: Publicación condicionada a conexión aceptada
 
 El servicio MQTT no debe publicar estado, disponibilidad, descubrimiento ni suscripciones mientras no haya procesado una conexión aceptada. Debe continuar ejecutándose durante ese intervalo y reanudar las publicaciones cuando se acepte una conexión nueva.
