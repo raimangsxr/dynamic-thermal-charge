@@ -72,6 +72,9 @@ LEGACY_ENVIRONMENT_INPUTS: dict[str, LegacyConfigurationInput] = {
             "DTC_CONTROLLER_LOG_MAX_EVENTS", "logging", "persistence.controller_log"
         ),
         _persisted("AEMET_API_KEY", "weather", "weather", secret=True),
+        _persisted("DTC_VAPID_PRIVATE_KEY", "web_push", "push", secret=True),
+        _persisted("DTC_VAPID_PUBLIC_KEY", "web_push", "api.routes.calibration"),
+        _persisted("DTC_VAPID_SUBJECT", "web_push", "push"),
     )
 }
 

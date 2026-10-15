@@ -37,6 +37,8 @@ import type {
   DatabaseCandidateDto, MigrationDto, OnboardingStatusDto, SecretEditDto,
   SystemConfigurationDto, SystemSection, TopologyDto, ConnectionTestDto,
   WeatherRefreshDto,
+  RoomDto, RoomPatchRequest, RoomEstimateRequest, CalibrationActionDto,
+  OperatorNotificationPageDto, PushRegistrationRequest, PushRegistrationDto,
 } from './api.types';
 
 const BASE = '/api/v1';
@@ -112,6 +114,46 @@ export class Api {
 
   config(): Observable<ConfigDto> {
     return this.http.get<ConfigDto>(`${BASE}/config`);
+  }
+
+  room(id: string): Observable<RoomDto> {
+    return this.http.get<RoomDto>(`${BASE}/rooms/${encodeURIComponent(id)}`);
+  }
+
+  patchRoom(id: string, body: RoomPatchRequest): Observable<RoomDto> {
+    return this.http.patch<RoomDto>(`${BASE}/rooms/${encodeURIComponent(id)}`, body);
+  }
+
+  startCalibration(id: string): Observable<CalibrationActionDto> {
+    return this.http.post<CalibrationActionDto>(`${BASE}/rooms/${encodeURIComponent(id)}/calibration`, {});
+  }
+
+  cancelCalibration(id: string): Observable<CalibrationActionDto> {
+    return this.http.delete<CalibrationActionDto>(`${BASE}/rooms/${encodeURIComponent(id)}/calibration`);
+  }
+
+  estimateRoom(id: string, body: RoomEstimateRequest): Observable<{ room: RoomDto; revision: number }> {
+    return this.http.post<{ room: RoomDto; revision: number }>(`${BASE}/rooms/${encodeURIComponent(id)}/estimate`, body);
+  }
+
+  notifications(): Observable<OperatorNotificationPageDto> {
+    return this.http.get<OperatorNotificationPageDto>(`${BASE}/notifications`);
+  }
+
+  acknowledgeNotification(id: number): Observable<OperatorNotificationPageDto> {
+    return this.http.post<OperatorNotificationPageDto>(`${BASE}/notifications/${id}/ack`, {});
+  }
+
+  pushPublicKey(): Observable<{ public_key: string | null }> {
+    return this.http.get<{ public_key: string | null }>(`${BASE}/push/public-key`);
+  }
+
+  registerPush(body: PushRegistrationRequest): Observable<PushRegistrationDto> {
+    return this.http.post<PushRegistrationDto>(`${BASE}/push/subscriptions`, body);
+  }
+
+  revokePush(browserId: string): Observable<PushRegistrationDto> {
+    return this.http.delete<PushRegistrationDto>(`${BASE}/push/subscriptions`, { body: { browser_id: browserId } });
   }
 
   heater(id: string): Observable<HeaterDto> {

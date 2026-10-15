@@ -5,6 +5,26 @@ tiene que atender, sin que el aviso pueda detener el control.
 
 ## Requirements
 
+### Requirement: Calibration notification channels
+
+Cada terminación de calibración crea un aviso duradero en la bandeja de la
+aplicación. El backend intenta correo por la cola existente de forma
+independiente y crea una tentativa Web Push por cada suscripción activa; cada
+pareja sesión/navegador se deduplica. Falta de VAPID, permiso, suscripción o
+entrega marca `unsupported`, `denied`, `expired` o `error` y nunca cambia el
+resultado de calibración, que sigue visible en la bandeja.
+
+#### Scenario: Push endpoint expired
+
+- **WHEN** el proveedor devuelve que un endpoint ha caducado o fue revocado
+- **THEN** la suscripción pasa a `expired`, no vuelve a intentarse y la
+  aplicación conserva el aviso terminal
+
+#### Scenario: Browser permission denied
+
+- **WHEN** el navegador no concede permiso o no soporta Push
+- **THEN** no se registra una suscripción y el aviso in-app sigue disponible
+
 ### Requirement: Configuración de correo residente en base de datos
 
 La configuración de sistema debe incluir una sección de correo con activación,

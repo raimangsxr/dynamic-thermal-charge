@@ -162,6 +162,54 @@ class AccumulatorNextSocTargetSensor(AccumulatorSensor):
         super().__init__(coordinator, accumulator_id, "next_soc_target_percent")
 
 
+class AccumulatorCalibrationStatusSensor(AccumulatorSensor):
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_translation_key = "calibration_status"
+
+    def __init__(self, coordinator: DynamicThermalChargeCoordinator, accumulator_id: str) -> None:
+        super().__init__(coordinator, accumulator_id, "calibration_status")
+
+
+class AccumulatorCalibrationPhaseSensor(AccumulatorSensor):
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_translation_key = "calibration_phase"
+
+    def __init__(self, coordinator: DynamicThermalChargeCoordinator, accumulator_id: str) -> None:
+        super().__init__(coordinator, accumulator_id, "calibration_phase")
+
+
+class AccumulatorCalibrationProgressSensor(AccumulatorSensor):
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_translation_key = "calibration_progress"
+
+    def __init__(self, coordinator: DynamicThermalChargeCoordinator, accumulator_id: str) -> None:
+        super().__init__(coordinator, accumulator_id, "calibration_progress")
+
+    @property
+    def native_value(self) -> float | None:
+        value = self._value
+        return None if value is None else float(value) * 100
+
+
+class AccumulatorCalibrationCapacitySensor(AccumulatorSensor):
+    _attr_native_unit_of_measurement = "kWh/°C"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_translation_key = "calibration_capacity"
+
+    def __init__(self, coordinator: DynamicThermalChargeCoordinator, accumulator_id: str) -> None:
+        super().__init__(coordinator, accumulator_id, "calibration_capacity_kwh_per_c")
+
+
+class AccumulatorCalibrationLossSensor(AccumulatorSensor):
+    _attr_native_unit_of_measurement = "kW/°C"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_translation_key = "calibration_loss"
+
+    def __init__(self, coordinator: DynamicThermalChargeCoordinator, accumulator_id: str) -> None:
+        super().__init__(coordinator, accumulator_id, "calibration_loss_kw_per_c")
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry,
@@ -181,6 +229,11 @@ async def async_setup_entry(
             AccumulatorDamperSensor(coordinator, accumulator_id),
             AccumulatorNextChargeSensor(coordinator, accumulator_id),
             AccumulatorNextSocTargetSensor(coordinator, accumulator_id),
+            AccumulatorCalibrationStatusSensor(coordinator, accumulator_id),
+            AccumulatorCalibrationPhaseSensor(coordinator, accumulator_id),
+            AccumulatorCalibrationProgressSensor(coordinator, accumulator_id),
+            AccumulatorCalibrationCapacitySensor(coordinator, accumulator_id),
+            AccumulatorCalibrationLossSensor(coordinator, accumulator_id),
         ],
         lambda accumulator_id: tuple(
             accumulator_entity_unique_id(coordinator, accumulator_id, key)
@@ -191,6 +244,11 @@ async def async_setup_entry(
                 "damper_position_percent",
                 "next_charge_at",
                 "next_soc_target_percent",
+                "calibration_status",
+                "calibration_phase",
+                "calibration_progress",
+                "calibration_capacity_kwh_per_c",
+                "calibration_loss_kw_per_c",
             )
         ),
         async_add_entities,

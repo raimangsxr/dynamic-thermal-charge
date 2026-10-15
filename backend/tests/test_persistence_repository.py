@@ -128,17 +128,17 @@ def test_a_heater_field_changes_only_that_heater(initialised_store):
             assert changed[heater.id] == heater, "an unrelated heater changed"
 
 
-def test_a_legacy_heater_without_a_thermal_profile_can_receive_a_single_field_edit(
+def test_a_room_without_a_row_can_receive_a_single_field_edit(
     initialised_store,
 ):
-    from dynamic_thermal_charge.persistence.schema import heater as heater_table, thermal_profile
+    from dynamic_thermal_charge.persistence.schema import heater as heater_table, room
 
     with initialised_store.engine.begin() as connection:
         heater_key = connection.execute(
             select(heater_table.c.id).where(heater_table.c.heater_id == "entrada")
         ).scalar_one()
         connection.execute(
-            delete(thermal_profile).where(thermal_profile.c.heater_id == heater_key)
+            delete(room).where(room.c.heater_id == heater_key)
         )
 
     repository = initialised_store.repository
@@ -238,7 +238,7 @@ def test_a_heater_can_be_added(initialised_store):
     assert added.thermal is not None
 
 
-def test_removing_a_heater_takes_its_output_and_profile(initialised_store):
+def test_removing_a_heater_takes_its_output_and_room(initialised_store):
     repository = initialised_store.repository
     _, revision = repository.current()
     repository.remove_heater(revision, "buhardilla")
@@ -247,14 +247,14 @@ def test_removing_a_heater_takes_its_output_and_profile(initialised_store):
     with initialised_store.engine.connect() as connection:
         from dynamic_thermal_charge.persistence.schema import (
             output_config,
-            thermal_profile,
+            room,
         )
 
         assert connection.execute(
             select(func.count()).select_from(output_config)
         ).scalar() == 3
         assert connection.execute(
-            select(func.count()).select_from(thermal_profile)
+            select(func.count()).select_from(room)
         ).scalar() == 3
 
 

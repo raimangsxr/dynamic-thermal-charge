@@ -278,6 +278,11 @@ class PlanningInput:
     )
     room_energy_model: bool = False
     telemetry_max_age_seconds: float = 900.0
+    # A running calibration owns its accumulator completely.  The planner
+    # receives this explicit arbitration set instead of inferring it from
+    # mutable room status, so a stale plan cannot reintroduce the selected
+    # accumulator during the calibration cycle.
+    calibration_excluded_heater_ids: tuple[str, ...] = ()
 
 
 class DegreeHoursDemandEstimator:
@@ -1696,13 +1701,18 @@ def _room_exclusion_payload(
     return tuple(
         {
             "heater_id": heater.id,
-            "cause": "missing_required_state",
+            "cause": (
+                "calibration_active"
+                if heater.id in set(request.calibration_excluded_heater_ids)
+                else "missing_required_state"
+            ),
         }
         for heater in sorted(
             (item for item in request.heaters if item.enabled),
             key=lambda item: item.id,
         )
-        if not _room_telemetry_fresh(
+        if heater.id in set(request.calibration_excluded_heater_ids)
+        or not _room_telemetry_fresh(
             request.telemetry.get(heater.id),
             request.horizon_start,
             request.telemetry_max_age_seconds,

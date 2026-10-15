@@ -14,7 +14,7 @@ decision.
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 
@@ -750,6 +750,114 @@ class ErrorResponse(BaseModel):
     heater_id: str | None = None
 
 
+# --------------------------------------------------------------------------- #
+# Automatic thermal calibration
+
+
+class CalibrationQualityView(BaseModel):
+    sample_count: int
+    elapsed_hours: float
+    heating_windows: int
+    cooling_windows: int
+    indoor_range_c: float
+    differential_range_c: float
+    heat_delivered_kwh: float
+    rmse_c: float | None = None
+    bias_c: float | None = None
+    capacity_confidence_relative: float | None = None
+    loss_confidence_relative: float | None = None
+    condition_number: float | None = None
+    sufficient: bool = False
+    reason: str | None = None
+
+
+class CalibrationSessionView(BaseModel):
+    id: str
+    status: str
+    phase: str
+    started_at: datetime
+    updated_at: datetime
+    phase_deadline_at: datetime | None = None
+    missing_since: dict[str, str] = Field(default_factory=dict)
+    commands: dict[str, Any] = Field(default_factory=dict)
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    terminal_cause: str | None = None
+
+
+class RoomResponse(BaseModel):
+    heater_id: str
+    capacity_kwh_per_c: float
+    loss_kw_per_c: float
+    status: str
+    terminal_result: dict[str, Any] | None = None
+    terminal_cause: str | None = None
+    terminal_at: datetime | None = None
+    applied_session_id: str | None = None
+    session: CalibrationSessionView | None = None
+    quality: CalibrationQualityView | None = None
+    input_ages_minutes: dict[str, float | None] = Field(default_factory=dict)
+
+
+class RoomPatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_revision: int = Field(ge=1)
+    capacity_kwh_per_c: float = Field(gt=0)
+    loss_kw_per_c: float = Field(ge=0)
+
+
+class RoomEstimateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_revision: int = Field(ge=1)
+    surface_m2: float = Field(gt=0)
+    walls_exterior: int = Field(ge=0, le=4)
+    windows_m2: float = Field(ge=0)
+    insulation: Literal["poor", "medium", "good"]
+    height_m: float = Field(ge=2, le=6)
+    other_heat_sources_kw: float = Field(ge=0)
+
+
+class RoomEstimateResponse(BaseModel):
+    room: RoomResponse
+    revision: int
+
+
+class CalibrationActionResponse(BaseModel):
+    accepted: bool = True
+    revision: int
+    room: RoomResponse
+
+
+class OperatorNotificationView(BaseModel):
+    id: int
+    session_id: str | None = None
+    kind: str
+    title: str
+    body: str
+    created_at: datetime
+    acknowledged_at: datetime | None = None
+
+
+class OperatorNotificationPage(BaseModel):
+    items: list[OperatorNotificationView]
+
+
+class PushRegistrationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    browser_id: str = Field(min_length=1, max_length=160)
+    endpoint: str = Field(min_length=1)
+    keys: dict[str, str]
+
+
+class PushRegistrationResponse(BaseModel):
+    browser_id: str
+    status: str
+
+
+class PushRevocationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    browser_id: str = Field(min_length=1, max_length=160)
+
+
 PlanningResponse.model_rebuild()
 
 
@@ -812,4 +920,16 @@ __all__ = [
     "UpdateHeaterRequest",
     "StatusResponse",
     "TransitionPage",
+    "CalibrationActionResponse",
+    "CalibrationQualityView",
+    "CalibrationSessionView",
+    "OperatorNotificationPage",
+    "OperatorNotificationView",
+    "PushRegistrationRequest",
+    "PushRegistrationResponse",
+    "PushRevocationRequest",
+    "RoomEstimateRequest",
+    "RoomEstimateResponse",
+    "RoomPatchRequest",
+    "RoomResponse",
 ]

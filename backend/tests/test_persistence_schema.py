@@ -160,7 +160,7 @@ def test_the_schema_declares_every_expected_table():
         "weather_config",
         "heater",
         "output_config",
-        "thermal_profile",
+        "room",
         "temperature_target",
             "forecast",
             "forecast_hour",
@@ -185,6 +185,12 @@ def test_the_schema_declares_every_expected_table():
             "alert_type_config",
             "alert_delivery",
             "alert_episode",
+            "outdoor_temperature",
+            "thermal_calibration_session",
+            "thermal_calibration_sample",
+            "operator_notification",
+            "web_push_subscription",
+            "web_push_attempt",
     }
 
 

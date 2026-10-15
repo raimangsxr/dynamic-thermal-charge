@@ -4,6 +4,19 @@ Ofrecer una integración local y configurable con Home Assistant sin convertirlo
 
 ## Requirements
 
+### Requirement: Thermal calibration entities and actions
+
+El snapshot operativo incluye estado, fase, progreso, coeficientes, calidad y
+resultado terminal por acumulador. La integración expone sensores equivalentes
+y botones explícitos para iniciar o cancelar; una orden no sustituye el
+controlador ni conmuta relés directamente.
+
+#### Scenario: Calibration terminal state
+
+- **WHEN** el backend termina una sesión
+- **THEN** Home Assistant refleja el estado y causa del mismo snapshot y puede
+  solicitar una nueva sesión solo mediante la acción explícita del operador
+
 ### Requirement: Snapshot operativo autenticado
 
 La API debe publicar un identificador estable de instalación, revisión, salud, inventario dinámico, telemetría fresca y resumen del plan. El forecast completo debe estar disponible mediante una operación separada y no como atributos masivos de entidades.

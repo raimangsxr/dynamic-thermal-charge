@@ -131,6 +131,8 @@ def discovery_entities(
     config: AppConfig,
     installation_name: str,
     topics: TopicLayout,
+    *,
+    include_calibration: bool = False,
 ) -> list[DiscoveryEntity]:
     """Return deterministic discovery definitions for the current inventory."""
     state = topics.installation_state
@@ -295,6 +297,28 @@ def discovery_entities(
                 payload_off="OFF",
             ),
         ]
+        if include_calibration:
+            for field, label in (
+                ("calibration.status", "Estado de calibración"),
+                ("calibration.phase", "Fase de calibración"),
+                ("calibration.progress", "Progreso de calibración"),
+                ("calibration.capacity_kwh_per_c", "Capacidad térmica"),
+                ("calibration.loss_kw_per_c", "Pérdida térmica"),
+            ):
+                group_entities.append(
+                    _entity(
+                        **common,
+                        key=f"heater_{heater.id}_{field.replace('.', '_')}",
+                        component="sensor",
+                        entity=field.replace(".", "_"),
+                        name=label,
+                        value=field,
+                        unit_of_measurement=(
+                            "kWh/°C" if field.endswith("capacity_kwh_per_c") else
+                            "kW/°C" if field.endswith("loss_kw_per_c") else None
+                        ),
+                    )
+                )
         for field, label in (
             ("requested_minutes", "Minutos solicitados"),
             ("allocated_minutes", "Minutos asignados"),

@@ -5,6 +5,36 @@ y ejecutables a partir de previsión y telemetría aptas.
 
 ## Requirements
 
+### Requirement: Room aggregate and automatic thermal calibration
+
+Cada acumulador tiene exactamente una estancia en el almacén de configuración.
+La migración conserva los coeficientes de `thermal_profile`, crea los valores
+predeterminados con estado `approximate` y clasifica los valores no
+predeterminados como `manually_adjusted`. El controlador mantiene una sesión
+duradera por acumulador con fases `baseline`, `charge`, `release`, `cool`,
+`fit` y `applying`, muestras sincronizadas y un arrendamiento renovable.
+
+#### Scenario: Calibration arbitration
+
+- **WHEN** una sesión activa selecciona un acumulador
+- **THEN** ese acumulador se excluye del input del plan y solo su override
+  controlado puede ordenar carga; el resto del plan sigue limitado por la
+  potencia global
+
+#### Scenario: Restart-safe terminal result
+
+- **WHEN** el controlador reinicia durante una sesión o entre la aplicación y
+  la limpieza
+- **THEN** recupera la fase persistida, fuerza salidas apagadas hasta validar
+  entradas y no aplica dos veces ni duplica el resultado terminal
+
+#### Scenario: Failed calibration preserves model
+
+- **WHEN** faltan entradas durante más de una hora, se pierde autoridad o se
+  agotan 24 horas sin calidad suficiente
+- **THEN** la sesión termina como `failed` o `cancelled`, conserva ambos
+  coeficientes anteriores y solicita una nueva planificación
+
 ### Requirement: Modelo acoplado de energía y confort por habitación
 
 Cada acumulador debe modelar la energía almacenada y la temperatura interior

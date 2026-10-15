@@ -101,6 +101,7 @@ def create_app(
         )
 
     from .routes import config as config_routes
+    from .routes import calibration as calibration_routes
     from .routes import controller_log as controller_log_routes
     from .routes import docs as docs_routes
     from .routes import health as health_routes
@@ -144,6 +145,12 @@ def create_app(
     app.include_router(relay_test_routes.router, prefix=API_PREFIX, tags=["relay-test"], dependencies=protected)
     app.include_router(
         config_routes.router, prefix=API_PREFIX, tags=["config"], dependencies=protected
+    )
+    app.include_router(
+        calibration_routes.router,
+        prefix=API_PREFIX,
+        tags=["calibration"],
+        dependencies=protected,
     )
     app.include_router(
         history_routes.router,

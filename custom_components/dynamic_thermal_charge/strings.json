@@ -54,6 +54,11 @@
       "damper_position_percent": {"name": "Damper position"},
       "next_charge_at": {"name": "Next charge"},
       "next_soc_target_percent": {"name": "Next SOC target"}
+      ,"calibration_status": {"name": "Calibration status"}
+      ,"calibration_phase": {"name": "Calibration phase"}
+      ,"calibration_progress": {"name": "Calibration progress"}
+      ,"calibration_capacity": {"name": "Calibrated capacity"}
+      ,"calibration_loss": {"name": "Calibrated heat loss"}
     },
     "binary_sensor": {
       "charging": {"name": "Charging"}
@@ -62,7 +67,9 @@
       "automatic_control": {"name": "Automatic control"}
     },
     "button": {
-      "recalculate": {"name": "Recalculate"}
+      "recalculate": {"name": "Recalculate"},
+      "start_calibration": {"name": "Start thermal calibration"},
+      "cancel_calibration": {"name": "Cancel thermal calibration"}
     },
     "climate": {
       "accumulator_climate": {"name": "Climate"}

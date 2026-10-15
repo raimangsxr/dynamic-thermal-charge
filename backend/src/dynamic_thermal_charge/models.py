@@ -8,6 +8,54 @@ import math
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
+ROOM_STATUSES = frozenset(
+    {
+        "approximate",
+        "estimated",
+        "calibrating",
+        "calibrated",
+        "failed",
+        "cancelled",
+        "manually_adjusted",
+    }
+)
+
+
+@dataclass(frozen=True)
+class Room:
+    """The thermal model belonging to exactly one storage accumulator.
+
+    ``ThermalProfile`` predates automatic calibration and remains available as
+    a compatibility value at the domain boundary.  New persistence and API
+    code uses ``Room`` so the coefficient state and the latest terminal result
+    have one canonical home.
+    """
+
+    room_thermal_capacity_kwh_per_c: float = 2.5
+    room_heat_loss_kw_per_c: float = 0.12
+    status: str = "approximate"
+    applied_session_id: str | None = None
+    terminal_result: dict[str, object] | None = None
+    terminal_cause: str | None = None
+    terminal_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if (
+            not math.isfinite(self.room_thermal_capacity_kwh_per_c)
+            or self.room_thermal_capacity_kwh_per_c <= 0
+        ):
+            raise ValueError("room thermal capacity must be finite and positive")
+        if (
+            not math.isfinite(self.room_heat_loss_kw_per_c)
+            or self.room_heat_loss_kw_per_c < 0
+        ):
+            raise ValueError("room heat loss must be finite and non-negative")
+        if self.status not in ROOM_STATUSES:
+            raise ValueError(f"unsupported room status: {self.status}")
+        if self.terminal_at is not None and self.terminal_at.tzinfo is None:
+            raise ValueError("room terminal_at requires a timezone")
+
+
 @dataclass(frozen=True)
 class OutputConfig:
     kind: str = "simulated"
@@ -236,6 +284,7 @@ class Heater:
     priority: int = 0
     output: OutputConfig = OutputConfig()
     thermal: ThermalProfile | None = None
+    room: Room | None = None
     model: str | None = None
     enabled: bool = True
     reserve_percent: float = 0.0
@@ -274,6 +323,56 @@ class Heater:
         targets = tuple(self.temperature_targets)
         if any(not isinstance(target, TemperatureTarget) for target in targets):
             raise ValueError(f"heater {self.id}: temperature_targets are invalid")
+        room = self.room
+        thermal = self.thermal
+        if room is None and thermal is not None:
+            room = Room(
+                room_thermal_capacity_kwh_per_c=thermal.room_thermal_capacity_kwh_per_c,
+                room_heat_loss_kw_per_c=thermal.room_heat_loss_kw_per_c,
+                status=(
+                    "approximate"
+                    if math.isclose(thermal.room_thermal_capacity_kwh_per_c, 2.5)
+                    and math.isclose(thermal.room_heat_loss_kw_per_c, 0.12)
+                    else "manually_adjusted"
+                ),
+            )
+            object.__setattr__(self, "room", room)
+        elif room is not None and thermal is None:
+            object.__setattr__(
+                self,
+                "thermal",
+                ThermalProfile(
+                    room_thermal_capacity_kwh_per_c=room.room_thermal_capacity_kwh_per_c,
+                    room_heat_loss_kw_per_c=room.room_heat_loss_kw_per_c,
+                ),
+            )
+        elif room is not None and thermal is not None:
+            if not (
+                math.isclose(
+                    room.room_thermal_capacity_kwh_per_c,
+                    thermal.room_thermal_capacity_kwh_per_c,
+                )
+                and math.isclose(
+                    room.room_heat_loss_kw_per_c,
+                    thermal.room_heat_loss_kw_per_c,
+                )
+            ):
+                # ``thermal`` is the compatibility constructor field used by
+                # older callers and dataclasses.replace().  A room created
+                # from the default thermal profile may therefore be stale;
+                # let an explicit legacy edit update the canonical aggregate.
+                if room.status == "approximate":
+                    object.__setattr__(
+                        self,
+                        "room",
+                        Room(
+                            room_thermal_capacity_kwh_per_c=thermal.room_thermal_capacity_kwh_per_c,
+                            room_heat_loss_kw_per_c=thermal.room_heat_loss_kw_per_c,
+                            status="manually_adjusted",
+                        ),
+                    )
+                else:
+                    raise ValueError(f"heater {self.id}: room and thermal coefficients differ")
         validate_temperature_targets(targets)
         object.__setattr__(
             self,
@@ -334,11 +433,15 @@ class Heater:
     @property
     def room_thermal_capacity_kwh_per_c(self) -> float:
         """The configured room heat capacity, with the migration default."""
+        if self.room is not None:
+            return self.room.room_thermal_capacity_kwh_per_c
         return 2.5 if self.thermal is None else self.thermal.room_thermal_capacity_kwh_per_c
 
     @property
     def room_heat_loss_kw_per_c(self) -> float:
         """The configured envelope heat-loss coefficient."""
+        if self.room is not None:
+            return self.room.room_heat_loss_kw_per_c
         return 0.12 if self.thermal is None else self.thermal.room_heat_loss_kw_per_c
 
 

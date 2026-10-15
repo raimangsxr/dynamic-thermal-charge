@@ -86,6 +86,28 @@ class Store:
             self.location,
         )
 
+    @property
+    def calibration(self):
+        from .calibration import SqlCalibrationRepository
+
+        return SqlCalibrationRepository(
+            self.configuration_engine or self.engine,
+            self.application_engine or self.engine,
+            self.repository.installation_id(),
+            self.location,
+            self.location,
+        )
+
+    @property
+    def outdoor_temperature(self):
+        from .outdoor import SqlOutdoorTemperatureRepository
+
+        return SqlOutdoorTemperatureRepository(
+            self.application_engine or self.engine,
+            self.repository.installation_id(),
+            self.location,
+        )
+
 
 @dataclass(frozen=True)
 class InitReport:

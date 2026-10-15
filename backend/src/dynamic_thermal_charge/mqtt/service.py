@@ -31,6 +31,7 @@ class MqttService:
         clock: Callable[[], datetime] | None = None,
         command_handler: Callable[[IncomingMessage], object] | None = None,
         indoor_handler: Callable[[IncomingMessage], object] | None = None,
+        outdoor_handler: Callable[[IncomingMessage], object] | None = None,
     ) -> None:
         self._client = client
         self._topics = topics
@@ -43,6 +44,7 @@ class MqttService:
         self._subscribed: set[str] = set()
         self._command_handler = command_handler
         self._indoor_handler = indoor_handler
+        self._outdoor_handler = outdoor_handler
         self._messages: deque[IncomingMessage] = deque()
         self._connections: deque[tuple[bool, str | None]] = deque()
         self._connected = False
@@ -120,6 +122,8 @@ class MqttService:
             try:
                 if "/set/" in message.topic and self._command_handler is not None:
                     self._command_handler(message)
+                elif self._outdoor_handler is not None and self._outdoor_handler(message):
+                    continue
                 elif self._indoor_handler is not None:
                     self._indoor_handler(message)
             except Exception:
@@ -156,7 +160,11 @@ class MqttService:
         self._subscribed = desired
 
     def _on_message(self, message: IncomingMessage) -> None:
-        if self._command_handler is None and self._indoor_handler is None:
+        if (
+            self._command_handler is None
+            and self._indoor_handler is None
+            and self._outdoor_handler is None
+        ):
             return
         self._messages.append(message)
 

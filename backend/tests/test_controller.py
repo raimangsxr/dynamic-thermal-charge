@@ -137,6 +137,28 @@ def test_ignores_unknown_heaters_from_persisted_plan(caplog) -> None:
     assert "Ignoring unknown heater ids" in caplog.text
 
 
+def test_calibration_owns_only_selected_heater_and_preserves_other_plan_outputs() -> None:
+    start = datetime(2026, 1, 1)
+    driver = RecordingDriver()
+    controller = ChargeController(
+        ("a", "b"),
+        driver,
+        calibration_ownership_provider=lambda: {"a"},
+        calibration_provider=lambda _at: set(),
+    )
+    persisted = ScheduleResult(
+        slots=(ScheduleSlot(start, start + timedelta(minutes=30), ("a", "b"), 4800),),
+        allocated_minutes={"a": 30, "b": 30},
+        unmet_minutes={},
+    )
+
+    controller.initialize(start)
+    controller.apply(persisted, start)
+
+    assert ("a", True) not in [(heater_id, enabled) for heater_id, enabled, _ in driver.calls]
+    assert ("b", True) in [(heater_id, enabled) for heater_id, enabled, _ in driver.calls]
+
+
 def test_active_relay_test_ends_when_lease_expires_without_a_pending_command(initialised_store, clock) -> None:
     from dynamic_thermal_charge.persistence.heartbeat import SqlHeartbeatPublisher
 
@@ -252,6 +274,45 @@ def test_apply_presumes_an_output_whose_off_failed_is_still_active() -> None:
     # The relay is physically closed, so the controller may not report it open:
     # instantaneous power is derived from what it believes is active.
     assert controller.active_outputs == {"a", "b"}
+
+
+def test_calibration_owned_off_failure_notifies_terminal_failure_callback() -> None:
+    start = datetime(2026, 1, 1)
+    middle = start + timedelta(minutes=30)
+    driver = SelectivelyFailingDriver(failing={("a", False)})
+    failures = []
+    controller = ChargeController(
+        ("a", "b"),
+        driver,
+        calibration_ownership_provider=lambda: {"a"},
+        calibration_failure_callback=lambda heater_id, at, cause: failures.append(
+            (heater_id, at, cause)
+        ),
+    )
+
+    controller.apply(plan(start), start)
+    controller.apply(plan(start), middle)
+
+    assert failures == [("a", middle, "relay_off_failed")]
+    assert controller.active_outputs == {"a", "b"}
+
+
+def test_non_calibration_off_failure_does_not_trigger_calibration_callback() -> None:
+    start = datetime(2026, 1, 1)
+    middle = start + timedelta(minutes=30)
+    driver = SelectivelyFailingDriver(failing={("a", False)})
+    failures = []
+    controller = ChargeController(
+        ("a", "b"),
+        driver,
+        calibration_ownership_provider=lambda: set(),
+        calibration_failure_callback=lambda *args: failures.append(args),
+    )
+
+    controller.apply(plan(start), start)
+    controller.apply(plan(start), middle)
+
+    assert failures == []
 
 
 def test_apply_does_not_claim_an_output_whose_on_failed() -> None:
