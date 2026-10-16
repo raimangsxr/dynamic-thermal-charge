@@ -929,6 +929,45 @@ eje común de 0–100% y su tabla conserva los kWh de inicio y fin.
 - **THEN** la celda correspondiente muestra “sin dato” y conserva el resto de
   columnas e intervalos consultables
 
+### Requirement: Histórico medido y señales de las gráficas
+
+El controlador conserva una muestra alineada cada cinco minutos por acumulador
+con temperatura interior, SOC, energía almacenada, carga confirmada, descarga
+ordenada y posición de compuerta, además de la temperatura exterior por
+instalación. Las lecturas ausentes o caducadas permanecen como `null`, las
+inserciones son idempotentes por instalación, acumulador y bucket, y las
+muestras siguen `retention_days`. La API sirve cada alcance por rango acotado a
+siete días, con paginación y sin exponer las muestras de calibración. Para cada
+slot pasado, la proyección y sus señales proceden del plan que lo gobernaba
+según la auditoría de activaciones y la frontera de slots, no del plan vigente.
+
+`Análisis y datos` superpone las series medidas y proyectadas para la ventana
+pasada elegida de 6, 24 o 72 horas. Las gráficas Chart.js y sus tablas
+equivalentes conservan los huecos nulos y muestran “sin dato”; incluyen el
+instante observado por Estado como marcador de ahora, la garantía, previsión
+interpolada u obsoleta, motivos de carga y límites agregados. La consulta se
+refresca con la cadencia de Estado solo mientras la vista está visible.
+
+#### Scenario: Muestra ausente y reinicio en el mismo bucket
+
+- **WHEN** el controlador repite un ciclo dentro del mismo bucket de cinco
+  minutos o una lectura no está fresca
+- **THEN** queda una sola muestra y el campo no fresco queda como `null`, sin
+  arrastrar el valor anterior
+
+#### Scenario: Plan gobernante de una muestra pasada
+
+- **WHEN** dos planes se activan alrededor del inicio de un slot ya observado
+- **THEN** cada punto usa el plan que gobernaba ese slot según la auditoría,
+  sin dividirlo ni sustituirlo por el plan actualmente activo
+
+#### Scenario: Señales y tabla accesible
+
+- **WHEN** una serie contiene valores nulos, una previsión interpolada u
+  obsoleta, motivos de carga o saturación del límite
+- **THEN** el gráfico conserva los huecos, dibuja las señales y la tabla
+  equivalente expone las mismas series y señales con texto comprensible
+
 ### Requirement: Feedback de las acciones del editor de planificación
 
 El flujo guiado de planificación debe hacer visible el resultado de sus

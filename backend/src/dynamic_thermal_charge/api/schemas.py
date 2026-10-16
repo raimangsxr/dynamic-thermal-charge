@@ -749,6 +749,44 @@ class TransitionPage(BaseModel):
     availability: str = "available"
 
 
+class HistorySeriesGoverningPlan(BaseModel):
+    plan_id: int
+    activated_at: datetime
+    slot_start: datetime
+    slot_end: datetime
+    status: str
+    activation_mode: str
+
+
+class HistorySeriesCues(BaseModel):
+    forecast_interpolated: bool | None = None
+    forecast_stale: bool | None = None
+    guaranteed: bool | None = None
+    charge_reasons: list[Any] | None = None
+    aggregate_limit_reached: bool | None = None
+
+
+class HistorySeriesPoint(BaseModel):
+    at: datetime
+    measured: dict[str, Any]
+    projected: dict[str, Any] | None = None
+    governing_plan: HistorySeriesGoverningPlan | None = None
+    cues: HistorySeriesCues
+
+
+class HistorySeriesPage(BaseModel):
+    scope: Literal["installation", "heater"]
+    heater_id: str | None = None
+    from_: datetime = Field(alias="from")
+    to: datetime
+    items: list[HistorySeriesPoint]
+    limit_applied: int
+    has_more: bool
+    next_cursor: str | None = None
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
 class RelayTestHistoryItem(BaseModel):
     id: int
     session_id: str

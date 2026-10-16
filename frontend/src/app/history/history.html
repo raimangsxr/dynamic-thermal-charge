@@ -30,23 +30,32 @@
     <div class="section-heading">
       <div><p class="eyebrow">Consulta</p><h2 id="filters-title">Filtrar {{ activeTab().label.toLowerCase() }}</h2><p class="section-lead">Acota el periodo y aplica los filtros antes de cargar los registros. Las horas se muestran en {{ installationTimezone() }}.</p></div>
     </div>
-    <form class="filters" (submit)="$event.preventDefault(); load()">
-      <mat-form-field appearance="outline" subscriptSizing="dynamic">
-        <mat-label>Desde</mat-label>
-        <input matInput id="from" type="datetime-local" [ngModel]="from()" (ngModelChange)="from.set($event)" name="from" />
-      </mat-form-field>
-      <mat-form-field appearance="outline" subscriptSizing="dynamic">
-        <mat-label>Hasta</mat-label>
-        <input matInput id="to" type="datetime-local" [ngModel]="to()" (ngModelChange)="to.set($event)" name="to" />
-      </mat-form-field>
-      @if (tab() === 'transitions') {
+    @if (tab() !== 'measured') {
+      <form class="filters" (submit)="$event.preventDefault(); load()">
         <mat-form-field appearance="outline" subscriptSizing="dynamic">
-          <mat-label>Acumulador</mat-label>
-          <input matInput id="heater" [ngModel]="heaterId()" (ngModelChange)="heaterId.set($event)" name="heater" placeholder="ID del acumulador" />
+          <mat-label>Desde</mat-label>
+          <input matInput id="from" type="datetime-local" [ngModel]="from()" (ngModelChange)="from.set($event)" name="from" />
         </mat-form-field>
-      }
-      <button mat-flat-button color="primary" type="submit" data-testid="apply"><mat-icon aria-hidden="true">filter_alt</mat-icon>Aplicar filtros</button>
-    </form>
+        <mat-form-field appearance="outline" subscriptSizing="dynamic">
+          <mat-label>Hasta</mat-label>
+          <input matInput id="to" type="datetime-local" [ngModel]="to()" (ngModelChange)="to.set($event)" name="to" />
+        </mat-form-field>
+        @if (tab() === 'transitions') {
+          <mat-form-field appearance="outline" subscriptSizing="dynamic">
+            <mat-label>Acumulador</mat-label>
+            <input matInput id="heater" [ngModel]="heaterId()" (ngModelChange)="heaterId.set($event)" name="heater" placeholder="ID del acumulador" />
+          </mat-form-field>
+        }
+        <button mat-flat-button color="primary" type="submit" data-testid="apply"><mat-icon aria-hidden="true">filter_alt</mat-icon>Aplicar filtros</button>
+      </form>
+    } @else {
+      <div class="history-window" role="group" aria-label="Ventana histórica medida">
+        <span>Pasado desde la hora observada por Estado:</span>
+        <button mat-stroked-button type="button" [class.selected-window]="historyWindowHours() === 6" (click)="selectHistoryWindow(6)">6 h</button>
+        <button mat-stroked-button type="button" [class.selected-window]="historyWindowHours() === 24" (click)="selectHistoryWindow(24)">24 h</button>
+        <button mat-stroked-button type="button" [class.selected-window]="historyWindowHours() === 72" (click)="selectHistoryWindow(72)">72 h</button>
+      </div>
+    }
   </section>
 
   @if (rangeError(); as message) {
@@ -83,7 +92,7 @@
     <section class="workspace-panel results-panel" aria-labelledby="results-title">
       <div class="section-heading">
         <div><p class="eyebrow">Resultados</p><h2 id="results-title">{{ activeTab().label }}</h2><p class="section-lead">Los registros se muestran en el orden recibido del servidor.</p></div>
-        @if (page(); as current) { <span class="revision-chip">{{ current.items.length }} registros</span> }
+        @if (page(); as current) { <span class="revision-chip">{{ tab() === 'measured' ? measuredRows().length : current.items.length }} registros</span> }
         @if (tab() === 'planning' && planningAudit(); as audit) { <span class="revision-chip">{{ audit.items.length }} registros</span> }
       </div>
 
@@ -127,6 +136,32 @@
               <caption class="sr-only">Decisiones automáticas de planificación</caption>
               <thead><tr><th scope="col">Instante</th><th scope="col">Evento</th><th scope="col">Motivo</th><th scope="col">Detalle</th></tr></thead>
               <tbody>@for (item of planningAudit()?.items ?? []; track item.id) { <tr><td>{{ instant(item.occurred_at) }}</td><td>{{ auditEventText(item.event) }}</td><td>{{ auditReasonText(item.reason) }}</td><td><details><summary>Detalle técnico</summary><code>{{ item.details | json }}</code></details></td></tr> }</tbody>
+            </table>
+          }
+          @case ('measured') {
+            <table data-table="measured">
+              <caption class="sr-only">Muestras medidas de instalación y acumuladores, con proyección y señales conservadas</caption>
+              <thead><tr><th scope="col">Instante</th><th scope="col">Marcador</th><th scope="col">Alcance</th><th scope="col">Interior medido (°C)</th><th scope="col">Interior proyectado (°C)</th><th scope="col">Exterior medido (°C)</th><th scope="col">Exterior proyectado (°C)</th><th scope="col">SOC medido (%)</th><th scope="col">Energía medida (kWh)</th><th scope="col">Carga medida (W)</th><th scope="col">Carga proyectada (W)</th><th scope="col">Descarga ordenada</th><th scope="col">Compuerta (%)</th><th scope="col">Señales</th></tr></thead>
+              <tbody>
+                @for (row of measuredRows(); track row.scope + ':' + (row.heaterId ?? 'installation') + ':' + row.at) {
+                  <tr>
+                    <th scope="row">{{ instant(row.at) }}</th>
+                    <td>{{ measuredNowAt() === row.at ? 'Ahora' : '—' }}</td>
+                    <td>{{ measuredScopeText(row) }}</td>
+                    <td>{{ historyTemperature(row.measured['indoor_temperature_c']) }}</td>
+                    <td>{{ historyTemperature(row.projected?.['indoor_temperature_c']) }}</td>
+                    <td>{{ historyTemperature(row.measured['outdoor_temperature_c']) }}</td>
+                    <td>{{ historyTemperature(row.projected?.['outdoor_temperature_c']) }}</td>
+                    <td>{{ historyValue(row.measured['stored_soc_percent']) }}</td>
+                    <td>{{ historyValue(row.measured['stored_energy_kwh']) }}</td>
+                    <td>{{ historyValue(row.measured['confirmed_charge_power_w'] ?? row.measured['aggregate_charge_power_w']) }}</td>
+                    <td>{{ historyValue(row.projected?.['charge_power_w'] ?? row.projected?.['aggregate_charge_power_w']) }}</td>
+                    <td>{{ historyValue(row.measured['discharge_commanded']) }}</td>
+                    <td>{{ historyValue(row.measured['damper_position_percent']) }}</td>
+                    <td>{{ historyCueText(row.cues) }}</td>
+                  </tr>
+                }
+              </tbody>
             </table>
           }
         }

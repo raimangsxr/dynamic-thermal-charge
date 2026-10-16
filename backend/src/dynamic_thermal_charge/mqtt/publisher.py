@@ -5,8 +5,6 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import replace
-from datetime import timedelta
 from typing import Any
 
 from ..api.liveness import ControllerView
@@ -19,7 +17,12 @@ from ..persistence import (
     SchemaVersionError,
 )
 from . import MqttClient, MqttError
-from .discharge import DischargeCommand, NO_SETPOINT, resolve_discharge_commands
+from .discharge import (
+    DischargeCommand,
+    NO_SETPOINT,
+    apply_calibration_discharge_overrides,
+    resolve_discharge_commands,
+)
 from .discovery import DiscoveryEntity
 from .discovery import discovery_entities
 from .topics import TopicLayout
@@ -387,45 +390,25 @@ class StoreSnapshotReader:
         # Calibration owns only its selected accumulator.  Safety, global
         # control and relay-test checks above remain authoritative; stale
         # commands are treated as OFF after a controller restart.
+        automatic_control_enabled = (
+            True
+            if control is None
+            else bool(getattr(control, "automatic_control_enabled", True))
+        )
+        relay_test_in_progress = _relay_test_in_progress(relay_test)
         if (
-            not _relay_test_in_progress(relay_test)
+            not relay_test_in_progress
             and bool(self._state_is_current)
-            and (control is None or bool(getattr(control, "automatic_control_enabled", True)))
+            and automatic_control_enabled
         ):
-            projection = self._calibration_provider(self._config)
-            now = self._clock()
-            adjusted: list[DischargeCommand] = []
-            for command in commands:
-                value = projection.get(command.heater_id) if isinstance(projection, Mapping) else None
-                calibration = value if isinstance(value, Mapping) else None
-                payload = calibration.get("commands") if calibration is not None else None
-                authorized_at = _parse_instant(
-                    payload.get("authorized_at") if isinstance(payload, Mapping) else None
-                )
-                if isinstance(payload, Mapping) and (
-                    bool(payload.get("discharge"))
-                    and authorized_at is not None
-                    and timedelta(0) <= now - authorized_at <= timedelta(seconds=30)
-                ):
-                    adjusted.append(
-                        replace(
-                            command,
-                            enabled=True,
-                            setpoint_c=(
-                                None
-                                if payload.get("setpoint_temperature_c") is None
-                                else float(payload["setpoint_temperature_c"])
-                            ),
-                        )
-                    )
-                elif isinstance(calibration, Mapping) and "commands" in calibration:
-                    # An active baseline/charge/cool phase owns this heater's
-                    # planned discharge too.  Do not let a stale plan keep
-                    # releasing heat while the calibration output is OFF.
-                    adjusted.append(replace(command, enabled=False, setpoint_c=None))
-                else:
-                    adjusted.append(command)
-            return tuple(adjusted)
+            return apply_calibration_discharge_overrides(
+                commands,
+                projection=self._calibration_provider(self._config),
+                at=self._clock(),
+                automatic_control_enabled=automatic_control_enabled,
+                controller_state_is_current=True,
+                relay_test_in_progress=False,
+            )
         return commands
 
     def discovery(
@@ -486,20 +469,6 @@ def _relay_test_in_progress(view: Mapping[str, Any] | None) -> bool:
         return True
     safety = view.get("safety")
     return bool(isinstance(safety, Mapping) and safety.get("fault_latched"))
-
-
-def _parse_instant(value: object):
-    from datetime import datetime, timezone
-
-    if isinstance(value, datetime):
-        return value
-    if not isinstance(value, str):
-        return None
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
 
 
 __all__ = ["MqttPublisher", "StoreSnapshotReader", "project_state"]

@@ -734,6 +734,56 @@ plan_audit = Table(
 )
 
 
+# Five-minute measured history.  These rows are append-only observations keyed
+# by their UTC wall-clock bucket; the natural key makes controller retries
+# idempotent while retaining nullable fields for missing or stale inputs.
+measured_installation_sample = Table(
+    "measured_installation_sample",
+    application_metadata,
+    Column("id", Integer, primary_key=True),
+    Column("installation_id", Integer, nullable=False),
+    Column("observed_at", DateTime, nullable=False),
+    Column("outdoor_temperature_c", Float, nullable=True),
+    UniqueConstraint(
+        "installation_id",
+        "observed_at",
+        name="uq_measured_installation_sample",
+    ),
+    Index(
+        "ix_measured_installation_sample_installation_time",
+        "installation_id",
+        "observed_at",
+    ),
+)
+
+measured_heater_sample = Table(
+    "measured_heater_sample",
+    application_metadata,
+    Column("id", Integer, primary_key=True),
+    Column("installation_id", Integer, nullable=False),
+    Column("heater_id", String(64), nullable=False),
+    Column("observed_at", DateTime, nullable=False),
+    Column("indoor_temperature_c", Float, nullable=True),
+    Column("stored_soc_percent", Float, nullable=True),
+    Column("stored_energy_kwh", Float, nullable=True),
+    Column("confirmed_charge_power_w", Integer, nullable=True),
+    Column("discharge_commanded", Boolean, nullable=True),
+    Column("damper_position_percent", Float, nullable=True),
+    UniqueConstraint(
+        "installation_id",
+        "heater_id",
+        "observed_at",
+        name="uq_measured_heater_sample",
+    ),
+    Index(
+        "ix_measured_heater_sample_installation_heater_time",
+        "installation_id",
+        "heater_id",
+        "observed_at",
+    ),
+)
+
+
 indoor_reading = Table(
     "indoor_reading",
     application_metadata,
@@ -1215,6 +1265,14 @@ CONSTRAINT_FIELDS: dict[str, tuple[str, str]] = {
         "observed_at",
         "a forecast cannot record two temperatures for the same instant",
     ),
+    "uq_measured_installation_sample": (
+        "observed_at",
+        "an installation cannot record two measured samples for the same instant",
+    ),
+    "uq_measured_heater_sample": (
+        "observed_at",
+        "an accumulator cannot record two measured samples for the same instant",
+    ),
     "ck_change_action": ("action", "the change action is not recognised"),
     "ck_change_revision": ("revision_after", "revisions must advance by exactly one"),
     "ck_heartbeat_poll": ("poll_seconds", "the polling cadence must be positive"),
@@ -1313,6 +1371,8 @@ RETAINED_TABLES: tuple[tuple[Table, str], ...] = (
     (alert_delivery, "created_at"),
     (web_push_attempt, "attempted_at"),
     (alert_episode, "last_enqueued_at"),
+    (measured_installation_sample, "observed_at"),
+    (measured_heater_sample, "observed_at"),
     (output_transition, "occurred_at"),
     (plan, "created_at"),
     (forecast, "retrieved_at"),
@@ -1341,6 +1401,8 @@ CONFIG_TABLES = (
 )
 APPLICATION_TABLES = (
     indoor_reading,
+    measured_installation_sample,
+    measured_heater_sample,
     heater_telemetry,
     outdoor_temperature,
     forecast,
@@ -1372,6 +1434,8 @@ APPLICATION_TABLES = (
     web_push_attempt,
 )
 HISTORY_TABLES = (
+    measured_installation_sample,
+    measured_heater_sample,
     forecast,
     forecast_hour,
     forecast_cycle,
@@ -1411,6 +1475,8 @@ __all__ = [
     "reconciled_event",
     "output_config",
     "output_transition",
+    "measured_installation_sample",
+    "measured_heater_sample",
     "plan",
     "plan_allocation",
     "plan_slot",

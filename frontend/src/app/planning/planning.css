@@ -36,6 +36,13 @@ h3 { margin: 0; color: var(--ink); font-size: 1rem; }
 .summary-list dd { margin: 0; }
 .workspace-panel, .visualization, .constraints, .preview-job { margin-top: 1rem; padding: 1.35rem; border: 1px solid var(--border); border-radius: .85rem; background: var(--surface); box-shadow: 0 5px 18px #1720330b; }
 .visualization + .visualization { margin-top: 1rem; }
+.selected-window { border-color: var(--primary); background: #e8f0ff; color: var(--primary); }
+.chart-cues { display: flex; align-items: center; flex-wrap: wrap; gap: .7rem; margin: .8rem 0 0; color: var(--muted); font-size: .82rem; line-height: 1.4; }
+.cue-dot { display: inline-block; width: .65rem; height: .65rem; margin-right: -.45rem; border-radius: 50%; }
+.cue-now { background: var(--danger); }
+.cue-guaranteed { background: #059669; }
+.cue-interpolated { background: #7c3aed; }
+.cue-stale { background: #d97706; }
 .section-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
 .section-header > div { min-width: 0; }
 .section-header > div:first-child { flex: 1 1 auto; }

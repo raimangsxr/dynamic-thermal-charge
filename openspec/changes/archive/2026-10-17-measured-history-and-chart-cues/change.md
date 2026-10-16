@@ -1,6 +1,6 @@
 # Histórico medido y señales visuales en las gráficas
 
-Status: draft
+Status: approved
 
 ## Goal
 Que el usuario pueda comprobar si el plan se cumple y por qué. Hoy todas las gráficas muestran proyecciones y la telemetría solo guarda el último valor, así que nunca se ve lo medido junto a lo planificado. El cambio persiste una serie medida y la superpone a la planificación en `Análisis y datos`, junto con señales visuales de las situaciones límite.
@@ -23,14 +23,3 @@ La temperatura exterior medida depende del topic introducido por `automatic-ther
 - A3: Prueba de comparación: tras dos activaciones, los slots pasados se comparan con el plan que gobernaba cada uno.
 - A4: Pruebas de Angular: series superpuestas, ventana seleccionable, marcador de ahora, sombreado, previsión interpolada y obsoleta, anotaciones de motivo y de límite, refresco automático y tablas equivalentes.
 - A5: `make check` pasa.
-
-## Decisions
-- D1: El muestreo cada 5 minutos coincide con el de la calibración para poder compartir el muestreador; el histórico general no contiene las muestras de calibración, que siguen borrándose al terminar la sesión.
-- D2: La temperatura exterior medida solo se visualiza y nunca entra en la planificación.
-
-## Tasks
-- [ ] T1: Tabla de muestras medidas con migración Alembic, muestreador del controlador y retención; pruebas.
-- [ ] T2: Endpoint de serie medida y proyección del plan gobernante por slot pasado; pruebas.
-- [ ] T3: Gráficas superpuestas, ventana seleccionable y tablas en `Análisis y datos`; pruebas.
-- [ ] T4: Marcador de ahora, sombreado, previsión interpolada y obsoleta, anotaciones de motivo y límite; refresco automático; pruebas.
-- [ ] T5: Actualizar specs vivas de planificación; `make check`.

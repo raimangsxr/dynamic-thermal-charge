@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type {
   ConfigDto,
   ForecastHistoryDto,
+  HistorySeriesPageDto,
   PageDto,
   PlanHistoryDto,
   TransitionHistoryDto,
@@ -323,6 +324,46 @@ describe('History', () => {
     const container = el().querySelector('.table-scroll');
     expect(container).not.toBeNull();
     expect(container?.querySelector('table')).not.toBeNull();
+  });
+
+  it('loads measured installation and heater history from the status observed_at window', () => {
+    flushPlans();
+    fixture.componentInstance.select('measured');
+    backend.expectOne('/api/v1/status').flush({
+      observed_at: '2026-01-16T01:07:00Z',
+      heaters: [{ id: 'salon' }],
+    });
+    const requests = backend.match((request) => request.url === '/api/v1/history/series');
+    expect(requests).toHaveLength(2);
+    const installationRequest = requests.find((request) => request.request.params.get('scope') === 'installation');
+    const heaterRequest = requests.find((request) => request.request.params.get('scope') === 'heater');
+    expect(installationRequest?.request.params.get('from')).toBe('2026-01-15T01:07:00.000Z');
+    expect(installationRequest?.request.params.get('to')).toBe('2026-01-16T01:07:00.000Z');
+    expect(installationRequest?.request.params.get('limit')).toBe('500');
+    expect(heaterRequest?.request.params.get('heater_id')).toBe('salon');
+    const cues = { forecast_interpolated: false, forecast_stale: false, guaranteed: null, charge_reasons: null, aggregate_limit_reached: false };
+    const installation: HistorySeriesPageDto = {
+      scope: 'installation', heater_id: null, from: '2026-01-15T01:07:00Z', to: '2026-01-16T01:07:00Z',
+      items: [{ at: '2026-01-16T01:05:00Z', measured: { outdoor_temperature_c: 4, aggregate_charge_power_w: 1800 }, projected: { outdoor_temperature_c: 5, aggregate_charge_power_w: 2000 }, governing_plan: null, cues }],
+      limit_applied: 500, has_more: false, next_cursor: null,
+    };
+    const heater: HistorySeriesPageDto = {
+      scope: 'heater', heater_id: 'salon', from: '2026-01-15T01:07:00Z', to: '2026-01-16T01:07:00Z',
+      items: [{ at: '2026-01-16T01:05:00Z', measured: { indoor_temperature_c: null, stored_soc_percent: 50, stored_energy_kwh: 10, confirmed_charge_power_w: 1800, discharge_commanded: false, damper_position_percent: null }, projected: { indoor_temperature_c: 19, charge_power_w: 2000 }, governing_plan: null, cues: { ...cues, charge_reasons: [] } }],
+      limit_applied: 500, has_more: false, next_cursor: null,
+    };
+    installationRequest?.flush(installation);
+    heaterRequest?.flush(heater);
+    fixture.detectChanges();
+    expect(testId('empty')).toBeNull();
+    const table = el().querySelector<HTMLTableElement>('[data-table="measured"]');
+    expect(table).not.toBeNull();
+    expect(table?.textContent).toContain('Ahora');
+    expect(table?.textContent).toContain('sin dato');
+    expect(table?.textContent).toContain('motivo de carga: no disponible');
+    expect(fixture.componentInstance.historyNowPosition('2026-01-16T01:07:00Z', ['2026-01-16T01:00:00Z', '2026-01-16T01:05:00Z'])).toBe(1);
+    expect(fixture.componentInstance.historyNowPosition('bad timestamp', ['2026-01-16T01:00:00Z'])).toBeNull();
+    expect(fixture.componentInstance.historyNowPosition('2026-01-16T01:07:00Z', [])).toBeNull();
   });
 
   afterEach(() => {

@@ -124,6 +124,37 @@ def test_an_inverted_range_is_rejected(client, initialised_store):
     assert "starts after it ends" in response.json()["message"]
 
 
+def test_measured_series_requires_a_bounded_range(client):
+    response = _get(
+        client,
+        "/api/v1/history/series",
+        scope="installation",
+        **{
+            "from": SEED_END.isoformat(),
+            "to": (SEED_END + timedelta(days=8)).isoformat(),
+        },
+    )
+    assert response.status_code == 400
+    assert "cannot exceed 7 days" in response.json()["message"]
+
+
+def test_measured_series_returns_the_stable_page_shape(client):
+    response = _get(
+        client,
+        "/api/v1/history/series",
+        scope="installation",
+        **{
+            "from": SEED_END.isoformat(),
+            "to": (SEED_END + timedelta(hours=1)).isoformat(),
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["scope"] == "installation"
+    assert body["from"] == SEED_END.isoformat().replace("+00:00", "Z")
+    assert body["items"] == []
+
+
 # --------------------------------------------------------------------------- #
 # FR-036: a removed heater keeps its history
 # --------------------------------------------------------------------------- #

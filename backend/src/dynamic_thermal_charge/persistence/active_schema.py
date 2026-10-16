@@ -412,6 +412,12 @@ def _upgrade_application_schema(engine: Engine, revision: int, expected: int) ->
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_web_push_attempt_alert_browser "
                 "ON web_push_attempt (alert_id, subscription_id)"
             )
+        from .schema import measured_heater_sample, measured_installation_sample
+
+        application_metadata.create_all(
+            engine,
+            tables=[measured_installation_sample, measured_heater_sample],
+        )
         revision = 15
     if revision != expected:
         raise BootstrapIncompatibleError(

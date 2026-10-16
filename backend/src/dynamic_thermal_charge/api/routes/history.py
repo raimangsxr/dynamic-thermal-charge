@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.encoders import jsonable_encoder
@@ -22,6 +23,7 @@ from ..schemas import (
     ERROR_RESPONSES,
     READ_RESPONSES,
     ForecastPage,
+    HistorySeriesPage,
     PlanPage,
     PlanExplanationResponse,
     PruneResponse,
@@ -63,6 +65,51 @@ def _page(call, **kwargs):
         return call(**kwargs)
     except CursorError as exc:
         raise bad_request(str(exc), field="cursor") from exc
+
+
+@router.get(
+    "/history/series",
+    response_model=HistorySeriesPage,
+    responses={**READ_RESPONSES, 400: ERROR_RESPONSES[404]},
+    summary="Measured and projected history series",
+)
+def get_history_series(
+    since: datetime | None = Query(default=None, alias="from"),
+    until: datetime | None = Query(default=None, alias="to"),
+    scope: Literal["installation", "heater"] = Query(default="installation"),
+    heater_id: str | None = None,
+    limit: int | None = Query(default=None, ge=1),
+    cursor: str | None = None,
+    store: Store = Depends(usable_store),
+) -> HistorySeriesPage:
+    if since is None or until is None:
+        raise bad_request("'from' and 'to' are required for a history series", field="from")
+    _check_range(since, until)
+    if until - since > timedelta(days=7):
+        raise bad_request("history series ranges cannot exceed 7 days", field="to")
+    if scope == "heater" and not heater_id:
+        raise bad_request("heater_id is required for a heater series", field="heater_id")
+    if scope == "installation" and heater_id is not None:
+        raise bad_request("heater_id is only valid for a heater series", field="heater_id")
+    page = _page(
+        _reader(store).series,
+        since=since,
+        until=until,
+        scope=scope,
+        heater_id=heater_id,
+        limit=limit,
+        cursor=cursor,
+    )
+    return HistorySeriesPage(
+        scope=scope,
+        heater_id=heater_id,
+        from_=since,
+        to=until,
+        items=page.items,
+        limit_applied=page.limit_applied,
+        has_more=page.has_more,
+        next_cursor=page.next_cursor,
+    )
 
 
 @router.get(

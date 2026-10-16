@@ -548,6 +548,44 @@ export interface TransitionHistoryDto {
   plan_id: number | null;
 }
 
+export type HistorySeriesScope = 'installation' | 'heater';
+
+export interface HistorySeriesGoverningPlanDto {
+  plan_id: number;
+  activated_at: string;
+  slot_start: string;
+  slot_end: string;
+  status: string;
+  activation_mode: string;
+}
+
+export interface HistorySeriesCuesDto {
+  forecast_interpolated: boolean | null;
+  forecast_stale: boolean | null;
+  guaranteed: boolean | null;
+  charge_reasons: Array<Record<string, unknown>> | null;
+  aggregate_limit_reached: boolean | null;
+}
+
+export interface HistorySeriesPointDto {
+  at: string;
+  measured: Record<string, unknown>;
+  projected: Record<string, unknown> | null;
+  governing_plan: HistorySeriesGoverningPlanDto | null;
+  cues: HistorySeriesCuesDto;
+}
+
+export interface HistorySeriesPageDto {
+  scope: HistorySeriesScope;
+  heater_id: string | null;
+  from: string;
+  to: string;
+  items: HistorySeriesPointDto[];
+  limit_applied: number;
+  has_more: boolean;
+  next_cursor: string | null;
+}
+
 export interface PruneDto {
   deleted: Record<string, number>;
   total: number;
