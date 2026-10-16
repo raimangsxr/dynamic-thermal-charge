@@ -396,6 +396,73 @@ def test_status_uses_the_active_automatic_plan_over_a_legacy_plan(
     assert body["plan"]["slots"][0]["heater_ids"] == [heater_id]
 
 
+def test_new_calibration_is_overlaid_without_recalculation_on_all_live_projections(
+    client, initialised_store
+):
+    from dynamic_thermal_charge.charge_planning import (
+        AutomaticPlan,
+        AutomaticPlanSlot,
+        FEASIBLE,
+    )
+
+    planning = initialised_store.planning
+    config, revision = initialised_store.repository.current()
+    heater = config.heaters[0]
+    start = API_NOW
+    planning.record_telemetry("salon", "indoor_temperature_c", 19.0, start)
+    planning.record_telemetry("salon", "stored_soc_percent", 50.0, start)
+    initialised_store.outdoor_temperature.record(5.0, start)
+    plan = AutomaticPlan(
+        start,
+        start + timedelta(hours=2),
+        30,
+        (
+            AutomaticPlanSlot(
+                start,
+                start + timedelta(minutes=30),
+                (heater.id,),
+                heater.power_w,
+                {heater.id: 50.0},
+                {heater.id: 75.0},
+                outdoor_temperature_c=5.0,
+            ),
+        ),
+        (),
+        FEASIBLE,
+        (),
+        "calibration-overlay",
+        start,
+    )
+    planning.save_plan(
+        plan,
+        configuration_revision=revision,
+        constraints_revision=planning.site()["revision"],
+        reason="periodic",
+        active=True,
+    )
+
+    started = client.post("/api/v1/rooms/salon/calibration", headers=AUTH)
+    assert started.status_code == 201, started.text
+
+    planning_body = client.get("/api/v1/planning", headers=AUTH).json()
+    status_body = client.get("/api/v1/status", headers=AUTH).json()
+    snapshot_body = client.get("/api/v1/operational/snapshot", headers=AUTH).json()
+    expected_exclusion = [{"heater_id": "salon", "cause": "calibration_active"}]
+
+    assert planning_body["excluded_heaters"] == expected_exclusion
+    assert planning_body["best_effort"] is False
+    assert planning_body["plan"]["slots"][0]["heater_ids"] == ["salon"]
+    assert status_body["excluded_heaters"] == expected_exclusion
+    assert status_body["best_effort"] is False
+    assert status_body["plan"]["slots"][0]["heater_ids"] == ["salon"]
+    assert snapshot_body["plan"]["excluded_heaters"] == expected_exclusion
+    assert snapshot_body["plan"]["best_effort"] is False
+    salon = next(item for item in snapshot_body["accumulators"] if item["id"] == "salon")
+    assert salon["exclusion_cause"] == "calibration_active"
+    assert salon["exclusion_label"] == "En calibración"
+    assert initialised_store.planning.active_plan()["excluded_heaters"] == []
+
+
 def test_status_shows_a_new_degraded_candidate_without_governing_outputs(
     client, initialised_store, heartbeat
 ):

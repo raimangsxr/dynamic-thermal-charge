@@ -157,6 +157,14 @@ un best-effort activable cuando expire la cobertura.
 - **THEN** se encola una sola alerta `plan_heater_excluded` que nombra los
   acumuladores, la causa y que no se ordena carga ni descarga para ellos
 
+#### Scenario: Acumulador en calibración
+
+- **WHEN** la planificación activa conserva un acumulador excluido con causa
+  `calibration_active`
+- **THEN** no se abre ni se mantiene `plan_heater_excluded` ni
+  `plan_best_effort_active` por ese acumulador, y las proyecciones lo muestran
+  como `En calibración` sin acción para recuperar telemetría
+
 #### Scenario: Resolución de las alertas nuevas
 
 - **WHEN** un plan posterior ya no usa best-effort ni contiene exclusiones

@@ -99,9 +99,15 @@
           }
           @if (data.plan && data.best_effort) {
             <div class="banner warn" role="status" data-testid="planning-best-effort">
-              <div class="banner-content"><mat-icon aria-hidden="true">warning</mat-icon><div><strong>Mejor esfuerzo activo</strong><p>El controlador ejecuta el mejor plan físicamente validado disponible y seguirá intentando converger.</p>@if (data.excluded_heaters?.length) { <p>Acumuladores excluidos por telemetría incompleta: {{ excludedHeaterText(data) }}</p> }</div></div>
+              <div class="banner-content"><mat-icon aria-hidden="true">warning</mat-icon><div><strong>Mejor esfuerzo activo</strong><p>El controlador ejecuta el mejor plan físicamente validado disponible y seguirá intentando converger.</p>@if (excludedHeaterText(data); as telemetryExcluded) { <p>Acumuladores excluidos por telemetría incompleta: {{ telemetryExcluded }}</p> }</div></div>
             </div>
-          } @else if (isDegradedStatus(data.plan_status)) {
+          }
+          @if (calibratingHeaterText(data); as calibrating) {
+            <div class="banner" role="status" data-testid="planning-calibration-active">
+              <div class="banner-content"><mat-icon aria-hidden="true">thermostat</mat-icon><div><strong>En calibración</strong><p>{{ calibrating }} queda fuera del cálculo mientras dura la sesión. Se reincorporará automáticamente al terminar; no es necesario recuperar telemetría.</p></div></div>
+            </div>
+          }
+          @if (!data.best_effort && isDegradedStatus(data.plan_status)) {
             <div class="banner warn" role="alert" data-testid="planning-degraded">
               <div class="banner-content"><mat-icon aria-hidden="true">warning</mat-icon><div><strong>Resultado degradado: no activable</strong><p>Este recálculo no gobierna las salidas. Se conserva el último plan VALID o CONVERGING mientras queden intervalos vigentes.</p>@if (data.deficits?.length) { <ul>@for (deficit of data.deficits ?? []; track $index) { <li>{{ deficitText(deficit) }}@if (deficit.affected_from || deficit.affected_until) { · {{ dateTime(deficit.affected_from) }}–{{ dateTime(deficit.affected_until) }} }</li> }</ul> }</div></div>
             </div>

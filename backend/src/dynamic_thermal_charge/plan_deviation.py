@@ -239,6 +239,7 @@ def evaluate_plan_deviation(
     max_age_seconds: float = 900.0,
     shortfall_tolerance_c: float = 0.1,
     surplus_soc_percent: float = 5.0,
+    calibration_active_heater_ids: Sequence[str] = (),
 ) -> DeviationVerdict:
     """Reproject the remaining active plan with the measured state.
 
@@ -265,6 +266,7 @@ def evaluate_plan_deviation(
         heater
         for heater in heaters
         if heater.enabled
+        and heater.id not in set(calibration_active_heater_ids)
         and heater.id in telemetry
         and heater.id in targets
         and _telemetry_fresh(telemetry.get(heater.id), at, max_age_seconds)

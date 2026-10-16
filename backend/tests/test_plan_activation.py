@@ -1,10 +1,14 @@
 from datetime import datetime, timedelta, timezone
 
+from dynamic_thermal_charge.api.routes.planning import _deficit_view
+from dynamic_thermal_charge.charge_planning import PlanningViolation, group_planning_violations
 from dynamic_thermal_charge.plan_activation import (
     ACTIVATION_AUTOMATIC,
     ACTIVATION_BEST_EFFORT,
     can_activate_plan,
     candidate_activation_mode,
+    plan_best_effort_reasons,
+    plan_has_degrading_exclusions,
 )
 
 
@@ -83,6 +87,78 @@ def test_successful_stale_forecast_is_activated_as_best_effort():
         now=NOW,
         has_stale_forecast=True,
     ) is True
+def test_calibration_exclusion_keeps_normal_activation_and_no_best_effort_reason():
+    plan = {
+        "status": "VALID",
+        "excluded_heaters": [
+            {"heater_id": "salon", "cause": "calibration_active"},
+        ],
+        "violations": [
+            {
+                "heater_id": "salon",
+                "requirement": "excluded_heater",
+                "reason": "calibration_active",
+                "cause": "calibration_active",
+            },
+        ],
+    }
+
+    assert plan_has_degrading_exclusions(plan) is False
+    assert plan_best_effort_reasons(plan) == ()
+    assert candidate_activation_mode(
+        "VALID",
+        None,
+        now=NOW,
+        has_exclusions=plan_has_degrading_exclusions(plan),
+    ) == ACTIVATION_AUTOMATIC
+
+
+def test_missing_telemetry_still_degrades_alongside_calibration_exclusion():
+    plan = {
+        "excluded_heaters": [
+            {"heater_id": "salon", "cause": "calibration_active"},
+            {"heater_id": "cocina", "cause": "missing_required_state"},
+        ],
+    }
+
+    assert plan_has_degrading_exclusions(plan) is True
+    assert plan_best_effort_reasons(plan) == ("missing_required_state",)
+
+
+def test_grouped_calibration_exclusion_preserves_cause_over_legacy_reason():
+    violation = PlanningViolation(
+        "salon",
+        "excluded_heater",
+        None,
+        None,
+        NOW,
+        "missing_required_state",
+        cause="calibration_active",
+    )
+
+    grouped = group_planning_violations((violation,), slot_minutes=30)
+    assert grouped[0]["reason"] == "missing_required_state"
+    assert grouped[0]["cause"] == "calibration_active"
+
+    view = _deficit_view(grouped[0])
+
+    assert view.cause == "calibration_active"
+    assert view.recommended_action is None
+
+    legacy = group_planning_violations(
+        (
+            {
+                "heater_id": "salon",
+                "requirement": "excluded_heater",
+                "at": NOW,
+                "reason": "calibration_active",
+            },
+        ),
+        slot_minutes=30,
+    )
+    legacy_view = _deficit_view(legacy[0])
+    assert legacy_view.cause == "calibration_active"
+    assert legacy_view.recommended_action is None
 
 
 def test_a_successful_candidate_can_activate_when_the_old_plan_expires_before_refresh():

@@ -11,6 +11,21 @@ from .charge_planning import CONVERGING, DEGRADED, VALID
 
 ACTIVATION_AUTOMATIC = "automatic"
 ACTIVATION_BEST_EFFORT = "best_effort"
+CALIBRATION_ACTIVE = "calibration_active"
+
+
+def _value(item: Any, name: str, default: Any = None) -> Any:
+    if isinstance(item, Mapping):
+        return item.get(name, default)
+    return getattr(item, name, default)
+
+
+def plan_has_degrading_exclusions(plan: Any) -> bool:
+    """Whether excluded heaters contain a cause that degrades activation."""
+    return any(
+        str(_value(item, "cause", "missing_required_state")) != CALIBRATION_ACTIVE
+        for item in (_value(plan, "excluded_heaters", ()) or ())
+    )
 
 
 def seconds_to_next_replan(
@@ -119,31 +134,27 @@ def can_activate_plan(
 
 def plan_best_effort_reasons(plan: Any) -> tuple[str, ...]:
     """Return stable cause codes suitable for API and operator projections."""
-    def value(item: Any, name: str, default: Any = None) -> Any:
-        if isinstance(item, Mapping):
-            return item.get(name, default)
-        return getattr(item, name, default)
-
-    excluded = value(plan, "excluded_heaters", ()) or ()
+    excluded = _value(plan, "excluded_heaters", ()) or ()
     reasons: set[str] = set()
-    if bool(value(plan, "stale_forecast", False)):
+    if bool(_value(plan, "stale_forecast", False)):
         reasons.add("stale_forecast")
     for item in excluded:
-        if isinstance(item, Mapping):
-            reasons.add(str(item.get("cause", "missing_required_state")))
-    for item in value(plan, "violations", ()) or value(plan, "deficits", ()) or ():
-        requirement = str(value(item, "requirement", ""))
+        cause = str(_value(item, "cause", "missing_required_state"))
+        if cause != CALIBRATION_ACTIVE:
+            reasons.add(cause)
+    for item in _value(plan, "violations", ()) or _value(plan, "deficits", ()) or ():
+        requirement = str(_value(item, "requirement", ""))
         if requirement == "excluded_heater":
-            reasons.add(
-                str(
-                    value(item, "cause")
-                    or value(item, "reason", "missing_required_state")
-                )
+            cause = str(
+                _value(item, "cause")
+                or _value(item, "reason", "missing_required_state")
             )
+            if cause != CALIBRATION_ACTIVE:
+                reasons.add(cause)
         elif requirement:
             reasons.add(
                 str(
-                    value(item, "cause") or value(item, "reason", requirement)
+                    _value(item, "cause") or _value(item, "reason", requirement)
                 ).split(":", 1)[0]
             )
     return tuple(sorted(reasons))
@@ -155,6 +166,7 @@ __all__ = [
     "can_activate_plan",
     "candidate_activation_mode",
     "covering_plan",
+    "plan_has_degrading_exclusions",
     "seconds_to_next_replan",
     "plan_best_effort_reasons",
 ]

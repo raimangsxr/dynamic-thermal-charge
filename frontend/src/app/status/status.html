@@ -130,11 +130,17 @@
     }
     @if (data.best_effort) {
       <div class="banner warn" role="status" data-testid="plan-best-effort">
-        <div class="banner-content"><mat-icon aria-hidden="true">warning</mat-icon><div><strong>Mejor esfuerzo activo</strong><p>El controlador ejecuta el mejor plan físicamente validado y seguirá intentando converger.</p>@if (data.excluded_heaters?.length) { <p>Acumuladores excluidos por telemetría incompleta: {{ excludedHeaterText(data) }}</p> }</div></div>
+        <div class="banner-content"><mat-icon aria-hidden="true">warning</mat-icon><div><strong>Mejor esfuerzo activo</strong><p>El controlador ejecuta el mejor plan físicamente validado y seguirá intentando converger.</p>@if (excludedHeaterText(data); as telemetryExcluded) { <p>Acumuladores excluidos por telemetría incompleta: {{ telemetryExcluded }}</p> }</div></div>
       </div>
     } @else if (isDegradedStatus(data.plan_status)) {
       <div class="banner warn" role="alert" data-testid="plan-degraded">
         <div class="banner-content"><mat-icon aria-hidden="true">warning</mat-icon><div><strong>Resultado degradado: no activable</strong><p>Se muestra el último plan utilizable, si existe; este resultado no gobierna las salidas.</p></div></div>
+      </div>
+    }
+
+    @if (calibratingHeaterText(data); as calibrating) {
+      <div class="banner" role="status" data-testid="status-calibration-active">
+        <div class="banner-content"><mat-icon aria-hidden="true">thermostat</mat-icon><div><strong>En calibración</strong><p>{{ calibrating }} queda fuera del cálculo mientras dura la sesión. Se reincorporará automáticamente al terminar; no es necesario recuperar telemetría.</p></div></div>
       </div>
     }
 
@@ -177,12 +183,12 @@
             <thead><tr><th scope="col">Acumulador</th><th scope="col">Temperatura interior</th><th scope="col">SOC almacenado</th><th scope="col">Energía almacenada</th><th scope="col">Estado</th></tr></thead>
             <tbody>
               @for (item of data.telemetry; track item.heater_id) {
-                <tr [class.stale]="item.state === 'telemetry_stale'">
+              <tr [class.stale]="item.state === 'telemetry_stale'">
                   <th scope="row">{{ heaterText(item.heater_id) }}</th>
                   <td>{{ temperature(item.indoor_temperature_c) }}</td>
                   <td>{{ item.stored_soc_percent === null ? 'sin dato' : item.stored_soc_percent + ' %' }}</td>
                   <td>{{ item.stored_energy_kwh === null ? 'sin dato' : item.stored_energy_kwh.toFixed(2) + ' kWh' }}</td>
-                  <td>@if (item.state === 'telemetry_stale') { <span class="state-chip state-warning"><mat-icon aria-hidden="true">warning</mat-icon>Caducada o incompleta</span> } @else { <span class="state-chip state-ok"><mat-icon aria-hidden="true">check_circle</mat-icon>Válida</span> }</td>
+                  <td>@if (item.state === 'calibrating') { <span class="state-chip state-warning"><mat-icon aria-hidden="true">thermostat</mat-icon>En calibración</span> } @else if (item.state === 'telemetry_stale') { <span class="state-chip state-warning"><mat-icon aria-hidden="true">warning</mat-icon>Caducada o incompleta</span> } @else { <span class="state-chip state-ok"><mat-icon aria-hidden="true">check_circle</mat-icon>Válida</span> }</td>
                 </tr>
               }
             </tbody>

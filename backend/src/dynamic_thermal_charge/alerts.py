@@ -20,6 +20,7 @@ import smtplib
 from email.message import EmailMessage
 from typing import Any, Callable, Mapping, Protocol, Sequence
 
+from .plan_activation import plan_best_effort_reasons
 from .system_settings import EmailSystemSettings
 
 
@@ -461,13 +462,7 @@ def plan_best_effort_active_message(
     at: datetime,
     plan: Any,
 ) -> tuple[str, str]:
-    violations = tuple(getattr(plan, "violations", ()) or ())
-    causes = sorted(
-        {
-            str(getattr(item, "cause", None) or getattr(item, "reason", "desconocida"))
-            for item in violations
-        }
-    )
+    causes = list(plan_best_effort_reasons(plan))
     subject = f"[{installation}] Plan de mejor esfuerzo activo"
     body = "\n".join(
         (
@@ -487,17 +482,23 @@ def plan_heater_excluded_message(
     at: datetime,
     plan: Any,
 ) -> tuple[str, str]:
-    excluded = tuple(getattr(plan, "excluded_heaters", ()) or ())
+    excluded = tuple(
+        item
+        for item in (
+            plan.get("excluded_heaters", ())
+            if isinstance(plan, Mapping)
+            else getattr(plan, "excluded_heaters", ())
+        )
+        or ()
+        if isinstance(item, Mapping)
+        and str(item.get("cause", "missing_required_state")) == "missing_required_state"
+    )
     heater_ids = sorted(
         str(item.get("heater_id"))
         for item in excluded
         if isinstance(item, Mapping) and item.get("heater_id")
     )
-    causes = sorted(
-        str(item.get("cause", "missing_required_state"))
-        for item in excluded
-        if isinstance(item, Mapping)
-    )
+    causes = sorted(str(item.get("cause", "missing_required_state")) for item in excluded)
     subject = f"[{installation}] Acumulador excluido del plan"
     body = "\n".join(
         (
@@ -595,6 +596,12 @@ def notify_plan_activation(
             plan.get("excluded_heaters", ())
             if isinstance(plan, Mapping)
             else getattr(plan, "excluded_heaters", ())
+        )
+        excluded = tuple(
+            item
+            for item in (excluded or ())
+            if isinstance(item, Mapping)
+            and str(item.get("cause", "missing_required_state")) == "missing_required_state"
         )
         if excluded:
             subject, body = plan_heater_excluded_message(

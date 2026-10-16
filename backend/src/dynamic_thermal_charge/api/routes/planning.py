@@ -75,11 +75,17 @@ from ...persistence.mapping import (
 )
 from ..read_model import automatic_window, forecast_cycle_context, real_before, wall_clock_end
 from ...planning_coordination import coordinated_plan
+from ...calibration_runtime import (
+    active_calibration_exclusions,
+    active_calibration_heater_ids,
+)
 from ...plan_activation import (
     ACTIVATION_AUTOMATIC,
     ACTIVATION_BEST_EFFORT,
+    CALIBRATION_ACTIVE,
     can_activate_plan,
     candidate_activation_mode,
+    plan_has_degrading_exclusions,
     plan_best_effort_reasons,
     seconds_to_next_replan,
 )
@@ -651,7 +657,7 @@ def activate_planning(
         next_refresh_seconds=next_refresh_seconds,
         best_effort_requested=request.best_effort,
         require_best_effort_confirmation=True,
-        has_exclusions=bool(plan.excluded_heaters),
+        has_exclusions=plan_has_degrading_exclusions(plan),
         has_stale_forecast=plan.stale_forecast,
     )
     if activation_mode is None:
@@ -785,13 +791,7 @@ def _plan_violations(plan: dict[str, Any]) -> list[dict[str, Any]] | tuple:
 
 
 def _plan_causes(plan: dict[str, Any]) -> list[str]:
-    causes = {
-        _deficit_cause(_violation_payload(item))
-        for item in _plan_violations(plan)
-    }
-    if plan.get("stale_forecast"):
-        causes.add("stale_forecast")
-    return sorted(causes)
+    return list(plan_best_effort_reasons(plan))
 
 
 def _deficit_view(
@@ -842,6 +842,11 @@ _CAUSE_CODES = {
 
 def _deficit_cause(payload: dict[str, Any]) -> str:
     if payload.get("requirement") == "excluded_heater":
+        if (
+            payload.get("cause") == CALIBRATION_ACTIVE
+            or str(payload.get("reason", "")).split(":", 1)[0] == CALIBRATION_ACTIVE
+        ):
+            return CALIBRATION_ACTIVE
         return "excluded_heater"
     explicit = payload.get("cause")
     if explicit:
@@ -865,6 +870,7 @@ def _recommended_action(cause: str, *, horizon_hours: int = 24) -> str:
         "missing_forecast_coverage": f"Recupera el forecast continuo para las {horizon_hours} horas configuradas.",
         "forecast_not_eligible": "Espera a que el forecast sea elegible para planificación automática.",
         "excluded_heater": "Revisa el estado requerido del acumulador excluido antes de volver a incluirlo.",
+        "calibration_active": None,
         "safe_planning_input": "Corrige la entrada de planificación indicada y vuelve a calcular.",
         "solver_time_limit": "Reduce la complejidad de la planificación o aumenta el tiempo límite del solver.",
         "solver_unavailable": "Comprueba la instalación del solver y vuelve a calcular.",
@@ -1024,11 +1030,31 @@ def _enrich(response: PlanningResponse, store: Store, observed_at: datetime) -> 
     capacity_by_id = {heater.id: heater.capacity_kwh for heater in config.heaters}
     max_age_seconds = config.site.indoor_max_age_minutes * 60
     telemetry = planning.telemetry()
+    calibrating_heaters = {
+        heater.id
+        for heater in config.heaters
+        if store.calibration.active(heater.id) is not None
+    }
     views = []
     for heater in response.heaters:
         value = telemetry.get(heater.id)
         if value is None:
-            views.append(ChargeTelemetryView(heater_id=heater.id, missing_fields=["indoor_temperature_c", "stored_soc_percent"]))
+            views.append(
+                ChargeTelemetryView(
+                    heater_id=heater.id,
+                    state=(
+                        "calibrating"
+                        if heater.id in calibrating_heaters
+                        else "telemetry_stale"
+                    ),
+                    state_label=(
+                        "En calibración"
+                        if heater.id in calibrating_heaters
+                        else "Caducada o incompleta"
+                    ),
+                    missing_fields=["indoor_temperature_c", "stored_soc_percent"],
+                )
+            )
             continue
         ages = [
             (observed_at - stamp).total_seconds()
@@ -1043,21 +1069,36 @@ def _enrich(response: PlanningResponse, store: Store, observed_at: datetime) -> 
             or oldest > max_age_seconds
             or any(age < 0 for age in ages)
         )
-        views.append(ChargeTelemetryView(
-            heater_id=heater.id,
-            indoor_temperature_c=value.indoor_temperature_c,
-            stored_soc_percent=value.stored_soc_percent,
-            indoor_received_at=value.indoor_received_at,
-            stored_soc_received_at=value.stored_soc_received_at,
-            state="telemetry_stale" if stale else "ready",
-            missing_fields=missing,
-            oldest_age_seconds=oldest,
-            stored_energy_kwh=(
-                None
-                if value.stored_soc_percent is None
-                else value.stored_soc_percent / 100 * capacity_by_id.get(heater.id, 0)
-            ),
-        ))
+        views.append(
+            ChargeTelemetryView(
+                heater_id=heater.id,
+                indoor_temperature_c=value.indoor_temperature_c,
+                stored_soc_percent=value.stored_soc_percent,
+                indoor_received_at=value.indoor_received_at,
+                stored_soc_received_at=value.stored_soc_received_at,
+                state=(
+                    "calibrating"
+                    if heater.id in calibrating_heaters
+                    else "telemetry_stale"
+                    if stale
+                    else "ready"
+                ),
+                state_label=(
+                    "En calibración"
+                    if heater.id in calibrating_heaters
+                    else "Caducada o incompleta"
+                    if stale
+                    else "Válida"
+                ),
+                missing_fields=missing,
+                oldest_age_seconds=oldest,
+                stored_energy_kwh=(
+                    None
+                    if value.stored_soc_percent is None
+                    else value.stored_soc_percent / 100 * capacity_by_id.get(heater.id, 0)
+                ),
+            )
+        )
     active = planning.active_plan()
     latest = planning.latest_plan() if hasattr(planning, "latest_plan") else None
     site = planning.site()
@@ -1091,6 +1132,12 @@ def _enrich(response: PlanningResponse, store: Store, observed_at: datetime) -> 
     if active is not None or diagnostic is not None:
         projection = diagnostic or active
         assert projection is not None
+        projected = dict(projection)
+        projected["excluded_heaters"] = active_calibration_exclusions(
+            store,
+            config,
+            projection.get("excluded_heaters", ()),
+        )
         response.plan_status = _canonical_plan_status(projection["status"])
         projection_is_active = active is not None and projection is active
         response.activation_mode = (
@@ -1104,8 +1151,8 @@ def _enrich(response: PlanningResponse, store: Store, observed_at: datetime) -> 
         response.forecast_max_age_hours = int(
             projection.get("forecast_max_age_hours", site.get("forecast_max_age_hours", 30))
         )
-        response.excluded_heaters = list(projection.get("excluded_heaters", []))
-        response.best_effort_reasons = _plan_causes(projection)
+        response.excluded_heaters = list(projected["excluded_heaters"])
+        response.best_effort_reasons = _plan_causes(projected)
         response.best_effort_activatable = can_activate_plan(
             response.plan_status,
             active if projection is not active else None,
@@ -1116,7 +1163,7 @@ def _enrich(response: PlanningResponse, store: Store, observed_at: datetime) -> 
                 slot_minutes=int(projection.get("slot_minutes", 30)),
             ),
             best_effort_requested=True,
-            has_exclusions=bool(projection.get("excluded_heaters")),
+            has_exclusions=plan_has_degrading_exclusions(projected),
             has_stale_forecast=bool(projection.get("stale_forecast")),
         )
         response.deficits = _grouped_deficit_views(
@@ -1129,6 +1176,10 @@ def _enrich(response: PlanningResponse, store: Store, observed_at: datetime) -> 
         response.guaranteed_until = projection.get("guaranteed_until")
         response.optimization_quality = projection.get("optimization_quality")
         response.preview_token = active["input_token"] if active is not None else None
+    else:
+        response.excluded_heaters = list(
+            active_calibration_exclusions(store, config, response.excluded_heaters)
+        )
     if response.forecast is not None:
         response.forecast.forecast_age_hours = response.forecast_age_hours
         response.forecast.forecast_max_age_hours = response.forecast_max_age_hours
@@ -1332,6 +1383,7 @@ def _build_automatic_request(
         cancellation_probe=cancellation_probe,
         room_energy_model=True,
         telemetry_max_age_seconds=config.site.indoor_max_age_minutes * 60,
+        calibration_excluded_heater_ids=active_calibration_heater_ids(store, config),
     )
     return request
 
@@ -1917,12 +1969,14 @@ def _preview_response(
         already_active=already_active,
         activation_mode=(
             ACTIVATION_BEST_EFFORT
-            if plan.status == DEGRADED or plan.excluded_heaters or plan.stale_forecast
+            if plan.status == DEGRADED
+            or plan_has_degrading_exclusions(plan)
+            or plan.stale_forecast
             else ACTIVATION_AUTOMATIC
         ),
         best_effort=(
             plan.status == DEGRADED
-            or bool(plan.excluded_heaters)
+            or plan_has_degrading_exclusions(plan)
             or plan.stale_forecast
         ),
         best_effort_activatable=(
@@ -1940,10 +1994,12 @@ def _preview_response(
                     )
                 ),
                 best_effort_requested=True,
-                has_exclusions=bool(plan.excluded_heaters),
+                has_exclusions=plan_has_degrading_exclusions(plan),
                 has_stale_forecast=plan.stale_forecast,
             )
-            if plan.status == DEGRADED or plan.excluded_heaters or plan.stale_forecast
+            if plan.status == DEGRADED
+            or plan_has_degrading_exclusions(plan)
+            or plan.stale_forecast
             else False
         ),
         best_effort_reasons=list(plan_best_effort_reasons(plan)),
