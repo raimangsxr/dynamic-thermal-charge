@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import json
-from typing import Any, Mapping
+import logging
+from typing import Any, Callable, Mapping
 from uuid import uuid4
 
-from sqlalchemy import delete, insert, select, update
+from sqlalchemy import and_, delete, insert, or_, select, update
 from sqlalchemy.engine import Engine
 
 from ..thermal_calibration import CalibrationFit, CalibrationSample
@@ -21,10 +23,15 @@ from .schema import (
     room,
     thermal_calibration_sample,
     thermal_calibration_session,
+    alert_type_config,
     web_push_attempt,
     web_push_subscription,
 )
 from .url import StoreLocation
+
+
+PUSH_CLAIM_LEASE_SECONDS = 30
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -52,7 +59,12 @@ class OperatorNotification:
     title: str
     body: str
     created_at: datetime
-    acknowledged_at: datetime | None
+    acknowledged_at: datetime | None = None
+    alert_type: str = "thermal_calibration_terminal"
+    severity: str = "info"
+    episode_id: str | None = None
+    opened_at: datetime | None = None
+    resolved_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -77,6 +89,9 @@ class WebPushAttempt:
     status: str
     attempted_at: datetime | None
     error: str | None
+    alert_id: int | None = None
+    claimed_by: str | None = None
+    claimed_until: datetime | None = None
 
 
 class SqlCalibrationRepository:
@@ -502,7 +517,7 @@ class SqlCalibrationRepository:
                     & (thermal_calibration_session.c.installation_id == self._installation_id)
                 )
             )
-        self.create_notification(
+        notification_id = self.create_notification(
             session_id,
             kind=f"thermal_calibration_{status}",
             title="Calibración térmica finalizada",
@@ -512,13 +527,14 @@ class SqlCalibrationRepository:
         # Queue one durable attempt per current browser.  The unique key on
         # ``web_push_attempt`` makes this safe when a controller restart
         # retries the terminal saga.
-        self.queue_push_attempts(session_id)
+        self.queue_push_attempts(session_id, alert_id=notification_id)
         return True
 
     # ------------------------------------------------------------------ UI notifications
 
     def create_notification(self, session_id: str | None, *, kind: str, title: str, body: str, at: datetime | None = None) -> int:
         moment = to_utc(at or self._clock())
+        episode_id = session_id or str(uuid4())
         with transaction(self._application, self._application_location) as connection:
             existing = None
             if session_id is not None:
@@ -536,16 +552,29 @@ class SqlCalibrationRepository:
                         installation_id=self._installation_id,
                         session_id=session_id,
                         kind=kind,
+                        alert_type="thermal_calibration_terminal",
+                        severity="info",
+                        episode_id=episode_id,
                         title=title[:512],
                         body=body,
                         created_at=moment,
+                        opened_at=moment,
+                        # Calibration is an event, so it is resolved when
+                        # created while remaining visible in history.
+                        resolved_at=moment,
                     )
                 ).inserted_primary_key[0]
             )
 
     def notifications(self, *, include_acknowledged: bool = False, limit: int = 100) -> tuple[OperatorNotification, ...]:
         with self._application.connect() as connection:
-            query = select(operator_notification).where(operator_notification.c.installation_id == self._installation_id)
+            # Compatibility surface for the calibration page. The global
+            # alerts page reads through SqlAlertRepository; this method keeps
+            # terminal calibration events visible until explicitly accused.
+            query = select(operator_notification).where(
+                (operator_notification.c.installation_id == self._installation_id)
+                & operator_notification.c.session_id.is_not(None)
+            )
             if not include_acknowledged:
                 query = query.where(operator_notification.c.acknowledged_at.is_(None))
             rows = connection.execute(query.order_by(operator_notification.c.created_at.desc(), operator_notification.c.id.desc()).limit(limit)).mappings().all()
@@ -583,13 +612,6 @@ class SqlCalibrationRepository:
                 )
                 .values(acknowledged_at=to_utc(at or self._clock()))
             ).rowcount
-            if changed == 1:
-                connection.execute(
-                    delete(operator_notification).where(
-                        (operator_notification.c.id == notification_id)
-                        & (operator_notification.c.installation_id == self._installation_id)
-                    )
-                )
             return changed == 1
 
     # ------------------------------------------------------------------ Push subscriptions
@@ -669,17 +691,72 @@ class SqlCalibrationRepository:
                 )
             ).rowcount == 1
 
-    def queue_push_attempts(self, session_id: str) -> tuple[WebPushAttempt, ...]:
+    def queue_push_attempts(self, session_id: str, *, alert_id: int | None = None) -> tuple[WebPushAttempt, ...]:
+        if alert_id is not None and not self._alert_type_enabled(
+            "thermal_calibration_terminal"
+        ):
+            return self.push_attempts(session_id)
         with transaction(self._application, self._application_location) as connection:
             for subscription in connection.execute(select(web_push_subscription).where((web_push_subscription.c.installation_id == self._installation_id) & (web_push_subscription.c.status == "active"))).mappings():
-                existing = connection.execute(select(web_push_attempt.c.id).where((web_push_attempt.c.session_id == session_id) & (web_push_attempt.c.subscription_id == subscription["id"]))).scalar()
+                predicate = (
+                    (web_push_attempt.c.alert_id == alert_id)
+                    & (web_push_attempt.c.subscription_id == subscription["id"])
+                    if alert_id is not None
+                    else (web_push_attempt.c.session_id == session_id)
+                    & (web_push_attempt.c.subscription_id == subscription["id"])
+                )
+                existing = connection.execute(select(web_push_attempt.c.id).where(predicate)).scalar()
                 if existing is None:
-                    connection.execute(insert(web_push_attempt).values(subscription_id=subscription["id"], session_id=session_id, status="pending"))
+                    connection.execute(insert(web_push_attempt).values(subscription_id=subscription["id"], session_id=session_id, alert_id=alert_id, status="pending"))
         return self.push_attempts(session_id)
+
+    def _alert_type_enabled(self, alert_type: str) -> bool:
+        with self._configuration.connect() as connection:
+            row = connection.execute(
+                select(alert_type_config.c.enabled).where(
+                    alert_type_config.c.name == alert_type
+                )
+            ).first()
+        return True if row is None else bool(row[0])
+
+    @contextmanager
+    def _locked_type_enabled(self, alert_type: str):
+        """Read one catalogue row while holding its transaction lock."""
+        with transaction(self._configuration, self._configuration_location) as connection:
+            try:
+                row = connection.execute(
+                    select(alert_type_config.c.enabled)
+                    .where(alert_type_config.c.name == alert_type)
+                    .with_for_update()
+                ).first()
+            except Exception:  # noqa: BLE001 - Push delivery remains best effort
+                logger.warning(
+                    "Could not read catalogue state for Push alert %s",
+                    alert_type,
+                    exc_info=True,
+                )
+                row = None
+            yield True if row is None else bool(row[0])
+
+    def alert_type_enabled(self, alert_type: str) -> bool:
+        """Expose catalogue state to the independent Push worker."""
+        return self._alert_type_enabled(alert_type)
 
     def push_attempts(self, session_id: str) -> tuple[WebPushAttempt, ...]:
         with self._application.connect() as connection:
-            rows = connection.execute(select(web_push_attempt).where(web_push_attempt.c.session_id == session_id).order_by(web_push_attempt.c.id)).mappings().all()
+            rows = connection.execute(
+                select(web_push_attempt)
+                .where(
+                    web_push_attempt.c.session_id == session_id,
+                    web_push_attempt.c.subscription_id.in_(
+                        select(web_push_subscription.c.id).where(
+                            web_push_subscription.c.installation_id
+                            == self._installation_id
+                        )
+                    ),
+                )
+                .order_by(web_push_attempt.c.id)
+            ).mappings().all()
         return tuple(_attempt_from_row(row) for row in rows)
 
     def pending_push_session_ids(self) -> tuple[str, ...]:
@@ -687,17 +764,203 @@ class SqlCalibrationRepository:
         with self._application.connect() as connection:
             rows = connection.execute(
                 select(web_push_attempt.c.session_id)
-                .where(web_push_attempt.c.status.in_(("pending", "error")))
+                .where(
+                    web_push_attempt.c.status.in_(("pending", "error")),
+                    web_push_attempt.c.subscription_id.in_(
+                        select(web_push_subscription.c.id).where(
+                            web_push_subscription.c.installation_id
+                            == self._installation_id
+                        )
+                    ),
+                )
                 .distinct()
                 .order_by(web_push_attempt.c.session_id)
             ).scalars().all()
         return tuple(str(value) for value in rows)
 
-    def mark_push_attempt(self, attempt_id: int, *, status: str, error: str | None = None, at: datetime | None = None) -> bool:
+    def pending_push_alert_ids(self) -> tuple[int, ...]:
+        with self._application.connect() as connection:
+            rows = connection.execute(
+                select(web_push_attempt.c.alert_id)
+                .where(
+                    web_push_attempt.c.alert_id.is_not(None),
+                    web_push_attempt.c.status.in_(("pending", "error")),
+                    web_push_attempt.c.subscription_id.in_(
+                        select(web_push_subscription.c.id).where(
+                            web_push_subscription.c.installation_id
+                            == self._installation_id
+                        )
+                    ),
+                )
+                .distinct()
+                .order_by(web_push_attempt.c.alert_id)
+            ).scalars().all()
+        return tuple(int(value) for value in rows)
+
+    def push_attempts_for_alert(self, alert_id: int) -> tuple[WebPushAttempt, ...]:
+        with self._application.connect() as connection:
+            rows = connection.execute(
+                select(web_push_attempt)
+                .where(
+                    web_push_attempt.c.alert_id == alert_id,
+                    web_push_attempt.c.subscription_id.in_(
+                        select(web_push_subscription.c.id).where(
+                            web_push_subscription.c.installation_id
+                            == self._installation_id
+                        )
+                    ),
+                )
+                .order_by(web_push_attempt.c.id)
+            ).mappings().all()
+        return tuple(_attempt_from_row(row) for row in rows)
+
+    def claim_push_attempt(
+        self,
+        attempt_id: int,
+        *,
+        owner: str,
+        at: datetime | None = None,
+        lease_seconds: int = PUSH_CLAIM_LEASE_SECONDS,
+    ) -> bool:
+        """Claim one Push attempt so API/controller workers cannot duplicate it."""
+        moment = to_utc(at or self._clock())
+        lease_until = moment + timedelta(seconds=lease_seconds)
+        with transaction(self._application, self._application_location) as connection:
+            return (
+                connection.execute(
+                    update(web_push_attempt)
+                    .where(
+                        and_(
+                            web_push_attempt.c.id == attempt_id,
+                            web_push_attempt.c.status.in_(("pending", "error")),
+                            or_(
+                                web_push_attempt.c.claimed_until.is_(None),
+                                web_push_attempt.c.claimed_until <= moment,
+                            ),
+                            web_push_attempt.c.subscription_id.in_(
+                                select(web_push_subscription.c.id).where(
+                                    web_push_subscription.c.installation_id
+                                    == self._installation_id
+                                )
+                            ),
+                        )
+                    )
+                    .values(claimed_by=owner, claimed_until=lease_until)
+                ).rowcount
+                == 1
+            )
+
+    def deliver_claimed_push(
+        self,
+        attempt_id: int,
+        *,
+        owner: str,
+        at: datetime,
+        alert_type: str | None,
+        send: Callable[[WebPushSubscription], None],
+    ) -> str:
+        """Revalidate a Push claim while serialising catalogue cleanup."""
+        moment = to_utc(at)
+        with transaction(self._application, self._application_location) as connection:
+            condition = and_(
+                web_push_attempt.c.id == attempt_id,
+                web_push_attempt.c.status.in_(("pending", "error")),
+                web_push_attempt.c.claimed_by == owner,
+                web_push_attempt.c.claimed_until > moment,
+                web_push_attempt.c.subscription_id.in_(
+                    select(web_push_subscription.c.id).where(
+                        web_push_subscription.c.installation_id == self._installation_id
+                    )
+                ),
+            )
+            claimed = connection.execute(
+                update(web_push_attempt)
+                .where(condition)
+                # Retain the lease while taking the row lock used to
+                # serialise this handoff with catalogue cleanup.
+                .values(claimed_until=web_push_attempt.c.claimed_until)
+            ).rowcount
+            if claimed != 1:
+                return "lost"
+            subscription_row = connection.execute(
+                select(web_push_subscription).where(
+                    and_(
+                        web_push_subscription.c.id
+                        == select(web_push_attempt.c.subscription_id)
+                        .where(web_push_attempt.c.id == attempt_id)
+                        .scalar_subquery(),
+                        web_push_subscription.c.installation_id == self._installation_id,
+                    )
+                )
+            ).mappings().first()
+            if subscription_row is None or subscription_row["status"] != "active":
+                return "inactive"
+            if alert_type is None:
+                send(_subscription_from_row(subscription_row))
+            else:
+                with self._locked_type_enabled(alert_type) as enabled:
+                    if not enabled:
+                        connection.execute(
+                            update(web_push_attempt)
+                            .where(web_push_attempt.c.id == attempt_id)
+                            .values(
+                                status="denied",
+                                error="alert_type_disabled",
+                                attempted_at=moment,
+                                claimed_by=None,
+                                claimed_until=None,
+                            )
+                        )
+                        return "disabled"
+                    send(_subscription_from_row(subscription_row))
+        return "sent"
+
+    def alert_notification(self, alert_id: int) -> OperatorNotification | None:
+        with self._application.connect() as connection:
+            row = connection.execute(
+                select(operator_notification).where(
+                    (operator_notification.c.id == alert_id)
+                    & (operator_notification.c.installation_id == self._installation_id)
+                )
+            ).mappings().first()
+        return None if row is None else _notification_from_row(row)
+
+    def mark_push_attempt(
+        self,
+        attempt_id: int,
+        *,
+        status: str,
+        error: str | None = None,
+        at: datetime | None = None,
+        owner: str | None = None,
+    ) -> bool:
         if status not in {"pending", "sent", "denied", "unsupported", "expired", "error"}:
             raise ConfigValidationError("push attempt status is invalid")
+        moment = to_utc(at if at is not None else self._clock())
         with transaction(self._application, self._application_location) as connection:
-            return connection.execute(update(web_push_attempt).where(web_push_attempt.c.id == attempt_id).values(status=status, error=None if error is None else error[:512], attempted_at=to_utc(at or self._clock()))).rowcount == 1
+            conditions = [
+                web_push_attempt.c.id == attempt_id,
+                web_push_attempt.c.subscription_id.in_(
+                    select(web_push_subscription.c.id).where(
+                        web_push_subscription.c.installation_id
+                        == self._installation_id
+                    )
+                ),
+            ]
+            if owner is not None:
+                conditions.append(web_push_attempt.c.claimed_by == owner)
+                conditions.append(web_push_attempt.c.claimed_until > moment)
+            return connection.execute(
+                update(web_push_attempt)
+                .where(and_(*conditions))
+                .values(
+                    status=status,
+                    error=None if error is None else error[:512],
+                    attempted_at=moment,
+                    claimed_by=None,
+                    claimed_until=None,
+                )
+            ).rowcount == 1
 
 
 def _json_object(value: object) -> dict[str, Any]:
@@ -758,9 +1021,14 @@ def _notification_from_row(row: Mapping[str, Any]) -> OperatorNotification:
         id=int(row["id"]),
         session_id=None if row["session_id"] is None else str(row["session_id"]),
         kind=str(row["kind"]),
+        alert_type=str(row.get("alert_type") or row["kind"]),
+        severity=str(row.get("severity") or "info"),
+        episode_id=None if row.get("episode_id") is None else str(row["episode_id"]),
         title=str(row["title"]),
         body=str(row["body"]),
         created_at=from_utc(row["created_at"]),
+        opened_at=from_utc(row.get("opened_at") or row["created_at"]),
+        resolved_at=from_utc(row.get("resolved_at")),
         acknowledged_at=from_utc(row["acknowledged_at"]),
     )
 
@@ -785,9 +1053,12 @@ def _attempt_from_row(row: Mapping[str, Any]) -> WebPushAttempt:
         id=int(row["id"]),
         subscription_id=int(row["subscription_id"]),
         session_id=str(row["session_id"]),
+        alert_id=None if row.get("alert_id") is None else int(row["alert_id"]),
         status=str(row["status"]),
         attempted_at=from_utc(row["attempted_at"]),
         error=None if row["error"] is None else str(row["error"]),
+        claimed_by=None if row.get("claimed_by") is None else str(row["claimed_by"]),
+        claimed_until=from_utc(row.get("claimed_until")),
     )
 
 

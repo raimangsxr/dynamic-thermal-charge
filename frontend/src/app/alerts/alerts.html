@@ -1,0 +1,26 @@
+<main class="alerts-page">
+  <header class="page-heading">
+    <div><p class="eyebrow">Operación</p><h1>Avisos</h1><p>Condiciones que requieren atención, con su estado y el historial conservado.</p></div>
+    @if (page(); as current) {
+      <p class="summary" aria-live="polite">{{ current.active_count }} activas · máxima {{ current.maximum_severity ?? '—' }}</p>
+    }
+  </header>
+  <nav class="tabs" aria-label="Vista de avisos">
+    <button type="button" [class.active]="view() === 'active'" (click)="selectView('active')">Activas</button>
+    <button type="button" [class.active]="view() === 'history'" (click)="selectView('history')">Histórico</button>
+  </nav>
+  @if (message(); as text) { <p role="status" class="message">{{ text }}</p> }
+  @if (loading()) { <p>Cargando avisos…</p> }
+  @if (!loading() && page(); as current) {
+    @if (!current.items.length) { <p class="empty">No hay avisos en esta vista.</p> }
+    <section class="alert-list" aria-label="Lista de avisos">
+      @for (alert of current.items; track alert.id) {
+        <article class="alert-card" [attr.data-severity]="alert.severity">
+          <div class="alert-copy"><div class="alert-meta"><span>{{ alert.severity }}</span><time [attr.datetime]="alert.opened_at">{{ alert.opened_at | date:'short' }}</time></div><h2>{{ alert.title }}</h2><p>{{ alert.body }}</p>@if (alert.resolved_at) { <small>Resuelto {{ alert.resolved_at | date:'short' }}</small> } @if (alert.acknowledged_at) { <small>Acusado {{ alert.acknowledged_at | date:'short' }}</small> }</div>
+          @if (!alert.acknowledged_at) { <button type="button" (click)="acknowledge(alert.id)">Acusar</button> }
+        </article>
+      }
+    </section>
+    @if (current.has_more) { <button type="button" class="load-more" (click)="nextPage()">Cargar más</button> }
+  }
+</main>

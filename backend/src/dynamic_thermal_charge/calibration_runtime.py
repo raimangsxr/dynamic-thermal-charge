@@ -134,10 +134,16 @@ class CalibrationCoordinator:
         config = self._store.repository.current()[0]
         heater_by_id = {heater.id: heater for heater in config.heaters}
         active = set(self.active_heater_ids(config))
+        alert_repository = getattr(self._store, "alerts", None)
+        pending_alert_ids = getattr(
+            alert_repository, "pending_push_alert_ids", lambda: ()
+        )
         owned = set(self.owned_heater_ids(config, at=moment))
         if not owned:
             for session_id in self._store.calibration.pending_push_session_ids():
                 self._push.deliver_pending(session_id=session_id)
+            for alert_id in pending_alert_ids():
+                self._push.deliver_pending(alert_id=alert_id)
             return None
         outputs: set[str] = set()
         for heater_id in active:
@@ -168,6 +174,8 @@ class CalibrationCoordinator:
         # therefore drained independently of the active-session loop.
         for session_id in self._store.calibration.pending_push_session_ids():
             self._push.deliver_pending(session_id=session_id)
+        for alert_id in pending_alert_ids():
+            self._push.deliver_pending(alert_id=alert_id)
         # A non-None result owns every relay for the cycle.  Thus an active
         # baseline/cool session also forces the stale plan's output OFF.
         return outputs
@@ -490,6 +498,7 @@ def _notify_terminal_email(
                 THERMAL_CALIBRATION_TERMINAL,
                 subject=subject,
                 body=body,
+                session_id=session_id,
             )
             channel_status = "queued" if queued else "email_unconfigured"
         except Exception:  # noqa: BLE001 - SMTP is independent of control

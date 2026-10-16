@@ -39,6 +39,7 @@ import type {
   WeatherRefreshDto,
   RoomDto, RoomPatchRequest, RoomEstimateRequest, CalibrationActionDto,
   OperatorNotificationPageDto, PushRegistrationRequest, PushRegistrationDto,
+  AlertPageDto,
 } from './api.types';
 
 const BASE = '/api/v1';
@@ -142,6 +143,16 @@ export class Api {
 
   acknowledgeNotification(id: number): Observable<OperatorNotificationPageDto> {
     return this.http.post<OperatorNotificationPageDto>(`${BASE}/notifications/${id}/ack`, {});
+  }
+
+  alerts(view: 'active' | 'history' | 'all' = 'active', limit = 50, cursor?: string): Observable<AlertPageDto> {
+    const params: Record<string, string | number> = { view, limit };
+    if (cursor) params['cursor'] = cursor;
+    return this.http.get<AlertPageDto>(`${BASE}/alerts`, { params });
+  }
+
+  acknowledgeAlert(id: number, view: 'active' | 'history' | 'all' = 'active', limit = 50): Observable<AlertPageDto> {
+    return this.http.post<AlertPageDto>(`${BASE}/alerts/${id}/ack`, {}, { params: { view, limit } });
   }
 
   pushPublicKey(): Observable<{ public_key: string | null }> {

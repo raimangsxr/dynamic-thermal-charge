@@ -450,6 +450,43 @@ class CoordinationStub:
         ]
 
 
+def test_relay_test_fault_latch_emits_and_resolves_output_failure_once() -> None:
+    events: list[set[str]] = []
+    relay_tests = CoordinationStub(
+        _view(safety={"fault_latched": True, "fault_generation": 7})
+    )
+    controller = ChargeController(
+        ("a", "b"),
+        RecordingDriver(),
+        relay_tests=relay_tests,
+        output_failure_callback=lambda failed, _at: events.append(failed),
+    )
+
+    controller.apply(plan(AT), AT)
+
+    assert events == [{"a", "b"}, set()]
+    assert relay_tests.recovered == [7]
+
+
+def test_relay_test_driver_failure_emits_once_and_resolves_after_recovery() -> None:
+    driver = SelectivelyFailingDriver(failing={("b", True)})
+    relay_tests = CoordinationStub(_view("active", pending=True))
+    events: list[set[str]] = []
+    controller = ChargeController(
+        ("a", "b"),
+        driver,
+        relay_tests=relay_tests,
+        output_failure_callback=lambda failed, _at: events.append(failed),
+    )
+
+    controller.apply(plan(AT), AT)
+    controller.apply(plan(AT), AT + timedelta(seconds=1))
+    driver.failing.clear()
+    controller.apply(plan(AT), AT + timedelta(seconds=2))
+
+    assert events == [{"b"}, set()]
+
+
 def _active_view(status: str = "active", pending: bool = False) -> dict:
     return {
         "session": {"id": "session-1", "status": status},

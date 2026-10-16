@@ -241,6 +241,24 @@ def validate_snapshot(
     health = body.get("health")
     if health not in {"running", "idle", "degraded", "error"}:
         raise DynamicThermalChargeResponseError("backend snapshot has an invalid health")
+    alerts = body.get("alerts", {})
+    if not isinstance(alerts, dict):
+        raise DynamicThermalChargeResponseError("backend snapshot has invalid alerts")
+    count = alerts.get("count", 0)
+    if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+        raise DynamicThermalChargeResponseError("backend snapshot has invalid alert count")
+    if alerts.get("active", False) not in {True, False}:
+        raise DynamicThermalChargeResponseError("backend snapshot has invalid alert state")
+    if alerts.get("maximum_severity") not in {None, "critical", "warning", "info"}:
+        raise DynamicThermalChargeResponseError(
+            "backend snapshot has invalid alert severity"
+        )
+    for key in ("types", "messages"):
+        values = alerts.get(key, [])
+        if not isinstance(values, list) or not all(isinstance(value, str) for value in values):
+            raise DynamicThermalChargeResponseError(
+                f"backend snapshot has invalid alert {key}"
+            )
     return body
 
 

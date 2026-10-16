@@ -21,6 +21,7 @@ from .calibration_runtime import CalibrationCoordinator, active_calibration_heat
 from .drivers import OutputDriver, RecordingOutputDriver, SimulatedOutputDriver
 from .gpio_driver import GpioOutputDriver
 from .alerts import (
+    OUTPUT_FAILURE,
     PLAN_BEST_EFFORT_ACTIVE,
     PLAN_HEATER_EXCLUDED,
     PLAN_RECALCULATION_DEGRADED,
@@ -216,6 +217,14 @@ def _run_controller(
                 calibration_failure_callback=(
                     lambda heater_id, at, cause: calibration.fail_active_relay(
                         heater_id, at=at, cause=cause
+                    )
+                ),
+                output_failure_callback=(
+                    lambda failed, at: _notify_output_failure(
+                        alerts,
+                        failed,
+                        installation=store.repository.installation_name(),
+                        at=at,
                     )
                 ),
             )
@@ -871,6 +880,35 @@ def _build_alert_service(store) -> AlertService | None:
     except Exception:  # noqa: BLE001
         logger.exception("Could not initialise email alerts; continuing without them")
         return None
+
+
+def _notify_output_failure(
+    alerts,
+    failed: set[str],
+    *,
+    installation: str,
+    at: datetime,
+) -> None:
+    """Open or resolve the relay-output episode without touching control."""
+    if alerts is None:
+        return
+    try:
+        if failed:
+            names = ", ".join(sorted(failed))
+            alerts.raise_alert(
+                OUTPUT_FAILURE,
+                subject=f"[{installation}] Fallo de salida",
+                body=(
+                    f"Instalación: {installation}\n"
+                    f"Momento: {at.isoformat()}\n"
+                    f"Salidas rechazadas: {names}\n"
+                    "Se reintentará la orden en el siguiente ciclo."
+                ),
+            )
+        else:
+            alerts.clear_alert(OUTPUT_FAILURE)
+    except Exception:  # noqa: BLE001 - alerting cannot block relay control
+        logger.exception("Could not notify output_failure")
 
 
 def _notify_recalculation_result(

@@ -266,7 +266,29 @@ class ControllerService:
         if self._deviation_failure is not None:
             logger.info("Plan deviation evaluation recovered")
             self._deviation_failure = None
+        self._notify_plan_deviation(detected, now)
         return detected
+
+    def _notify_plan_deviation(self, detected: bool, at: datetime) -> None:
+        """Keep the informational deviation episode aligned with the detector."""
+        if self._alerts is None:
+            return
+        try:
+            from .alerts import PLAN_DEVIATION_REPLAN
+
+            if detected:
+                self._alerts.raise_alert(
+                    PLAN_DEVIATION_REPLAN,
+                    subject="Replanificación por desviación",
+                    body=(
+                        "La telemetría observada dejó de servir el plan activo; "
+                        f"se solicitó un recálculo en {at.isoformat()}."
+                    ),
+                )
+            else:
+                self._alerts.clear_alert(PLAN_DEVIATION_REPLAN)
+        except Exception:  # noqa: BLE001 - alerting cannot block replanning
+            logger.exception("Could not notify plan_deviation_replan")
 
     def _deliver_alerts(self) -> None:
         if self._alerts is None:

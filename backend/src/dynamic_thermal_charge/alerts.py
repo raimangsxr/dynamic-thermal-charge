@@ -16,9 +16,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import logging
+import os
 import smtplib
 from email.message import EmailMessage
 from typing import Any, Callable, Mapping, Protocol, Sequence
+from uuid import uuid4
 
 from .plan_activation import plan_best_effort_reasons
 from .system_settings import EmailSystemSettings
@@ -33,6 +35,10 @@ PLAN_BEST_EFFORT_ACTIVE = "plan_best_effort_active"
 PLAN_HEATER_EXCLUDED = "plan_heater_excluded"
 FORECAST_STALE = "forecast_stale"
 THERMAL_CALIBRATION_TERMINAL = "thermal_calibration_terminal"
+CONTROLLER_UNRESPONSIVE = "controller_unresponsive"
+OUTPUT_FAILURE = "output_failure"
+ALERT_EMAIL_FAILED = "alert_email_failed"
+PLAN_DEVIATION_REPLAN = "plan_deviation_replan"
 
 # Retries stop here: a mail server that refused five times with growing waits
 # is not going to accept the sixth attempt inside the same episode.
@@ -47,6 +53,7 @@ class AlertType:
     name: str
     title: str
     description: str
+    severity: str = "warning"
 
 
 ALERT_TYPES: tuple[AlertType, ...] = (
@@ -58,6 +65,7 @@ ALERT_TYPES: tuple[AlertType, ...] = (
             "instalación se queda sin plan activo y cuando se conserva el plan "
             "anterior por no poder reemplazarlo."
         ),
+        severity="critical",
     ),
     AlertType(
         name=PLAN_RECALCULATION_DEGRADED,
@@ -68,6 +76,7 @@ ALERT_TYPES: tuple[AlertType, ...] = (
             "si no cubre la próxima actualización puede activarse el mejor "
             "esfuerzo disponible."
         ),
+        severity="warning",
     ),
     AlertType(
         name=PLAN_BEST_EFFORT_ACTIVE,
@@ -76,6 +85,7 @@ ALERT_TYPES: tuple[AlertType, ...] = (
             "El controlador ejecuta el mejor plan físicamente validado aunque "
             "no haya alcanzado convergencia completa."
         ),
+        severity="warning",
     ),
     AlertType(
         name=PLAN_HEATER_EXCLUDED,
@@ -84,6 +94,7 @@ ALERT_TYPES: tuple[AlertType, ...] = (
             "Uno o más acumuladores no tienen temperatura interior o SOC "
             "recientes y quedan fuera del cálculo hasta recuperar telemetría."
         ),
+        severity="warning",
     ),
     AlertType(
         name=FORECAST_STALE,
@@ -93,6 +104,7 @@ ALERT_TYPES: tuple[AlertType, ...] = (
             "límite configurado; se ejecuta como mejor esfuerzo hasta obtener "
             "una previsión nueva."
         ),
+        severity="warning",
     ),
     AlertType(
         name=THERMAL_CALIBRATION_TERMINAL,
@@ -101,6 +113,40 @@ ALERT_TYPES: tuple[AlertType, ...] = (
             "Una calibración térmica terminó y requiere atención en la bandeja "
             "de la instalación."
         ),
+        severity="info",
+    ),
+    AlertType(
+        name=CONTROLLER_UNRESPONSIVE,
+        title="Controlador sin respuesta",
+        description=(
+            "El latido del controlador ha superado el umbral de liveness o "
+            "hay varios controladores sospechados."
+        ),
+        severity="critical",
+    ),
+    AlertType(
+        name=OUTPUT_FAILURE,
+        title="Fallo de salida",
+        description=(
+            "Una salida no aceptó su orden o la prueba de relés dejó activado "
+            "el bloqueo de seguridad."
+        ),
+        severity="critical",
+    ),
+    AlertType(
+        name=ALERT_EMAIL_FAILED,
+        title="Entrega de correo fallida",
+        description="Una entrega de correo agotó sus reintentos.",
+        severity="critical",
+    ),
+    AlertType(
+        name=PLAN_DEVIATION_REPLAN,
+        title="Replanificación por desviación",
+        description=(
+            "La medida observada se desvió del plan y se solicitó un nuevo "
+            "cálculo."
+        ),
+        severity="info",
     ),
 )
 
@@ -116,6 +162,8 @@ class PendingAlert:
     subject: str
     body: str
     attempts: int
+    alert_id: int | None = None
+    episode_id: str | None = None
 
 
 class AlertRepository(Protocol):
@@ -127,6 +175,20 @@ class AlertRepository(Protocol):
 
     def open_episode(
         self, alert_type: str, *, subject: str, body: str, at: datetime
+    ) -> bool: ...
+
+    def open_alert(
+        self,
+        alert_type: str,
+        *,
+        severity: str,
+        subject: str,
+        body: str,
+        at: datetime,
+        email_enabled: bool,
+        push_enabled: bool,
+        resolved: bool = False,
+        session_id: str | None = None,
     ) -> bool: ...
 
     def set_episode(self, alert_type: str, *, active: bool, at: datetime) -> None: ...
@@ -146,6 +208,7 @@ class AlertRepository(Protocol):
         attempts: int,
         next_attempt_at: datetime | None,
         error: str,
+        at: datetime | None = None,
     ) -> None: ...
 
 
@@ -207,23 +270,53 @@ class AlertService:
         self._sender = sender
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._max_attempts = max_attempts
+        self._owner = f"alert-{os.getpid()}-{uuid4().hex[:12]}"
         self._reported_unconfigured = False
 
     def raise_alert(self, alert_type: str, *, subject: str, body: str) -> bool:
         """Queue an alert unless its episode is already open.
 
-        Returns whether anything was queued.  A disabled alert or an
-        unconfigured mail server never opens an episode, so enabling either
-        later still notifies the next occurrence.
+        Returns whether the durable alert was opened.  With the global
+        repository, catalogue activation controls only channel rows: an
+        unconfigured mail server or disabled type cannot remove the in-app
+        record, and the next occurrence is still episode-deduplicated.
         """
         if alert_type not in ALERT_TYPES_BY_NAME:
             raise ValueError(f"unknown alert type {alert_type!r}")
         settings = self._settings()
+        now = self._clock()
+        definition = ALERT_TYPES_BY_NAME[alert_type]
+        # New repositories always persist the in-app alert. Catalogue
+        # activation controls only channel rows, and D2 keeps email off for
+        # info while allowing Web Push.
+        open_alert = getattr(self._repository, "open_alert", None)
+        if callable(open_alert):
+            enabled = self._repository.type_enabled(alert_type)
+            queued = open_alert(
+                alert_type,
+                severity=definition.severity,
+                subject=subject,
+                body=body,
+                at=now,
+                email_enabled=bool(enabled and settings.deliverable and definition.severity != "info"),
+                push_enabled=bool(enabled),
+            )
+            if not settings.deliverable and not self._reported_unconfigured:
+                logger.warning(
+                    "Alert %s has no email delivery: email alerts are disabled or incompletely configured",
+                    alert_type,
+                )
+                self._reported_unconfigured = True
+            elif settings.deliverable:
+                self._reported_unconfigured = False
+            return bool(queued)
+
+        # Compatibility for small in-memory repositories used by the original
+        # email-alert unit tests. Their contract predates the global inbox.
         if not settings.deliverable:
             if not self._reported_unconfigured:
                 logger.warning(
-                    "Alert %s was not queued: email alerts are disabled or "
-                    "incompletely configured",
+                    "Alert %s was not queued: email alerts are disabled or incompletely configured",
                     alert_type,
                 )
                 self._reported_unconfigured = True
@@ -232,16 +325,20 @@ class AlertService:
         if not self._repository.type_enabled(alert_type):
             logger.debug("Alert %s is disabled in the catalogue", alert_type)
             return False
-        now = self._clock()
-        if not self._repository.open_episode(
-            alert_type, subject=subject, body=body, at=now
-        ):
+        if not self._repository.open_episode(alert_type, subject=subject, body=body, at=now):
             logger.debug("Alert %s already has an open episode", alert_type)
             return False
         logger.info("Alert %s queued for delivery", alert_type)
         return True
 
-    def enqueue_message(self, alert_type: str, *, subject: str, body: str) -> bool:
+    def enqueue_message(
+        self,
+        alert_type: str,
+        *,
+        subject: str,
+        body: str,
+        session_id: str | None = None,
+    ) -> bool:
         """Queue an independent message without sharing an episode latch.
 
         Terminal calibration notifications are one message per session.  They
@@ -252,14 +349,34 @@ class AlertService:
         if alert_type not in ALERT_TYPES_BY_NAME:
             raise ValueError(f"unknown alert type {alert_type!r}")
         settings = self._settings()
+        now = self._clock()
+        open_alert = getattr(self._repository, "open_alert", None)
+        if callable(open_alert):
+            definition = ALERT_TYPES_BY_NAME[alert_type]
+            enabled = self._repository.type_enabled(alert_type)
+            return bool(
+                open_alert(
+                    alert_type,
+                    severity=definition.severity,
+                    subject=subject,
+                    body=body,
+                    at=now,
+                    email_enabled=bool(
+                        enabled
+                        and settings.deliverable
+                        and (
+                            definition.severity != "info"
+                            or alert_type == THERMAL_CALIBRATION_TERMINAL
+                        )
+                    ),
+                    push_enabled=bool(enabled),
+                    resolved=True,
+                    session_id=session_id,
+                )
+            )
         if not settings.deliverable or not self._repository.type_enabled(alert_type):
             return False
-        self._repository.enqueue(
-            alert_type,
-            subject=subject,
-            body=body,
-            at=self._clock(),
-        )
+        self._repository.enqueue(alert_type, subject=subject, body=body, at=now)
         return True
 
     def clear_alert(self, alert_type: str) -> None:
@@ -267,9 +384,11 @@ class AlertService:
         if alert_type not in ALERT_TYPES_BY_NAME:
             raise ValueError(f"unknown alert type {alert_type!r}")
         if self._repository.episode_active(alert_type):
-            self._repository.set_episode(
-                alert_type, active=False, at=self._clock()
-            )
+            resolver = getattr(self._repository, "resolve_alert", None)
+            if callable(resolver):
+                resolver(alert_type, at=self._clock())
+            else:
+                self._repository.set_episode(alert_type, active=False, at=self._clock())
             logger.info("Alert %s resolved and rearmed", alert_type)
 
     def deliver_pending(self, limit: int = 10) -> int:
@@ -279,20 +398,59 @@ class AlertService:
             return 0
         now = self._clock()
         delivered = 0
-        for alert in self._repository.due(now, limit):
+        claimer = getattr(self._repository, "claim_pending", None)
+        if callable(claimer):
+            try:
+                due = claimer(now, owner=self._owner, limit=limit)
+            except TypeError:
+                due = self._repository.due(now, limit)
+        else:
+            due = self._repository.due(now, limit)
+        handoff = getattr(self._repository, "deliver_claimed", None)
+        for alert in due:
             attempts = alert.attempts + 1
             try:
-                self._sender.send(settings, alert)
+                if callable(handoff):
+                    handed_off = handoff(
+                        alert,
+                        owner=self._owner,
+                        at=self._clock(),
+                        send=lambda: self._sender.send(settings, alert),
+                    )
+                    if not handed_off:
+                        continue
+                else:
+                    # Compatibility for pre-lease repositories. The durable
+                    # repository uses ``deliver_claimed`` above so this check
+                    # and the sender handoff are serialised with cleanup.
+                    if not self._repository.type_enabled(alert.alert_type):
+                        _mark_attempt_failed(
+                            self._repository,
+                            alert.id,
+                            attempts=alert.attempts,
+                            next_attempt_at=None,
+                            error="alert_type_disabled",
+                            at=self._clock(),
+                            owner=self._owner,
+                        )
+                        continue
+                    self._sender.send(settings, alert)
             except AlertDeliveryError as exc:
                 exhausted = attempts >= self._max_attempts
-                self._repository.mark_attempt_failed(
+                failure_at = self._clock()
+                marked = _mark_attempt_failed(
+                    self._repository,
                     alert.id,
                     attempts=attempts,
                     next_attempt_at=(
-                        None if exhausted else now + _backoff(attempts)
+                        None if exhausted else failure_at + _backoff(attempts)
                     ),
                     error=str(exc)[:512],
+                    at=failure_at,
+                    owner=self._owner,
                 )
+                if marked is False:
+                    continue
                 if exhausted:
                     logger.error(
                         "Alert %s could not be delivered after %d attempts: %s",
@@ -300,6 +458,7 @@ class AlertService:
                         attempts,
                         exc,
                     )
+                    self._record_email_failure(alert, exc)
                 else:
                     logger.warning(
                         "Attempt %d to deliver alert %s failed: %s",
@@ -308,10 +467,40 @@ class AlertService:
                         exc,
                     )
                 continue
-            self._repository.mark_sent(alert.id, now)
+            marked = _mark_sent(
+                self._repository, alert.id, self._clock(), owner=self._owner
+            )
+            if marked is False:
+                continue
             delivered += 1
+            if alert.alert_type != ALERT_EMAIL_FAILED:
+                # A successful subsequent delivery closes the diagnostic
+                # episode without making the diagnostic itself recursive.
+                self.clear_alert(ALERT_EMAIL_FAILED)
             logger.info("Alert %s delivered", alert.alert_type)
         return delivered
+
+    def _record_email_failure(self, alert: PendingAlert, exc: BaseException) -> None:
+        """Open the non-email diagnostic without recursing into SMTP."""
+        opener = getattr(self._repository, "open_alert", None)
+        if not callable(opener) or alert.alert_type == ALERT_EMAIL_FAILED:
+            return
+        try:
+            enabled = self._repository.type_enabled(ALERT_EMAIL_FAILED)
+            opener(
+                ALERT_EMAIL_FAILED,
+                severity=ALERT_TYPES_BY_NAME[ALERT_EMAIL_FAILED].severity,
+                subject=f"Entrega de correo fallida: {alert.alert_type}",
+                body=(
+                    f"El aviso {alert.alert_type} agotó {self._max_attempts} intentos. "
+                    f"Último error: {str(exc)[:512]}"
+                ),
+                at=self._clock(),
+                email_enabled=False,
+                push_enabled=bool(enabled),
+            )
+        except Exception:  # pragma: no cover - diagnostics cannot break delivery
+            logger.exception("Could not record alert_email_failed")
 
     def send_test_message(self, subject: str, body: str) -> None:
         """Validate the live configuration without touching the catalogue."""
@@ -359,6 +548,52 @@ def build_alert_service(store) -> "AlertService | None":
 def _backoff(attempts: int) -> timedelta:
     """One minute, then doubling: 1, 2, 4, 8 minutes."""
     return timedelta(seconds=FIRST_RETRY_SECONDS * (2 ** (attempts - 1)))
+
+
+def _mark_sent(repository: Any, delivery_id: int, at: datetime, *, owner: str) -> bool | None:
+    """Mark a delivery while remaining compatible with pre-lease fakes."""
+    try:
+        return repository.mark_sent(delivery_id, at, owner=owner)
+    except TypeError:
+        return repository.mark_sent(delivery_id, at)
+
+
+def _mark_attempt_failed(
+    repository: Any,
+    delivery_id: int,
+    *,
+    attempts: int,
+    next_attempt_at: datetime | None,
+    error: str,
+    at: datetime,
+    owner: str,
+) -> bool | None:
+    """Mark a failed delivery only if this worker still owns its lease."""
+    try:
+        return repository.mark_attempt_failed(
+            delivery_id,
+            attempts=attempts,
+            next_attempt_at=next_attempt_at,
+            error=error,
+            at=at,
+            owner=owner,
+        )
+    except TypeError:
+        try:
+            return repository.mark_attempt_failed(
+                delivery_id,
+                attempts=attempts,
+                next_attempt_at=next_attempt_at,
+                error=error,
+                owner=owner,
+            )
+        except TypeError:
+            return repository.mark_attempt_failed(
+                delivery_id,
+                attempts=attempts,
+                next_attempt_at=next_attempt_at,
+                error=error,
+            )
 
 
 def plan_recalculation_invalid_message(
@@ -644,6 +879,10 @@ __all__ = [
     "PLAN_HEATER_EXCLUDED",
     "FORECAST_STALE",
     "THERMAL_CALIBRATION_TERMINAL",
+    "CONTROLLER_UNRESPONSIVE",
+    "OUTPUT_FAILURE",
+    "ALERT_EMAIL_FAILED",
+    "PLAN_DEVIATION_REPLAN",
     "plan_best_effort_active_message",
     "plan_heater_excluded_message",
     "forecast_stale_message",

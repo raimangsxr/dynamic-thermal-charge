@@ -2,12 +2,14 @@ import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { MatSidenav, MatSidenavModule } from '@angular/material/sidenav';
 import { MatToolbarModule } from '@angular/material/toolbar';
-import { Component, computed, DestroyRef, inject, signal } from '@angular/core';
+import { Component, computed, DestroyRef, effect, inject, signal } from '@angular/core';
 import { Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 
 import { Auth } from './core/auth';
 import { Api } from './core/api';
+import { Poller } from './core/poll';
 import { RelayTestSession } from './core/relay-test-session';
+import type { AlertPageDto } from './core/api.types';
 
 declare const __APP_VERSION__: string;
 
@@ -26,6 +28,10 @@ declare const __APP_VERSION__: string;
           <mat-icon aria-hidden="true">{{ navigationOpen() ? 'menu_open' : 'menu' }}</mat-icon>
         </button>
         <span class="toolbar-title">Panel de control</span><span class="toolbar-spacer"></span>
+        <a class="alert-indicator" routerLink="/avisos" [attr.data-severity]="alertSummary()?.maximum_severity ?? null"
+           [attr.aria-label]="'Avisos activos: ' + (alertSummary()?.active_count ?? 0)" data-testid="alerts-indicator">
+          <mat-icon aria-hidden="true">notifications</mat-icon><span>{{ alertSummary()?.active_count ?? 0 }}</span>
+        </a>
         <button mat-icon-button type="button" (click)="signOut()" aria-label="Cerrar sesión" data-testid="logout">
           <mat-icon aria-hidden="true">logout</mat-icon>
         </button>
@@ -51,6 +57,9 @@ declare const __APP_VERSION__: string;
             </a>
             <a class="nav-link" routerLink="/calibracion" routerLinkActive="active" (click)="closeDrawer(drawer)">
               <mat-icon aria-hidden="true">thermostat</mat-icon><span>Calibración térmica</span>
+            </a>
+            <a class="nav-link" routerLink="/avisos" routerLinkActive="active" (click)="closeDrawer(drawer)">
+              <mat-icon aria-hidden="true">notifications</mat-icon><span>Avisos</span>
             </a>
             <a class="nav-link" routerLink="/configuracion" routerLinkActive="active" (click)="closeDrawer(drawer)">
               <mat-icon aria-hidden="true">tune</mat-icon><span>Configuración</span>
@@ -103,6 +112,10 @@ declare const __APP_VERSION__: string;
     .menu-button { margin-right: .5rem; }
     .toolbar-title { font-size: 1rem; font-weight: 500; }
     .toolbar-spacer { flex: 1 1 auto; }
+    .alert-indicator { display: inline-flex; align-items: center; gap: .2rem; color: #fff; text-decoration: none; padding: .35rem .55rem; border-radius: .4rem; margin-right: .4rem; }
+    .alert-indicator[data-severity="critical"] { background: #b3261e; }
+    .alert-indicator[data-severity="warning"] { background: #8a5b00; }
+    .alert-indicator[data-severity="info"] { background: #1c5d99; }
     .shell-content { height: 100%; overflow-y: auto; }
     .page-content { min-width: 0; min-height: 100%; }
     .global-mode { padding: .65rem max(1rem, calc((100vw - 76rem) / 2)); background: #fff1c7; border-bottom: 2px solid var(--warning); }
@@ -120,6 +133,9 @@ export class App {
   readonly mobile = signal(false);
   readonly navigationOpen = signal(true);
   readonly topology = signal<import('./core/api.types').TopologyDto | null>(null);
+  readonly alertSummary = signal<AlertPageDto | null>(null);
+  private alertRefreshInFlight = false;
+  private readonly alertPoller = new Poller(() => this.refreshAlertSummary());
   readonly relayAttention = computed(() => {
     const state = this.relay.view();
     const session = state?.session;
@@ -144,12 +160,17 @@ export class App {
       });
     }
 
-    // This initial read makes an externally-owned session or persistent latch
-    // visible from every authenticated route. It never renews a lease.
-    if (this.auth.authenticated()) {
-      this.api.topology().subscribe({ next: (state) => this.topology.set(state), error: () => undefined });
-      this.api.relayTest(this.relay.credential()).subscribe({ next: (view) => this.relay.observe(view), error: () => undefined });
-    }
+    // React to the session signal instead of reading it only once. The root
+    // shell survives the login route, so a credential entered after startup
+    // must initialize the same authenticated projections as a restored one.
+    effect(() => {
+      if (this.auth.authenticated()) {
+        this.startAuthenticatedState();
+      } else {
+        this.stopAuthenticatedState();
+      }
+    });
+    this.destroyRef.onDestroy(() => this.alertPoller.stop());
   }
 
   closeDrawer(drawer: MatSidenav): void {
@@ -175,9 +196,33 @@ export class App {
   }
 
   signOut(): void {
+    this.stopAuthenticatedState();
     this.auth.signOut();
     this.relay.clear();
     this.topology.set(null);
     void this.router.navigateByUrl('/login');
+  }
+
+  private startAuthenticatedState(): void {
+    this.api.topology().subscribe({ next: (state) => this.topology.set(state), error: () => undefined });
+    this.api.relayTest(this.relay.credential()).subscribe({ next: (view) => this.relay.observe(view), error: () => undefined });
+    this.refreshAlertSummary();
+    this.alertPoller.start();
+  }
+
+  private stopAuthenticatedState(): void {
+    this.alertPoller.stop();
+    this.alertRefreshInFlight = false;
+    this.alertSummary.set(null);
+  }
+
+  private refreshAlertSummary(): void {
+    if (!this.auth.authenticated() || this.alertRefreshInFlight) return;
+    this.alertRefreshInFlight = true;
+    this.api.alerts('active', 1).subscribe({
+      next: (page) => this.alertSummary.set(page),
+      error: () => { this.alertRefreshInFlight = false; },
+      complete: () => { this.alertRefreshInFlight = false; },
+    });
   }
 }

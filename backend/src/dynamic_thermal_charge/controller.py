@@ -24,6 +24,7 @@ class ChargeController:
         calibration_ownership_provider=None,
         calibration_confirmation_provider=None,
         calibration_failure_callback=None,
+        output_failure_callback=None,
     ) -> None:
         self._heater_ids = heater_ids
         self._heater_id_set = set(heater_ids)
@@ -42,6 +43,7 @@ class ChargeController:
         self._calibration_ownership_provider = calibration_ownership_provider
         self._calibration_confirmation_provider = calibration_confirmation_provider
         self._calibration_failure_callback = calibration_failure_callback
+        self._output_failure_callback = output_failure_callback
 
     @property
     def active_outputs(self) -> set[str]:
@@ -59,6 +61,10 @@ class ChargeController:
         # the remaining OFF requests, and preserve the failure for the next
         # process instead of forgetting it when this controller exits.
         results = self._sweep_off(at)
+        self._note_output_failures(
+            {heater_id for heater_id, accepted in results.items() if not accepted},
+            at,
+        )
         if not all(results.values()):
             self._latch_partial_off(at, "off_sweep_failed", results)
 
@@ -90,7 +96,7 @@ class ChargeController:
         if applied != self._active:
             logger.info("Controller outputs at %s: %s", at.isoformat(), sorted(applied))
         self._active = applied
-        self._note_output_failures(failed)
+        self._note_output_failures(failed, at)
 
     def _switch(self, heater_id: str, enabled: bool, at: datetime) -> bool:
         """Drive one output, reporting whether the driver accepted it."""
@@ -121,7 +127,7 @@ class ChargeController:
             )
             return False
 
-    def _note_output_failures(self, failed: set[str]) -> None:
+    def _note_output_failures(self, failed: set[str], at: datetime | None = None) -> None:
         """Log the degraded condition once per transition, as the service does."""
         if failed == self._failed_outputs:
             return
@@ -134,6 +140,13 @@ class ChargeController:
         else:
             logger.info("Every output accepted its command again")
         self._failed_outputs = failed
+        if self._output_failure_callback is not None:
+            try:
+                self._output_failure_callback(
+                    set(failed), at or datetime.now()
+                )
+            except Exception:
+                logger.error("Could not publish output failure alert", exc_info=True)
 
     def _notify_calibration_off_failure(self, heater_id: str, at: datetime) -> None:
         """Fail calibration ownership when its output cannot be switched off."""
@@ -177,7 +190,17 @@ class ChargeController:
         # A local latch is authoritative until it has been durably reconciled;
         # do not let a temporarily readable store re-enable automatic control.
         if self._relay_test_latch_local:
-            results = self._sweep_off(at)
+            results = self._sweep_off(at, notify=False)
+            if self._failed_outputs:
+                self._note_output_failures(
+                    {
+                        heater_id
+                        for heater_id, accepted in results.items()
+                        if not accepted
+                    }
+                    or set(self._failed_outputs),
+                    at,
+                )
             if all(results.values()):
                 try:
                     if self._relay_test_session_id:
@@ -190,6 +213,8 @@ class ChargeController:
                         self._relay_test_session_id = None
                     else:
                         self._relay_tests.arm_latch(None, at, "store_unavailable")
+                    if self._failed_outputs:
+                        self._note_output_failures(set(), at)
                     self._relay_test_latch_local = False
                 except Exception:
                     return True
@@ -200,12 +225,26 @@ class ChargeController:
         safety = view.get("safety", {})
         if safety.get("fault_latched"):
             generation = int(safety.get("fault_generation", 0))
-            results = self._sweep_off(at)
+            # A persisted relay-test fault is itself an output failure even
+            # when the recovery OFF sweep succeeds.  Suppress the sweep's
+            # intermediate notification so the transition is reported once,
+            # then clear it only after the durable latch is actually recovered.
+            results = self._sweep_off(at, notify=False)
+            failed = (
+                {
+                    heater_id
+                    for heater_id, accepted in results.items()
+                    if not accepted
+                }
+                or set(self._heater_ids)
+            )
+            self._note_output_failures(failed, at)
             try:
                 if all(results.values()):
                     # This cycle is recovery only.  Automatic control can resume
                     # on the following cycle after a fresh read.
-                    self._relay_tests.recover_latch(generation, at)
+                    if self._relay_tests.recover_latch(generation, at):
+                        self._note_output_failures(set(), at)
                 else:
                     self._relay_tests.arm_latch(safety.get("fault_session_id"), at, "off_sweep_failed")
             except Exception:
@@ -269,15 +308,52 @@ class ChargeController:
                     self._relay_test_latch_local = True
                     return True
                 try:
-                    self._driver.set_state(output["heater_id"], bool(output["desired_state"]), at)
-                    if output["desired_state"]: self._active.add(output["heater_id"])
-                    else: self._active.discard(output["heater_id"])
-                    self._relay_tests.confirm(session["id"], output["heater_id"], output["command_seq"], bool(output["desired_state"]), at)
+                    self._driver.set_state(
+                        output["heater_id"], bool(output["desired_state"]), at
+                    )
                 except Exception:
+                    self._note_output_failures(
+                        self._failed_outputs | {output["heater_id"]}, at
+                    )
                     logger.exception("Relay-test output %s could not be confirmed", output["heater_id"])
                     try:
                         self._relay_tests.unknown(session["id"], output["heater_id"], output["command_seq"], at)
                         self._relay_tests.request_controller_end(session["id"], at, "driver_failed")
+                    except Exception:
+                        self._sweep_off_safely(at)
+                        self._relay_test_latch_local = True
+                        return True
+                    return True
+                try:
+                    if output["desired_state"]:
+                        self._active.add(output["heater_id"])
+                    else:
+                        self._active.discard(output["heater_id"])
+                    self._relay_tests.confirm(
+                        session["id"],
+                        output["heater_id"],
+                        output["command_seq"],
+                        bool(output["desired_state"]),
+                        at,
+                    )
+                    self._note_output_failures(
+                        self._failed_outputs - {output["heater_id"]}, at
+                    )
+                except Exception:
+                    logger.exception(
+                        "Relay-test output %s could not be confirmed",
+                        output["heater_id"],
+                    )
+                    try:
+                        self._relay_tests.unknown(
+                            session["id"],
+                            output["heater_id"],
+                            output["command_seq"],
+                            at,
+                        )
+                        self._relay_tests.request_controller_end(
+                            session["id"], at, "confirmation_failed"
+                        )
                     except Exception:
                         self._sweep_off_safely(at)
                         self._relay_test_latch_local = True
@@ -316,7 +392,7 @@ class ChargeController:
             self._latch_partial_off(at, "off_sweep_failed", results)
         return results
 
-    def _sweep_off(self, at: datetime) -> dict[str, bool]:
+    def _sweep_off(self, at: datetime, *, notify: bool = True) -> dict[str, bool]:
         results: dict[str, bool] = {}
         for heater_id in self._heater_ids:
             try:
@@ -327,6 +403,11 @@ class ChargeController:
                 results[heater_id] = False
                 self._notify_calibration_off_failure(heater_id, at)
         self._active.clear()
+        if notify:
+            self._note_output_failures(
+                {heater_id for heater_id, accepted in results.items() if not accepted},
+                at,
+            )
         return results
 
     def shutdown(self, at: datetime) -> None:

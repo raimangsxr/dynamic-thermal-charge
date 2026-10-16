@@ -243,6 +243,25 @@ def discovery_entities(
             payload_on=True,
             payload_off=False,
         ),
+        _entity(
+            topics=topics,
+            key="installation_alerts_active",
+            component="binary_sensor",
+            entity="alerts_active",
+            name="Alertas activas",
+            device_name=installation_name,
+            state_topic=state,
+            value="alerts_active",
+            payload_on=True,
+            payload_off=False,
+            json_attributes_topic=state,
+            json_attributes_template=(
+                "{{ {'count': value_json.alerts_count, "
+                "'types': value_json.alerts_types, "
+                "'maximum_severity': value_json.alerts_max_severity, "
+                "'messages': value_json.alerts_messages} | tojson }}"
+            ),
+        ),
     ]
     entities = [
         _device_group(

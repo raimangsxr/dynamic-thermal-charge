@@ -1,10 +1,9 @@
 <main class="calibration-page">
   <header class="page-heading">
-    <div><p class="eyebrow">Modelo térmico</p><h1>Calibración automática</h1><p>Una estancia por acumulador. La calibración ejecuta ciclos controlados y nunca sustituye un resultado fallido automáticamente.</p></div>
+    <div><p class="eyebrow">Modelo térmico</p><h1>Calibración automática</h1><p>Una estancia por acumulador. La calibración ejecuta ciclos controlados y nunca sustituye un resultado fallido automáticamente.</p><a routerLink="/avisos">Ver la bandeja global de avisos</a></div>
     <div class="push-actions"><button type="button" (click)="registerPush()">Activar avisos del navegador</button><button type="button" (click)="revokePush()">Revocar avisos</button>@if (pushStatus(); as status) { <span role="status">{{ status }}</span> }</div>
   </header>
   @if (message(); as text) { <p class="message" role="status">{{ text }}</p> }
-  @if (notifications().length) { <section class="notifications" aria-label="Avisos"><h2>Avisos</h2>@for (notification of notifications(); track notification.id) { <article><div><strong>{{ notification.title }}</strong><p>{{ notification.body }}</p></div><button type="button" (click)="acknowledge(notification)">Acusar</button></article> }</section> }
   @if (loading()) { <p>Cargando estancias…</p> }
   <section class="room-grid" aria-label="Estancias">
     @for (card of cards(); track card.heater.id) {

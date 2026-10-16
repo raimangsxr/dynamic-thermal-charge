@@ -366,6 +366,29 @@ export interface RoomEstimateRequest { expected_revision: number; surface_m2: nu
 export interface CalibrationActionDto { accepted: boolean; revision: number; room: RoomDto; }
 export interface OperatorNotificationDto { id: number; session_id: string | null; kind: string; title: string; body: string; created_at: string; acknowledged_at: string | null; }
 export interface OperatorNotificationPageDto { items: OperatorNotificationDto[]; }
+export type AlertSeverity = 'critical' | 'warning' | 'info';
+export interface AlertDto {
+  id: number;
+  alert_type: string;
+  severity: AlertSeverity;
+  title: string;
+  body: string;
+  episode_id: string | null;
+  session_id: string | null;
+  opened_at: string;
+  resolved_at: string | null;
+  acknowledged_at: string | null;
+  active: boolean;
+}
+export interface AlertPageDto {
+  items: AlertDto[];
+  view: 'active' | 'history' | 'all';
+  limit_applied: number;
+  has_more: boolean;
+  next_cursor: string | null;
+  active_count: number;
+  maximum_severity: AlertSeverity | null;
+}
 export interface PushRegistrationRequest { browser_id: string; endpoint: string; keys: { p256dh: string; auth: string }; }
 export interface PushRegistrationDto { browser_id: string; status: string; }
 

@@ -5,6 +5,65 @@ tiene que atender, sin que el aviso pueda detener el control.
 
 ## Requirements
 
+### Requirement: Bandeja global y ciclo de vida de alertas
+
+Cada tipo del catálogo se persiste como un aviso de operador con tipo, título,
+severidad (`critical`, `warning` o `info`), mensaje, instante de apertura,
+resolución opcional y acuse opcional. La API expone las vistas `active`,
+`history` y `all` con cursor opaco y permite acusar un aviso sin borrarlo; el
+histórico conserva los avisos y sus entregas conforme a `retention_days`.
+Las alertas de condición se resuelven al desaparecer la condición y las de
+evento nacen resueltas.
+
+#### Scenario: Acuse conservado en histórico
+
+- **WHEN** el operador acusa una alerta activa
+- **THEN** desaparece de `active`, conserva su apertura y acuse en `history`,
+  y sigue sujeta a la retención configurada
+
+#### Scenario: Apertura idempotente tras reinicio
+
+- **WHEN** dos procesos detectan el mismo episodio
+- **THEN** la persistencia confirma una sola alerta y una sola entrega por
+  suscripción
+
+### Requirement: Canales independientes y alertas informativas
+
+Cada apertura intenta de forma independiente correo y Web Push por cada
+suscripción activa mediante filas duraderas reclamables con una concesión
+entre procesos. Un fallo o agotamiento de un canal no modifica el aviso ni
+bloquea el control. Las alertas `info` siempre permanecen en la bandeja, se
+proyectan en la aplicación y Home Assistant y se intentan por Web Push, pero
+no generan correo. Desactivar un tipo suprime sus filas de correo y Push, pero
+no elimina el aviso de la bandeja.
+
+#### Scenario: Info sin correo
+
+- **WHEN** se abre una alerta `info` con una suscripción Web Push activa
+- **THEN** se persiste en la bandeja y se crea una tentativa Push sin crear una
+  entrega de correo
+
+#### Scenario: Reclamación exclusiva
+
+- **WHEN** dos procesos reclaman la misma entrega pendiente
+- **THEN** solo el proceso que obtiene la concesión puede marcarla enviada o
+  fallida
+
+### Requirement: Detección de controlador y nuevas transiciones
+
+El proceso API detecta `controller_unresponsive` por un latido obsoleto o por
+varios controladores sospechados y lo resuelve cuando el latido vuelve a estar
+vigente. El runtime abre y resuelve `output_failure` por transición de rechazo
+de una salida o bloqueo de seguridad del relé, y abre `plan_deviation_replan`
+cuando una medida solicita recálculo; estas detecciones no alteran la física de
+planificación.
+
+#### Scenario: Controlador recuperado
+
+- **WHEN** la API observa un latido obsoleto y después uno vigente
+- **THEN** abre una alerta crítica en el primer sondeo y resuelve el mismo
+  episodio en el segundo
+
 ### Requirement: Calibration notification channels
 
 Cada terminación de calibración crea un aviso duradero en la bandeja de la
@@ -115,9 +174,9 @@ se registran una vez por transición.
 Mientras una condición siga activa no debe encolarse otra alerta de su tipo.
 Cuando la condición se resuelve, ese tipo se rearma y una ocurrencia nueva
 vuelve a avisar. El estado de rearme se persiste, de modo que un reinicio no
-reenvíe el aviso de una condición ya notificada. Un tipo desactivado o una
-configuración de correo no operativa no abren episodio, así que habilitar
-cualquiera de los dos más tarde sigue avisando de la siguiente ocurrencia.
+reenvíe el aviso de una condición ya notificada. Una configuración de correo
+no operativa no impide abrir el aviso en la bandeja; un tipo desactivado
+conserva el aviso, pero suprime sus entregas de correo y Push.
 La primera entrega y la apertura del episodio deben confirmarse en una sola
 transacción, de modo que un fallo entre ambas no deje un mensaje duplicable.
 

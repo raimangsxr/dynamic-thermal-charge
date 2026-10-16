@@ -27,16 +27,20 @@ from .mapping import from_utc, to_utc
 from .forecast_context import persisted_forecast_context
 from .schema import (
     RETAINED_TABLES,
+    alert_delivery,
+    alert_episode,
     automatic_plan,
     forecast as forecast_table,
     forecast_hour,
     output_transition,
+    operator_notification,
     plan as plan_table,
     plan_allocation,
     plan_slot,
     relay_test_control,
     relay_test_event,
     relay_test_session,
+    web_push_attempt,
 )
 from .url import StoreLocation
 
@@ -236,6 +240,49 @@ class SqlHistoryRecorder:
                                     plan_table_ref.c.forecast_id.is_not(None)
                                 )
                             )
+                    if table is operator_notification:
+                        # Active alerts are operational state, not disposable
+                        # history; acknowledged or resolved rows remain subject
+                        # to the configured retention window.
+                        condition = condition & or_(
+                            operator_notification.c.acknowledged_at.is_not(None),
+                            operator_notification.c.resolved_at.is_not(None),
+                        )
+                        # Keep the inbox row alongside a channel row that is
+                        # still waiting for a worker; otherwise a delayed
+                        # delivery could outlive the operator-visible alert.
+                        condition = condition & ~operator_notification.c.id.in_(
+                            select(alert_delivery.c.alert_id).where(
+                                and_(
+                                    alert_delivery.c.alert_id.is_not(None),
+                                    alert_delivery.c.installation_id
+                                    == self._installation_id,
+                                    alert_delivery.c.status.in_(
+                                        ("pending", "failed")
+                                    ),
+                                )
+                            )
+                        )
+                        condition = condition & ~operator_notification.c.id.in_(
+                            select(web_push_attempt.c.alert_id).where(
+                                and_(
+                                    web_push_attempt.c.alert_id.is_not(None),
+                                    web_push_attempt.c.status.in_(
+                                        ("pending", "error")
+                                    ),
+                                )
+                            )
+                        )
+                    if table is alert_episode:
+                        condition = condition & alert_episode.c.active.is_(False)
+                    if table is alert_delivery:
+                        # A pending delivery must survive until the channel
+                        # worker can claim it, even if its alert is old.
+                        condition = condition & alert_delivery.c.status.in_(("sent", "failed"))
+                    if table is web_push_attempt:
+                        # Pending/error attempts have no attempted_at and must
+                        # not disappear before a process can deliver them.
+                        condition = condition & web_push_attempt.c.status.not_in(("pending", "error"))
                     count = connection.execute(delete(table).where(condition)).rowcount
                     if count:
                         deleted[table.name] = int(count)
