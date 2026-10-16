@@ -31,7 +31,7 @@ const HEATER: Record<string, string> = {
   full_discharge_hours:
     'Horas de descarga nominal del fabricante. La emisión máxima es la capacidad dividida por estas horas, y decae con el estado de carga.',
   static_emission_percent:
-    'Emisión que el acumulador conserva con la carga agotada, en porcentaje de la máxima. Fija el suelo de la curva de emisión.',
+    'Fuga térmica continua: incluso al 100% de carga el acumulador libera este porcentaje de su potencia máxima. El planificador la cuenta como calor forzado y la calibración la separa del calor controlado.',
   room_thermal_capacity_kwh_per_c:
     'Capacidad térmica efectiva de la sala (kWh/°C): energía física necesaria para elevar un grado la temperatura interior. En planificación, una capacidad de 5 en vez de 2,5 hace que la misma energía neta produzca aproximadamente la mitad de variación de temperatura.',
   room_heat_loss_kw_per_c:

@@ -942,6 +942,8 @@ def _automatic_planning_response(
                 indoor_temperature_next_c_by_heater=item.get("indoor_temperature_next_c", {}),
                 target_temperature_c_by_heater=item.get("target_temperature_c", {}),
                 heat_delivered_kwh_by_heater=item.get("heat_delivered_kwh", {}),
+                forced_heat_kwh_by_heater=item.get("forced_heat_kwh", {}),
+                controlled_heat_kwh_by_heater=item.get("controlled_heat_kwh", {}),
                 thermal_loss_kwh_by_heater=item.get("thermal_loss_kwh", {}),
                 temperature_shortfall_start_c_by_heater=item.get("temperature_shortfall_start_c", {}),
                 temperature_shortfall_c_by_heater=item.get("temperature_shortfall_c", {}),
@@ -1429,6 +1431,8 @@ def _automatic_plan_from_preview_payload(payload: dict[str, Any]) -> AutomaticPl
             _preview_float_map(item.get("indoor_temperature_next_c")),
             _preview_float_map(item.get("temperature_shortfall_start_c")),
             _preview_float_map(item.get("heat_delivery_limit_kwh")),
+            _preview_float_map(item.get("forced_heat_kwh")),
+            _preview_float_map(item.get("controlled_heat_kwh")),
         )
         for item in _preview_dict_list(payload.get("slots"))
     )
@@ -1483,6 +1487,9 @@ def _automatic_plan_from_preview_payload(payload: dict[str, Any]) -> AutomaticPl
                     if isinstance(reason, dict)
                 )
             ),
+            _preview_optional_float(item.get("total_forced_heat_kwh")),
+            _preview_optional_float(item.get("total_controlled_heat_kwh")),
+            _preview_optional_float(item.get("terminal_forced_heat_kwh")),
         )
         for item in _preview_dict_list(payload.get("explanations"))
     )
@@ -1507,6 +1514,8 @@ def _automatic_plan_from_preview_payload(payload: dict[str, Any]) -> AutomaticPl
                 float(item["temperature_shortfall_c"]),
                 float(item.get("temperature_shortfall_start_c", 0.0)),
                 float(item.get("heat_delivery_limit_kwh", 0.0)),
+                float(item.get("forced_heat_kwh", 0.0)),
+                float(item.get("controlled_heat_kwh", 0.0)),
             )
             for item in demand_items
         )
@@ -1768,6 +1777,20 @@ def _preview_response(
             )
             for heater_id in sorted({item.heater_id for item in plan.demand})
         } if room_energy_model else {},
+        "forced_heat_kwh_by_heater": {
+            heater_id: round(
+                sum(item.forced_heat_kwh for item in plan.demand if item.heater_id == heater_id),
+                6,
+            )
+            for heater_id in sorted({item.heater_id for item in plan.demand})
+        } if room_energy_model else {},
+        "controlled_heat_kwh_by_heater": {
+            heater_id: round(
+                sum(item.controlled_heat_kwh for item in plan.demand if item.heater_id == heater_id),
+                6,
+            )
+            for heater_id in sorted({item.heater_id for item in plan.demand})
+        } if room_energy_model else {},
         "heater_summaries": persisted_operator_summary(
             {"explanations": explanation_payload}
         ),
@@ -1808,6 +1831,8 @@ def _preview_response(
                 "indoor_temperature_next_c": item.indoor_temperature_next_c,
                 "target_temperature_c": item.target_temperature_c,
                 "heat_delivered_kwh": item.heat_delivered_kwh,
+                "forced_heat_kwh": item.forced_heat_kwh,
+                "controlled_heat_kwh": item.controlled_heat_kwh,
                 "thermal_loss_kwh": item.thermal_loss_kwh,
                 "temperature_shortfall_start_c": item.temperature_shortfall_start_c,
                 "temperature_shortfall_c": item.temperature_shortfall_c,
@@ -1952,6 +1977,8 @@ def _ordered_plan_slots(slots: list[PlanningSlotView]) -> list[dict]:
             "indoor_temperature_next_c": slot.indoor_temperature_next_c_by_heater,
             "target_temperature_c": slot.target_temperature_c_by_heater,
             "heat_delivered_kwh": slot.heat_delivered_kwh_by_heater,
+            "forced_heat_kwh": slot.forced_heat_kwh_by_heater,
+            "controlled_heat_kwh": slot.controlled_heat_kwh_by_heater,
             "thermal_loss_kwh": slot.thermal_loss_kwh_by_heater,
             "temperature_shortfall_start_c": slot.temperature_shortfall_start_c_by_heater,
             "temperature_shortfall_c": slot.temperature_shortfall_c_by_heater,
@@ -2043,6 +2070,14 @@ def _build_timeline(
             str(key): float(value)
             for key, value in (source_slot.get("heat_delivered_kwh", {}) or {}).items()
         }
+        forced_projection = {
+            str(key): float(value)
+            for key, value in (source_slot.get("forced_heat_kwh", {}) or {}).items()
+        }
+        controlled_projection = {
+            str(key): float(value)
+            for key, value in (source_slot.get("controlled_heat_kwh", {}) or {}).items()
+        }
         loss_projection = {
             str(key): float(value)
             for key, value in (source_slot.get("thermal_loss_kwh", {}) or {}).items()
@@ -2081,6 +2116,8 @@ def _build_timeline(
                 indoor_temperature_next_c_by_heater={heater_id: round(value, 6) for heater_id, value in indoor_projection_next.items()},
                 target_temperature_c_by_heater={heater_id: round(value, 6) for heater_id, value in target_projection.items()},
                 heat_delivered_kwh_by_heater={heater_id: round(value, 6) for heater_id, value in heat_projection.items()},
+                forced_heat_kwh_by_heater={heater_id: round(value, 6) for heater_id, value in forced_projection.items()},
+                controlled_heat_kwh_by_heater={heater_id: round(value, 6) for heater_id, value in controlled_projection.items()},
                 thermal_loss_kwh_by_heater={heater_id: round(value, 6) for heater_id, value in loss_projection.items()},
                 temperature_shortfall_start_c_by_heater={heater_id: round(value, 6) for heater_id, value in shortfall_start_projection.items()},
                 temperature_shortfall_c_by_heater={heater_id: round(value, 6) for heater_id, value in shortfall_projection.items()},

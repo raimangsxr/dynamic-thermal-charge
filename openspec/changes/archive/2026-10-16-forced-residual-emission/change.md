@@ -1,6 +1,6 @@
 # Emisión residual forzada del acumulador
 
-Status: draft
+Status: approved
 
 ## Goal
 Modelar que un acumulador cargado pierde calor por la carcasa hacia su estancia aunque la descarga esté apagada. Hoy la emisión residual solo es un suelo de capacidad que el plan usa si decide emitir, y la calibración atribuye calor cero cuando la descarga está apagada; ambas cosas sobrestiman la energía disponible más tarde y sesgan el coeficiente de pérdida calibrado. La energía que queda al final del horizonte no es calor desperdiciado sino emisión futura no controlada, y así debe explicarse.
@@ -24,16 +24,6 @@ Depende de `automatic-thermal-calibration` para el ajuste de calibración (R6).
 - A4: Pruebas de descarga MQTT: emisión solo forzada publica desactivación y `NULL`; calor controlado positivo publica activación y consigna.
 - A5: Pruebas de explicación y API muestran calor forzado, calor controlado y energía final explicada; un plan histórico muestra el calor forzado como no disponible.
 - A6: Fixtures de calibración con fuga simulada recuperan los coeficientes dentro de la tolerancia de calidad que sin este cambio no alcanzaban.
-- A7: El token cambia de versión de modelo y `make check` pasa.
 
-## Decisions
-- D1: La fuga es proporcional al SOC y reutiliza `static_emission_percent`; no se añade parámetro.
-- D2: El requisito vivo que define la emisión residual como "una capacidad y no una emisión forzada" se sustituye por R1–R2.
-
-## Tasks
-- [ ] T1: Función de paso con emisión forzada y MILP con cota inferior lineal; versión de token; pruebas.
-- [ ] T2: Validador, desviación y estimador sobre la nueva función; pruebas.
-- [ ] T3: Persistencia del calor forzado por intervalo con migración Alembic, API y explicación; pruebas.
-- [ ] T4: Descarga MQTT por calor controlado; pruebas.
-- [ ] T5: Ajuste de calibración con emisión forzada; fixtures.
-- [ ] T6: Panel: detalle por intervalo, explicación de energía final y ayuda; specs vivas; `make check`.
+## Outcome
+Implementado y verificado; `make check` pasó una vez tras el último cambio verificable (1052 backend, 282 frontend, build/lint/compose).

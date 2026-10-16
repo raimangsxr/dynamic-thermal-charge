@@ -148,7 +148,7 @@ const HEATER_FORM_FIELDS: readonly HeaterFormFieldMeta[] = [
   },
   {
     key: 'static_emission_percent', label: 'Emisión residual (%)', type: 'number', min: '0', max: '100', step: '1', required: true,
-    hint: 'Porcentaje de la emisión máxima que el acumulador conserva con la carga agotada.',
+    hint: 'Fuga térmica continua: se libera incluso al 100% de carga y afecta a la planificación y calibración.',
   },
   {
     key: 'room_thermal_capacity_kwh_per_c', label: 'Capacidad térmica de la sala (kWh/°C)', type: 'number', min: '0.0001', step: '0.1', required: true,

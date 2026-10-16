@@ -283,19 +283,12 @@ def _intervals(samples: Sequence[CalibrationSample], capacity_kwh: float):
             continue
         midpoint_soc = (previous.soc_percent + current.soc_percent) / 2
         soc_fraction = max(0.0, min(1.0, midpoint_soc / 100))
-        discharge = 1.0 if previous.discharge_enabled or current.discharge_enabled else 0.0
-        # The accumulator's nominal emission is intentionally represented only
-        # by the configured capacity and the nominal discharge duration at the
-        # integration boundary.  A sample may provide a measured/modelled
-        # interval value directly; when omitted, no heat is credited.
-        # ``CalibrationCoordinator`` stores the modeled energy for each
-        # sample after applying SOC, discharge state and damper opening.  Use
-        # the interval average here; multiplying by damper again would apply
-        # the gate twice, and taking the maximum would over-credit a changing
-        # SOC/position at the interval boundary.
+        # ``CalibrationCoordinator`` stores the modeled total: residual heat
+        # is present in every phase, while the controlled component is gated by
+        # discharge and damper state.  Use the interval average; applying the
+        # gate again here would double-count it.
         heat = (
             max(0.0, (previous.heat_delivered_kwh + current.heat_delivered_kwh) / 2)
-            * discharge
         )
         integral = ((previous.indoor_temperature_c - previous.outdoor_temperature_c) + (current.indoor_temperature_c - current.outdoor_temperature_c)) / 2 * duration
         intervals.append((current.observed_at, current.indoor_temperature_c - previous.indoor_temperature_c, integral, heat, duration, soc_fraction, capacity_kwh))

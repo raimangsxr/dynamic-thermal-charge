@@ -84,6 +84,8 @@ interface PreviewChartPoint {
   indoor_temperature_next_c: number | null;
   target_temperature_c: number | null;
   heat_delivered_kwh: number | null;
+  forced_heat_kwh: number | null;
+  controlled_heat_kwh: number | null;
   thermal_loss_kwh: number | null;
   temperature_shortfall_start_c: number | null;
   temperature_shortfall_c: number | null;
@@ -108,6 +110,8 @@ interface ExplanationRow {
   storedNext: number | null;
   charge: number | null;
   heat: number | null;
+  forced: number | null;
+  controlled: number | null;
   loss: number | null;
   indoor: number | null;
   indoorNext: number | null;
@@ -157,8 +161,8 @@ function explainPlanningDeficit(item: PlanningDeficitDto): string {
           @for (item of explanation.operator_summary; track item.heater_id) {
             <article class="problem operator-explanation" data-testid="plan-operator-summary">
               <h3>{{ item.heater_name }}</h3>
-              <p>Partía de {{ temperature(item.initial_indoor_temperature_c) }} y {{ percent(item.initial_soc_percent) }} de carga. El plan asignó {{ duration(item.charge_minutes) }} de carga y proyectó {{ energy(item.total_heat_delivered_kwh) }} de calor entregado, {{ energy(item.total_thermal_loss_kwh) }} de intercambio y una temperatura final de {{ temperature(item.final_indoor_temperature_c) }}.</p>
-              <p>Energía almacenada: {{ energy(item.initial_stored_energy_kwh) }} → {{ energy(item.final_stored_energy_kwh) }}; carga eléctrica: {{ energy(item.total_charge_energy_kwh) }}; excedente terminal: {{ energy(item.terminal_surplus_energy_kwh) }}; contribución de la previsión: {{ energy(item.forecast_contribution_kwh) }}.</p>
+              <p>Partía de {{ temperature(item.initial_indoor_temperature_c) }} y {{ percent(item.initial_soc_percent) }} de carga. El plan asignó {{ duration(item.charge_minutes) }} de carga y proyectó {{ energy(item.total_heat_delivered_kwh) }} de calor entregado ({{ energy(item.total_forced_heat_kwh) }} forzado + {{ energy(item.total_controlled_heat_kwh) }} controlado), {{ energy(item.total_thermal_loss_kwh) }} de intercambio y una temperatura final de {{ temperature(item.final_indoor_temperature_c) }}.</p>
+              <p>Energía almacenada: {{ energy(item.initial_stored_energy_kwh) }} → {{ energy(item.final_stored_energy_kwh) }}; carga eléctrica: {{ energy(item.total_charge_energy_kwh) }}; calor forzado futuro al terminar el horizonte: {{ energy(item.terminal_forced_heat_kwh) }}; excedente terminal: {{ energy(item.terminal_surplus_energy_kwh) }}; contribución de la previsión: {{ energy(item.forecast_contribution_kwh) }}.</p>
               <p>Próximo objetivo: {{ temperature(item.next_target_temperature_c) }} · inicio {{ dateTime(item.next_target_start) }} · fecha límite {{ dateTime(item.next_target_end) }}.</p>
               @if (item.charge_reasons === null || item.charge_reasons === undefined) {
                 <p>Motivos de carga: no disponible.</p>
@@ -194,9 +198,9 @@ function explainPlanningDeficit(item: PlanningDeficitDto): string {
           @if (explanation.plan['slots']?.length) {
             <h3>Balance por intervalo</h3>
             <div class="table-scroll planning-detail-table-scroll">
-              <table class="planning-detail-table" data-testid="plan-explanation-intervals"><thead><tr><th>Intervalo</th><th>Acumulador</th><th>Potencia</th><th>Energía inicio</th><th>+ carga</th><th>- calor</th><th>- pérdidas</th><th>Energía final</th><th>Interior</th><th>Objetivo</th><th>Déficit</th></tr></thead><tbody>
+              <table class="planning-detail-table" data-testid="plan-explanation-intervals"><thead><tr><th>Intervalo</th><th>Acumulador</th><th>Potencia</th><th>Energía inicio</th><th>+ carga</th><th>- calor total</th><th>- forzado</th><th>- controlado</th><th>- pérdidas</th><th>Energía final</th><th>Interior</th><th>Objetivo</th><th>Déficit</th></tr></thead><tbody>
                 @for (row of explanationRows(explanation); track row.key) {
-                  <tr><th>{{ dateTime(row.start) }}–{{ dateTime(row.end) }}</th><td>{{ row.heater }}</td><td>{{ row.power }} W</td><td>{{ energy(row.stored) }}</td><td>{{ energy(row.charge) }}</td><td>{{ energy(row.heat) }}</td><td>{{ energy(row.loss) }}</td><td>{{ energy(row.storedNext) }}</td><td>{{ temperature(row.indoor) }} → {{ temperature(row.indoorNext) }}</td><td>{{ temperature(row.target) }}</td><td>{{ temperature(row.shortfall) }}</td></tr>
+                  <tr><th>{{ dateTime(row.start) }}–{{ dateTime(row.end) }}</th><td>{{ row.heater }}</td><td>{{ row.power }} W</td><td>{{ energy(row.stored) }}</td><td>{{ energy(row.charge) }}</td><td>{{ energy(row.heat) }}</td><td>{{ energy(row.forced) }}</td><td>{{ energy(row.controlled) }}</td><td>{{ energy(row.loss) }}</td><td>{{ energy(row.storedNext) }}</td><td>{{ temperature(row.indoor) }} → {{ temperature(row.indoorNext) }}</td><td>{{ temperature(row.target) }}</td><td>{{ temperature(row.shortfall) }}</td></tr>
                 }
               </tbody></table>
             </div>
@@ -257,8 +261,8 @@ function explainPlanningDeficit(item: PlanningDeficitDto): string {
               <mat-tab [label]="heater.name">
                 <section class="preview-detail-table" data-testid="preview-detail-heater-table" [attr.aria-labelledby]="'preview-detail-heater-title-' + heater.id">
                   <h3 [id]="'preview-detail-heater-title-' + heater.id">{{ heater.name }}</h3>
-                  <div class="table-scroll"><table [attr.aria-label]="'Detalle de planificación de ' + heater.name"><thead><tr><th scope="col">Intervalo</th><th scope="col">Potencia (W)</th><th scope="col">Energía inicio</th><th scope="col">Energía fin</th><th scope="col">Interior inicio</th><th scope="col">Interior fin</th><th scope="col">Objetivo</th><th scope="col">Déficit inicio</th><th scope="col">Déficit fin</th><th scope="col">Calor entregado</th><th scope="col">Intercambio térmico</th></tr></thead><tbody>
-                    @for (slot of previewWindowSlots(preview); track $index) { <tr><th scope="row">{{ previewSlotRangeLabel(slot) }}</th><td>{{ previewPower(slot, heater.id, heater.power_w) }}</td><td>{{ energy(previewStoredEnergy(slot, heater.id)) }}</td><td>{{ energy(previewStoredEnergyNext(slot, heater.id)) }}</td><td>{{ temperature(previewIndoorTemperature(slot, heater.id)) }}</td><td>{{ temperature(previewIndoorTemperatureNext(slot, heater.id)) }}</td><td>{{ temperature(previewTargetTemperature(slot, heater.id)) }}</td><td>{{ temperature(previewShortfallStart(slot, heater.id)) }}</td><td>{{ temperature(previewShortfall(slot, heater.id)) }}</td><td>{{ energy(previewHeatDelivered(slot, heater.id)) }}</td><td>{{ energy(previewThermalLoss(slot, heater.id)) }}</td></tr> }
+                  <div class="table-scroll"><table [attr.aria-label]="'Detalle de planificación de ' + heater.name"><thead><tr><th scope="col">Intervalo</th><th scope="col">Potencia (W)</th><th scope="col">Energía inicio</th><th scope="col">Energía fin</th><th scope="col">Interior inicio</th><th scope="col">Interior fin</th><th scope="col">Objetivo</th><th scope="col">Déficit inicio</th><th scope="col">Déficit fin</th><th scope="col">Calor total</th><th scope="col">Calor forzado</th><th scope="col">Calor controlado</th><th scope="col">Intercambio térmico</th></tr></thead><tbody>
+                    @for (slot of previewWindowSlots(preview); track $index) { <tr><th scope="row">{{ previewSlotRangeLabel(slot) }}</th><td>{{ previewPower(slot, heater.id, heater.power_w) }}</td><td>{{ energy(previewStoredEnergy(slot, heater.id)) }}</td><td>{{ energy(previewStoredEnergyNext(slot, heater.id)) }}</td><td>{{ temperature(previewIndoorTemperature(slot, heater.id)) }}</td><td>{{ temperature(previewIndoorTemperatureNext(slot, heater.id)) }}</td><td>{{ temperature(previewTargetTemperature(slot, heater.id)) }}</td><td>{{ temperature(previewShortfallStart(slot, heater.id)) }}</td><td>{{ temperature(previewShortfall(slot, heater.id)) }}</td><td>{{ energy(previewHeatDelivered(slot, heater.id)) }}</td><td>{{ energy(previewForcedHeat(slot, heater.id)) }}</td><td>{{ energy(previewControlledHeat(slot, heater.id)) }}</td><td>{{ energy(previewThermalLoss(slot, heater.id)) }}</td></tr> }
                   </tbody></table></div>
                 </section>
               </mat-tab>
@@ -393,7 +397,7 @@ export class PlanningDetailDialog implements AfterViewInit, OnDestroy {
     const labels: Record<string, string> = {
       necessary_for_target: 'Carga necesaria para la consigna',
       preheating_for_next_target: 'Precalentamiento para la siguiente consigna',
-      residual_storage: 'Carga residual',
+      residual_storage: 'Energía que seguirá liberándose como calor forzado tras el horizonte',
     };
     return typeof value === 'string' && labels[value] ? labels[value] : 'Motivo no disponible';
   }
@@ -497,6 +501,7 @@ export class PlanningDetailDialog implements AfterViewInit, OnDestroy {
           power: active ? metric('heater_power_w') ?? Number(slot['power_w'] ?? 0) : 0,
           stored: metric('stored_energy_kwh'), storedNext: metric('stored_energy_next_kwh'),
           charge: metric('charge_energy_kwh'), heat: metric('heat_delivered_kwh'), loss: metric('thermal_loss_kwh'),
+          forced: metric('forced_heat_kwh'), controlled: metric('controlled_heat_kwh'),
           indoor: metric('indoor_temperature_c'), indoorNext: metric('indoor_temperature_next_c'),
           target: metric('target_temperature_c'), shortfall: metric('temperature_shortfall_c'),
         });
@@ -636,7 +641,7 @@ export class PlanningDetailDialog implements AfterViewInit, OnDestroy {
     });
   }
 
-  previewSlotMetric(slot: Record<string, unknown>, key: 'heater_power_w' | 'stored_energy_kwh' | 'stored_energy_next_kwh' | 'indoor_temperature_c' | 'indoor_temperature_next_c' | 'target_temperature_c' | 'heat_delivered_kwh' | 'thermal_loss_kwh' | 'temperature_shortfall_start_c' | 'temperature_shortfall_c' | 'charge_energy_kwh', heaterId: string): number | null {
+  previewSlotMetric(slot: Record<string, unknown>, key: 'heater_power_w' | 'stored_energy_kwh' | 'stored_energy_next_kwh' | 'indoor_temperature_c' | 'indoor_temperature_next_c' | 'target_temperature_c' | 'heat_delivered_kwh' | 'forced_heat_kwh' | 'controlled_heat_kwh' | 'thermal_loss_kwh' | 'temperature_shortfall_start_c' | 'temperature_shortfall_c' | 'charge_energy_kwh', heaterId: string): number | null {
     const values = slot[key] as Record<string, number> | undefined;
     return typeof values?.[heaterId] === 'number' ? values[heaterId] : null;
   }
@@ -669,6 +674,12 @@ export class PlanningDetailDialog implements AfterViewInit, OnDestroy {
   }
   previewHeatDelivered(slot: Record<string, unknown>, heaterId: string): number | null {
     return this.previewSlotMetric(slot, 'heat_delivered_kwh', heaterId);
+  }
+  previewForcedHeat(slot: Record<string, unknown>, heaterId: string): number | null {
+    return this.previewSlotMetric(slot, 'forced_heat_kwh', heaterId);
+  }
+  previewControlledHeat(slot: Record<string, unknown>, heaterId: string): number | null {
+    return this.previewSlotMetric(slot, 'controlled_heat_kwh', heaterId);
   }
   previewThermalLoss(slot: Record<string, unknown>, heaterId: string): number | null {
     return this.previewSlotMetric(slot, 'thermal_loss_kwh', heaterId);
@@ -1629,7 +1640,7 @@ export class Planning implements AfterViewInit, OnDestroy {
       return Number.isFinite(start) && start >= windowStart && start < windowEnd;
     });
   }
-  previewSlotMetric(slot: Record<string, unknown>, key: 'heater_power_w' | 'stored_energy_kwh' | 'stored_energy_next_kwh' | 'indoor_temperature_c' | 'indoor_temperature_next_c' | 'target_temperature_c' | 'heat_delivered_kwh' | 'thermal_loss_kwh' | 'temperature_shortfall_start_c' | 'temperature_shortfall_c' | 'charge_energy_kwh', heaterId: string): number | null {
+  previewSlotMetric(slot: Record<string, unknown>, key: 'heater_power_w' | 'stored_energy_kwh' | 'stored_energy_next_kwh' | 'indoor_temperature_c' | 'indoor_temperature_next_c' | 'target_temperature_c' | 'heat_delivered_kwh' | 'forced_heat_kwh' | 'controlled_heat_kwh' | 'thermal_loss_kwh' | 'temperature_shortfall_start_c' | 'temperature_shortfall_c' | 'charge_energy_kwh', heaterId: string): number | null {
     const values = slot[key] as Record<string, number> | undefined;
     return typeof values?.[heaterId] === 'number' ? values[heaterId] : null;
   }
@@ -1641,6 +1652,12 @@ export class Planning implements AfterViewInit, OnDestroy {
     if (!Array.isArray(heaterIds) || !heaterIds.some((id) => String(id) === heaterId)) return 0;
     if (fallbackPowerW > 0) return fallbackPowerW;
     return heaterIds.length === 1 ? this.previewSlotPower(slot) : 0;
+  }
+  previewForcedHeat(slot: Record<string, unknown>, heaterId: string): number | null {
+    return this.previewSlotMetric(slot, 'forced_heat_kwh', heaterId);
+  }
+  previewControlledHeat(slot: Record<string, unknown>, heaterId: string): number | null {
+    return this.previewSlotMetric(slot, 'controlled_heat_kwh', heaterId);
   }
   previewChartPoint(slot: Record<string, unknown>, heaterId: string, fallbackPowerW = 0, index = 0): PreviewChartPoint {
     const power_w = this.previewPower(slot, heaterId, fallbackPowerW);
@@ -1654,6 +1671,8 @@ export class Planning implements AfterViewInit, OnDestroy {
       indoor_temperature_next_c: this.previewSlotMetric(slot, 'indoor_temperature_next_c', heaterId),
       target_temperature_c: this.previewSlotMetric(slot, 'target_temperature_c', heaterId),
       heat_delivered_kwh: this.previewSlotMetric(slot, 'heat_delivered_kwh', heaterId),
+      forced_heat_kwh: this.previewSlotMetric(slot, 'forced_heat_kwh', heaterId),
+      controlled_heat_kwh: this.previewSlotMetric(slot, 'controlled_heat_kwh', heaterId),
       thermal_loss_kwh: this.previewSlotMetric(slot, 'thermal_loss_kwh', heaterId),
       temperature_shortfall_start_c: this.previewSlotMetric(slot, 'temperature_shortfall_start_c', heaterId),
       temperature_shortfall_c: this.previewSlotMetric(slot, 'temperature_shortfall_c', heaterId),
@@ -1663,7 +1682,16 @@ export class Planning implements AfterViewInit, OnDestroy {
   previewSummaryText(summary: Record<string, unknown>): string {
     const delivered = summary['heat_delivered_kwh_by_heater'] as Record<string, number> | undefined;
     if (!delivered) return 'Sin resumen disponible.';
-    return Object.entries(delivered).map(([heater, value]) => `${this.heaterText(heater)}: ${Number(value).toFixed(2)} kWh entregados`).join(' · ') || 'No se estima calor entregado.';
+    const forced = summary['forced_heat_kwh_by_heater'] as Record<string, number> | undefined;
+    const controlled = summary['controlled_heat_kwh_by_heater'] as Record<string, number> | undefined;
+    return Object.entries(delivered).map(([heater, value]) => {
+      const forcedValue = forced?.[heater];
+      const controlledValue = controlled?.[heater];
+      const detail = forcedValue === undefined || controlledValue === undefined
+        ? `${Number(value).toFixed(2)} kWh entregados`
+        : `${Number(value).toFixed(2)} kWh entregados (${Number(forcedValue).toFixed(2)} forzados + ${Number(controlledValue).toFixed(2)} controlados)`;
+      return `${this.heaterText(heater)}: ${detail}`;
+    }).join(' · ') || 'No se estima calor entregado.';
   }
 
   previewIntervalCount(result: PlanningPreviewDto): number {
@@ -1829,7 +1857,7 @@ export class Planning implements AfterViewInit, OnDestroy {
           options: this.chartOptions<'line'>(fullLabels, 'Potencia (kW)', (context) => {
             const point = context.raw as PreviewChartPoint;
             const metric = (value: number | null | undefined, digits: number): string => value === null || value === undefined ? 'no disponible' : value.toFixed(digits);
-            return `${context.dataset.label ?? 'Acumulador'}: ${point.power_w} W · ${metric(point.stored_energy_kwh, 2)}→${metric(point.stored_energy_next_kwh, 2)} kWh almacenados · ${metric(point.indoor_temperature_c, 1)}→${metric(point.indoor_temperature_next_c, 1)} °C interior · ${metric(point.heat_delivered_kwh, 2)} kWh entregados · ${metric(point.thermal_loss_kwh, 2)} kWh intercambio`;
+            return `${context.dataset.label ?? 'Acumulador'}: ${point.power_w} W · ${metric(point.stored_energy_kwh, 2)}→${metric(point.stored_energy_next_kwh, 2)} kWh almacenados · ${metric(point.indoor_temperature_c, 1)}→${metric(point.indoor_temperature_next_c, 1)} °C interior · ${metric(point.heat_delivered_kwh, 2)} kWh entregados (${metric(point.forced_heat_kwh, 2)} forzados + ${metric(point.controlled_heat_kwh, 2)} controlados) · ${metric(point.thermal_loss_kwh, 2)} kWh intercambio`;
           }),
         }) as unknown as Chart);
         return;

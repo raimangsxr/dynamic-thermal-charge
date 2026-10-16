@@ -114,6 +114,8 @@ def test_room_energy_step_limits_discharge_to_emission_capability():
     # 19.2 kWh over 10 h is 1.92 kW at full charge, with a 20% residual floor:
     # 0.384 + (1.92 - 0.384) * 0.507 = 1.162752 kW, so 0.581376 kWh in 30 min.
     assert interval.heat_delivered_kwh == pytest.approx(0.581376)
+    assert interval.forced_heat_kwh == pytest.approx(0.097344)
+    assert interval.controlled_heat_kwh == pytest.approx(0.484032)
     assert interval.heat_delivery_limit_kwh == pytest.approx(0.581376)
     assert interval.stored_energy_next_kwh == pytest.approx(9.153024)
 
@@ -156,8 +158,8 @@ def test_empty_accumulator_delivers_no_heat_despite_the_residual_floor():
         slot_minutes=30,
     )
 
-    # The floor is a capability, not a forced emission: with nothing stored the
-    # accumulator delivers nothing and the deficit is preserved.
+    # A zero-SOC accumulator has no forced energy available despite the
+    # configured residual capability, so the deficit is preserved.
     assert interval.heat_delivery_limit_kwh == pytest.approx(0.192)
     assert interval.heat_delivered_kwh == pytest.approx(0.0)
     assert interval.stored_energy_next_kwh == pytest.approx(0.0)
@@ -778,9 +780,9 @@ def test_estimator_projects_each_interval_from_indoor_temperature_and_soc():
     assert intervals[0].indoor_temperature_next_c == pytest.approx(19.8176)
 
 
-def test_no_heat_is_delivered_when_no_target_remains_in_the_horizon():
-    # The discharge system only emits on demand: a target that ends before the
-    # horizon does leaves the trailing slots with nothing to reach.
+def test_forced_heat_is_delivered_when_no_target_remains_in_the_horizon():
+    # Residual heat is emitted continuously after a target ends, even though no
+    # controlled discharge is requested in the trailing slots.
     heater = replace(
         _heater(),
         temperature_targets=(TemperatureTarget(20.5, time(0, 0), time(1, 0)),),
@@ -798,8 +800,10 @@ def test_no_heat_is_delivered_when_no_target_remains_in_the_horizon():
     assert result.demand[0].target_temperature_c == pytest.approx(20.5)
     assert result.demand[1].target_temperature_c is None
     assert result.demand[2].target_temperature_c is None
-    assert result.demand[1].heat_delivered_kwh == pytest.approx(0.0)
-    assert result.demand[2].heat_delivered_kwh == pytest.approx(0.0)
+    assert result.demand[1].heat_delivered_kwh == pytest.approx(0.43904)
+    assert result.demand[2].heat_delivered_kwh == pytest.approx(0.4302592)
+    assert result.demand[1].forced_heat_kwh == pytest.approx(result.demand[1].heat_delivered_kwh)
+    assert result.demand[2].controlled_heat_kwh == pytest.approx(0.0)
 
 
 def test_emission_capability_bounds_the_plan_at_every_state_of_charge():
@@ -1043,7 +1047,10 @@ def test_large_room_model_places_charge_in_the_latest_viable_slot():
         for interval in first.demand
         if interval.heater_id == "late" and interval.charge_energy_kwh > 1e-6
     ]
-    assert late_charge_starts == [8]
+    # Forced emission during the gap consumes part of the stored energy, so the
+    # latest physically viable charge moves earlier than the old total-heat
+    # model's slot 8.
+    assert late_charge_starts == [6]
 
 
 def test_sparse_room_model_omits_inactive_shortfalls_and_dominated_charge_decisions():
@@ -1139,6 +1146,7 @@ def test_verified_zero_objectives_are_locked_without_relaunching_cbc():
     "charge",
     "missing_interval",
     "temperature",
+    "forced_heat",
 ])
 def test_independent_validator_rejects_corrupted_solver_payloads(mutation):
     request = _request(
@@ -1167,6 +1175,11 @@ def test_independent_validator_rejects_corrupted_solver_payloads(mutation):
         )
     elif mutation == "missing_interval":
         corrupted = replace(plan, demand=plan.demand[:-1])
+    elif mutation == "forced_heat":
+        corrupted = replace(
+            plan,
+            slots=(replace(first, forced_heat_kwh={"salon": 0.0}), *plan.slots[1:]),
+        )
     else:
         corrupted = replace(
             plan,

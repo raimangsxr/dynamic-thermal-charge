@@ -193,6 +193,10 @@ class AutomaticPlanSlot:
     # Emission capability applied to the slot, so a comfort deficit caused by a
     # low state of charge is distinguishable from one caused by empty storage.
     heat_delivery_limit_kwh: dict[str, float] | None = None
+    # The physical balance is split explicitly. ``heat_delivered_kwh`` remains
+    # the total for compatibility with persisted plans and MQTT consumers.
+    forced_heat_kwh: dict[str, float] | None = None
+    controlled_heat_kwh: dict[str, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -221,6 +225,11 @@ class HeaterExplanation:
     # ``None`` means this evidence was not recorded by an older persisted
     # preview; an empty tuple is a measured/calculated zero-charge result.
     charge_reasons: tuple[dict[str, Any], ...] | None = None
+    # Older persisted explanations do not contain this decomposition. Keep the
+    # fields nullable so the API can describe those plans as unavailable.
+    total_forced_heat_kwh: float | None = None
+    total_controlled_heat_kwh: float | None = None
+    terminal_forced_heat_kwh: float | None = None
 
 
 @dataclass(frozen=True)
@@ -727,7 +736,7 @@ def input_token(request: PlanningInput) -> str:
         # The room-energy planner now makes a per-heater safety decision from
         # telemetry freshness.  A preview produced before that decision must
         # never be activated against the new semantics.
-        "planner_model_version": "planner_resilience_v1_partial_telemetry",
+        "planner_model_version": "planner_forced_residual_emission_v1",
     }
     if room_energy:
         payload["room_energy_model"] = True
@@ -736,7 +745,7 @@ def input_token(request: PlanningInput) -> str:
         # The optimization-quality pipeline is part of the calculation
         # semantics.  Bump the token version so a preview produced by the
         # former nine-phase hierarchy cannot be silently reused.
-        payload["room_energy_model_version"] = "terminal_guard_v5_resilience_partial_telemetry"
+        payload["room_energy_model_version"] = "terminal_guard_v6_forced_residual_emission"
         payload["excluded_heaters"] = list(_room_exclusion_payload(request))
         payload["room_coefficients"] = {
             heater.id: {
@@ -908,6 +917,8 @@ def deserialize_automatic_plan(payload: Mapping[str, Any]) -> AutomaticPlan:
             indoor_temperature_next_c=_plan_float_map(item.get("indoor_temperature_next_c")),
             temperature_shortfall_start_c=_plan_float_map(item.get("temperature_shortfall_start_c")),
             heat_delivery_limit_kwh=_plan_float_map(item.get("heat_delivery_limit_kwh")),
+            forced_heat_kwh=_plan_float_map(item.get("forced_heat_kwh")),
+            controlled_heat_kwh=_plan_float_map(item.get("controlled_heat_kwh")),
         )
         for item in _plan_dict_list(value.get("slots"), field_name="slots")
     )
@@ -962,6 +973,9 @@ def deserialize_automatic_plan(payload: Mapping[str, Any]) -> AutomaticPlan:
             next_target_start=_plan_datetime(item.get("next_target_start"), required=False),
             next_target_end=_plan_datetime(item.get("next_target_end"), required=False),
             charge_reasons=_plan_charge_reasons(item.get("charge_reasons")),
+            total_forced_heat_kwh=_plan_float(item.get("total_forced_heat_kwh")),
+            total_controlled_heat_kwh=_plan_float(item.get("total_controlled_heat_kwh")),
+            terminal_forced_heat_kwh=_plan_float(item.get("terminal_forced_heat_kwh")),
         )
         for item in _plan_dict_list(value.get("explanations"), field_name="explanations")
     )
@@ -986,6 +1000,8 @@ def deserialize_automatic_plan(payload: Mapping[str, Any]) -> AutomaticPlan:
                 temperature_shortfall_c=float(item["temperature_shortfall_c"]),
                 temperature_shortfall_start_c=float(item.get("temperature_shortfall_start_c", 0.0)),
                 heat_delivery_limit_kwh=float(item.get("heat_delivery_limit_kwh", 0.0)),
+                forced_heat_kwh=float(item.get("forced_heat_kwh", 0.0)),
+                controlled_heat_kwh=float(item.get("controlled_heat_kwh", 0.0)),
             )
             for item in demand_items
         )
@@ -1300,6 +1316,8 @@ class RoomEnergyInterval:
     temperature_shortfall_c: float
     temperature_shortfall_start_c: float = 0.0
     heat_delivery_limit_kwh: float = 0.0
+    forced_heat_kwh: float = 0.0
+    controlled_heat_kwh: float = 0.0
 
     @property
     def demand_kwh(self) -> float:
@@ -1784,15 +1802,18 @@ def room_energy_step(
     stored_energy_kwh: float,
     slot_minutes: int,
     charge_on: bool = False,
+    discharge_enabled: bool | None = None,
+    controlled_heat_kwh: float | None = None,
     heat_delivered_kwh: float | None = None,
 ) -> RoomEnergyInterval:
     """Project one physical room/storage interval.
 
-    ``charge_on`` is the discrete electrical decision.  If no heat quantity is
-    supplied, the ideal room controller delivers the least heat that reaches
-    the target, limited by the energy available after that charge decision.
-    This helper is also the equation boundary used by tests and explanations;
-    it never maps SOC directly to a temperature.
+    ``charge_on`` is the discrete electrical decision.  Every interval emits
+    the residual (forced) component, including when no comfort target is
+    active.  ``controlled_heat_kwh`` is an optional additional discharge that
+    is accepted only when ``discharge_enabled`` is true.  The legacy
+    ``heat_delivered_kwh`` argument remains a total-heat override for replay
+    and older callers; new code should pass the controlled component instead.
     """
     if slot_minutes <= 0:
         raise ValueError("slot_minutes must be positive")
@@ -1818,13 +1839,46 @@ def room_energy_step(
         else max(0.0, (target_temperature_c - no_heat_next) * capacity)
     )
     available = stored_energy_kwh + charge_energy
-    heat = required_heat if heat_delivered_kwh is None else float(heat_delivered_kwh)
-    if not math.isfinite(heat) or heat < 0:
-        raise ValueError("heat_delivered_kwh must be finite and non-negative")
+    if controlled_heat_kwh is not None and heat_delivered_kwh is not None:
+        raise ValueError("controlled_heat_kwh and heat_delivered_kwh are mutually exclusive")
+    if discharge_enabled is None:
+        # Preserve the old direct-call behaviour for explicit total heat and
+        # active targets.  A target-free interval with no explicit override is
+        # the new forced-only physical step.
+        discharge_enabled = heat_delivered_kwh is not None or target_temperature_c is not None
+    if not isinstance(discharge_enabled, bool):
+        raise ValueError("discharge_enabled must be boolean")
     delivery_limit = _heat_delivery_limit_kwh(
         heater, slot_minutes, stored_energy_kwh
     )
-    heat = min(heat, available, delivery_limit)
+    forced_request = heater.static_emission_power_kw * hours * (
+        stored_energy_kwh / heater.capacity_kwh
+    )
+    forced = min(max(0.0, forced_request), available, delivery_limit)
+    if controlled_heat_kwh is not None:
+        controlled = float(controlled_heat_kwh)
+        if not math.isfinite(controlled) or controlled < 0:
+            raise ValueError("controlled_heat_kwh must be finite and non-negative")
+        controlled = (
+            min(controlled, max(0.0, available - forced), max(0.0, delivery_limit - forced))
+            if discharge_enabled
+            else 0.0
+        )
+    elif heat_delivered_kwh is not None:
+        requested_total = float(heat_delivered_kwh)
+        if not math.isfinite(requested_total) or requested_total < 0:
+            raise ValueError("heat_delivered_kwh must be finite and non-negative")
+        total = (
+            min(max(forced, requested_total), available, delivery_limit)
+            if discharge_enabled
+            else forced
+        )
+        controlled = max(0.0, total - forced)
+    else:
+        total = max(forced, required_heat) if discharge_enabled else forced
+        total = min(total, available, delivery_limit)
+        controlled = max(0.0, total - forced)
+    heat = forced + controlled
     stored_next = max(0.0, min(heater.capacity_kwh, available - heat))
     indoor_next = indoor_temperature_c + (heat - thermal_loss) / capacity
     return RoomEnergyInterval(
@@ -1855,13 +1909,15 @@ def room_energy_step(
             else float(max(0.0, target_temperature_c - indoor_temperature_c))
         ),
         heat_delivery_limit_kwh=float(delivery_limit),
+        forced_heat_kwh=float(forced),
+        controlled_heat_kwh=float(controlled),
     )
 
 
 class RoomEnergyDemandEstimator:
-    """Calculate the room balance without deriving temperature from SOC."""
+    """Calculate room balance, optionally including a private terminal guard."""
 
-    name = "room_energy_balance_v1"
+    name = "room_energy_balance_v2_forced_residual_emission"
 
     def estimate(
         self,
@@ -1874,6 +1930,10 @@ class RoomEnergyDemandEstimator:
         timezone_name: str = "UTC",
         targets: Mapping[str, Sequence[TemperatureTarget]] | None = None,
         charge_on: Mapping[str, Sequence[bool]] | None = None,
+        discharge_enabled: Mapping[str, Sequence[bool]] | None = None,
+        # ``terminal_guard_targets`` is used by deviation reprojection only;
+        # its appended interval is never persisted as part of the public plan.
+        terminal_guard_targets: Mapping[str, float] | None = None,
         heat_delivered_kwh: Mapping[str, Sequence[float | None]] | None = None,
     ) -> tuple[RoomEnergyInterval, ...]:
         result: list[RoomEnergyInterval] = []
@@ -1894,14 +1954,32 @@ class RoomEnergyDemandEstimator:
             inside = float(state.indoor_temperature_c)
             stored = heater.capacity_kwh * float(state.stored_soc_percent) / 100
             on_values = tuple(charge_on.get(heater.id, (False,) * len(starts))) if charge_on else (False,) * len(starts)
+            discharge_values = (
+                tuple(discharge_enabled.get(heater.id, (False,) * len(starts)))
+                if discharge_enabled
+                else None
+            )
             heat_values = tuple(heat_delivered_kwh.get(heater.id, (None,) * len(starts))) if heat_delivered_kwh else (None,) * len(starts)
-            if len(on_values) != len(starts) or len(heat_values) != len(starts):
+            if (
+                len(on_values) != len(starts)
+                or len(heat_values) != len(starts)
+                or (discharge_values is not None and len(discharge_values) != len(starts))
+            ):
                 raise ValueError(f"room-energy decisions for heater {heater.id} do not cover every interval")
             for index, start in enumerate(starts):
                 outdoor = _weather_at(start, forecast)
                 target = active_temperature_target(target_rules, start, timezone_name)
                 if outdoor is None:
                     raise ValueError(f"missing room-energy inputs at {start.isoformat()}")
+                is_discharge_enabled = (
+                    bool(discharge_values[index])
+                    if discharge_values is not None
+                    else target is not None
+                    or any(
+                        active_temperature_target(target_rules, future, timezone_name) is not None
+                        for future in starts[index + 1 :]
+                    )
+                )
                 interval = room_energy_step(
                     heater,
                     start=start,
@@ -1911,10 +1989,34 @@ class RoomEnergyDemandEstimator:
                     stored_energy_kwh=stored,
                     slot_minutes=slot_minutes,
                     charge_on=on_values[index],
+                    discharge_enabled=is_discharge_enabled,
                     heat_delivered_kwh=heat_values[index],
                 )
                 result.append(interval)
                 inside, stored = interval.indoor_temperature_next_c, interval.stored_energy_next_kwh
+            guard_target = (
+                None
+                if terminal_guard_targets is None
+                else terminal_guard_targets.get(heater.id)
+            )
+            if guard_target is not None and starts:
+                guard_start = advance_real(starts[-1], slot_minutes)
+                guard_outdoor = _weather_at(guard_start, forecast)
+                if guard_outdoor is None:
+                    raise ValueError(f"missing room-energy inputs at {guard_start.isoformat()}")
+                result.append(
+                    room_energy_step(
+                        heater,
+                        start=guard_start,
+                        outdoor_temperature_c=guard_outdoor,
+                        target_temperature_c=float(guard_target),
+                        indoor_temperature_c=inside,
+                        stored_energy_kwh=stored,
+                        slot_minutes=slot_minutes,
+                        charge_on=False,
+                        discharge_enabled=True,
+                    )
+                )
         return tuple(result)
 
 
@@ -2184,6 +2286,8 @@ def _room_heater_explanation(
         initial_indoor_temperature_c=initial_indoor,
         final_indoor_temperature_c=final_indoor,
         total_heat_delivered_kwh=sum(item.heat_delivered_kwh for item in intervals),
+        total_forced_heat_kwh=sum(item.forced_heat_kwh for item in intervals),
+        total_controlled_heat_kwh=sum(item.controlled_heat_kwh for item in intervals),
         total_thermal_loss_kwh=sum(item.thermal_loss_kwh for item in intervals),
         maximum_temperature_shortfall_c=max(
             (
@@ -2197,6 +2301,10 @@ def _room_heater_explanation(
         total_charge_energy_kwh=sum(item.charge_energy_kwh for item in intervals),
         forecast_contribution_kwh=-sum(item.thermal_loss_kwh for item in intervals),
         terminal_surplus_energy_kwh=max(0.0, final_stored - initial_stored),
+        # Energy remaining at the visible horizon will continue to leak through
+        # the residual path after the plan ends; expose that explicitly instead
+        # of presenting it as an unexplained surplus.
+        terminal_forced_heat_kwh=max(0.0, final_stored),
         next_target_temperature_c=(
             None
             if next_target is None
@@ -2297,7 +2405,22 @@ def _solve_room_energy(
             f"heat_delivered_{heater.id}_{index:03d}", lowBound=0
         )
         for heater in heaters
-        for index in decision_indices[heater.id]
+        for index in range(len(starts))
+    }
+    forced = {
+        (heater.id, index): pulp.LpVariable(
+            f"forced_heat_{heater.id}_{index:03d}", lowBound=0
+        )
+        for heater in heaters
+        for index in range(len(starts))
+    }
+    forced_choice = {
+        (heater.id, index): pulp.LpVariable(
+            f"forced_heat_clip_{heater.id}_{index:03d}", cat="Binary"
+        )
+        for heater in heaters
+        for index in range(len(starts))
+        if heater.static_emission_power_kw * slot_hours > heater.capacity_kwh
     }
     shortfall = {
         (heater.id, index): pulp.LpVariable(
@@ -2323,16 +2446,17 @@ def _solve_room_energy(
     guard_stored_next: dict[str, Any] = {}
     guard_indoor_next: dict[str, Any] = {}
     guard_heat: dict[str, Any] = {}
+    guard_forced: dict[str, Any] = {}
+    guard_forced_choice: dict[str, Any] = {}
     guard_start_shortfall: dict[str, Any] = {}
     guard_end_shortfall: dict[str, Any] = {}
     for heater in heaters:
         state = request.telemetry[heater.id]
         model += stored[(heater.id, 0)] == heater.capacity_kwh * float(state.stored_soc_percent) / 100
         model += indoor[(heater.id, 0)] == float(state.indoor_temperature_c)
-        # The discharge system only emits on demand, so a slot with no target
-        # ahead of it never delivers heat.  A slot inside a gap that precedes a
-        # target may still emit, which is what lets the plan preheat towards
-        # the starting edge of that target.
+        # Controlled discharge is only useful when a target is active or still
+        # ahead, but residual emission is physical and therefore remains in
+        # every interval even after the last target.
         emission_allowed: list[bool] = []
         target_ahead = heater.id in terminal_guards
         for index in reversed(range(len(starts))):
@@ -2352,17 +2476,38 @@ def _solve_room_energy(
             heat_value = heat.get((heater.id, index), 0)
             if index not in decision_indices[heater.id]:
                 assert target is None and not emission_allowed[index]
-            if (heater.id, index) in heat:
-                model += heat_value <= stored[(heater.id, index)] + charge_value
-                # Emission capability decays with the state of charge, so a poorly
-                # charged accumulator can no longer reach the target however much
-                # time it is given.  Affine in ``stored``, so no binary is needed.
-                model += heat_value <= (
-                    emission_floor_kwh
-                    + emission_span_kwh * stored[(heater.id, index)] / heater.capacity_kwh
-                )
-                if not emission_allowed[index]:
-                    model += heat_value == 0
+            forced_value = forced[(heater.id, index)]
+            forced_clip = forced_choice.get((heater.id, index))
+            available_value = stored[(heater.id, index)] + charge_value
+            # forced = min(P_residual * SOC_start * dt, available energy).
+            # The binary is only needed for the pathological case where one
+            # slot's residual request exceeds the remaining store.
+            forced_base = emission_floor_kwh * stored[(heater.id, index)] / heater.capacity_kwh
+            if forced_clip is None:
+                # Valid heaters normally satisfy residual_power * dt <=
+                # capacity, so the affine lower-bound branch is already the
+                # exact min with available energy and needs no extra binary.
+                model += forced_value == forced_base
+            else:
+                forced_big_m = max(
+                    heater.capacity_kwh + heater.charge_power_kw * slot_hours,
+                    emission_floor_kwh,
+                ) + 1.0
+                model += forced_value <= forced_base
+                model += forced_value <= available_value
+                model += forced_value >= forced_base - forced_big_m * forced_clip
+                model += forced_value >= available_value - forced_big_m * (1 - forced_clip)
+            model += heat_value >= forced_value
+            model += heat_value <= available_value
+            # Emission capability decays with the state of charge, so a poorly
+            # charged accumulator can no longer reach the target however much
+            # time it is given.  Affine in ``stored``, so no binary is needed.
+            model += heat_value <= (
+                emission_floor_kwh
+                + emission_span_kwh * stored[(heater.id, index)] / heater.capacity_kwh
+            )
+            if not emission_allowed[index]:
+                model += heat_value == forced_value
             model += stored[(heater.id, index + 1)] == stored[(heater.id, index)] + charge_value - heat_value
             # E_loss = K_room * (T_inside - T_outside) * dt, substituted into
             # the affine temperature balance below.  This retains the sign:
@@ -2396,12 +2541,31 @@ def _solve_room_energy(
             guard_heat[heater.id] = pulp.LpVariable(
                 f"guard_heat_delivered_{heater.id}", lowBound=0
             )
+            guard_forced[heater.id] = pulp.LpVariable(
+                f"guard_forced_heat_{heater.id}", lowBound=0
+            )
+            if heater.static_emission_power_kw * slot_hours > heater.capacity_kwh:
+                guard_forced_choice[heater.id] = pulp.LpVariable(
+                    f"guard_forced_heat_clip_{heater.id}", cat="Binary"
+                )
             guard_end_shortfall[heater.id] = pulp.LpVariable(
                 f"guard_temperature_shortfall_{heater.id}",
                 lowBound=0,
                 upBound=200,
             )
-            model += guard_heat[heater.id] <= stored[(heater.id, len(starts))]
+            guard_available = stored[(heater.id, len(starts))]
+            guard_forced_base = emission_floor_kwh * guard_available / heater.capacity_kwh
+            guard_forced_clip = guard_forced_choice.get(heater.id)
+            if guard_forced_clip is None:
+                model += guard_forced[heater.id] == guard_forced_base
+            else:
+                guard_forced_big_m = max(heater.capacity_kwh, emission_floor_kwh) + 1.0
+                model += guard_forced[heater.id] <= guard_forced_base
+                model += guard_forced[heater.id] <= guard_available
+                model += guard_forced[heater.id] >= guard_forced_base - guard_forced_big_m * guard_forced_clip
+                model += guard_forced[heater.id] >= guard_available - guard_forced_big_m * (1 - guard_forced_clip)
+            model += guard_heat[heater.id] >= guard_forced[heater.id]
+            model += guard_heat[heater.id] <= guard_available
             model += guard_heat[heater.id] <= (
                 emission_floor_kwh
                 + emission_span_kwh * stored[(heater.id, len(starts))] / heater.capacity_kwh
@@ -2429,6 +2593,7 @@ def _solve_room_energy(
             model += guard_end_shortfall[heater.id] >= (
                 guard.target_temperature_c - guard_indoor_next[heater.id]
             )
+    binary_variables = {**on, **forced_choice, **guard_forced_choice}
     for index in range(len(starts)):
         power_terms = [
             heater.power_w * on[(heater.id, index)]
@@ -2463,8 +2628,8 @@ def _solve_room_energy(
     total_charge = pulp.lpSum(charge.values())
     total_heat = pulp.lpSum(heat.values())
     premature_heat = pulp.lpSum(
-        variable
-        for (heater_id, index), variable in heat.items()
+        heat[(heater_id, index)] - forced[(heater_id, index)]
+        for heater_id, index in heat
         if target_values[(heater_id, index)] is None
     )
     latest_charge = pulp.lpSum(
@@ -2488,7 +2653,7 @@ def _solve_room_energy(
     )
     max_surplus = sum(heater.capacity_kwh for heater in heaters)
     max_heat = sum(
-        heater.emission_power_kw * slot_hours * len(decision_indices[heater.id])
+        heater.emission_power_kw * slot_hours * len(starts)
         for heater in heaters
     )
     max_latest_charge = max_charge * max(1, len(starts))
@@ -2571,7 +2736,7 @@ def _solve_room_energy(
         _notify(request, f"solver_phase_{phase_index + 1}")
         _check_cancelled(request)
         is_quality_phase = phase_index == len(phases) - 1
-        if last_verified_solution is not None and _model_solution_is_feasible(model, pulp, on):
+        if last_verified_solution is not None and _model_solution_is_feasible(model, pulp, binary_variables):
             incumbent_value = pulp.value(objective)
             if incumbent_value is None:
                 incumbent_value = getattr(objective, "constant", objective)
@@ -2623,8 +2788,8 @@ def _solve_room_energy(
                 continue
         remaining_seconds = solver_deadline - monotonic()
         if remaining_seconds <= 0:
-            if not _model_solution_is_feasible(model, pulp, on) and not _restore_verified_model_solution(
-                model, pulp, on, last_verified_solution
+            if not _model_solution_is_feasible(model, pulp, binary_variables) and not _restore_verified_model_solution(
+                model, pulp, binary_variables, last_verified_solution
             ):
                 return _invalid_room_plan(
                     request,
@@ -2668,8 +2833,8 @@ def _solve_room_energy(
             len(model.constraints),
         )
         if status != pulp.LpStatusOptimal:
-            if not _model_solution_is_feasible(model, pulp, on) and not _restore_verified_model_solution(
-                model, pulp, on, last_verified_solution
+            if not _model_solution_is_feasible(model, pulp, binary_variables) and not _restore_verified_model_solution(
+                model, pulp, binary_variables, last_verified_solution
             ):
                 return _invalid_room_plan(
                     request,
@@ -2724,7 +2889,7 @@ def _solve_room_energy(
             phase_index + 1,
             optimum,
         )
-        verified_solution = _snapshot_verified_model_solution(model, pulp, on)
+        verified_solution = _snapshot_verified_model_solution(model, pulp, binary_variables)
         if verified_solution is not None:
             last_verified_solution = verified_solution
         if phase_index < len(phases) - 1:
@@ -2758,6 +2923,8 @@ def _solve_room_energy(
         interval_start_shortfall: dict[str, float] = {}
         interval_shortfall: dict[str, float] = {}
         interval_heat_limit: dict[str, float] = {}
+        interval_forced: dict[str, float] = {}
+        interval_controlled: dict[str, float] = {}
         initial_soc: dict[str, float] = {}
         demand: dict[str, float] = {}
         power_by_heater: dict[str, int] = {}
@@ -2780,6 +2947,10 @@ def _solve_room_energy(
             heat_value = 0.0 if heat_variable is None else _clean_solver_energy(
                 _required_solver_value(heat_variable.value(), "heat delivered")
             )
+            forced_value = _clean_solver_energy(
+                _required_solver_value(forced[(heater.id, index)].value(), "forced heat")
+            )
+            controlled_value = _clean_solver_energy(max(0.0, heat_value - forced_value))
             target = target_values[(heater.id, index)]
             outdoor = outdoor_values[(heater.id, index)]
             target_window = (
@@ -2842,6 +3013,8 @@ def _solve_room_energy(
             interval_start_shortfall[heater.id] = round(start_short_value, 9)
             interval_shortfall[heater.id] = round(short_value, 9)
             interval_heat_limit[heater.id] = round(limit_value, 9)
+            interval_forced[heater.id] = round(forced_value, 9)
+            interval_controlled[heater.id] = round(controlled_value, 9)
             initial_soc[heater.id] = round(stored_value / heater.capacity_kwh * 100, 6)
             demand[heater.id] = round(heat_value, 9)
             power_by_heater[heater.id] = heater.power_w if on_value > 0.5 else 0
@@ -2864,6 +3037,8 @@ def _solve_room_energy(
                     short_value,
                     start_short_value,
                     limit_value,
+                    forced_value,
+                    controlled_value,
                 )
             )
         plan_slots.append(
@@ -2889,6 +3064,8 @@ def _solve_room_energy(
                 interval_next_indoor,
                 interval_start_shortfall,
                 interval_heat_limit,
+                interval_forced,
+                interval_controlled,
             )
         )
     for heater in heaters:
@@ -3177,6 +3354,7 @@ def _validate_room_energy_plan(
             / 100
             for heater in heaters
         }
+        terminal_guards = _terminal_guard_requirements(planning_request, boundaries[-1])
         for index, start in enumerate(starts):
             slot = plan.slots[index]
             expected_end = boundaries[index + 1]
@@ -3205,8 +3383,17 @@ def _validate_room_energy_plan(
                 assert state is not None
                 charge_on = heater.id in active
                 heat_values = slot.heat_delivered_kwh or {}
+                forced_values = slot.forced_heat_kwh
+                controlled_values = slot.controlled_heat_kwh
                 charge_values = slot.charge_energy_kwh or {}
-                if heater.id not in heat_values or heater.id not in charge_values:
+                if (
+                    heater.id not in heat_values
+                    or forced_values is None
+                    or controlled_values is None
+                    or heater.id not in forced_values
+                    or heater.id not in controlled_values
+                    or heater.id not in charge_values
+                ):
                     raise ValueError(f"candidate is missing decisions for heater {heater.id}")
                 stored_values = slot.stored_energy_kwh or {}
                 stored_next_values = slot.stored_energy_next_kwh or {}
@@ -3241,6 +3428,13 @@ def _validate_room_energy_plan(
                 target = active_temperature_target(
                     _room_targets(planning_request, heater), start, request.timezone_name
                 )
+                discharge_enabled = target is not None or any(
+                    active_temperature_target(
+                        _room_targets(planning_request, heater), future, request.timezone_name
+                    )
+                    is not None
+                    for future in starts[index + 1 :]
+                ) or heater.id in terminal_guards
                 outdoor = _weather_at(start, request.forecast)
                 if outdoor is None:
                     raise ValueError(f"missing forecast at {start.isoformat()}")
@@ -3271,6 +3465,7 @@ def _validate_room_energy_plan(
                     stored_energy_kwh=stored_by_heater[heater.id],
                     slot_minutes=request.slot_minutes,
                     charge_on=charge_on,
+                    discharge_enabled=discharge_enabled,
                     heat_delivered_kwh=heat,
                 )
                 if replayed.temperature_shortfall_c <= SOLVER_NUMERICAL_TOLERANCE or replayed.temperature_shortfall_start_c <= SOLVER_NUMERICAL_TOLERANCE:
@@ -3307,6 +3502,8 @@ def _validate_room_energy_plan(
                     (candidate.temperature_shortfall_c, replayed.temperature_shortfall_c),
                     (candidate.temperature_shortfall_start_c, replayed.temperature_shortfall_start_c),
                     (candidate.heat_delivery_limit_kwh, replayed.heat_delivery_limit_kwh),
+                    (candidate.forced_heat_kwh, replayed.forced_heat_kwh),
+                    (candidate.controlled_heat_kwh, replayed.controlled_heat_kwh),
                 ):
                     if not math.isclose(
                         float(actual),
@@ -3334,6 +3531,8 @@ def _validate_room_energy_plan(
                     ("indoor_temperature_next_c", indoor_next_values, replayed.indoor_temperature_next_c),
                     ("temperature_shortfall_start_c", slot.temperature_shortfall_start_c, replayed.temperature_shortfall_start_c),
                     ("heat_delivery_limit_kwh", slot.heat_delivery_limit_kwh, replayed.heat_delivery_limit_kwh),
+                    ("forced_heat_kwh", forced_values, replayed.forced_heat_kwh),
+                    ("controlled_heat_kwh", controlled_values, replayed.controlled_heat_kwh),
                 )
                 for field_name, values, expected in slot_values:
                     if values is None or heater.id not in values:

@@ -461,6 +461,7 @@ automatic_plan_slot = Table(
     Column("temperature_shortfall_json", Text, nullable=False, server_default="{}"),
     Column("charge_energy_json", Text, nullable=False, server_default="{}"),
     Column("heat_limit_json", Text, nullable=False, server_default="{}"),
+    Column("forced_heat_json", Text, nullable=False, server_default="{}"),
     UniqueConstraint("plan_id", "slot_start", name="uq_automatic_plan_slot"),
 )
 

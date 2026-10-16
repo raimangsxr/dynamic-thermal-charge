@@ -74,9 +74,9 @@ const PREVIEW: PlanningPreviewDto = {
   window_start: '2026-01-16T00:00:00Z', window_end: '2026-01-16T01:00:00Z',
   horizon_start: '2026-01-16T00:00:00Z', horizon_end: '2026-01-16T02:00:00Z', slot_minutes: 30,
   slots: [
-    { start: '2026-01-16T00:00:00Z', end: '2026-01-16T00:30:00Z', heater_ids: ['salon'], power_w: 2800, heater_power_w: { salon: 2800, cocina: 0 }, stored_energy_kwh: { salon: 10.9, cocina: 8.1 }, stored_energy_next_kwh: { salon: 10.5, cocina: 8.1 }, indoor_temperature_c: { salon: 18.5, cocina: 19 }, indoor_temperature_next_c: { salon: 18.9, cocina: 19.1 }, target_temperature_c: { salon: 21, cocina: 21 }, heat_delivered_kwh: { salon: 1.4, cocina: 0 }, thermal_loss_kwh: { salon: 0.4, cocina: 0.3 }, temperature_shortfall_start_c: { salon: 2.5, cocina: 2 }, temperature_shortfall_c: { salon: 2.1, cocina: 1.9 }, charge_energy_kwh: { salon: 1.4, cocina: 0 } },
-    { start: '2026-01-16T00:30:00Z', end: '2026-01-16T01:00:00Z', heater_ids: ['cocina'], power_w: 1800, heater_power_w: { salon: 0, cocina: 1800 }, stored_energy_kwh: { salon: 10.5, cocina: 7.8 }, stored_energy_next_kwh: { salon: 10.5, cocina: 7.5 }, indoor_temperature_c: { salon: 18.3, cocina: 19.2 }, indoor_temperature_next_c: { salon: 18.1, cocina: 19 }, target_temperature_c: { salon: 21, cocina: 21 }, heat_delivered_kwh: { salon: 0, cocina: 0.9 }, thermal_loss_kwh: { salon: 0.4, cocina: 0.3 }, temperature_shortfall_start_c: { salon: 2.7, cocina: 1.8 }, temperature_shortfall_c: { salon: 2.9, cocina: 2 }, charge_energy_kwh: { salon: 0, cocina: 0.9 } },
-    { start: '2026-01-16T01:00:00Z', end: '2026-01-16T01:30:00Z', heater_ids: [], power_w: 0, heater_power_w: { salon: 0, cocina: 0 }, stored_energy_kwh: { salon: 10.1, cocina: 7.5 }, indoor_temperature_c: { salon: 18.1, cocina: 19 }, target_temperature_c: { salon: 21, cocina: 21 }, heat_delivered_kwh: { salon: 0, cocina: 0 }, thermal_loss_kwh: { salon: 0.4, cocina: 0.3 }, temperature_shortfall_c: { salon: 2.9, cocina: 2 }, charge_energy_kwh: { salon: 0, cocina: 0 } },
+    { start: '2026-01-16T00:00:00Z', end: '2026-01-16T00:30:00Z', heater_ids: ['salon'], power_w: 2800, heater_power_w: { salon: 2800, cocina: 0 }, stored_energy_kwh: { salon: 10.9, cocina: 8.1 }, stored_energy_next_kwh: { salon: 10.5, cocina: 8.1 }, indoor_temperature_c: { salon: 18.5, cocina: 19 }, indoor_temperature_next_c: { salon: 18.9, cocina: 19.1 }, target_temperature_c: { salon: 21, cocina: 21 }, heat_delivered_kwh: { salon: 1.4, cocina: 0 }, forced_heat_kwh: { salon: 0.4, cocina: 0 }, controlled_heat_kwh: { salon: 1.0, cocina: 0 }, thermal_loss_kwh: { salon: 0.4, cocina: 0.3 }, temperature_shortfall_start_c: { salon: 2.5, cocina: 2 }, temperature_shortfall_c: { salon: 2.1, cocina: 1.9 }, charge_energy_kwh: { salon: 1.4, cocina: 0 } },
+    { start: '2026-01-16T00:30:00Z', end: '2026-01-16T01:00:00Z', heater_ids: ['cocina'], power_w: 1800, heater_power_w: { salon: 0, cocina: 1800 }, stored_energy_kwh: { salon: 10.5, cocina: 7.8 }, stored_energy_next_kwh: { salon: 10.5, cocina: 7.5 }, indoor_temperature_c: { salon: 18.3, cocina: 19.2 }, indoor_temperature_next_c: { salon: 18.1, cocina: 19 }, target_temperature_c: { salon: 21, cocina: 21 }, heat_delivered_kwh: { salon: 0, cocina: 0.9 }, forced_heat_kwh: { salon: 0.3, cocina: 0.2 }, controlled_heat_kwh: { salon: 0, cocina: 0.7 }, thermal_loss_kwh: { salon: 0.4, cocina: 0.3 }, temperature_shortfall_start_c: { salon: 2.7, cocina: 1.8 }, temperature_shortfall_c: { salon: 2.9, cocina: 2 }, charge_energy_kwh: { salon: 0, cocina: 0.9 } },
+    { start: '2026-01-16T01:00:00Z', end: '2026-01-16T01:30:00Z', heater_ids: [], power_w: 0, heater_power_w: { salon: 0, cocina: 0 }, stored_energy_kwh: { salon: 10.1, cocina: 7.5 }, indoor_temperature_c: { salon: 18.1, cocina: 19 }, target_temperature_c: { salon: 21, cocina: 21 }, heat_delivered_kwh: { salon: 0, cocina: 0 }, forced_heat_kwh: { salon: 0, cocina: 0 }, controlled_heat_kwh: { salon: 0, cocina: 0 }, thermal_loss_kwh: { salon: 0.4, cocina: 0.3 }, temperature_shortfall_c: { salon: 2.9, cocina: 2 }, charge_energy_kwh: { salon: 0, cocina: 0 } },
   ],
   deficits: [{ heater_id: 'salon', requirement: 'temperature_comfort', achievable_value: 18.5, shortfall: 2.5, at: '2026-01-16T01:00:00Z', reason: 'insufficient_stored_energy_or_power', target_temperature_c: 21, projected_temperature_c: 18.5, shortfall_c: 2.5, stored_energy_kwh: 10.9, stored_soc_percent: 48.7 }],
   violations: [], explanations: [], demand: [],
@@ -868,6 +868,12 @@ describe('Planning', () => {
     expect(dialog?.textContent).toContain('Salón');
     expect(dialog?.textContent).toContain('Cocina');
     expect(dialog?.textContent).toContain('2800');
+    const headers = Array.from(dialog?.querySelectorAll('[data-testid="preview-detail-heater-table"] th[scope="col"]') ?? []).map((item) => item.textContent?.trim());
+    expect(headers).toContain('Calor total');
+    expect(headers).toContain('Calor forzado');
+    expect(headers).toContain('Calor controlado');
+    expect(dialog?.textContent).toContain('0.40');
+    expect(dialog?.textContent).toContain('1.00');
     dialog?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[1]?.click();
     await fixture.whenStable();
     const secondTabDialog = document.querySelector('mat-dialog-container');
@@ -1044,6 +1050,16 @@ describe('Planning', () => {
       heat_delivered_kwh: null,
       indoor_temperature_c: null,
     });
+  });
+
+  it('keeps forced and controlled preview heat mapped from the API fields', () => {
+    expect(fixture.componentInstance.previewForcedHeat(PREVIEW.slots[0]!, 'salon')).toBe(0.4);
+    expect(fixture.componentInstance.previewControlledHeat(PREVIEW.slots[0]!, 'salon')).toBe(1.0);
+    expect(fixture.componentInstance.previewSummaryText({
+      heat_delivered_kwh_by_heater: { salon: 1.4 },
+      forced_heat_kwh_by_heater: { salon: 0.4 },
+      controlled_heat_kwh_by_heater: { salon: 1.0 },
+    })).toContain('1.40 kWh entregados (0.40 forzados + 1.00 controlados)');
   });
 
   it('shows only charging intervals in the preview slots table', () => {

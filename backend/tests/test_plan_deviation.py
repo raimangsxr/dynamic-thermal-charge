@@ -397,6 +397,59 @@ def test_delayed_poll_reprojects_the_newly_active_slot_once(monkeypatch):
     assert captured["charge_on"] == {"salon": (True, True)}
 
 
+def test_last_interval_reprojection_includes_the_terminal_guard(monkeypatch):
+    heater = replace(
+        _heater(),
+        temperature_targets=(TemperatureTarget(21.0, time(3, 0), time(5, 0)),),
+    )
+    captured = {}
+
+    def record_projection(
+        _self,
+        _heaters,
+        _telemetry,
+        _forecast,
+        starts,
+        _slot_minutes,
+        **kwargs,
+    ):
+        captured["starts"] = starts
+        captured["discharge_enabled"] = kwargs["discharge_enabled"]
+        captured["terminal_guard_targets"] = kwargs["terminal_guard_targets"]
+        return ()
+
+    monkeypatch.setattr(RoomEnergyDemandEstimator, "estimate", record_projection)
+
+    verdict = _evaluate(
+        _plan(slots=2),
+        heaters=(heater,),
+        telemetry={"salon": _telemetry("salon", indoor=20.0, soc=50.0)},
+    )
+
+    assert verdict.replan is False
+    assert captured["starts"] == (NOW, NOW + SLOT)
+    assert captured["discharge_enabled"] == {"salon": (False, True)}
+    assert captured["terminal_guard_targets"] == {"salon": 21.0}
+
+
+def test_reprojection_evaluates_a_guard_target_starting_at_horizon_end():
+    heater = replace(
+        _heater(),
+        temperature_targets=(TemperatureTarget(21.0, time(3, 0), time(5, 0)),),
+    )
+
+    verdict = _evaluate(
+        _plan(charge=False, stored_next=0.0),
+        heaters=(heater,),
+        telemetry={"salon": _telemetry("salon", indoor=15.0, soc=0.0)},
+    )
+
+    assert verdict.replan is True
+    assert verdict.reason == PROJECTED_DEFICIT
+    assert verdict.at == NOW + 3 * SLOT
+    assert verdict.projected_value > 5.0
+
+
 def test_deviation_rejects_expired_and_future_telemetry_at_the_configured_limit():
     heater = _heater()
     for stamp, expected_replan in (

@@ -14,6 +14,11 @@ predeterminados como `manually_adjusted`. El controlador mantiene una sesión
 duradera por acumulador con fases `baseline`, `charge`, `release`, `cool`,
 `fit` y `applying`, muestras sincronizadas y un arrendamiento renovable.
 
+El ajuste atribuye en cada intervalo la emisión forzada mientras quede energía
+almacenada, incluso con la descarga apagada, y suma calor controlado solo cuando
+la descarga y su compuerta lo permiten. Las fases sin descarga no suponen calor
+cero.
+
 #### Scenario: Calibration arbitration
 
 - **WHEN** una sesión activa selecciona un acumulador
@@ -53,12 +58,19 @@ puede superar
 `(P_residual + (P_emisión − P_residual) × SOC) × duración real del intervalo`,
 con el SOC del borde inicial del intervalo, ni la energía disponible después de
 sumar la carga de ese intervalo. El límite se aplica también cuando carga y
-descarga coinciden, y la emisión residual es una capacidad y no una emisión
-forzada: un acumulador vacío entrega cero.
+descarga coinciden. El calor total se descompone en calor forzado y controlado:
+`forced = min(P_residual × SOC_inicio × duración, energía disponible)` y el
+calor controlado solo puede ocupar la capacidad restante cuando la descarga
+está habilitada. La emisión residual es física y forzada en cada intervalo,
+también sin consigna activa o posterior; un acumulador vacío entrega cero.
+El porcentaje `static_emission_percent` representa esa fuga continua a carga
+completa; la ayuda de configuración explica que modifica tanto la planificación
+como la calibración.
 
-El calor entregado es cero en los intervalos sin consigna activa a partir de
-los cuales ninguna consigna del horizonte queda por delante. En los intervalos
-anteriores a una consigna la emisión sigue permitida, de modo que el plan puede
+Cuando un intervalo no tiene consigna activa y ninguna consigna del horizonte
+queda por delante, el calor controlado es cero y el calor total coincide con el
+forzado, que puede ser positivo. En los intervalos anteriores a una consigna la
+emisión forzada sigue ocurriendo y el plan puede añadir calor controlado para
 precalentar hacia su borde inicial.
 
 Cuando una consigna está activa en un slot, la temperatura objetivo es una
@@ -103,7 +115,8 @@ publicado. La falta de previsión para su inicio hace que el resultado sea
 
 - **WHEN** un intervalo no tiene consigna activa y ninguna consigna del
   horizonte queda por delante de él
-- **THEN** el calor entregado en ese intervalo es cero
+- **THEN** el calor controlado es cero y el calor total es exactamente la
+  emisión forzada, salvo que el acumulador esté vacío
 
 ### Requirement: Configuración térmica independiente por acumulador
 
@@ -250,7 +263,8 @@ tokens distintos se serializan por instalación para no competir por el solver.
 
 - **WHEN** la previsión exterior y el modelo térmico mantienen todos los bordes
   de una consigna dentro de sus límites sin cargar
-- **THEN** no se asigna carga eléctrica anticipada ni residual
+- **THEN** no se asigna carga eléctrica anticipada ni calor controlado
+  adicional; la emisión forzada continúa mientras quede energía almacenada
 
 #### Scenario: Solape de consignas
 
@@ -414,14 +428,15 @@ con su decisión de carga persistida antes de comparar los slots posteriores.
 ### Requirement: Accionamiento de la descarga por MQTT
 
 El plan activo debe accionar la descarga de cada acumulador. Cuando el plan
-indica emisión en el intervalo vigente, el sistema publica la activación de la
-descarga en el topic de compuerta del acumulador y la temperatura objetivo
-vigente en su topic de consigna; cuando deja de indicarla, publica la
-desactivación y el sentinel textual `NULL` en el topic de consigna configurado,
-sin publicar una consigna numérica. La emisión está indicada mientras una
-consigna esté activa y también en un intervalo anterior sin consigna en el que
-el plan proyecte calor entregado, caso en el que la consigna publicada es la de
-la próxima consigna que motiva esa emisión.
+proyecta calor controlado positivo en el intervalo vigente, el sistema publica
+la activación de la descarga en el topic de compuerta del acumulador y la
+temperatura objetivo vigente en su topic de consigna; cuando solo queda calor
+forzado, publica la desactivación y el sentinel textual `NULL` en el topic de
+consigna configurado, sin publicar una consigna numérica. La emisión forzada
+por sí sola no acciona la descarga. La descarga también puede activarse en un
+intervalo anterior sin consigna si el plan proyecta calor controlado para
+precalentar; en ese caso se publica la consigna de la próxima ventana que lo
+motiva.
 
 El mando activa o desactiva la descarga; no ordena abrir la compuerta. El
 termostato del acumulador la modula contra la consigna publicada, cerrándola al
@@ -448,16 +463,22 @@ pueda limpiar su indicación de temperatura objetivo.
 
 #### Scenario: Fin del intervalo de consigna
 
-- **WHEN** termina el intervalo de consigna y el plan no proyecta calor para ese
-  acumulador
+- **WHEN** termina el intervalo de consigna y el plan no proyecta calor
+  controlado para ese acumulador
 - **THEN** se publica la desactivación de su descarga y `NULL` en su topic de
   consigna configurado
 
 #### Scenario: Anticipación antes de una consigna
 
-- **WHEN** el plan proyecta calor entregado en un intervalo sin consigna activa
+- **WHEN** el plan proyecta calor controlado en un intervalo sin consigna activa
 - **THEN** se publica la activación de la descarga y la consigna de la próxima
   ventana del plan
+
+#### Scenario: Solo emisión forzada
+
+- **WHEN** un intervalo tiene calor forzado positivo pero calor controlado cero
+- **THEN** se publica la desactivación de la descarga y `NULL`, aunque el calor
+  total del intervalo sea positivo
 
 #### Scenario: Compuerta cerrada con la descarga activada
 
@@ -484,16 +505,18 @@ pueda limpiar su indicación de temperatura objetivo.
 Las vistas previas, el plan activo, las explicaciones y el historial deben
 conservar por acumulador e intervalo la temperatura interior proyectada y la
 energía almacenada en los bordes de inicio y fin, la consigna, el SOC, el calor
-entregado, el límite de emisión aplicado, el intercambio térmico y los déficits
-de temperatura de ambos bordes cuando existan. La capacidad total en kWh debe estar disponible para expresar el
-SOC relativo de cada acumulador.
+total entregado desglosado en calor forzado y controlado, el límite de emisión
+aplicado, el intercambio térmico y los déficits de temperatura de ambos bordes
+cuando existan. La capacidad total en kWh debe estar disponible para expresar
+el SOC relativo de cada acumulador.
 
 #### Scenario: Consulta de un intervalo planificado
 
 - **WHEN** el operador abre el detalle de un intervalo
 - **THEN** puede distinguir los valores de inicio y fin de energía almacenada,
-  carga, calor entregado, límite de emisión aplicado, intercambio térmico,
-  interior, objetivo y déficit sin inferir temperatura a partir del SOC
+  carga, calor total, calor forzado y calor controlado, límite de emisión
+  aplicado, intercambio térmico, interior, objetivo y déficit sin inferir
+  temperatura a partir del SOC
 
 #### Scenario: Balance físico de la vista previa activada
 
@@ -510,6 +533,11 @@ del plan activo o histórico debe derivarse de esa evidencia mediante reglas
 deterministas, mostrar el balance físico por intervalo y permitir descargar un
 diagnóstico con su comparación, auditoría y transiciones. Nunca debe reconstruir
 datos ausentes a partir del estado actual.
+
+La explicación separa calor forzado y controlado. La energía almacenada al final
+del horizonte se presenta como calor forzado que se liberará después, indicando
+su importe; el motivo de almacenamiento residual se describe con ese significado
+y no como calor desperdiciado.
 
 El diagnóstico descargable añade un bloque `forecast` al formato
 `dynamic-thermal-charge-plan-diagnostic-v2`. Ese bloque identifica únicamente el
