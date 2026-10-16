@@ -67,7 +67,7 @@ class DailyForecastResult:
 
 
 class DailyAemetForecastManager:
-    """AEMET-specific daily retrieval with durable five-retry semantics.
+    """AEMET-specific daily retrieval with durable hourly retry semantics.
 
     A failed cycle returns the last real forecast marked stale by the caller;
     it never asks a simulated provider to replace it.
@@ -81,6 +81,22 @@ class DailyAemetForecastManager:
     def poll(self, now: datetime, state: ForecastCycleState | None = None) -> DailyForecastResult:
         local_date = now.astimezone(self._cycle.timezone).date()
         current = state or self._cycle.initial_state(local_date)
+        if current.local_date != local_date:
+            # A failed cycle must not wait for the next configured query hour
+            # after midnight.  Start the new local-day record immediately,
+            # carrying the retry episode forward until the provider succeeds.
+            previous_failed = current.stale and not current.completed
+            initial = self._cycle.initial_state(local_date)
+            current = replace(
+                initial,
+                attempt=current.attempt if previous_failed else 0,
+                next_retry_at=(
+                    now.astimezone(timezone.utc) if previous_failed else None
+                ),
+                last_error=current.last_error if previous_failed else None,
+                stale=previous_failed,
+                last_forecast_id=current.last_forecast_id if previous_failed else None,
+            )
         logger.debug(
             "Daily AEMET forecast poll: local_date=%s attempt=%d due=%s",
             local_date.isoformat(),

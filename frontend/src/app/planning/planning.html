@@ -69,6 +69,7 @@
                   <div><dt>Horizonte</dt><dd>{{ dateTime(data.horizon_start) }}–{{ dateTime(data.horizon_end) }}</dd></div>
                   <div><dt>Intervalos</dt><dd>{{ plan.slots.length }} intervalos de {{ plan.slot_minutes }} minutos</dd></div>
                   <div><dt>Revisión de configuración</dt><dd>{{ plan.installation_revision }}</dd></div>
+                  <div><dt>Antigüedad de previsión</dt><dd>{{ data.forecast_age_hours === null || data.forecast_age_hours === undefined ? 'sin dato' : (data.forecast_age_hours | number:'1.0-2') + ' h' }} / máximo {{ data.forecast_max_age_hours ?? 30 }} h</dd></div>
                   <div><dt>Zona horaria</dt><dd>{{ data.timezone || 'Europe/Madrid' }}</dd></div>
                 </dl>
               } @else {
@@ -321,6 +322,10 @@
                     @if (!previewMatchesDraft()) { <p data-testid="preview-stale-draft">Las consignas han cambiado desde este cálculo. Recalcula antes de continuar.</p> }
                   </div>
                 </div>
+                <p class="preview-forecast-age" [class.warning]="result.stale_forecast" data-testid="preview-forecast-age">
+                  Previsión: {{ result.forecast_age_hours === null || result.forecast_age_hours === undefined ? 'sin dato' : (result.forecast_age_hours | number:'1.0-2') + ' h' }} de antigüedad · máximo {{ result.forecast_max_age_hours ?? 30 }} h
+                  @if (result.stale_forecast) { · se activará como mejor esfuerzo. }
+                </p>
 
                 <div class="preview-review-grid">
                   <section class="review-panel" aria-labelledby="checked-targets-title">
@@ -461,6 +466,7 @@
                   <div><dt>Rango temporal</dt><dd>{{ forecastRange(forecast.hourly_points) }}</dd></div>
                   <div><dt>Registros horarios</dt><dd>{{ forecast.hourly_points.length }}</dd></div>
                   <div><dt>Temperaturas resumen</dt><dd>{{ temperatures(forecast) }}</dd></div>
+                  <div><dt>Antigüedad de previsión</dt><dd>{{ data.forecast_age_hours === null || data.forecast_age_hours === undefined ? 'sin dato' : (data.forecast_age_hours | number:'1.0-2') + ' h' }} / máximo {{ data.forecast_max_age_hours ?? 30 }} h</dd></div>
                 </dl>
               } @else {
                 <p class="empty" data-testid="planning-no-forecast">No hay previsión utilizable.</p>
@@ -468,8 +474,9 @@
               <dl class="summary-list summary-list-compact">
                 <div><dt>Estado de consulta</dt><dd>{{ forecastStatusText(data.forecast_status) }}</dd></div>
                 <div><dt>Última consulta</dt><dd>{{ dateTime(data.forecast_last_attempt_at) }}</dd></div>
+                <div><dt>Intentos del ciclo</dt><dd>{{ data.forecast_attempt ?? 0 }} · próximo reintento {{ dateTime(data.forecast_next_retry_at) }}</dd></div>
                 <div><dt>{{ forecastNextText(data.forecast_next_run_kind) }}</dt><dd>{{ dateTime(data.forecast_next_run_at) }}</dd></div>
-                @if (data.forecast_stale) { <div><dt>Antigüedad</dt><dd class="warning">La previsión está marcada como antigua.</dd></div> }
+                @if (data.stale_forecast || data.forecast_stale) { <div><dt>Advertencia</dt><dd class="warning">La previsión supera la antigüedad configurada y el plan se ejecuta como mejor esfuerzo.</dd></div> }
               </dl>
             </section>
           </div>

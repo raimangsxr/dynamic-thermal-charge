@@ -591,10 +591,12 @@ explicación no cambia.
 ### Requirement: Ciclo de previsión AEMET durable
 
 La consulta AEMET debe ejecutarse a la hora local configurada y conservar su
-estado entre reinicios. Tras un fallo debe reintentar cinco veces, a intervalos
-horarios; al agotarlos, debe conservar la última previsión AEMET válida como
-obsoleta para recalcular, sin habilitar carga automática con previsiones de
-respaldo o simuladas.
+estado entre reinicios. Tras un fallo debe reintentar cada hora sin límite hasta
+obtener una previsión AEMET; al cambiar el día local, un ciclo fallido debe
+continuar reintentando sin esperar de nuevo a la hora de consulta. Mientras
+falla, debe conservar la última previsión AEMET válida como obsoleta para
+recalcular, sin habilitar carga automática con previsiones de respaldo o
+simuladas, y exponer el número de intento y el próximo reintento.
 
 #### Scenario: Fallo de AEMET durante una replanificación
 
@@ -608,13 +610,55 @@ respaldo o simuladas.
   posterior falla
 - **THEN** el estado conserva `forecast_last_success_at` derivado de
   `forecast.retrieved_at` y expone por separado el estado, error y próximo
-  intento de la consulta más reciente
+  intento de la consulta más reciente, incluido el número de intento y el
+  próximo reintento horario
+
+#### Scenario: Reintentos continuos y cambio de día
+
+- **WHEN** seis o más consultas consecutivas fallan y comienza un nuevo día
+  local
+- **THEN** el ciclo permanece obsoleto y no completado, conserva un próximo
+  reintento a una hora y vuelve a intentar inmediatamente en el nuevo día sin
+  esperar a la hora de consulta diaria
 
 #### Scenario: Municipio AEMET con codificación heredada
 
 - **WHEN** el proveedor o una previsión histórica contiene un municipio con
   mojibake UTF-8 como `Noia, A CoruÃ±a`
 - **THEN** el estado lo devuelve y renderiza como `Noia, A Coruña`
+
+### Requirement: Antigüedad de previsión y activación de mejor esfuerzo
+
+La configuración de planificación debe persistir `forecast_max_age_hours` como
+entero entre 1 y 168, con valor predeterminado 30. En cada cálculo, la edad de
+la previsión AEMET apta usada es `horizon_start - retrieved_at`; si supera el
+límite, el plan conserva exactamente su estado y valores físicos, añade el
+aviso de entrada `stale_forecast`, y expone `forecast_age_hours` junto con el
+límite. La obsolescencia es ortogonal al estado físico: un plan válido o
+convergente con ese aviso puede activarse como `best_effort`, con las mismas
+reglas de precedencia que las exclusiones, y el token conserva solo el
+indicador de obsolescencia y el límite, no la edad exacta. La temperatura
+exterior medida nunca sustituye ni corrige los puntos de la previsión usada.
+
+#### Scenario: Previsión fuera del límite
+
+- **WHEN** la edad calculada supera `forecast_max_age_hours` y la cobertura,
+  telemetría y solución física siguen siendo válidas
+- **THEN** el estado físico del plan no cambia, se expone `stale_forecast` y
+  `forecast_age_hours`, el plan queda activable como mejor esfuerzo y
+  `best_effort_reasons` contiene `stale_forecast`
+
+#### Scenario: Previsión dentro del límite
+
+- **WHEN** la edad calculada es igual o menor que `forecast_max_age_hours`
+- **THEN** no se añade `stale_forecast`, el plan conserva la activación normal
+  y el token sigue siendo válido para el mismo intervalo de slot
+
+#### Scenario: Temperatura exterior observada
+
+- **WHEN** existe una lectura exterior medida mientras se calcula un plan
+- **THEN** el planificador sigue usando los valores horarios AEMET y no los
+  sustituye ni los corrige con esa lectura
 
 ### Requirement: Integridad de la planificación automática
 
@@ -820,7 +864,10 @@ secundaria de solo consulta `Análisis y datos`. Cambiar entre ambos contextos n
 debe perder la edición ni el trabajo de preview en curso. Solo el paso
 seleccionado usa `aria-current="step"` y el tratamiento visual principal; las
 acciones del paso `Comprobar` permanecen en el flujo normal del documento, sin
-sticky ni elevación.
+sticky ni elevación. `Comprobar`, `Estado` y la pestaña de previsión de
+`Análisis y datos` muestran, cuando existe, la edad de la previsión usada, el
+límite configurado y la advertencia de mejor esfuerzo; el estado del ciclo
+mantiene visibles su número de intento y próximo reintento.
 
 #### Scenario: Llegada a la vista de planificación
 
@@ -833,6 +880,13 @@ sticky ni elevación.
 - **WHEN** el operador abre `Análisis y datos` o vuelve al flujo guiado
 - **THEN** ve únicamente el contexto correspondiente y conserva el estado de
   edición y de preview
+
+#### Scenario: Visibilidad de previsión obsoleta
+
+- **WHEN** el plan o la previsión usados superan `forecast_max_age_hours`
+- **THEN** `Comprobar`, `Estado` y `Análisis y datos` muestran la edad, el
+  límite y la advertencia de mejor esfuerzo, junto con el intento y próximo
+  reintento del ciclo AEMET cuando estén disponibles
 
 ### Requirement: Detalle tabular de la planificación activa
 

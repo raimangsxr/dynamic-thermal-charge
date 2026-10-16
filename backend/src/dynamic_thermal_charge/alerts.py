@@ -30,6 +30,7 @@ PLAN_RECALCULATION_INVALID = "plan_recalculation_invalid"
 PLAN_RECALCULATION_DEGRADED = "plan_recalculation_degraded"
 PLAN_BEST_EFFORT_ACTIVE = "plan_best_effort_active"
 PLAN_HEATER_EXCLUDED = "plan_heater_excluded"
+FORECAST_STALE = "forecast_stale"
 THERMAL_CALIBRATION_TERMINAL = "thermal_calibration_terminal"
 
 # Retries stop here: a mail server that refused five times with growing waits
@@ -81,6 +82,15 @@ ALERT_TYPES: tuple[AlertType, ...] = (
         description=(
             "Uno o más acumuladores no tienen temperatura interior o SOC "
             "recientes y quedan fuera del cálculo hasta recuperar telemetría."
+        ),
+    ),
+    AlertType(
+        name=FORECAST_STALE,
+        title="Previsión meteorológica antigua",
+        description=(
+            "El plan activo usa una previsión AEMET cuya antigüedad supera el "
+            "límite configurado; se ejecuta como mejor esfuerzo hasta obtener "
+            "una previsión nueva."
         ),
     ),
     AlertType(
@@ -502,6 +512,42 @@ def plan_heater_excluded_message(
     return subject, body
 
 
+def forecast_stale_message(
+    *,
+    installation: str,
+    at: datetime,
+    plan: Any,
+    forecast_status: Mapping[str, Any] | None = None,
+) -> tuple[str, str]:
+    """Build the forecast-stale episode message with retry diagnostics."""
+    def value(name: str, default: Any = None) -> Any:
+        if isinstance(plan, Mapping):
+            return plan.get(name, default)
+        return getattr(plan, name, default)
+
+    status = forecast_status or {}
+    retrieved_at = value("forecast_retrieved_at")
+    age = value("forecast_age_hours")
+    limit = value("forecast_max_age_hours", 30)
+    last_error = status.get("forecast_last_error") or "sin error registrado"
+    next_retry = status.get("forecast_next_retry_at") or "no programado"
+    subject = f"[{installation}] Previsión meteorológica antigua"
+    body = "\n".join(
+        (
+            f"Instalación: {installation}",
+            f"Momento: {at.isoformat()}",
+            f"Previsión recuperada: {retrieved_at.isoformat() if isinstance(retrieved_at, datetime) else retrieved_at or 'no disponible'}",
+            f"Antigüedad: {float(age):.2f} horas" if age is not None else "Antigüedad: no disponible",
+            f"Límite configurado: {limit} horas",
+            f"Último error AEMET: {last_error}",
+            f"Próximo reintento: {next_retry.isoformat() if isinstance(next_retry, datetime) else next_retry}",
+            "Se mantiene el estado físico del plan y se ejecuta como mejor esfuerzo "
+            "hasta recuperar una previsión reciente.",
+        )
+    )
+    return subject, body
+
+
 def notify_plan_activation(
     alerts: AlertService | None,
     plan: Any,
@@ -509,6 +555,7 @@ def notify_plan_activation(
     installation: str,
     at: datetime,
     activation_mode: str,
+    forecast_status: Mapping[str, Any] | None = None,
 ) -> None:
     """Publish the non-blocking alerts associated with an active plan."""
     if alerts is None:
@@ -529,7 +576,27 @@ def notify_plan_activation(
             )
         else:
             alerts.clear_alert(PLAN_BEST_EFFORT_ACTIVE)
-        if getattr(plan, "excluded_heaters", ()):
+        stale = (
+            plan.get("stale_forecast", False)
+            if isinstance(plan, Mapping)
+            else getattr(plan, "stale_forecast", False)
+        )
+        if stale:
+            subject, body = forecast_stale_message(
+                installation=installation,
+                at=at,
+                plan=plan,
+                forecast_status=forecast_status,
+            )
+            alerts.raise_alert(FORECAST_STALE, subject=subject, body=body)
+        else:
+            alerts.clear_alert(FORECAST_STALE)
+        excluded = (
+            plan.get("excluded_heaters", ())
+            if isinstance(plan, Mapping)
+            else getattr(plan, "excluded_heaters", ())
+        )
+        if excluded:
             subject, body = plan_heater_excluded_message(
                 installation=installation,
                 at=at,
@@ -568,9 +635,11 @@ __all__ = [
     "PLAN_RECALCULATION_INVALID",
     "PLAN_BEST_EFFORT_ACTIVE",
     "PLAN_HEATER_EXCLUDED",
+    "FORECAST_STALE",
     "THERMAL_CALIBRATION_TERMINAL",
     "plan_best_effort_active_message",
     "plan_heater_excluded_message",
+    "forecast_stale_message",
     "thermal_calibration_terminal_message",
     "notify_plan_activation",
     "AlertDeliveryError",

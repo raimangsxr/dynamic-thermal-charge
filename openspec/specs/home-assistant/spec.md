@@ -19,12 +19,17 @@ controlador ni conmuta relés directamente.
 
 ### Requirement: Snapshot operativo autenticado
 
-La API debe publicar un identificador estable de instalación, revisión, salud, inventario dinámico, telemetría fresca y resumen del plan. El forecast completo debe estar disponible mediante una operación separada y no como atributos masivos de entidades.
+La API debe publicar un identificador estable de instalación, revisión, salud, inventario dinámico, telemetría fresca y resumen del plan. El resumen del plan y las entidades que lo representan exponen `stale_forecast`, `forecast_age_hours` y `forecast_max_age_hours` cuando corresponda. El forecast completo debe estar disponible mediante una operación separada y no como atributos masivos de entidades.
 
 #### Scenario: Snapshot coherente
 
 - **WHEN** Home Assistant consulta el snapshot
 - **THEN** recibe una revisión y `observed_at` comunes para la instalación, acumuladores, telemetría y plan que estén disponibles
+
+#### Scenario: Previsión obsoleta en el snapshot
+
+- **WHEN** el plan activo o consultado usa una previsión que supera el límite configurado
+- **THEN** Home Assistant muestra el indicador de obsolescencia, la edad y el límite del plan sin sustituir los valores de previsión por temperatura medida
 
 ### Requirement: Control durable y autoridad del backend
 

@@ -67,6 +67,7 @@ def candidate_activation_mode(
     best_effort_requested: bool = False,
     require_best_effort_confirmation: bool = False,
     has_exclusions: bool = False,
+    has_stale_forecast: bool = False,
 ) -> str | None:
     """Return the mode in which a candidate may become active.
 
@@ -77,7 +78,7 @@ def candidate_activation_mode(
     """
     status = _status(candidate_status)
     if status in {VALID, CONVERGING}:
-        return ACTIVATION_BEST_EFFORT if has_exclusions else ACTIVATION_AUTOMATIC
+        return ACTIVATION_BEST_EFFORT if has_exclusions or has_stale_forecast else ACTIVATION_AUTOMATIC
     if status != DEGRADED:
         return None
     if covering_plan(
@@ -99,6 +100,7 @@ def can_activate_plan(
     next_refresh_seconds: int = 0,
     best_effort_requested: bool = False,
     has_exclusions: bool = False,
+    has_stale_forecast: bool = False,
 ) -> bool:
     return (
         candidate_activation_mode(
@@ -109,6 +111,7 @@ def can_activate_plan(
             best_effort_requested=best_effort_requested,
             require_best_effort_confirmation=True,
             has_exclusions=has_exclusions,
+            has_stale_forecast=has_stale_forecast,
         )
         is not None
     )
@@ -123,6 +126,8 @@ def plan_best_effort_reasons(plan: Any) -> tuple[str, ...]:
 
     excluded = value(plan, "excluded_heaters", ()) or ()
     reasons: set[str] = set()
+    if bool(value(plan, "stale_forecast", False)):
+        reasons.add("stale_forecast")
     for item in excluded:
         if isinstance(item, Mapping):
             reasons.add(str(item.get("cause", "missing_required_state")))

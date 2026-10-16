@@ -207,6 +207,7 @@ const PLANNING_FIELDS: readonly FieldDefinition[] = [
   { name: 'replan_minutes', label: 'Frecuencia de replanificación (min)', type: 'number', min: '1', step: '1' },
   { name: 'planning_window_hours', label: 'Ventana visible (horas)', type: 'number', min: '1', step: '1' },
   { name: 'forecast_horizon_hours', label: 'Horizonte de previsión (horas)', type: 'number', min: '1', step: '1' },
+  { name: 'forecast_max_age_hours', label: 'Antigüedad máxima de previsión (horas)', type: 'number', min: '1', max: '168', step: '1', hint: 'Entre 1 y 168 horas. Si se supera, el plan conserva sus temperaturas físicas y se activa como mejor esfuerzo.' },
   { name: 'solver_time_limit_seconds', label: 'Tiempo máximo del optimizador (s)', type: 'number', min: '1', step: '1' },
   { name: 'aemet_query_hour', label: 'Hora de consulta AEMET (0–23)', type: 'number', min: '0', max: '23', step: '1' },
   { name: 'contracted_power_w', label: 'Potencia total contratada (W)', type: 'number', min: '1', step: '100', hint: 'Fuente única para el optimizador y el indicador de Estado.' },
@@ -531,8 +532,8 @@ export class Config {
   }
   planningGroups(): readonly FieldGroup[] {
     return [
-      { title: 'Cadencia y horizonte', description: 'Define cuánto mira el optimizador y cuándo vuelve a calcular.', fields: PLANNING_FIELDS.slice(0, 5) },
-      { title: 'Límites y sensibilidad', description: 'La potencia contratada total es la fuente única que usa el optimizador y Estado. Las tolerancias gobiernan los recálculos por desviación.', fields: PLANNING_FIELDS.slice(5, 10) }
+      { title: 'Cadencia y horizonte', description: 'Define cuánto mira el optimizador y cuándo vuelve a calcular.', fields: PLANNING_FIELDS.slice(0, 6) },
+      { title: 'Límites y sensibilidad', description: 'La potencia contratada total es la fuente única que usa el optimizador y Estado. Las tolerancias gobiernan los recálculos por desviación.', fields: PLANNING_FIELDS.slice(6, 11) }
     ];
   }
   mqttEnabled(): boolean {
@@ -886,7 +887,7 @@ export class Config {
     if (!snapshot) return;
     const number = (name: string): number => Number(this.planningValue(name));
     const values = {
-      replan_minutes: number('replan_minutes'), planning_window_hours: number('planning_window_hours'), forecast_horizon_hours: number('forecast_horizon_hours'), aemet_query_hour: number('aemet_query_hour'), solver_time_limit_seconds: number('solver_time_limit_seconds'),
+      replan_minutes: number('replan_minutes'), planning_window_hours: number('planning_window_hours'), forecast_horizon_hours: number('forecast_horizon_hours'), forecast_max_age_hours: number('forecast_max_age_hours'), aemet_query_hour: number('aemet_query_hour'), solver_time_limit_seconds: number('solver_time_limit_seconds'),
       contracted_power_w: number('contracted_power_w'), max_heating_power_w: number('max_heating_power_w'), base_load_w: number('base_load_w'), deviation_shortfall_tolerance_c: number('deviation_shortfall_tolerance_c'), deviation_surplus_soc_percent: number('deviation_surplus_soc_percent'),
     };
     this.planningSaving.set(true);

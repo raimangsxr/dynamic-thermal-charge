@@ -1,4 +1,5 @@
 import { HttpErrorResponse } from '@angular/common/http';
+import { DecimalPipe } from '@angular/common';
 import { AfterViewInit, Component, ElementRef, Injector, OnDestroy, ViewChild, afterNextRender, computed, inject, signal } from '@angular/core';
 import { MAT_DIALOG_DATA, MatDialog, MatDialogModule, type MatDialogRef } from '@angular/material/dialog';
 import { MatButtonModule } from '@angular/material/button';
@@ -702,7 +703,7 @@ export class PlanningDetailDialog implements AfterViewInit, OnDestroy {
 
 @Component({
   selector: 'dtc-planning',
-  imports: [FormsModule, MatButtonModule, MatIconModule, MatSnackBarModule, MatTabsModule],
+  imports: [FormsModule, DecimalPipe, MatButtonModule, MatIconModule, MatSnackBarModule, MatTabsModule],
   templateUrl: './planning.html',
   styleUrl: './planning.css',
 })

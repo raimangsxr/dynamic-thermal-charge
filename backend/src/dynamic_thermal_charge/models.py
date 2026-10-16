@@ -456,6 +456,7 @@ class SiteConfig:
     indoor_max_plausible_c: float = 50.0
     replan_minutes: int = 30
     forecast_horizon_hours: int = 48
+    forecast_max_age_hours: int = 30
     aemet_query_hour: int = 12
     max_heating_power_w: int | None = None
     design_indoor_temperature_c: float = 21.0
@@ -483,6 +484,12 @@ class SiteConfig:
             raise ValueError("replan_minutes must be positive")
         if self.forecast_horizon_hours <= 0:
             raise ValueError("forecast_horizon_hours must be positive")
+        if (
+            isinstance(self.forecast_max_age_hours, bool)
+            or not isinstance(self.forecast_max_age_hours, int)
+            or not 1 <= self.forecast_max_age_hours <= 168
+        ):
+            raise ValueError("forecast_max_age_hours must be an integer between 1 and 168")
         if not 0 <= self.aemet_query_hour <= 23:
             raise ValueError("aemet_query_hour must be between 0 and 23")
         if self.max_heating_power_w is not None and self.max_heating_power_w <= 0:

@@ -304,11 +304,13 @@ def refresh_weather(request: Request, store: Store = Depends(usable_store)) -> W
             )
             failed = replace(
                 cycle,
+                attempt=cycle.attempt + 1,
                 last_attempt_at=now,
                 last_result="error",
                 last_error=safe_error,
                 stale=True,
-                next_run_at=next_run_at,
+                next_retry_at=now + timedelta(hours=1),
+                next_run_at=None,
             )
             _save_forecast_cycle(planning, failed)
             raise ApiError(503, "weather_refresh_failed", safe_error) from exc
@@ -325,6 +327,7 @@ def refresh_weather(request: Request, store: Store = Depends(usable_store)) -> W
             last_result="success",
             last_error=None,
             stale=False,
+            next_retry_at=None,
             next_run_at=next_run_at,
         )
         _save_forecast_cycle(planning, completed, forecast_ref)
@@ -432,6 +435,7 @@ def _forecast_response(forecast, at) -> dict[str, object]:
         "minimum_temperature_c": forecast.minimum_temperature_c,
         "maximum_temperature_c": forecast.maximum_temperature_c,
         "municipality": forecast.location,
+        "retrieved_at": forecast.retrieved_at,
         "hourly_points": [
             {
                 "timestamp": point.timestamp,

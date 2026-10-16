@@ -114,6 +114,7 @@ class SqlPlanningRepository:
                 "replan_minutes": 30,
                 "planning_window_hours": 12,
                 "forecast_horizon_hours": 24,
+                "forecast_max_age_hours": 30,
                 "solver_time_limit_seconds": 120,
                 "aemet_query_hour": 12,
                 "contracted_power_w": 5200,
@@ -127,6 +128,7 @@ class SqlPlanningRepository:
             "replan_minutes",
             "planning_window_hours",
             "forecast_horizon_hours",
+            "forecast_max_age_hours",
             "solver_time_limit_seconds",
             "aemet_query_hour",
             "contracted_power_w",
@@ -155,6 +157,7 @@ class SqlPlanningRepository:
             "replan_minutes",
             "planning_window_hours",
             "forecast_horizon_hours",
+            "forecast_max_age_hours",
             "solver_time_limit_seconds",
             "aemet_query_hour",
             "contracted_power_w",
@@ -170,7 +173,7 @@ class SqlPlanningRepository:
         allowed = {}
         for key, value in values.items():
             if key in integer_fields:
-                if key in {"planning_window_hours", "forecast_horizon_hours", "solver_time_limit_seconds"} and (
+                if key in {"planning_window_hours", "forecast_horizon_hours", "forecast_max_age_hours", "solver_time_limit_seconds"} and (
                     isinstance(value, bool) or int(value) != float(value)
                 ):
                     raise ConfigValidationError(f"{key} must be an integer", field=key)
@@ -184,10 +187,16 @@ class SqlPlanningRepository:
         combined = {**current, **allowed}
         window_hours = int(combined["planning_window_hours"])
         horizon_hours = int(combined["forecast_horizon_hours"])
+        forecast_max_age_hours = int(combined["forecast_max_age_hours"])
         if not 1 <= window_hours <= 48:
             raise ConfigValidationError("planning_window_hours must be between 1 and 48", field="planning_window_hours")
         if not 1 <= horizon_hours <= 48:
             raise ConfigValidationError("forecast_horizon_hours must be between 1 and 48", field="forecast_horizon_hours")
+        if not 1 <= forecast_max_age_hours <= 168:
+            raise ConfigValidationError(
+                "forecast_max_age_hours must be between 1 and 168",
+                field="forecast_max_age_hours",
+            )
         if window_hours > horizon_hours:
             raise ConfigValidationError("planning_window_hours must not exceed forecast_horizon_hours", field="planning_window_hours")
         if int(combined["solver_time_limit_seconds"]) <= 0:
@@ -534,6 +543,10 @@ class SqlPlanningRepository:
             "evidence": _json_ready(dict(evidence or {})),
             "activation_mode": activation_mode,
             "excluded_heaters": _json_ready(list(plan.excluded_heaters)),
+            "forecast_retrieved_at": _json_ready(plan.forecast_retrieved_at),
+            "forecast_age_hours": plan.forecast_age_hours,
+            "forecast_max_age_hours": plan.forecast_max_age_hours,
+            "stale_forecast": plan.stale_forecast,
         }
         with transaction(self._application, self._application_location) as connection:
             predecessor_plan_id = connection.execute(
@@ -1252,8 +1265,17 @@ class SqlPlanningRepository:
             "best_effort": bool(row["active"]) and bool(
                 inputs.get("activation_mode") == ACTIVATION_BEST_EFFORT
                 or bool(inputs.get("excluded_heaters"))
+                or bool(inputs.get("stale_forecast"))
             ),
             "excluded_heaters": inputs.get("excluded_heaters") or [],
+            "forecast_retrieved_at": _datetime_or_none(inputs.get("forecast_retrieved_at")),
+            "forecast_age_hours": (
+                None
+                if inputs.get("forecast_age_hours") is None
+                else float(inputs["forecast_age_hours"])
+            ),
+            "forecast_max_age_hours": int(inputs.get("forecast_max_age_hours", 30)),
+            "stale_forecast": bool(inputs.get("stale_forecast", False)),
             "reason": row["reason"],
             "active": bool(row["active"]),
             "input_token": row["input_token"],
@@ -1468,6 +1490,20 @@ class SqlPlanningRepository:
             ],
         }
 
+    def latest_forecast_retrieved_at(self) -> datetime | None:
+        """Return the retrieval instant of the forecast used for planning."""
+        from .schema import forecast
+
+        with store_errors(self._application_location):
+            with self._application.connect() as connection:
+                value = connection.execute(
+                    select(forecast.c.retrieved_at)
+                    .where(forecast.c.installation_id == self._installation_id)
+                    .order_by(forecast.c.retrieved_at.desc(), forecast.c.id.desc())
+                    .limit(1)
+                ).scalar()
+        return from_utc(value)
+
     def latest_forecast_automatic_eligible(self) -> bool:
         from .schema import forecast
         with store_errors(self._application_location):
@@ -1475,13 +1511,62 @@ class SqlPlanningRepository:
                 source = connection.execute(select(forecast.c.source).where(forecast.c.installation_id == self._installation_id).order_by(forecast.c.retrieved_at.desc()).limit(1)).scalar()
         return source == "aemet"
 
-    def forecast_cycle(self, local_date: date, scheduled_at: datetime) -> ForecastCycleState:
+    def forecast_cycle(
+        self,
+        local_date: date,
+        scheduled_at: datetime,
+        now: datetime | None = None,
+    ) -> ForecastCycleState:
         from .schema import forecast_cycle
         with transaction(self._application, self._application_location) as connection:
             row = connection.execute(select(forecast_cycle).where((forecast_cycle.c.installation_id == self._installation_id) & (forecast_cycle.c.local_date == local_date))).mappings().first()
             if row is None:
-                connection.execute(insert(forecast_cycle).values(installation_id=self._installation_id, local_date=local_date, scheduled_at=to_utc(scheduled_at), attempt=0, next_retry_at=None, last_error=None, last_forecast_id=None, stale=False, last_attempt_at=None, last_result=None, next_run_at=None, updated_at=to_utc(datetime.now(timezone.utc))))
-                return ForecastCycleState(local_date, scheduled_at, 0, None, None, False)
+                previous = connection.execute(
+                    select(forecast_cycle)
+                    .where(
+                        forecast_cycle.c.installation_id == self._installation_id
+                    )
+                    .order_by(forecast_cycle.c.updated_at.desc(), forecast_cycle.c.id.desc())
+                    .limit(1)
+                ).mappings().first()
+                if previous is not None and not (
+                    bool(previous["stale"]) and previous["last_result"] == "error"
+                ):
+                    previous = None
+                inherited_stale = previous is not None
+                inherited_attempt = 0 if previous is None else int(previous["attempt"])
+                retry_at = (
+                    None
+                    if previous is None
+                    else to_utc(now or datetime.now(timezone.utc))
+                )
+                connection.execute(insert(forecast_cycle).values(
+                    installation_id=self._installation_id,
+                    local_date=local_date,
+                    scheduled_at=to_utc(scheduled_at),
+                    attempt=inherited_attempt,
+                    next_retry_at=retry_at,
+                    last_error=None if previous is None else previous["last_error"],
+                    last_forecast_id=None if previous is None else previous["last_forecast_id"],
+                    stale=inherited_stale,
+                    last_attempt_at=None,
+                    last_result=None,
+                    next_run_at=None,
+                    updated_at=to_utc(datetime.now(timezone.utc)),
+                ))
+                return ForecastCycleState(
+                    local_date,
+                    scheduled_at,
+                    inherited_attempt,
+                    retry_at,
+                    None if previous is None else previous["last_error"],
+                    inherited_stale,
+                    False,
+                    None,
+                    None,
+                    None,
+                    None if previous is None else previous["last_forecast_id"],
+                )
         attempt = int(row["attempt"])
         return ForecastCycleState(
             local_date,
@@ -1490,7 +1575,7 @@ class SqlPlanningRepository:
             from_utc(row["next_retry_at"]),
             row["last_error"],
             bool(row["stale"]),
-            attempt >= 6,
+            row["last_result"] == "success",
             from_utc(row["last_attempt_at"]),
             row["last_result"],
             from_utc(row["next_run_at"]),
@@ -1504,7 +1589,7 @@ class SqlPlanningRepository:
         with transaction(self._application, self._application_location) as connection:
             values = {
                 "scheduled_at": to_utc(state.scheduled_at),
-                "attempt": 6 if state.completed else state.attempt,
+                "attempt": state.attempt,
                 "next_retry_at": None if state.next_retry_at is None else to_utc(state.next_retry_at),
                 "last_error": state.last_error,
                 "stale": state.stale,
@@ -1557,8 +1642,11 @@ class SqlPlanningRepository:
         return {
             "forecast_status": cycle["last_result"],
             "forecast_last_attempt_at": cycle["last_attempt_at"],
-            "forecast_last_error": cycle["last_error"] if cycle["last_result"] == "error" else None,
+            "forecast_last_error": cycle["last_error"] if cycle["stale"] else None,
             "forecast_next_run_at": cycle["next_run_at"],
+            "forecast_attempt": cycle["attempt"],
+            "forecast_next_retry_at": cycle["next_retry_at"],
+            "forecast_stale": cycle["stale"],
         }
 
     def audit(self, since: datetime | None = None, until: datetime | None = None, limit: int = 100) -> list[dict[str, Any]]:

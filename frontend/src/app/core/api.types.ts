@@ -54,6 +54,9 @@ export interface PlanDto {
   slots: PlanSlotDto[];
   activation_mode?: 'automatic' | 'best_effort' | string;
   best_effort?: boolean;
+  stale_forecast?: boolean;
+  forecast_age_hours?: number | null;
+  forecast_max_age_hours?: number;
 }
 
 export type ForecastSource = 'aemet';
@@ -65,6 +68,10 @@ export interface ForecastDto {
   minimum_temperature_c: number | null;
   maximum_temperature_c: number | null;
   municipality: string | null;
+  retrieved_at?: string | null;
+  forecast_age_hours?: number | null;
+  forecast_max_age_hours?: number;
+  stale_forecast?: boolean;
 }
 
 export interface HourlyForecastPointDto {
@@ -129,6 +136,9 @@ export interface PlanningPlanDto {
   slots: PlanningSlotDto[];
   activation_mode?: 'automatic' | 'best_effort' | string;
   best_effort?: boolean;
+  stale_forecast?: boolean;
+  forecast_age_hours?: number | null;
+  forecast_max_age_hours?: number;
 }
 
 export interface PlanningHeaterDto {
@@ -145,6 +155,7 @@ export interface PlanningSiteConfigDto {
   replan_minutes: number;
   planning_window_hours: number;
   forecast_horizon_hours: number;
+  forecast_max_age_hours?: number;
   solver_time_limit_seconds: number;
   aemet_query_hour: number;
   contracted_power_w: number;
@@ -189,6 +200,11 @@ export interface PlanningDto {
   forecast_next_run_at?: string | null;
   forecast_next_run_kind?: string | null;
   forecast_stale?: boolean | null;
+  forecast_attempt?: number | null;
+  forecast_next_retry_at?: string | null;
+  forecast_age_hours?: number | null;
+  forecast_max_age_hours?: number;
+  stale_forecast?: boolean;
   preview_job?: PlanningPreviewJobDto | null;
 }
 
@@ -196,7 +212,7 @@ export interface TemperatureTargetDto { id: number | null; heater_id: string; ta
 export interface ChargeTelemetryDto { heater_id: string; indoor_temperature_c: number | null; stored_soc_percent: number | null; indoor_received_at: string | null; stored_soc_received_at: string | null; state: string; missing_fields: string[]; oldest_age_seconds: number | null; stored_energy_kwh: number | null; }
 export interface PlanningDeficitDto { heater_id: string | null; requirement: string; achievable_value: number | null; shortfall: number | null; at: string | null; reason: string; cause?: string | null; recommended_action?: string | null; target_temperature_c: number | null; projected_temperature_c: number | null; shortfall_c: number | null; stored_energy_kwh: number | null; stored_soc_percent: number | null; target_window_start?: string | null; target_window_end?: string | null; affected_from?: string | null; affected_until?: string | null; observation_count?: number; }
 export interface TemperatureTargetRequest { heater_id: string; target_temperature_c: number; start_time: string; end_time: string; weekdays: number[]; enabled?: boolean; }
-export interface PlanningPreviewDto { token: string; status: 'VALID' | 'CONVERGING' | 'DEGRADED' | 'INVALID' | 'FEASIBLE'; optimization_quality?: 'OPTIMAL' | 'FEASIBLE_LIMIT' | 'NO_SOLUTION' | string; score: number[]; window_start: string; window_end: string; horizon_start: string; horizon_end: string; slot_minutes: number; slots: Array<Record<string, unknown>>; deficits: PlanningDeficitDto[]; violations: PlanningDeficitDto[]; convergence_by_heater?: Record<string, string | null>; convergence_at?: string | null; guaranteed_until?: string | null; explanations: Array<Record<string, unknown>>; demand: Array<Record<string, unknown>>; temperature_targets: TemperatureTargetDto[]; operator_summary: Record<string, unknown>; already_active?: boolean; activation_mode?: 'automatic' | 'best_effort' | string; best_effort?: boolean; best_effort_activatable?: boolean; best_effort_reasons?: string[]; excluded_heaters?: Array<{ heater_id: string; cause: string }>; }
+export interface PlanningPreviewDto { token: string; status: 'VALID' | 'CONVERGING' | 'DEGRADED' | 'INVALID' | 'FEASIBLE'; optimization_quality?: 'OPTIMAL' | 'FEASIBLE_LIMIT' | 'NO_SOLUTION' | string; score: number[]; window_start: string; window_end: string; horizon_start: string; horizon_end: string; slot_minutes: number; slots: Array<Record<string, unknown>>; deficits: PlanningDeficitDto[]; violations: PlanningDeficitDto[]; convergence_by_heater?: Record<string, string | null>; convergence_at?: string | null; guaranteed_until?: string | null; explanations: Array<Record<string, unknown>>; demand: Array<Record<string, unknown>>; temperature_targets: TemperatureTargetDto[]; operator_summary: Record<string, unknown>; already_active?: boolean; activation_mode?: 'automatic' | 'best_effort' | string; best_effort?: boolean; best_effort_activatable?: boolean; best_effort_reasons?: string[]; excluded_heaters?: Array<{ heater_id: string; cause: string }>; forecast_retrieved_at?: string | null; forecast_age_hours?: number | null; forecast_max_age_hours?: number; stale_forecast?: boolean; }
 export interface PlanningCheckDto { name: string; status: 'pending' | 'running' | 'completed' | 'error' | 'cancelled' | 'skipped'; detail: string | null; started_at: string | null; finished_at: string | null; }
 export interface PlanningPreviewJobDto { job_id: string; status: 'queued' | 'running' | 'cancelling' | 'completed' | 'error' | 'cancelled' | 'interrupted'; cancellation_requested: boolean; requested_at: string; started_at: string | null; finished_at: string | null; checks: PlanningCheckDto[]; result: PlanningPreviewDto | null; operator_summary: Record<string, unknown>; error_code: string | null; error_detail: string | null; already_active?: boolean; }
 export interface AutomaticPlanAuditItem { id: number; plan_id: number | null; event: string; reason: string; details: Record<string, unknown>; occurred_at: string; }
@@ -242,6 +258,11 @@ export interface StatusDto {
   forecast_next_run_at?: string | null;
   forecast_next_run_kind?: string | null;
   forecast_stale?: boolean | null;
+  forecast_attempt?: number | null;
+  forecast_next_retry_at?: string | null;
+  forecast_age_hours?: number | null;
+  forecast_max_age_hours?: number;
+  stale_forecast?: boolean;
 }
 
 export type ControllerLogLevel = 'DEBUG' | 'INFO' | 'WARNING' | 'ERROR' | 'CRITICAL';

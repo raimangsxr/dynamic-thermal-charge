@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Mapping
 
 from .charge_planning import PlanningInput
@@ -79,6 +79,20 @@ def planning_evidence(
         }
         for point in request.forecast
     ]
+    retrieved_at = request.forecast_retrieved_at
+    if retrieved_at is not None and retrieved_at.tzinfo is None:
+        retrieved_at = retrieved_at.replace(tzinfo=timezone.utc)
+    horizon_start = request.horizon_start
+    if horizon_start.tzinfo is None:
+        horizon_start = horizon_start.replace(tzinfo=timezone.utc)
+    forecast_age_hours = (
+        None
+        if retrieved_at is None
+        else (
+            horizon_start.astimezone(timezone.utc)
+            - retrieved_at.astimezone(timezone.utc)
+        ).total_seconds() / 3600
+    )
     return {
         "captured_at": _instant(request.generated_at or request.horizon_start),
         "timezone": request.timezone_name,
@@ -98,6 +112,7 @@ def planning_evidence(
                 "replan_minutes",
                 "planning_window_hours",
                 "forecast_horizon_hours",
+                "forecast_max_age_hours",
                 "deviation_shortfall_tolerance_c",
                 "deviation_surplus_soc_percent",
             }
@@ -116,6 +131,13 @@ def planning_evidence(
         },
         "temperature_targets": targets,
         "forecast": forecast,
+        "forecast_retrieved_at": _instant(request.forecast_retrieved_at),
+        "forecast_age_hours": forecast_age_hours,
+        "forecast_max_age_hours": request.forecast_max_age_hours,
+        "stale_forecast": (
+            forecast_age_hours is not None
+            and forecast_age_hours > request.forecast_max_age_hours
+        ),
         "forecast_automatic_eligible": request.forecast_automatic_eligible,
         "forecast_status": dict(forecast_status or {}),
     }

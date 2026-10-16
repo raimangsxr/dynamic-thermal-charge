@@ -93,6 +93,9 @@ class PlanSummary(BaseModel):
     slots: list[PlanSlotView]
     activation_mode: str = "automatic"
     best_effort: bool = False
+    stale_forecast: bool = False
+    forecast_age_hours: float | None = None
+    forecast_max_age_hours: int = 30
 
 
 class ForecastSummary(BaseModel):
@@ -102,6 +105,10 @@ class ForecastSummary(BaseModel):
     minimum_temperature_c: float | None = None
     maximum_temperature_c: float | None = None
     municipality: str | None = None
+    retrieved_at: datetime | None = None
+    forecast_age_hours: float | None = None
+    forecast_max_age_hours: int = 30
+    stale_forecast: bool = False
 
 
 class AllocationSummary(BaseModel):
@@ -151,6 +158,11 @@ class StatusResponse(BaseModel):
     forecast_next_run_at: datetime | None = None
     forecast_next_run_kind: str | None = None
     forecast_stale: bool | None = None
+    forecast_attempt: int | None = None
+    forecast_next_retry_at: datetime | None = None
+    forecast_age_hours: float | None = None
+    forecast_max_age_hours: int = 30
+    stale_forecast: bool = False
 
 
 class HourlyForecastPointView(BaseModel):
@@ -224,6 +236,9 @@ class PlanningPlanView(BaseModel):
     slots: list[PlanningSlotView]
     activation_mode: str = "automatic"
     best_effort: bool = False
+    stale_forecast: bool = False
+    forecast_age_hours: float | None = None
+    forecast_max_age_hours: int = 30
 
 
 class PlanningResponse(BaseModel):
@@ -258,6 +273,11 @@ class PlanningResponse(BaseModel):
     forecast_next_run_at: datetime | None = None
     forecast_next_run_kind: str | None = None
     forecast_stale: bool | None = None
+    forecast_attempt: int | None = None
+    forecast_next_retry_at: datetime | None = None
+    forecast_age_hours: float | None = None
+    forecast_max_age_hours: int = 30
+    stale_forecast: bool = False
     preview_job: "PlanningPreviewJobResponse | None" = None
     base_load_w: int = 0
     max_heating_power_w: int = 0
@@ -360,6 +380,10 @@ class PlanningPreviewResponse(BaseModel):
     best_effort_activatable: bool = False
     best_effort_reasons: list[str] = Field(default_factory=list)
     excluded_heaters: list[dict[str, str]] = Field(default_factory=list)
+    forecast_retrieved_at: datetime | None = None
+    forecast_age_hours: float | None = None
+    forecast_max_age_hours: int = 30
+    stale_forecast: bool = False
 
 
 class PlanningCheckView(BaseModel):
@@ -412,6 +436,7 @@ class PlanningSiteConfigRequest(BaseModel):
     replan_minutes: int = Field(gt=0)
     planning_window_hours: StrictInt = Field(gt=0, le=48, default=12)
     forecast_horizon_hours: StrictInt = Field(gt=0, le=48)
+    forecast_max_age_hours: StrictInt = Field(gt=0, le=168, default=30)
     solver_time_limit_seconds: StrictInt = Field(gt=0, default=120)
     aemet_query_hour: int = Field(ge=0, le=23)
     contracted_power_w: int = Field(gt=0)
@@ -432,6 +457,7 @@ class PlanningSiteConfigResponse(BaseModel):
     replan_minutes: int
     planning_window_hours: int
     forecast_horizon_hours: int
+    forecast_max_age_hours: int = 30
     solver_time_limit_seconds: int
     aemet_query_hour: int
     contracted_power_w: int

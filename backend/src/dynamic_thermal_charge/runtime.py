@@ -381,6 +381,7 @@ def _run_controller(
                             now=now,
                             next_refresh_seconds=next_refresh_seconds,
                             has_exclusions=bool(candidate.excluded_heaters),
+                            has_stale_forecast=candidate.stale_forecast,
                         )
                         if (
                             deviation is not None
@@ -442,6 +443,11 @@ def _run_controller(
                             ),
                             retained_horizon_end=retained_horizon_end,
                             activation_mode=activation_mode,
+                            forecast_status=(
+                                store.planning.forecast_cycle_status()
+                                if hasattr(store.planning, "forecast_cycle_status")
+                                else None
+                            ),
                         )
                         if candidate_degraded and activation_mode is None:
                             # A covering VALID/CONVERGING plan still owns the
@@ -627,6 +633,12 @@ def _build_automatic_runtime_plan(
         telemetry=valid,
         constraints=(),
         forecast=store.planning.latest_forecast(now),
+        forecast_retrieved_at=(
+            store.planning.latest_forecast_retrieved_at()
+            if hasattr(store.planning, "latest_forecast_retrieved_at")
+            else None
+        ),
+        forecast_max_age_hours=int(planning_site.get("forecast_max_age_hours", 30)),
         horizon_start=now,
         horizon_hours=int(planning_site.get("forecast_horizon_hours", PLANNING_HORIZON_HOURS)),
         slot_minutes=config.site.slot_minutes,
@@ -880,6 +892,7 @@ def _notify_recalculation_result(
     previous_plan_preserved: bool = False,
     retained_horizon_end: datetime | None = None,
     activation_mode: str | None = None,
+    forecast_status=None,
 ) -> None:
     """Raise or rearm the alert for a non-activable recalculation.
 
@@ -901,6 +914,7 @@ def _notify_recalculation_result(
                     installation=installation,
                     at=at,
                     activation_mode=activation_mode,
+                    forecast_status=forecast_status,
                 )
             return
         if status == DEGRADED:
@@ -912,6 +926,7 @@ def _notify_recalculation_result(
                     installation=installation,
                     at=at,
                     activation_mode=activation_mode,
+                    forecast_status=forecast_status,
                 )
                 return
             subject, body = plan_recalculation_degraded_message(
@@ -1007,7 +1022,7 @@ def _refresh_daily_aemet_forecast(
         local_date, clock_time(hour=query_hour), tzinfo=zone
     )
     try:
-        current = store.planning.forecast_cycle(local_date, scheduled_at)
+        current = store.planning.forecast_cycle(local_date, scheduled_at, now=now)
         result = manager.poll(now, current)
         forecast_ref = (
             history.record_forecast(result.forecast)
@@ -1050,8 +1065,12 @@ def _record_forecast_cycle(
             last_result=result,
             last_error=error,
             stale=result == "error",
-            next_retry_at=(next_run_at if result == "error" else None),
-            next_run_at=next_run_at,
+            next_retry_at=(
+                attempted_at.astimezone(timezone.utc) + timedelta(hours=1)
+                if result == "error"
+                else None
+            ),
+            next_run_at=(None if result == "error" else next_run_at),
             attempt=(current.attempt + 1 if result == "error" else 0),
         )
         planning.save_forecast_cycle(state, forecast_ref)

@@ -163,6 +163,26 @@ un best-effort activable cuando expire la cobertura.
 - **THEN** ambas alertas se rearman y una ocurrencia futura puede volver a
   encolarlas
 
+### Requirement: Aviso de previsión obsoleta
+
+El catálogo debe incluir `forecast_stale`. Se abre cuando se activa un plan
+que lleva el aviso de entrada `stale_forecast` y se rearma cuando se activa un
+plan cuya previsión está dentro de `forecast_max_age_hours`. El mensaje conserva
+la hora de obtención de la previsión, su edad, el límite configurado, el último
+error de AEMET y el próximo reintento horario. La alerta no modifica el estado
+físico del plan, la precedencia de activación ni el accionamiento.
+
+#### Scenario: Previsión antigua activada
+
+- **WHEN** se activa como mejor esfuerzo un plan con `stale_forecast`
+- **THEN** se encola una sola alerta `forecast_stale` con la hora de obtención,
+  edad, límite, último error y próximo reintento
+
+#### Scenario: Previsión recuperada
+
+- **WHEN** se activa un plan posterior con previsión dentro del límite
+- **THEN** `forecast_stale` se rearma sin encolar otro aviso
+
 ### Requirement: Aviso de replanificación imposible
 
 Debe avisarse cuando un recálculo devuelve `INVALID`. El correo identifica la

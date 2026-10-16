@@ -67,7 +67,7 @@ def test_daily_aemet_refresh_persists_before_automatic_planning(initialised_stor
     assert initialised_store.planning.forecast_cycle_status()["forecast_status"] == "success"
 
 
-def test_daily_aemet_cycle_keeps_six_failures_across_persisted_state(initialised_store):
+def test_daily_aemet_cycle_keeps_unbounded_failures_across_persisted_state(initialised_store):
     class OfflineProvider:
         def forecast_for(self, _requested_date):
             raise RuntimeError("offline")
@@ -76,16 +76,79 @@ def test_daily_aemet_cycle_keeps_six_failures_across_persisted_state(initialised
     scheduled_at = datetime(2026, 1, 16, 12, tzinfo=timezone.utc)
     state = initialised_store.planning.forecast_cycle(scheduled_at.date(), scheduled_at)
     now = scheduled_at
-    for attempt in range(1, 7):
+    for attempt in range(1, 8):
         result = manager.poll(now, state)
         initialised_store.planning.save_forecast_cycle(result.state)
         state = initialised_store.planning.forecast_cycle(scheduled_at.date(), scheduled_at)
         assert state.attempt == attempt
         now = state.next_retry_at or now
 
-    assert state.completed is True
+    assert state.completed is False
     assert state.stale is True
-    assert state.next_retry_at is None
+    assert state.next_retry_at is not None
+
+
+def test_daily_aemet_cycle_retries_legacy_exhausted_state_same_day(initialised_store):
+    calls = []
+
+    class OfflineProvider:
+        def forecast_for(self, requested_date):
+            calls.append(requested_date)
+            raise RuntimeError("offline")
+
+    manager = DailyAemetForecastManager(
+        OfflineProvider(), query_hour=12, timezone_name="UTC"
+    )
+    now = datetime(2026, 1, 16, 12, tzinfo=timezone.utc)
+    initial = initialised_store.planning.forecast_cycle(now.date(), now)
+    legacy = replace(
+        initial,
+        attempt=6,
+        next_retry_at=None,
+        last_error="offline",
+        stale=True,
+        completed=False,
+        last_attempt_at=now - timedelta(hours=1),
+        last_result="error",
+        next_run_at=None,
+    )
+    initialised_store.planning.save_forecast_cycle(legacy)
+    restored = initialised_store.planning.forecast_cycle(now.date(), now)
+
+    result = manager.poll(now, restored)
+
+    assert calls == [now.date()]
+    assert result.state.attempt == 7
+    assert result.state.completed is False
+    assert result.state.stale is True
+    assert result.state.next_retry_at == now + timedelta(hours=1)
+
+
+def test_daily_aemet_cycle_continues_an_failed_episode_after_local_midnight():
+    calls = []
+
+    class OfflineProvider:
+        def forecast_for(self, requested_date):
+            calls.append(requested_date)
+            raise RuntimeError("offline")
+
+    manager = DailyAemetForecastManager(
+        OfflineProvider(), query_hour=12, timezone_name="UTC"
+    )
+    first = datetime(2026, 1, 16, 12, tzinfo=timezone.utc)
+    state = manager.poll(first).state
+    for _ in range(6):
+        state = manager.poll(state.next_retry_at, state).state
+
+    next_day = datetime(2026, 1, 17, 0, 5, tzinfo=timezone.utc)
+    result = manager.poll(next_day, state)
+
+    assert result.state.local_date == next_day.date()
+    assert result.state.completed is False
+    assert result.state.stale is True
+    assert result.state.attempt == 8
+    assert result.state.next_retry_at == next_day + timedelta(hours=1)
+    assert calls[-1] == next_day.date()
 
 
 def test_replan_cadence_waits_for_a_slot_boundary_and_never_underflows():
