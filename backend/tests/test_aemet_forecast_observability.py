@@ -1,5 +1,5 @@
 from dataclasses import replace
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from dynamic_thermal_charge.persistence.system_configuration import SecretAction, SecretMutation
 from dynamic_thermal_charge.runtime import _record_forecast_cycle
@@ -53,6 +53,9 @@ def test_forecast_cycle_persists_success_and_failure_without_replacing_forecast(
         "forecast_last_attempt_at": API_NOW,
         "forecast_last_error": None,
         "forecast_next_run_at": next_run,
+        "forecast_attempt": 0,
+        "forecast_next_retry_at": None,
+        "forecast_stale": False,
     }
 
     _record_forecast_cycle(
@@ -68,6 +71,40 @@ def test_forecast_cycle_persists_success_and_failure_without_replacing_forecast(
     assert status["forecast_status"] == "error"
     assert status["forecast_last_error"].startswith("WeatherProviderError")
     assert initialised_store.planning.latest_forecast()
+
+
+def test_forecast_cycle_does_not_resume_stale_episode_after_success(initialised_store):
+    first_day = datetime(2026, 1, 16, 1, tzinfo=timezone.utc)
+    second_day = first_day + timedelta(days=1)
+    third_day = second_day + timedelta(days=1)
+
+    _record_forecast_cycle(
+        initialised_store,
+        local_date=first_day.date(),
+        scheduled_at=first_day,
+        attempted_at=first_day,
+        result="error",
+        error="AEMET unavailable",
+        next_run_at=first_day + timedelta(hours=1),
+    )
+    _record_forecast_cycle(
+        initialised_store,
+        local_date=second_day.date(),
+        scheduled_at=second_day,
+        attempted_at=second_day,
+        result="success",
+        error=None,
+        next_run_at=second_day + timedelta(days=1),
+    )
+
+    next_cycle = initialised_store.planning.forecast_cycle(
+        third_day.date(), third_day, now=third_day
+    )
+
+    assert next_cycle.attempt == 0
+    assert next_cycle.next_retry_at is None
+    assert next_cycle.stale is False
+    assert next_cycle.completed is False
 
 
 def test_manual_aemet_refresh_returns_forecast_and_preserves_automatic_timer(

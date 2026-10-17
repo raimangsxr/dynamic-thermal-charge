@@ -21,8 +21,8 @@ from .topology import BootstrapCorruptError, BootstrapIncompatibleError
 from . import SchemaStatus, SchemaVersionError
 
 
-CONFIGURATION_SCHEMA_REVISION = 17
-APPLICATION_SCHEMA_REVISION = 13
+CONFIGURATION_SCHEMA_REVISION = 18
+APPLICATION_SCHEMA_REVISION = 14
 POSTGRES_CONFIGURATION_SCHEMA = "dtc_config"
 POSTGRES_APPLICATION_SCHEMA = "dtc_app"
 
@@ -332,6 +332,14 @@ def _upgrade_application_schema(engine: Engine, revision: int, expected: int) ->
                     text("ALTER TABLE automatic_plan_slot ADD COLUMN forced_heat_json TEXT NOT NULL DEFAULT '{}'")
                 )
         revision = 13
+    if revision == 13 and expected >= 14:
+        _replace_check_constraint(
+            engine,
+            "forecast_cycle",
+            "ck_forecast_cycle_attempt",
+            "attempt >= 0",
+        )
+        revision = 14
     if revision != expected:
         raise BootstrapIncompatibleError(
             f"application schema revision {revision} has no registered upgrade path to {expected}"
@@ -790,6 +798,26 @@ def _upgrade_configuration_schema(engine: Engine, revision: int, expected: int) 
             if inspector.has_table(thermal_profile.name):
                 thermal_profile.drop(connection)
         revision = 17
+    if revision == 17 and expected >= 18:
+        site_columns = {
+            column["name"]
+            for column in inspect(engine).get_columns("charge_planning_site")
+        }
+        if "forecast_max_age_hours" not in site_columns:
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "ALTER TABLE charge_planning_site "
+                        "ADD COLUMN forecast_max_age_hours INTEGER NOT NULL DEFAULT 30"
+                    )
+                )
+        _replace_check_constraint(
+            engine,
+            "charge_planning_site",
+            "ck_charge_site_forecast_max_age",
+            "forecast_max_age_hours >= 1 AND forecast_max_age_hours <= 168",
+        )
+        revision = 18
     if revision != expected:
         raise BootstrapIncompatibleError(
             f"configuration schema revision {revision} has no registered upgrade path to {expected}"

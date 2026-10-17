@@ -22,6 +22,7 @@ from ...plan_activation import (
     ACTIVATION_AUTOMATIC,
     can_activate_plan,
     seconds_to_next_replan,
+    plan_best_effort_reasons,
 )
 from ..dependencies import controller_view, usable_store
 from ..liveness import ControllerView
@@ -191,6 +192,9 @@ def get_status(
                 created_at=canonical_plan["created_at"],
                 activation_mode=str(canonical_plan.get("activation_mode", ACTIVATION_AUTOMATIC)),
                 best_effort=bool(canonical_plan.get("best_effort", False)),
+                stale_forecast=bool(canonical_plan.get("stale_forecast", False)),
+                forecast_age_hours=canonical_plan.get("forecast_age_hours"),
+                forecast_max_age_hours=int(canonical_plan.get("forecast_max_age_hours", planning_site.get("forecast_max_age_hours", 30))),
                 slots=[
                     PlanSlotView(start=start, end=end, heater_ids=sorted(set(ids)))
                     for (start, end), ids in sorted(grouped.items())
@@ -235,6 +239,17 @@ def get_status(
         absence_reason = "no_active_automatic_plan"
         if latest_forecast is not None:
             forecast = ForecastSummary(**latest_forecast)
+
+    forecast_plan = diagnostic_plan or canonical_plan or {}
+    if forecast is not None:
+        forecast.forecast_age_hours = forecast_plan.get("forecast_age_hours")
+        forecast.forecast_max_age_hours = int(
+            forecast_plan.get(
+                "forecast_max_age_hours",
+                planning_site.get("forecast_max_age_hours", 30),
+            )
+        )
+        forecast.stale_forecast = bool(forecast_plan.get("stale_forecast", False))
 
     telemetry_views = []
     telemetry_snapshot = store.planning.telemetry()
@@ -319,20 +334,16 @@ def get_status(
                 has_exclusions=bool(
                     (diagnostic_plan or {}).get("excluded_heaters")
                 ),
+                has_stale_forecast=bool(
+                    (diagnostic_plan or {}).get("stale_forecast")
+                ),
             )
             if diagnostic_plan is not None
             else False
         ),
-        best_effort_reasons=[
-            _deficit_view(
-                item,
-                horizon_hours=int(planning_site.get("forecast_horizon_hours", 24)),
-            ).cause or "safe_planning_input"
-            for item in group_planning_violations(
-                _plan_violations(diagnostic_plan or canonical_plan or {}),
-                slot_minutes=(diagnostic_plan or canonical_plan or {}).get("slot_minutes"),
-            )
-        ],
+        best_effort_reasons=list(
+            plan_best_effort_reasons(diagnostic_plan or canonical_plan or {})
+        ),
         excluded_heaters=list(
             (diagnostic_plan or canonical_plan or {}).get("excluded_heaters", [])
         ),
@@ -379,6 +390,20 @@ def get_status(
         forecast_next_run_at=cycle_status.get("forecast_next_run_at"),
         forecast_next_run_kind=cycle_status.get("forecast_next_run_kind"),
         forecast_stale=cycle_status.get("forecast_stale"),
+        forecast_attempt=cycle_status.get("forecast_attempt"),
+        forecast_next_retry_at=cycle_status.get("forecast_next_retry_at"),
+        forecast_age_hours=(
+            (diagnostic_plan or canonical_plan or {}).get("forecast_age_hours")
+        ),
+        forecast_max_age_hours=int(
+            (diagnostic_plan or canonical_plan or {}).get(
+                "forecast_max_age_hours",
+                planning_site.get("forecast_max_age_hours", 30),
+            )
+        ),
+        stale_forecast=bool(
+            (diagnostic_plan or canonical_plan or {}).get("stale_forecast", False)
+        ),
     )
 
 

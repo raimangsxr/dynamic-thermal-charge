@@ -1,6 +1,6 @@
 # Antigüedad máxima de la previsión y reintentos AEMET continuos
 
-Status: draft
+Status: approved
 
 ## Goal
 Que la instalación autónoma deje de planificar en silencio con una previsión antigua. Hoy, tras cinco reintentos fallidos, el ciclo AEMET se da por completado hasta el día siguiente y el planificador acepta cualquier previsión que cubra el horizonte sin mirar su antigüedad. El sistema debe seguir planificando con la última previsión válida, marcar el plan como mejor esfuerzo, avisar y seguir reintentando.
@@ -22,15 +22,5 @@ Que la instalación autónoma deje de planificar en silencio con una previsión 
 - A5: El parámetro recorre migración, repositorio, API y panel con validación de rango y sin escrituras parciales.
 - A6: Pruebas de frontend y Home Assistant cubren el aviso y los valores mostrados; `make check` pasa.
 
-## Decisions
-- D1: La obsolescencia es un aviso de entrada ortogonal al estado físico, igual que las exclusiones del cambio de mejor esfuerzo.
-- D2: 30 horas cubren el ciclo diario de AEMET con margen para algunos reintentos antes de avisar.
-- D3: Los reintentos horarios indefinidos sustituyen al tope de cinco; el requisito vivo "Ciclo de previsión AEMET durable" se modifica en consecuencia.
-
-## Tasks
-- [ ] T1: Columna `forecast_max_age_hours` con migración Alembic, repositorio, esquema API y evidencia del plan; pruebas.
-- [ ] T2: Edad de la previsión, aviso `stale_forecast`, token y modo de activación en el planificador y la activación; pruebas.
-- [ ] T3: Reintentos AEMET sin tope y continuidad entre días; exposición del número de intentos; pruebas.
-- [ ] T4: Alerta `forecast_stale` y sus mensajes; pruebas.
-- [ ] T5: Panel, Estado, `Análisis y datos` y atributos de Home Assistant; campo de configuración y ayuda; pruebas.
-- [ ] T6: Actualizar specs vivas de planificación y alertas; `make check`.
+## Outcome
+La verificación final aprobada confirma la continuidad de reintentos, la activación como mejor esfuerzo de previsiones obsoletas, la recuperación tras una previsión fresca y `make check` en verde sin findings.

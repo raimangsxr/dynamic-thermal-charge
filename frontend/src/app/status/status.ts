@@ -11,6 +11,7 @@
  */
 
 import { HttpErrorResponse } from '@angular/common/http';
+import { DecimalPipe } from '@angular/common';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import {
@@ -43,7 +44,7 @@ import {
 
 @Component({
   selector: 'dtc-status',
-  imports: [MatButtonModule, MatIconModule, ControllerHealth, ControllerHealthIndicator, OutputIndicator],
+  imports: [DecimalPipe, MatButtonModule, MatIconModule, ControllerHealth, ControllerHealthIndicator, OutputIndicator],
   templateUrl: './status.html',
   styleUrl: './status.css',
 })

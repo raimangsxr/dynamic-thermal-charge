@@ -8,6 +8,7 @@ import pytest
 
 from dynamic_thermal_charge.alerts import (
     ALERT_TYPES,
+    FORECAST_STALE,
     MAX_ATTEMPTS,
     PLAN_BEST_EFFORT_ACTIVE,
     PLAN_HEATER_EXCLUDED,
@@ -301,6 +302,61 @@ def test_the_recalculation_message_states_the_consequence(preserved):
         assert "conserva el plan anterior" in body
     else:
         assert "sin plan activo" in body
+
+
+def test_stale_forecast_alert_is_one_episode_and_rearms_on_fresh_activation():
+    repository, sender = FakeRepository(), FakeSender()
+    service = _service(repository, sender)
+    stale_plan = {
+        "stale_forecast": True,
+        "forecast_retrieved_at": NOW - timedelta(hours=31),
+        "forecast_age_hours": 31.0,
+        "forecast_max_age_hours": 30,
+    }
+    status = {
+        "forecast_last_error": "AEMET no responde",
+        "forecast_next_retry_at": NOW + timedelta(hours=1),
+    }
+
+    notify_plan_activation(
+        service,
+        stale_plan,
+        installation="Casa",
+        at=NOW,
+        activation_mode="best_effort",
+        forecast_status=status,
+    )
+    notify_plan_activation(
+        service,
+        stale_plan,
+        installation="Casa",
+        at=NOW,
+        activation_mode="best_effort",
+        forecast_status=status,
+    )
+
+    assert [item["alert_type"] for item in repository.queue].count(FORECAST_STALE) == 1
+    queued = next(item for item in repository.queue if item["alert_type"] == FORECAST_STALE)
+    assert "31.00" in queued["body"]
+    assert "AEMET no responde" in queued["body"]
+    assert "Próximo reintento" in queued["body"]
+
+    notify_plan_activation(
+        service,
+        {"stale_forecast": False},
+        installation="Casa",
+        at=NOW,
+        activation_mode="automatic",
+    )
+    notify_plan_activation(
+        service,
+        stale_plan,
+        installation="Casa",
+        at=NOW,
+        activation_mode="best_effort",
+        forecast_status=status,
+    )
+    assert [item["alert_type"] for item in repository.queue].count(FORECAST_STALE) == 2
 
 
 # --------------------------------------------------------------------------- #

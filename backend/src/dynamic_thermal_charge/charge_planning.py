@@ -251,6 +251,10 @@ class AutomaticPlan:
     diagnostics: Mapping[str, Any] = field(default_factory=dict)
     optimization_quality: str = OPTIMAL
     excluded_heaters: tuple[Mapping[str, str], ...] = ()
+    forecast_retrieved_at: datetime | None = None
+    forecast_age_hours: float | None = None
+    forecast_max_age_hours: int = 30
+    stale_forecast: bool = False
 
     @property
     def violations(self) -> tuple[PlanningViolation, ...]:
@@ -274,6 +278,8 @@ class PlanningInput:
     feedback_horizon_hours: float = 6.0
     max_heating_power_w: int | None = None
     forecast_automatic_eligible: bool = True
+    forecast_retrieved_at: datetime | None = None
+    forecast_max_age_hours: int = 30
     solver_time_limit_seconds: int | None = None
     generated_at: datetime | None = None
     exploration_limit: int = 100_000
@@ -379,7 +385,7 @@ class MilpChargePlanner:
 
     def build(self, request: PlanningInput) -> AutomaticPlan:
         if _is_room_energy_request(request):
-            return _build_room_energy_plan(request)
+            return _annotate_forecast(_build_room_energy_plan(request), request)
         generated_at = request.generated_at or request.horizon_start
         _notify(request, "inputs")
         _check_cancelled(request)
@@ -403,19 +409,19 @@ class MilpChargePlanner:
             # responses executable without planning an already-started slot.
             horizon_start = align_to_slot(request.horizon_start, request.slot_minutes)
         except (ValueError, ArithmeticError) as exc:
-            return _invalid_plan(request, request.horizon_start, (), str(exc), "invalid_configuration", generated_at)
+            return _annotate_forecast(_invalid_plan(request, request.horizon_start, (), str(exc), "invalid_configuration", generated_at), request)
         _notify(request, "coverage")
         boundaries = _continuous_forecast_slots(horizon_start, request.forecast, request.horizon_hours, request.slot_minutes)
         starts = boundaries[:-1] if boundaries else ()
         if not starts or not request.forecast_automatic_eligible:
             reason = "forecast_not_eligible" if not request.forecast_automatic_eligible else "missing_aemet_coverage"
             logger.debug("Automatic planning rejected: reason=%s", reason)
-            return _invalid_plan(request, horizon_start, (), reason, reason, generated_at)
+            return _annotate_forecast(_invalid_plan(request, horizon_start, (), reason, reason, generated_at), request)
         horizon_end = boundaries[-1]
         missing = [item.id for item in request.heaters if item.enabled and not _telemetry_usable(request.telemetry.get(item.id))]
         if missing:
             logger.debug("Automatic planning rejected: missing_telemetry=%s", ",".join(sorted(missing)))
-            return _invalid_plan(request, horizon_start, starts, f"missing required MQTT state: {', '.join(sorted(missing))}", "missing_required_state", generated_at, missing)
+            return _annotate_forecast(_invalid_plan(request, horizon_start, starts, f"missing required MQTT state: {', '.join(sorted(missing))}", "missing_required_state", generated_at, missing), request)
         try:
             _notify(request, "telemetry")
             demand = DegreeHoursDemandEstimator().estimate(
@@ -438,10 +444,10 @@ class MilpChargePlanner:
                     item.heater_id, item.at.isoformat(), item.minimum_soc_percent, item.priority,
                 )
             _notify(request, "constraints")
-            return self._solve(request, boundaries, demand, materialized, generated_at)
+            return _annotate_forecast(self._solve(request, boundaries, demand, materialized, generated_at), request)
         except (ValueError, ArithmeticError) as exc:
             logger.debug("Automatic planning rejected: %s", exc)
-            return _invalid_plan(request, horizon_start, starts, str(exc), "invalid_configuration", generated_at)
+            return _annotate_forecast(_invalid_plan(request, horizon_start, starts, str(exc), "invalid_configuration", generated_at), request)
 
     def _solve(self, request: PlanningInput, boundaries: Sequence[datetime], demand: Sequence[DemandEstimate], constraints: Sequence[MaterializedConstraint], generated_at: datetime) -> AutomaticPlan:
         # One source of truth for slot edges: the boundary list carries the end
@@ -731,6 +737,11 @@ def input_token(request: PlanningInput) -> str:
         "max_total_power_w": request.max_total_power_w, "base_load_w": request.base_load_w, "max_heating_power_w": request.max_heating_power_w,
         "timezone_name": request.timezone_name,
         "forecast_automatic_eligible": request.forecast_automatic_eligible,
+        # Retrieval age is deliberately not part of the token: previews must
+        # remain activatable while the clock advances, but the stale warning
+        # and configured limit must invalidate the old semantics together.
+        "stale_forecast": _forecast_is_stale(request),
+        "forecast_max_age_hours": request.forecast_max_age_hours,
         "solver_time_limit_seconds": request.solver_time_limit_seconds or SOLVER_TIME_LIMIT_SECONDS,
         "telemetry_max_age_seconds": request.telemetry_max_age_seconds,
         # The room-energy planner now makes a per-heater safety decision from
@@ -1050,6 +1061,16 @@ def deserialize_automatic_plan(payload: Mapping[str, Any]) -> AutomaticPlan:
             for item in (value.get("excluded_heaters") or [])
             if isinstance(item, Mapping)
         ),
+        forecast_retrieved_at=_plan_datetime(
+            value.get("forecast_retrieved_at"), required=False
+        ),
+        forecast_age_hours=(
+            None
+            if value.get("forecast_age_hours") is None
+            else float(value["forecast_age_hours"])
+        ),
+        forecast_max_age_hours=int(value.get("forecast_max_age_hours", 30)),
+        stale_forecast=bool(value.get("stale_forecast", False)),
     )
 
 
@@ -1070,6 +1091,12 @@ def _validate_input(request: PlanningInput) -> None:
         raise ValueError("slot_minutes must be a positive divisor of one hour")
     if request.horizon_hours <= 0 or request.horizon_hours > 48:
         raise ValueError("horizon_hours must be between 1 and 48")
+    if (
+        isinstance(request.forecast_max_age_hours, bool)
+        or not isinstance(request.forecast_max_age_hours, int)
+        or not 1 <= request.forecast_max_age_hours <= 168
+    ):
+        raise ValueError("forecast_max_age_hours must be an integer between 1 and 168")
     if request.solver_time_limit_seconds is not None and (
         isinstance(request.solver_time_limit_seconds, bool)
         or not isinstance(request.solver_time_limit_seconds, int)
@@ -1089,6 +1116,38 @@ def _validate_input(request: PlanningInput) -> None:
         if request.feedback_horizon_hours <= 0:
             raise ValueError("feedback_horizon_hours must be positive")
     ZoneInfo(request.timezone_name)
+
+
+def _forecast_age_hours(request: PlanningInput) -> float | None:
+    retrieved_at = request.forecast_retrieved_at
+    if retrieved_at is None:
+        return None
+    horizon_start = request.horizon_start
+    if retrieved_at.tzinfo is None:
+        retrieved_at = retrieved_at.replace(tzinfo=timezone.utc)
+    if horizon_start.tzinfo is None:
+        horizon_start = horizon_start.replace(tzinfo=timezone.utc)
+    return (
+        horizon_start.astimezone(timezone.utc)
+        - retrieved_at.astimezone(timezone.utc)
+    ).total_seconds() / 3600
+
+
+def _forecast_is_stale(request: PlanningInput) -> bool:
+    age = _forecast_age_hours(request)
+    return age is not None and age > request.forecast_max_age_hours
+
+
+def _annotate_forecast(plan: AutomaticPlan, request: PlanningInput) -> AutomaticPlan:
+    """Attach forecast provenance without changing the physical plan."""
+    age = _forecast_age_hours(request)
+    return replace(
+        plan,
+        forecast_retrieved_at=request.forecast_retrieved_at,
+        forecast_age_hours=age,
+        forecast_max_age_hours=request.forecast_max_age_hours,
+        stale_forecast=age is not None and age > request.forecast_max_age_hours,
+    )
 
 
 def _continuous_forecast_slots(start: datetime, forecast: Sequence[HourlyForecastPoint], horizon_hours: int, slot_minutes: int) -> tuple[datetime, ...]:
@@ -2024,7 +2083,7 @@ class RoomEnergyPlanner:
     """Public planner entry point for the coupled room/storage model."""
 
     def build(self, request: PlanningInput) -> AutomaticPlan:
-        return _build_room_energy_plan(request)
+        return _annotate_forecast(_build_room_energy_plan(request), request)
 
 
 def _build_room_energy_plan(request: PlanningInput) -> AutomaticPlan:

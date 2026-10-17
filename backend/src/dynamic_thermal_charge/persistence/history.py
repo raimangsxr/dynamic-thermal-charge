@@ -971,6 +971,7 @@ class SqlStatusReader:
             "municipality": normalize_municipality(
                 forecast_row["municipality"]
             ),
+            "retrieved_at": from_utc(forecast_row["retrieved_at"]),
             "hourly_points": [
                 {
                     "timestamp": point.timestamp,

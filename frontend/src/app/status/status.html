@@ -156,6 +156,7 @@
           <div><dt>Intervalos</dt><dd>intervalos de {{ plan.slot_minutes }} minutos</dd></div>
           <div><dt>Configuración</dt><dd>Revisión {{ plan.installation_revision }}</dd></div>
           @if (data.best_effort) { <div><dt>Activación</dt><dd>Mejor esfuerzo</dd></div> }
+          <div><dt>Antigüedad de previsión</dt><dd>{{ data.forecast_age_hours === null || data.forecast_age_hours === undefined ? 'sin dato' : (data.forecast_age_hours | number:'1.0-2') + ' h' }} / máximo {{ data.forecast_max_age_hours ?? 30 }} h</dd></div>
           <div><dt>Zona horaria</dt><dd>{{ data.timezone || 'Europe/Madrid' }}</dd></div>
         </dl>
       } @else {
@@ -205,10 +206,11 @@
       <dl class="summary-list summary-list-compact" data-testid="forecast-status">
         <div><dt>Última consulta correcta</dt><dd data-testid="forecast-last-success">{{ instant(data.forecast_last_success_at) }}</dd></div>
         <div><dt>Estado de consulta</dt><dd>{{ forecastStatusText(data.forecast_status) }}</dd></div>
+        <div><dt>Intentos del ciclo</dt><dd>{{ data.forecast_attempt ?? 0 }} · próximo reintento {{ instant(data.forecast_next_retry_at) }}</dd></div>
         <div><dt>{{ forecastNextText(data.forecast_next_run_kind) }}</dt><dd>{{ instant(data.forecast_next_run_at) }}</dd></div>
       </dl>
       @if (data.forecast_last_error) { <p class="warning-text" data-testid="forecast-error">Último error del proveedor: {{ data.forecast_last_error }}</p> }
-      @if (data.forecast_stale) { <p class="warning-text">La previsión disponible está marcada como antigua.</p> }
+      @if (data.stale_forecast || data.forecast_stale) { <p class="warning-text">La previsión supera la antigüedad configurada y el plan se ejecuta como mejor esfuerzo.</p> }
     </section>
   }
 </main>

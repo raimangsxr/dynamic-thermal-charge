@@ -2,7 +2,7 @@ from datetime import datetime, time, timedelta, timezone
 
 import pytest
 
-from dynamic_thermal_charge.charge_planning import DegreeHoursDemandEstimator, DeterministicChargeOptimizer, PlanningInput
+from dynamic_thermal_charge.charge_planning import DegreeHoursDemandEstimator, DeterministicChargeOptimizer, PlanningInput, input_token
 from dynamic_thermal_charge.models import ChargeConstraint, ChargeTelemetry, Heater, OutputConfig, ThermalProfile
 from dynamic_thermal_charge import runtime
 from dynamic_thermal_charge.persistence.seed import example_installation
@@ -56,21 +56,55 @@ def test_degree_hours_applies_multiplicative_reserve_without_exceeding_capacity(
     assert reserved.demand_kwh == pytest.approx(plain.demand_kwh * 1.25)
 
 
-def test_aemet_cycle_has_initial_attempt_and_exactly_five_hourly_retries():
+def test_aemet_cycle_retries_hourly_without_a_retry_cap():
     cycle = DailyAemetCycle(query_hour=12, timezone_name="Europe/Madrid")
     state = cycle.initial_state(datetime(2026, 1, 16).date())
     now = state.scheduled_at
-    for attempt in range(1, 6):
+    for attempt in range(1, 8):
         state = cycle.failure(state, now, "offline")
         assert state.attempt == attempt
-        if attempt < 5:
-            assert state.next_retry_at == now.astimezone(timezone.utc) + timedelta(hours=1)
-            now = state.next_retry_at
+        assert state.next_retry_at == now.astimezone(timezone.utc) + timedelta(hours=1)
+        now = state.next_retry_at
     assert state.stale is True
     assert state.next_retry_at is not None
-    state = cycle.failure(state, now, "offline")
-    assert state.attempt == 6
-    assert state.next_retry_at is None
+
+
+def test_stale_forecast_is_orthogonal_to_physical_plan_and_token_age_is_not_exact():
+    start = datetime(2026, 1, 16, 0, 0, tzinfo=timezone.utc)
+    common = dict(
+        heaters=(_heater("a"),),
+        telemetry={"a": _telemetry("a", 50)},
+        constraints=(),
+        forecast=tuple(
+            HourlyForecastPoint(start + timedelta(hours=index), 5)
+            for index in range(5)
+        ),
+        horizon_start=start,
+        horizon_hours=2,
+        slot_minutes=30,
+        forecast_max_age_hours=30,
+    )
+    fresh_request = PlanningInput(
+        **common, forecast_retrieved_at=start - timedelta(hours=30)
+    )
+    stale_request = PlanningInput(
+        **common, forecast_retrieved_at=start - timedelta(hours=31)
+    )
+    older_stale_request = PlanningInput(
+        **common, forecast_retrieved_at=start - timedelta(hours=32)
+    )
+
+    fresh = DeterministicChargeOptimizer().build(fresh_request)
+    stale = DeterministicChargeOptimizer().build(stale_request)
+
+    assert stale.status == fresh.status
+    assert stale.slots == fresh.slots
+    assert stale.demand == fresh.demand
+    assert stale.forecast_age_hours == pytest.approx(31)
+    assert stale.stale_forecast is True
+    assert fresh.stale_forecast is False
+    assert input_token(stale_request) == input_token(older_stale_request)
+    assert input_token(stale_request) != input_token(fresh_request)
 
 
 def test_degree_hours_uses_nominal_coefficient_and_linear_feedback():

@@ -88,6 +88,9 @@ class OperationalPlan(BaseModel):
     best_effort: bool = False
     best_effort_reasons: list[str] = Field(default_factory=list)
     excluded_heaters: list[dict[str, str]] = Field(default_factory=list)
+    stale_forecast: bool = False
+    forecast_age_hours: float | None = None
+    forecast_max_age_hours: int = 30
     observed_at: datetime
     intervals: list[PlanInterval] = Field(default_factory=list)
 
@@ -124,6 +127,9 @@ class ForecastResponse(BaseModel):
     retrieved_at: datetime | None = None
     source: str | None = None
     forecast_date: str | None = None
+    forecast_age_hours: float | None = None
+    forecast_max_age_hours: int = 30
+    stale_forecast: bool = False
     points: list[ForecastPoint] = Field(default_factory=list)
 
 
@@ -318,8 +324,25 @@ def get_operational_forecast(
     observed_at = request.app.state.clock()
     snapshot = store.planning.latest_forecast_snapshot()
     if snapshot is None:
-        return ForecastResponse(observed_at=observed_at)
-    return ForecastResponse(observed_at=observed_at, **snapshot)
+        return ForecastResponse(
+            observed_at=observed_at,
+            forecast_max_age_hours=int(store.planning.site().get("forecast_max_age_hours", 30)),
+        )
+    automatic = store.planning.active_plan()
+    age = None if automatic is None else automatic.get("forecast_age_hours")
+    stale = False if automatic is None else bool(automatic.get("stale_forecast", False))
+    return ForecastResponse(
+        observed_at=observed_at,
+        forecast_age_hours=age,
+        forecast_max_age_hours=int(
+            (automatic or {}).get(
+                "forecast_max_age_hours",
+                store.planning.site().get("forecast_max_age_hours", 30),
+            )
+        ),
+        stale_forecast=stale,
+        **snapshot,
+    )
 
 
 @router.post(
@@ -442,6 +465,9 @@ def _operational_plan(store: Store, observed_at: datetime) -> OperationalPlan | 
             status=automatic.get("status"),
             activation_mode=automatic.get("activation_mode", "automatic"),
             best_effort=bool(automatic.get("best_effort", False)),
+            stale_forecast=bool(automatic.get("stale_forecast", False)),
+            forecast_age_hours=automatic.get("forecast_age_hours"),
+            forecast_max_age_hours=int(automatic.get("forecast_max_age_hours", 30)),
             best_effort_reasons=list(plan_best_effort_reasons(automatic)),
             excluded_heaters=list(automatic.get("excluded_heaters", [])),
             observed_at=observed_at,
@@ -450,6 +476,9 @@ def _operational_plan(store: Store, observed_at: datetime) -> OperationalPlan | 
         status=automatic.get("status"),
         activation_mode=automatic.get("activation_mode", "automatic"),
         best_effort=bool(automatic.get("best_effort", False)),
+        stale_forecast=bool(automatic.get("stale_forecast", False)),
+        forecast_age_hours=automatic.get("forecast_age_hours"),
+        forecast_max_age_hours=int(automatic.get("forecast_max_age_hours", 30)),
         best_effort_reasons=list(plan_best_effort_reasons(automatic)),
         excluded_heaters=list(automatic.get("excluded_heaters", [])),
         observed_at=observed_at,

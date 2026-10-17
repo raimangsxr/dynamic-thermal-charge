@@ -49,6 +49,9 @@ class ControllerStateSensor(DynamicThermalChargeEntity, SensorEntity):
             "best_effort": bool(plan.get("best_effort", False)),
             "best_effort_reasons": list(plan.get("best_effort_reasons", [])),
             "excluded_heaters": list(plan.get("excluded_heaters", [])),
+            "stale_forecast": bool(plan.get("stale_forecast", False)),
+            "forecast_age_hours": plan.get("forecast_age_hours"),
+            "forecast_max_age_hours": plan.get("forecast_max_age_hours"),
             "controller_current": snapshot.get("controller_current"),
             "recalculation_pending": snapshot.get("recalculation_pending"),
         }
@@ -105,6 +108,9 @@ class AccumulatorSensor(DynamicThermalChargeEntity, SensorEntity):
             "plan_status": plan.get("status"),
             "activation_mode": plan.get("activation_mode"),
             "best_effort": bool(plan.get("best_effort", False)),
+            "stale_forecast": bool(plan.get("stale_forecast", False)),
+            "forecast_age_hours": plan.get("forecast_age_hours"),
+            "forecast_max_age_hours": plan.get("forecast_max_age_hours"),
         }
 
 

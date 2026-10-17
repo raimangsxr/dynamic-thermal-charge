@@ -68,6 +68,23 @@ def test_successful_candidate_replaces_best_effort_and_partial_success_is_flagge
     ) == ACTIVATION_BEST_EFFORT
 
 
+def test_successful_stale_forecast_is_activated_as_best_effort():
+    active = _active("VALID", NOW + timedelta(hours=1))
+
+    assert candidate_activation_mode(
+        "VALID",
+        active,
+        now=NOW,
+        has_stale_forecast=True,
+    ) == ACTIVATION_BEST_EFFORT
+    assert can_activate_plan(
+        "CONVERGING",
+        active,
+        now=NOW,
+        has_stale_forecast=True,
+    ) is True
+
+
 def test_a_successful_candidate_can_activate_when_the_old_plan_expires_before_refresh():
     active = _active("VALID", NOW + timedelta(minutes=29))
 

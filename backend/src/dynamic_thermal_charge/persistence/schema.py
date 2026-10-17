@@ -316,6 +316,7 @@ charge_planning_site = Table(
     Column("replan_minutes", Integer, nullable=False, server_default="30"),
     Column("planning_window_hours", Integer, nullable=False, server_default="12"),
     Column("forecast_horizon_hours", Integer, nullable=False, server_default="24"),
+    Column("forecast_max_age_hours", Integer, nullable=False, server_default="30"),
     Column("solver_time_limit_seconds", Integer, nullable=False, server_default="120"),
     Column("aemet_query_hour", Integer, nullable=False, server_default="12"),
     Column("contracted_power_w", Integer, nullable=False, server_default="5200"),
@@ -337,6 +338,7 @@ charge_planning_site = Table(
     CheckConstraint("revision >= 1", name="ck_charge_site_revision"),
     CheckConstraint("planning_window_hours > 0 AND planning_window_hours <= 48", name="ck_charge_site_window"),
     CheckConstraint("forecast_horizon_hours > 0 AND forecast_horizon_hours <= 48", name="ck_charge_site_horizon"),
+    CheckConstraint("forecast_max_age_hours >= 1 AND forecast_max_age_hours <= 168", name="ck_charge_site_forecast_max_age"),
     CheckConstraint("planning_window_hours <= forecast_horizon_hours", name="ck_charge_site_window_le_horizon"),
     CheckConstraint("solver_time_limit_seconds > 0", name="ck_charge_site_solver_time_limit"),
     CheckConstraint("aemet_query_hour >= 0 AND aemet_query_hour <= 23", name="ck_charge_site_query_hour"),
@@ -406,7 +408,7 @@ forecast_cycle = Table(
     Column("next_run_at", DateTime, nullable=True),
     Column("updated_at", DateTime, nullable=False),
     UniqueConstraint("installation_id", "local_date", name="uq_forecast_cycle_day"),
-    CheckConstraint("attempt >= 0 AND attempt <= 6", name="ck_forecast_cycle_attempt"),
+    CheckConstraint("attempt >= 0", name="ck_forecast_cycle_attempt"),
     CheckConstraint("last_result IS NULL OR last_result IN ('success', 'error')", name="ck_forecast_cycle_result"),
 )
 
@@ -1199,6 +1201,7 @@ CONSTRAINT_FIELDS: dict[str, tuple[str, str]] = {
     "ck_charge_site_replan": ("replan_minutes", "the replan cadence must be positive"),
     "ck_charge_site_window": ("planning_window_hours", "the planning window must be between 1 and 48 hours"),
     "ck_charge_site_horizon": ("forecast_horizon_hours", "the forecast horizon must be between 1 and 48 hours"),
+    "ck_charge_site_forecast_max_age": ("forecast_max_age_hours", "the forecast age limit must be between 1 and 168 hours"),
     "ck_charge_site_window_le_horizon": ("planning_window_hours", "the planning window must not exceed the forecast horizon"),
     "ck_charge_site_query_hour": ("aemet_query_hour", "the AEMET query hour must be between 0 and 23"),
     "ck_telemetry_soc": ("stored_soc_percent", "stored SOC must be between 0 and 100"),

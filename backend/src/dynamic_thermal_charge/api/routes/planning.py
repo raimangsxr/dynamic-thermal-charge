@@ -459,6 +459,8 @@ def get_planning(
         forecast_next_run_at=cycle_status.get("forecast_next_run_at"),
         forecast_next_run_kind=cycle_status.get("forecast_next_run_kind"),
         forecast_stale=cycle_status.get("forecast_stale"),
+        forecast_attempt=cycle_status.get("forecast_attempt"),
+        forecast_next_retry_at=cycle_status.get("forecast_next_retry_at"),
     )
     return _enrich(response, store, observed_at)
 
@@ -650,6 +652,7 @@ def activate_planning(
         best_effort_requested=request.best_effort,
         require_best_effort_confirmation=True,
         has_exclusions=bool(plan.excluded_heaters),
+        has_stale_forecast=plan.stale_forecast,
     )
     if activation_mode is None:
         if plan.status == DEGRADED and not request.best_effort:
@@ -713,6 +716,7 @@ def activate_planning(
         installation=store.repository.installation_name(),
         at=observed_at,
         activation_mode=activation_mode,
+        forecast_status=forecast_cycle_context(store.planning),
     )
     forecast = SqlStatusReader(
         store.application_engine or store.engine,
@@ -781,12 +785,13 @@ def _plan_violations(plan: dict[str, Any]) -> list[dict[str, Any]] | tuple:
 
 
 def _plan_causes(plan: dict[str, Any]) -> list[str]:
-    return sorted(
-        {
-            _deficit_cause(_violation_payload(item))
-            for item in _plan_violations(plan)
-        }
-    )
+    causes = {
+        _deficit_cause(_violation_payload(item))
+        for item in _plan_violations(plan)
+    }
+    if plan.get("stale_forecast"):
+        causes.add("stale_forecast")
+    return sorted(causes)
 
 
 def _deficit_view(
@@ -928,6 +933,9 @@ def _automatic_planning_response(
         created_at=automatic["created_at"],
         activation_mode=str(automatic.get("activation_mode", ACTIVATION_AUTOMATIC)),
         best_effort=bool(automatic.get("best_effort", False)),
+        stale_forecast=bool(automatic.get("stale_forecast", False)),
+        forecast_age_hours=automatic.get("forecast_age_hours"),
+        forecast_max_age_hours=int(automatic.get("forecast_max_age_hours", 30)),
         slots=[
             PlanningSlotView(
                 start=item["start"],
@@ -988,6 +996,11 @@ def _automatic_planning_response(
         horizon_end=horizon_end,
         forecast_next_run_kind=cycle_status.get("forecast_next_run_kind"),
         forecast_stale=cycle_status.get("forecast_stale"),
+        forecast_attempt=cycle_status.get("forecast_attempt"),
+        forecast_next_retry_at=cycle_status.get("forecast_next_retry_at"),
+        stale_forecast=bool(automatic.get("stale_forecast", False)),
+        forecast_age_hours=automatic.get("forecast_age_hours"),
+        forecast_max_age_hours=int(automatic.get("forecast_max_age_hours", 30)),
         timeline=_build_timeline(
             config.heaters,
             power_by_id,
@@ -1048,6 +1061,9 @@ def _enrich(response: PlanningResponse, store: Store, observed_at: datetime) -> 
     active = planning.active_plan()
     latest = planning.latest_plan() if hasattr(planning, "latest_plan") else None
     site = planning.site()
+    cycle_status = forecast_cycle_context(planning)
+    response.forecast_attempt = cycle_status.get("forecast_attempt")
+    response.forecast_next_retry_at = cycle_status.get("forecast_next_retry_at")
     diagnostic = (
         latest
         if latest is not None
@@ -1083,6 +1099,11 @@ def _enrich(response: PlanningResponse, store: Store, observed_at: datetime) -> 
             else None
         )
         response.best_effort = bool(projection.get("best_effort", False)) and projection_is_active
+        response.stale_forecast = bool(projection.get("stale_forecast", False))
+        response.forecast_age_hours = projection.get("forecast_age_hours")
+        response.forecast_max_age_hours = int(
+            projection.get("forecast_max_age_hours", site.get("forecast_max_age_hours", 30))
+        )
         response.excluded_heaters = list(projection.get("excluded_heaters", []))
         response.best_effort_reasons = _plan_causes(projection)
         response.best_effort_activatable = can_activate_plan(
@@ -1096,6 +1117,7 @@ def _enrich(response: PlanningResponse, store: Store, observed_at: datetime) -> 
             ),
             best_effort_requested=True,
             has_exclusions=bool(projection.get("excluded_heaters")),
+            has_stale_forecast=bool(projection.get("stale_forecast")),
         )
         response.deficits = _grouped_deficit_views(
             _plan_violations(projection),
@@ -1107,6 +1129,12 @@ def _enrich(response: PlanningResponse, store: Store, observed_at: datetime) -> 
         response.guaranteed_until = projection.get("guaranteed_until")
         response.optimization_quality = projection.get("optimization_quality")
         response.preview_token = active["input_token"] if active is not None else None
+    if response.forecast is not None:
+        response.forecast.forecast_age_hours = response.forecast_age_hours
+        response.forecast.forecast_max_age_hours = response.forecast_max_age_hours
+        response.forecast.stale_forecast = bool(
+            response.stale_forecast or response.forecast_stale
+        )
     response.temperature_targets_revision = site["revision"]
     response.base_load_w = int(site.get("base_load_w", 0))
     response.max_heating_power_w = int(site.get("max_heating_power_w", response.max_total_power_w))
@@ -1284,6 +1312,12 @@ def _build_automatic_request(
             }
         ),
         forecast=store.planning.latest_forecast(observed_at),
+        forecast_retrieved_at=(
+            store.planning.latest_forecast_retrieved_at()
+            if hasattr(store.planning, "latest_forecast_retrieved_at")
+            else None
+        ),
+        forecast_max_age_hours=int(site.get("forecast_max_age_hours", 30)),
         horizon_start=observed_at,
         horizon_hours=int(site["forecast_horizon_hours"]),
         slot_minutes=config.site.slot_minutes,
@@ -1570,6 +1604,14 @@ def _automatic_plan_from_preview_payload(payload: dict[str, Any]) -> AutomaticPl
             for item in (payload.get("excluded_heaters") or [])
             if isinstance(item, dict)
         ),
+        _preview_optional_datetime(payload.get("forecast_retrieved_at")),
+        (
+            None
+            if payload.get("forecast_age_hours") is None
+            else float(payload["forecast_age_hours"])
+        ),
+        int(payload.get("forecast_max_age_hours", 30)),
+        bool(payload.get("stale_forecast", False)),
     )
 
 
@@ -1875,10 +1917,14 @@ def _preview_response(
         already_active=already_active,
         activation_mode=(
             ACTIVATION_BEST_EFFORT
-            if plan.status == DEGRADED or plan.excluded_heaters
+            if plan.status == DEGRADED or plan.excluded_heaters or plan.stale_forecast
             else ACTIVATION_AUTOMATIC
         ),
-        best_effort=plan.status == DEGRADED or bool(plan.excluded_heaters),
+        best_effort=(
+            plan.status == DEGRADED
+            or bool(plan.excluded_heaters)
+            or plan.stale_forecast
+        ),
         best_effort_activatable=(
             can_activate_plan(
                 plan.status,
@@ -1895,12 +1941,17 @@ def _preview_response(
                 ),
                 best_effort_requested=True,
                 has_exclusions=bool(plan.excluded_heaters),
+                has_stale_forecast=plan.stale_forecast,
             )
-            if plan.status == DEGRADED or plan.excluded_heaters
+            if plan.status == DEGRADED or plan.excluded_heaters or plan.stale_forecast
             else False
         ),
         best_effort_reasons=list(plan_best_effort_reasons(plan)),
         excluded_heaters=[dict(item) for item in plan.excluded_heaters],
+        forecast_retrieved_at=plan.forecast_retrieved_at,
+        forecast_age_hours=plan.forecast_age_hours,
+        forecast_max_age_hours=plan.forecast_max_age_hours,
+        stale_forecast=plan.stale_forecast,
     )
 
 
