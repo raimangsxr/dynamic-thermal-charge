@@ -1637,12 +1637,14 @@ def group_planning_violations(
     grouped: dict[tuple[Any, ...], list[PlanningViolation | Mapping[str, Any]]] = {}
     for violation in violations:
         reason = str(_value_from_violation(violation, "reason", ""))
+        cause = _value_from_violation(violation, "cause")
         window_start = _value_from_violation(violation, "target_window_start")
         window_end = _value_from_violation(violation, "target_window_end")
         key = (
             _value_from_violation(violation, "heater_id"),
             _value_from_violation(violation, "requirement", ""),
             reason.split(":", 1)[0],
+            None if cause is None else str(cause),
             _violation_time_key(window_start),
             _violation_time_key(window_end),
         )
@@ -1692,6 +1694,7 @@ def group_planning_violations(
                     "shortfall": max_shortfall,
                     "at": first_at,
                     "reason": str(_value_from_violation(first, "reason", "")).split(":", 1)[0],
+                    "cause": _value_from_violation(first, "cause"),
                     "target_temperature_c": (
                         float(first_achievable) + float(first_shortfall)
                         if requirement == "temperature_comfort"

@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from ...persistence.bootstrap import Store
 from ...persistence.history import SqlStatusReader
 from ...persistence.home_assistant import ControlCommandResult
+from ...calibration_runtime import active_calibration_exclusions
 from ...plan_activation import plan_best_effort_reasons
 from ..dependencies import controller_view, usable_store
 from ..liveness import ControllerView
@@ -56,6 +57,7 @@ class OperationalHeater(BaseModel):
     next_soc_target_percent: float | None = None
     excluded_from_plan: bool = False
     exclusion_cause: str | None = None
+    exclusion_label: str | None = None
     calibration_status: str = "approximate"
     calibration_session_id: str | None = None
     calibration_phase: str | None = None
@@ -190,6 +192,11 @@ def get_operational_snapshot(
     plan = _operational_plan(store, observed_at)
     active_targets = _active_targets(config, store.planning.temperature_targets(enabled_only=True), observed_at)
     calibration = store.calibration.projection(config)
+    active_calibrations = {
+        heater.id
+        for heater in config.heaters
+        if store.calibration.active(heater.id) is not None
+    }
     future_by_heater: dict[str, list[PlanInterval]] = {}
     if plan is not None:
         for interval in plan.intervals:
@@ -221,6 +228,9 @@ def get_operational_snapshot(
             ),
             None,
         )
+        calibration_active = heater.id in active_calibrations
+        if calibration_active:
+            exclusion = {"heater_id": heater.id, "cause": "calibration_active"}
         calibration_value = calibration.get(heater.id, {})
         accumulators.append(
             OperationalHeater(
@@ -241,6 +251,14 @@ def get_operational_snapshot(
                 next_soc_target_percent=None if next_interval is None else next_interval.target_soc_percent,
                 excluded_from_plan=exclusion is not None,
                 exclusion_cause=None if exclusion is None else exclusion.get("cause"),
+                exclusion_label=(
+                    "En calibración"
+                    if exclusion is not None
+                    and exclusion.get("cause") == "calibration_active"
+                    else "Sin telemetría reciente"
+                    if exclusion is not None
+                    else None
+                ),
                 calibration_status=str(calibration_value.get("status", "approximate")),
                 calibration_session_id=(
                     None
@@ -439,6 +457,16 @@ def _operational_plan(store: Store, observed_at: datetime) -> OperationalPlan | 
     automatic = store.planning.active_plan()
     if automatic is None:
         return None
+    config, _revision = store.repository.current()
+    excluded_heaters = list(
+        active_calibration_exclusions(
+            store,
+            config,
+            automatic.get("excluded_heaters", ()),
+        )
+    )
+    projected = dict(automatic)
+    projected["excluded_heaters"] = excluded_heaters
     intervals: list[PlanInterval] = []
     for slot in automatic.get("slots", ()):
         initial = slot.get("initial_soc_percent", {})
@@ -468,8 +496,8 @@ def _operational_plan(store: Store, observed_at: datetime) -> OperationalPlan | 
             stale_forecast=bool(automatic.get("stale_forecast", False)),
             forecast_age_hours=automatic.get("forecast_age_hours"),
             forecast_max_age_hours=int(automatic.get("forecast_max_age_hours", 30)),
-            best_effort_reasons=list(plan_best_effort_reasons(automatic)),
-            excluded_heaters=list(automatic.get("excluded_heaters", [])),
+            best_effort_reasons=list(plan_best_effort_reasons(projected)),
+            excluded_heaters=excluded_heaters,
             observed_at=observed_at,
         )
     return OperationalPlan(
@@ -479,8 +507,8 @@ def _operational_plan(store: Store, observed_at: datetime) -> OperationalPlan | 
         stale_forecast=bool(automatic.get("stale_forecast", False)),
         forecast_age_hours=automatic.get("forecast_age_hours"),
         forecast_max_age_hours=int(automatic.get("forecast_max_age_hours", 30)),
-        best_effort_reasons=list(plan_best_effort_reasons(automatic)),
-        excluded_heaters=list(automatic.get("excluded_heaters", [])),
+        best_effort_reasons=list(plan_best_effort_reasons(projected)),
+        excluded_heaters=excluded_heaters,
         observed_at=observed_at,
         intervals=sorted(intervals, key=lambda item: (item.start, item.accumulator_id)),
     )

@@ -129,6 +129,7 @@ function explainPlanningDeficit(item: PlanningDeficitDto): string {
   const cause = item.cause ?? item.reason.split(':', 1)[0];
   if (cause === 'forecast_not_eligible') return 'La previsión activa no es de AEMET. La planificación automática solo usa forecast horario AEMET.';
   if (cause === 'missing_aemet_coverage' || cause === 'missing_forecast_coverage' || cause === 'missing_guard_forecast_coverage') return 'No hay cobertura meteorológica continua para todo el horizonte planificado.';
+  if (cause === 'calibration_active') return 'El acumulador está en calibración y se reincorporará al terminar la sesión.';
   if (item.requirement === 'excluded_heater' || cause === 'excluded_heater') {
     return 'El acumulador se excluyó hasta recuperar temperatura interior y SOC recientes.';
   }
@@ -541,6 +542,14 @@ export class PlanningDetailDialog implements AfterViewInit, OnDestroy {
 
   excludedHeaterText(planning: PlanningDto): string {
     return (planning.excluded_heaters ?? [])
+      .filter((item) => item.cause !== 'calibration_active')
+      .map((item) => this.heaterText(item.heater_id, planning))
+      .join(', ');
+  }
+
+  calibratingHeaterText(planning: PlanningDto): string {
+    return (planning.excluded_heaters ?? [])
+      .filter((item) => item.cause === 'calibration_active')
       .map((item) => this.heaterText(item.heater_id, planning))
       .join(', ');
   }
@@ -558,6 +567,7 @@ export class PlanningDetailDialog implements AfterViewInit, OnDestroy {
   }
 
   problemAction(item: PlanningDeficitDto, preview: PlanningPreviewDto): string | null {
+    if (item.cause === 'calibration_active' || item.reason.startsWith('calibration_active')) return null;
     if (item.recommended_action) return item.recommended_action;
     const warnings = preview.operator_summary['warnings'];
     const cause = item.cause ?? item.reason.split(':', 1)[0];
@@ -1257,6 +1267,14 @@ export class Planning implements AfterViewInit, OnDestroy {
 
   excludedHeaterText(planning: PlanningDto): string {
     return (planning.excluded_heaters ?? [])
+      .filter((item) => item.cause !== 'calibration_active')
+      .map((item) => this.heaterText(item.heater_id))
+      .join(', ');
+  }
+
+  calibratingHeaterText(planning: PlanningDto): string {
+    return (planning.excluded_heaters ?? [])
+      .filter((item) => item.cause === 'calibration_active')
       .map((item) => this.heaterText(item.heater_id))
       .join(', ');
   }
@@ -1521,8 +1539,10 @@ export class Planning implements AfterViewInit, OnDestroy {
   previewProblemGroups(result: PlanningPreviewDto): PreviewProblemGroup[] {
     const groups = new Map<string, PreviewProblemGroup>();
     const add = (key: string, heaterId: string | null | undefined, description: string): void => {
-      const title = key === 'missing_required_state' || key === 'excluded_heater'
-        ? 'Falta telemetría reciente'
+      const title = key === 'calibration_active'
+        ? 'En calibración'
+        : key === 'missing_required_state' || key === 'excluded_heater'
+          ? 'Falta telemetría reciente'
         : key === 'insufficient_stored_energy_or_power'
           ? 'Energía o potencia insuficiente'
         : key === 'missing_temperature_schedule'
@@ -1530,24 +1550,36 @@ export class Planning implements AfterViewInit, OnDestroy {
           : key === 'missing_aemet_coverage' || key === 'missing_forecast_coverage' || key === 'missing_guard_forecast_coverage'
             ? 'Falta cobertura meteorológica'
             : requirementLabel(key);
-      const state = key === 'missing_required_state' || key === 'excluded_heater' ? 'Sin datos recientes' : 'Requiere revisión';
+      const state = key === 'calibration_active'
+        ? 'En calibración'
+        : key === 'missing_required_state' || key === 'excluded_heater'
+          ? 'Sin datos recientes'
+          : 'Requiere revisión';
       const group = groups.get(key) ?? { key, title, description, state, heaterIds: [] };
       if (heaterId && !group.heaterIds.includes(heaterId)) group.heaterIds.push(heaterId);
       groups.set(key, group);
     };
     for (const item of previewProblems(result)) {
+      const cause = item.cause ?? item.reason.split(':', 1)[0];
       const key = item.requirement === 'excluded_heater'
-        ? 'missing_required_state'
-        : item.cause ?? item.reason.split(':', 1)[0] ?? item.requirement;
+        ? (cause === 'calibration_active' ? 'calibration_active' : 'missing_required_state')
+        : cause ?? item.requirement;
       add(key, item.heater_id, explainPlanningDeficit(item));
     }
     for (const item of result.excluded_heaters ?? []) {
-      add(item.cause || 'excluded_heater', item.heater_id, 'El acumulador necesita temperatura interior y SOC recientes antes de incluirlo en el plan.');
+      add(
+        item.cause || 'excluded_heater',
+        item.heater_id,
+        item.cause === 'calibration_active'
+          ? 'El acumulador se reincorporará al terminar la calibración.'
+          : 'El acumulador necesita temperatura interior y SOC recientes antes de incluirlo en el plan.',
+      );
     }
     return [...groups.values()];
   }
 
   previewProblemAction(item: PlanningDeficitDto, result: PlanningPreviewDto): string | null {
+    if (item.cause === 'calibration_active' || item.reason.startsWith('calibration_active')) return null;
     if (item.recommended_action) return item.recommended_action;
     const warnings = result.operator_summary['warnings'];
     const cause = item.cause ?? item.reason.split(':', 1)[0];

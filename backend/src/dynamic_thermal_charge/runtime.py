@@ -17,7 +17,7 @@ from typing import Callable, Iterator
 from zoneinfo import ZoneInfo
 
 from .controller import ChargeController
-from .calibration_runtime import CalibrationCoordinator
+from .calibration_runtime import CalibrationCoordinator, active_calibration_heater_ids
 from .drivers import OutputDriver, RecordingOutputDriver, SimulatedOutputDriver
 from .gpio_driver import GpioOutputDriver
 from .alerts import (
@@ -35,6 +35,7 @@ from .plan_activation import (
     ACTIVATION_AUTOMATIC,
     ACTIVATION_BEST_EFFORT,
     candidate_activation_mode,
+    plan_has_degrading_exclusions,
     seconds_to_next_replan,
 )
 from .charge_planning import (
@@ -266,6 +267,9 @@ def _run_controller(
                     at=now,
                     slot_minutes=slot_minutes,
                     max_age_seconds=live_config.site.indoor_max_age_minutes * 60,
+                    calibration_active_heater_ids=active_calibration_heater_ids(
+                        store, live_config
+                    ),
                     timezone_name=(
                         live_config.schedule.timezone
                         if live_config.schedule is not None
@@ -380,7 +384,7 @@ def _run_controller(
                             previous_automatic,
                             now=now,
                             next_refresh_seconds=next_refresh_seconds,
-                            has_exclusions=bool(candidate.excluded_heaters),
+                            has_exclusions=plan_has_degrading_exclusions(candidate),
                             has_stale_forecast=candidate.stale_forecast,
                         )
                         if (
@@ -558,21 +562,7 @@ def _run_controller(
 
 def _calibration_excluded_heaters(store, config: AppConfig) -> tuple[str, ...]:
     """Return the durable calibration ownership set for planner arbitration."""
-    calibration = getattr(store, "calibration", None)
-    if calibration is None:
-        return ()
-    excluded: list[str] = []
-    for heater in config.heaters:
-        try:
-            if calibration.active(heater.id) is not None:
-                excluded.append(heater.id)
-        except Exception:
-            # A store read failure must not make an old plan accidentally
-            # compete with a calibration that may still own a relay.  The
-            # controller's provider separately forces outputs off on errors.
-            logger.error("Could not read calibration ownership", exc_info=True)
-            return tuple(item.id for item in config.heaters)
-    return tuple(sorted(excluded))
+    return active_calibration_heater_ids(store, config)
 
 
 def _build_automatic_runtime_plan(

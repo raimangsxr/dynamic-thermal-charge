@@ -515,6 +515,48 @@ def test_best_effort_and_excluded_heater_alerts_are_deduplicated_and_rearmed():
     ]
 
 
+def test_calibration_exclusion_does_not_open_or_hold_telemetry_alert():
+    from dynamic_thermal_charge.charge_planning import AutomaticPlan, PlanningViolation
+
+    repository, sender = FakeRepository(), FakeSender()
+    service = _service(repository, sender)
+    plan = AutomaticPlan(
+        NOW,
+        NOW + timedelta(hours=2),
+        30,
+        (),
+        (
+            PlanningViolation(
+                "salon",
+                "excluded_heater",
+                None,
+                None,
+                NOW,
+                "calibration_active",
+                cause="calibration_active",
+            ),
+        ),
+        "VALID",
+        (),
+        "calibration-token",
+        NOW,
+        excluded_heaters=(
+            {"heater_id": "salon", "cause": "calibration_active"},
+        ),
+    )
+
+    notify_plan_activation(
+        service,
+        plan,
+        installation="Casa",
+        at=NOW,
+        activation_mode="automatic",
+    )
+
+    assert repository.queue == []
+    assert repository.episodes.get(PLAN_HEATER_EXCLUDED) is not True
+
+
 def test_an_unknown_type_cannot_be_stored(initialised_store):
     repository = SqlAlertRepository(
         initialised_store.configuration_engine or initialised_store.engine,

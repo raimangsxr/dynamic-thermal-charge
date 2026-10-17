@@ -70,6 +70,7 @@ const PLAN_REASON_LABELS: Record<string, string> = {
   infeasible_power_configuration: 'Configuración de potencia inviable',
   missing_guard_forecast_coverage: 'Cobertura de forecast insuficiente para la guarda',
   excluded_heater: 'Acumulador excluido del plan',
+  calibration_active: 'En calibración',
   safe_planning_input: 'Entrada de planificación no segura',
   insufficient_capacity_or_power: 'Capacidad o potencia insuficiente',
   insufficient_stored_energy_or_power: 'Energía almacenada o potencia insuficiente',

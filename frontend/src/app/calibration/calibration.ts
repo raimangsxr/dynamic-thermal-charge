@@ -141,6 +141,18 @@ export class Calibration {
     return typeof value === 'number' ? value * 100 : 0;
   }
 
+  statusLabel(status: RoomDto['status']): string {
+    return ({
+      approximate: 'Aproximada',
+      estimated: 'Estimada',
+      calibrating: 'En calibración',
+      calibrated: 'Calibrada',
+      failed: 'Fallida',
+      cancelled: 'Cancelada',
+      manually_adjusted: 'Ajustada manualmente',
+    } as Record<string, string>)[status] ?? status;
+  }
+
   private replace(id: string, room: RoomDto): void {
     this.cards.update((cards) => cards.map((card) => card.heater.id === id ? { ...card, room } : card));
   }

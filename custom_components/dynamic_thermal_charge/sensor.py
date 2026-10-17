@@ -105,6 +105,12 @@ class AccumulatorSensor(DynamicThermalChargeEntity, SensorEntity):
         return {
             "excluded_from_plan": bool(accumulator.get("excluded_from_plan", False)),
             "exclusion_cause": accumulator.get("exclusion_cause"),
+            "exclusion_label": accumulator.get("exclusion_label"),
+            "calibration_status_label": (
+                "En calibración"
+                if accumulator.get("calibration_status") == "calibrating"
+                else None
+            ),
             "plan_status": plan.get("status"),
             "activation_mode": plan.get("activation_mode"),
             "best_effort": bool(plan.get("best_effort", False)),

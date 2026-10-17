@@ -301,6 +301,7 @@ class ChargeTelemetryView(BaseModel):
     indoor_received_at: datetime | None = None
     stored_soc_received_at: datetime | None = None
     state: str = "telemetry_stale"
+    state_label: str = "Caducada o incompleta"
     missing_fields: list[str] = Field(default_factory=list)
     oldest_age_seconds: float | None = None
     stored_energy_kwh: float | None = None

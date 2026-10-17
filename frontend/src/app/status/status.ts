@@ -167,6 +167,14 @@ export class Status {
 
   excludedHeaterText(data: StatusDto): string {
     return (data.excluded_heaters ?? [])
+      .filter((item) => item.cause !== 'calibration_active')
+      .map((item) => this.heaterText(item.heater_id))
+      .join(', ');
+  }
+
+  calibratingHeaterText(data: StatusDto): string {
+    return (data.excluded_heaters ?? [])
+      .filter((item) => item.cause === 'calibration_active')
       .map((item) => this.heaterText(item.heater_id))
       .join(', ');
   }

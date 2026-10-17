@@ -18,11 +18,13 @@ from fastapi import APIRouter, Depends, Request
 from ...persistence.bootstrap import Store
 from ...persistence.history import SqlStatusReader
 from ...charge_planning import group_planning_violations
+from ...calibration_runtime import active_calibration_exclusions
 from ...plan_activation import (
     ACTIVATION_AUTOMATIC,
     can_activate_plan,
-    seconds_to_next_replan,
     plan_best_effort_reasons,
+    plan_has_degrading_exclusions,
+    seconds_to_next_replan,
 )
 from ..dependencies import controller_view, usable_store
 from ..liveness import ControllerView
@@ -167,6 +169,16 @@ def get_status(
     if canonical_plan is None and diagnostic_plan is not None:
         absence_reason = "no_active_automatic_plan"
 
+    displayed_plan = diagnostic_plan or canonical_plan
+    projected_plan = None
+    if displayed_plan is not None:
+        projected_plan = dict(displayed_plan)
+        projected_plan["excluded_heaters"] = active_calibration_exclusions(
+            store,
+            config,
+            displayed_plan.get("excluded_heaters", ()),
+        )
+
     if canonical_plan is not None:
         horizon_start = canonical_plan["horizon_start"]
         horizon_end = canonical_plan["horizon_end"]
@@ -253,30 +265,71 @@ def get_status(
 
     telemetry_views = []
     telemetry_snapshot = store.planning.telemetry()
+    calibrating_heaters = {
+        heater.id
+        for heater in config.heaters
+        if store.calibration.active(heater.id) is not None
+    }
     for heater in config.heaters:
         value = telemetry_snapshot.get(heater.id)
         if value is None:
-            telemetry_views.append(ChargeTelemetryView(heater_id=heater.id, missing_fields=["indoor_temperature_c", "stored_soc_percent"]))
+            telemetry_views.append(
+                ChargeTelemetryView(
+                    heater_id=heater.id,
+                    state=(
+                        "calibrating"
+                        if heater.id in calibrating_heaters
+                        else "telemetry_stale"
+                    ),
+                    state_label=(
+                        "En calibración"
+                        if heater.id in calibrating_heaters
+                        else "Caducada o incompleta"
+                    ),
+                    missing_fields=["indoor_temperature_c", "stored_soc_percent"],
+                )
+            )
             continue
         stamps = (value.indoor_received_at, value.stored_soc_received_at)
         ages = [(observed_at - item).total_seconds() for item in stamps if item is not None]
         missing = [name for name, item in (("indoor_temperature_c", value.indoor_temperature_c), ("stored_soc_percent", value.stored_soc_percent)) if item is None]
         oldest = max(ages, default=None)
-        telemetry_views.append(ChargeTelemetryView(
-            heater_id=heater.id,
-            indoor_temperature_c=value.indoor_temperature_c,
-            stored_soc_percent=value.stored_soc_percent,
-            indoor_received_at=value.indoor_received_at,
-            stored_soc_received_at=value.stored_soc_received_at,
-            stored_energy_kwh=(
-                None
-                if value.stored_soc_percent is None
-                else value.stored_soc_percent / 100 * heater.capacity_kwh
-            ),
-            state="telemetry_stale" if missing or oldest is None or oldest > config.site.indoor_max_age_minutes * 60 or any(age < 0 for age in ages) else "ready",
-            missing_fields=missing,
-            oldest_age_seconds=oldest,
-        ))
+        stale = bool(
+            missing
+            or oldest is None
+            or oldest > config.site.indoor_max_age_minutes * 60
+            or any(age < 0 for age in ages)
+        )
+        telemetry_views.append(
+            ChargeTelemetryView(
+                heater_id=heater.id,
+                indoor_temperature_c=value.indoor_temperature_c,
+                stored_soc_percent=value.stored_soc_percent,
+                indoor_received_at=value.indoor_received_at,
+                stored_soc_received_at=value.stored_soc_received_at,
+                stored_energy_kwh=(
+                    None
+                    if value.stored_soc_percent is None
+                    else value.stored_soc_percent / 100 * heater.capacity_kwh
+                ),
+                state=(
+                    "calibrating"
+                    if heater.id in calibrating_heaters
+                    else "telemetry_stale"
+                    if stale
+                    else "ready"
+                ),
+                state_label=(
+                    "En calibración"
+                    if heater.id in calibrating_heaters
+                    else "Caducada o incompleta"
+                    if stale
+                    else "Válida"
+                ),
+                missing_fields=missing,
+                oldest_age_seconds=oldest,
+            )
+        )
     return StatusResponse(
         observed_at=observed_at,
         timezone=timezone_name,
@@ -331,9 +384,7 @@ def get_status(
                     ),
                 ),
                 best_effort_requested=True,
-                has_exclusions=bool(
-                    (diagnostic_plan or {}).get("excluded_heaters")
-                ),
+                has_exclusions=plan_has_degrading_exclusions(projected_plan or {}),
                 has_stale_forecast=bool(
                     (diagnostic_plan or {}).get("stale_forecast")
                 ),
@@ -342,10 +393,10 @@ def get_status(
             else False
         ),
         best_effort_reasons=list(
-            plan_best_effort_reasons(diagnostic_plan or canonical_plan or {})
+            plan_best_effort_reasons(projected_plan or {})
         ),
         excluded_heaters=list(
-            (diagnostic_plan or canonical_plan or {}).get("excluded_heaters", [])
+            (projected_plan or {}).get("excluded_heaters", [])
         ),
         optimization_quality=(
             diagnostic_plan.get("optimization_quality")

@@ -498,6 +498,23 @@ def test_one_usable_heater_can_trigger_when_another_has_no_telemetry():
     assert verdict.heater_id == "cocina"
 
 
+def test_active_calibration_is_omitted_but_another_heater_can_trigger():
+    salon, cocina = _heater("salon"), _heater("cocina")
+    verdict = _evaluate(
+        _plan(heaters=("salon", "cocina")),
+        heaters=(salon, cocina),
+        telemetry={
+            "salon": _telemetry("salon", indoor=15.0, soc=5.0),
+            "cocina": _telemetry("cocina", indoor=15.0, soc=5.0),
+        },
+        calibration_active_heater_ids=("salon",),
+    )
+
+    assert verdict.replan is True
+    assert verdict.reason == PROJECTED_DEFICIT
+    assert verdict.heater_id == "cocina"
+
+
 def test_disabled_heater_is_not_reprojected():
     heater = replace(_heater(), enabled=False)
     verdict = _evaluate(

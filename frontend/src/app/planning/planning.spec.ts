@@ -165,6 +165,23 @@ describe('Planning', () => {
     expect(element.querySelector('[data-testid="planning-best-effort"]')?.textContent).toContain('Salón');
   });
 
+  it('shows a newly started calibration from the live plan overlay', async () => {
+    backend.expectOne('/api/v1/planning').flush({
+      ...PLANNING,
+      plan_status: 'VALID',
+      best_effort: false,
+      excluded_heaters: [{ heater_id: 'salon', cause: 'calibration_active' }],
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+    await showAnalysisPlan(fixture);
+
+    const element = fixture.nativeElement as HTMLElement;
+    expect(element.querySelector('[data-testid="planning-calibration-active"]')?.textContent).toContain('Salón');
+    expect(element.querySelector('[data-testid="planning-best-effort"]')).toBeNull();
+    expect(element.textContent).not.toContain('Acumuladores excluidos por telemetría incompleta');
+  });
+
   it('opens a deterministic explanation and recent plan history', async () => {
     backend.expectOne('/api/v1/planning').flush({
       ...PLANNING,
@@ -668,6 +685,36 @@ describe('Planning', () => {
     expect(dialog?.textContent).toContain('Recupera temperatura interior y SOC recientes.');
     document.querySelector<HTMLButtonElement>('[data-testid="detail-dialog-close"]')?.click();
     await new Promise((resolve) => setTimeout(resolve, 100));
+  });
+
+  it('keeps calibration exclusions out of telemetry recovery guidance', async () => {
+    backend.expectOne('/api/v1/planning').flush(TWO_HEATER_PLANNING);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    await selectPlanningTab(fixture, 1);
+
+    const calibration = {
+      ...PREVIEW,
+      status: 'VALID' as const,
+      deficits: [{
+        ...PREVIEW.deficits[0],
+        heater_id: 'salon',
+        requirement: 'excluded_heater',
+        cause: 'calibration_active',
+        reason: 'missing_required_state',
+        recommended_action: null,
+      }],
+      violations: [],
+      excluded_heaters: [{ heater_id: 'salon', cause: 'calibration_active' }],
+    };
+    fixture.componentInstance.previewJob.set(PREVIEW_JOB(calibration));
+    fixture.componentInstance.preview.set(calibration);
+    showCheckStep(fixture);
+
+    const deficit = calibration.deficits[0];
+    expect(fixture.componentInstance.deficitExplanation(deficit)).toContain('en calibración');
+    expect(fixture.componentInstance.previewProblemAction(deficit, calibration)).toBeNull();
+    expect(fixture.componentInstance.previewProblemGroups(calibration)[0]?.title).toBe('En calibración');
   });
 
   it('groups four excluded heaters by cause and replaces an empty chart with guidance', async () => {

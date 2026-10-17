@@ -22,7 +22,11 @@ from ..charge_planning import (
     VALID,
     AutomaticPlan,
 )
-from ..plan_activation import ACTIVATION_AUTOMATIC, ACTIVATION_BEST_EFFORT
+from ..plan_activation import (
+    ACTIVATION_AUTOMATIC,
+    ACTIVATION_BEST_EFFORT,
+    plan_has_degrading_exclusions,
+)
 from ..models import (
     ChargeTelemetry,
     TemperatureTarget,
@@ -1264,7 +1268,7 @@ class SqlPlanningRepository:
             # active row so projections cannot label an INVALID result as live.
             "best_effort": bool(row["active"]) and bool(
                 inputs.get("activation_mode") == ACTIVATION_BEST_EFFORT
-                or bool(inputs.get("excluded_heaters"))
+                or plan_has_degrading_exclusions(inputs)
                 or bool(inputs.get("stale_forecast"))
             ),
             "excluded_heaters": inputs.get("excluded_heaters") or [],

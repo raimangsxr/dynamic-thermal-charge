@@ -323,6 +323,15 @@ aplican ese límite a las dos medidas antes de considerarlas utilizables.
   `excluded_heater` y clasifica el estado físico usando únicamente los
   acumuladores planificados
 
+#### Scenario: Calibración activa por acumulador
+
+- **WHEN** un acumulador tiene una sesión de calibración activa y el resto de
+  entradas requeridas son frescas
+- **THEN** queda en `excluded_heaters` con causa `calibration_active`, no
+  aparece en decisiones de carga o descarga y el resto se planifica con estado
+  `VALID`; esta exclusión no convierte el plan en mejor esfuerzo ni requiere
+  recuperar telemetría
+
 #### Scenario: Todas las lecturas quedan excluidas
 
 - **WHEN** ningún acumulador habilitado tiene temperatura interior y SOC frescos
@@ -403,6 +412,13 @@ seguro habitual.
 La reproyección conserva el slot que ya comenzó cuando el sondeo llega después
 de su límite. Ese slot se evalúa una sola vez desde la telemetría observada y
 con su decisión de carga persistida antes de comparar los slots posteriores.
+
+#### Scenario: Desviación durante una calibración
+
+- **WHEN** un acumulador tiene una sesión de calibración activa en el instante
+  de la comprobación y su telemetría proyectaría un déficit
+- **THEN** ese acumulador se omite de la reproyección; otro acumulador
+  comprobable sí puede solicitar el recálculo por `projected_deficit`
 
 #### Scenario: Déficit nuevo tras una convergencia inicial
 

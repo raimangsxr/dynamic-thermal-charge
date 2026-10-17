@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import logging
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from .charge_planning import room_energy_step
 from .models import AppConfig, ChargeTelemetry, Heater
@@ -29,6 +29,55 @@ MAX_MISSING_INPUT = timedelta(hours=1)
 SAMPLE_PERIOD = timedelta(minutes=5)
 LEASE_SECONDS = 30
 TERMINAL_OFF_WINDOW = timedelta(seconds=30)
+
+
+def active_calibration_heater_ids(store, config: AppConfig) -> tuple[str, ...]:
+    """Return the durable calibration ownership set for planner arbitration."""
+    calibration = getattr(store, "calibration", None)
+    if calibration is None:
+        return ()
+    active: list[str] = []
+    for heater in config.heaters:
+        try:
+            if calibration.active(heater.id) is not None:
+                active.append(heater.id)
+        except Exception:
+            # A store read failure must not make an old plan compete with a
+            # calibration that may still own a relay. The controller provider
+            # separately forces outputs off on errors.
+            logger.error("Could not read calibration ownership", exc_info=True)
+            return tuple(item.id for item in config.heaters)
+    return tuple(sorted(active))
+
+
+def active_calibration_exclusions(
+    store,
+    config: AppConfig,
+    existing: Sequence[Mapping[str, str]] = (),
+) -> tuple[dict[str, str], ...]:
+    """Overlay live calibration ownership on a persisted exclusion list.
+
+    A plan can be read between the calibration start request and the
+    controller's next recalculation. The live session is authoritative for
+    operator projections in that interval, while persisted telemetry
+    exclusions for other accumulators remain visible.
+    """
+    active_ids = set(active_calibration_heater_ids(store, config))
+    projected = [
+        {
+            "heater_id": str(item["heater_id"]),
+            "cause": str(item.get("cause", "missing_required_state")),
+        }
+        for item in existing
+        if item.get("heater_id") not in active_ids
+    ]
+    projected_ids = {item["heater_id"] for item in projected}
+    projected.extend(
+        {"heater_id": heater.id, "cause": "calibration_active"}
+        for heater in config.heaters
+        if heater.id in active_ids and heater.id not in projected_ids
+    )
+    return tuple(projected)
 
 
 class CalibrationCoordinator:
@@ -604,4 +653,8 @@ def _parse_instant(value: object) -> datetime | None:
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
 
 
-__all__ = ["CalibrationCoordinator"]
+__all__ = [
+    "CalibrationCoordinator",
+    "active_calibration_exclusions",
+    "active_calibration_heater_ids",
+]

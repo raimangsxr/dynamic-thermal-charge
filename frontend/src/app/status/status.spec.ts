@@ -297,6 +297,19 @@ describe('Status', () => {
     expect(testId(element, 'forecast')?.textContent).toContain('Noia, A Coruña');
   });
 
+  it('shows a newly started calibration from the live plan overlay', () => {
+    const element = load({
+      ...statusDto(),
+      plan_status: 'VALID',
+      best_effort: false,
+      excluded_heaters: [{ heater_id: 'salon', cause: 'calibration_active' }],
+    });
+
+    expect(testId(element, 'status-calibration-active')?.textContent).toContain('Salón');
+    expect(testId(element, 'plan-best-effort')).toBeNull();
+    expect(element.textContent).not.toContain('Acumuladores excluidos por telemetría incompleta');
+  });
+
   it('shows the last successful forecast in the installation timezone', () => {
     const element = load(statusDto());
     expect(testId(element, 'forecast-last-success')?.textContent).toContain('02:00');
