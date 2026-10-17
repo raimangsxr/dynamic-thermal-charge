@@ -585,6 +585,7 @@ class SqlPlanningRepository:
                     temperature_shortfall_json=json.dumps(slot.temperature_shortfall_c or {}),
                     charge_energy_json=json.dumps(slot.charge_energy_kwh or {}),
                     heat_limit_json=json.dumps(slot.heat_delivery_limit_kwh or {}),
+                    forced_heat_json=json.dumps(slot.forced_heat_kwh or {}),
                 ))
             details = {
                 "status": status,
@@ -1305,6 +1306,8 @@ class SqlPlanningRepository:
                     "temperature_shortfall_c": json.loads(item.get("temperature_shortfall_json", "{}")),
                     "charge_energy_kwh": json.loads(item.get("charge_energy_json", "{}")),
                     "heat_delivery_limit_kwh": json.loads(item.get("heat_limit_json", "{}")),
+                    "forced_heat_kwh": json.loads(item.get("forced_heat_json", "{}")),
+                    "controlled_heat_kwh": {},
                 }
                 for item in slots
             ],
@@ -1319,6 +1322,14 @@ class SqlPlanningRepository:
             heater_id = item.get("heater_id")
             if slot is None or heater_id is None:
                 continue
+            heater_key = str(heater_id)
+            if slot.get("forced_heat_kwh"):
+                total_heat = (slot.get("heat_delivered_kwh") or {}).get(heater_key)
+                forced_heat = (slot.get("forced_heat_kwh") or {}).get(heater_key)
+                if total_heat is not None and forced_heat is not None:
+                    slot.setdefault("controlled_heat_kwh", {})[heater_key] = max(
+                        0.0, float(total_heat) - float(forced_heat)
+                    )
             for source, target in (
                 ("stored_energy_next_kwh", "stored_energy_next_kwh"),
                 ("indoor_temperature_next_c", "indoor_temperature_next_c"),

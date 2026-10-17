@@ -8,7 +8,8 @@ from types import SimpleNamespace
 from dynamic_thermal_charge.mqtt import IncomingMessage
 from dynamic_thermal_charge.mqtt.outdoor import OutdoorTemperatureMessageProcessor
 from dynamic_thermal_charge.push import PushUnsupported, WebPushDelivery
-from dynamic_thermal_charge.calibration_runtime import CalibrationCoordinator
+from dynamic_thermal_charge.calibration_runtime import CalibrationCoordinator, _sample_for
+from dynamic_thermal_charge.models import ChargeTelemetry, Heater
 from dynamic_thermal_charge.thermal_calibration import (
     CalibrationInput,
     CalibrationFit,
@@ -27,6 +28,55 @@ import pytest
 
 
 NOW = datetime(2026, 1, 16, 1, 0, tzinfo=timezone.utc)
+
+
+def test_calibration_sample_keeps_forced_leak_when_discharge_is_off():
+    heater = Heater(
+        id="salon",
+        name="Salón",
+        power_w=1000,
+        full_charge_minutes=600,
+        full_discharge_minutes=600,
+        static_emission_percent=20.0,
+    )
+    telemetry = ChargeTelemetry(
+        heater_id="salon",
+        indoor_temperature_c=20.0,
+        stored_soc_percent=50.0,
+        damper_position_percent=0.0,
+    )
+
+    sample = _sample_for(heater, telemetry, 5.0, NOW, "baseline")
+
+    # 10 kWh capacity, 1 kW full-charge emission, 20% static leak, 50% SOC,
+    # and a five-minute sample: 0.2 * 0.5 * 5/60 kWh.
+    assert sample.discharge_enabled is False
+    assert sample.heat_delivered_kwh == pytest.approx(1 / 120)
+
+
+def test_calibration_gate_applies_damper_only_to_controlled_heat():
+    heater = Heater(
+        id="salon",
+        name="Salón",
+        power_w=1000,
+        full_charge_minutes=600,
+        full_discharge_minutes=600,
+        static_emission_percent=20.0,
+    )
+    telemetry = ChargeTelemetry(
+        heater_id="salon",
+        indoor_temperature_c=20.0,
+        stored_soc_percent=50.0,
+        damper_position_percent=50.0,
+    )
+
+    sample = _sample_for(heater, telemetry, 5.0, NOW, "release")
+
+    # At 50% SOC the five-minute sample contains 1/120 kWh of forced leak and
+    # 1/24 kWh of total emission capability. A 50% damper therefore gates only
+    # half of the controlled 1/60 kWh, for 7/240 kWh in total.
+    assert sample.discharge_enabled is True
+    assert sample.heat_delivered_kwh == pytest.approx(7 / 240)
 
 
 def test_outdoor_payload_is_strict_and_estimation_is_deterministic():
@@ -158,6 +208,124 @@ def test_fit_counts_only_synchronized_samples_for_the_early_success_gate():
     assert fit.status == "failed"
     assert fit.quality.sample_count == 59
     assert fit.quality.reason == "not_enough_samples"
+
+
+@pytest.fixture
+def residual_gate_calibration_samples() -> tuple[tuple[CalibrationSample, ...], float, float]:
+    """Synthetic protocol evidence with forced leakage and a gated release."""
+    capacity_kwh_per_c = 2.5
+    loss_kw_per_c = 0.12
+    heater = Heater(
+        id="salon",
+        name="Salón",
+        power_w=1000,
+        full_charge_minutes=600,
+        full_discharge_minutes=600,
+        static_emission_percent=20.0,
+    )
+    phases: list[str] = []
+    soc_values: list[float] = []
+    outdoor_values: list[float] = []
+    damper_values: list[float] = []
+    heat_values: list[float] = []
+    sample_period = timedelta(minutes=5)
+    for index in range(97):
+        if index < 12:
+            phase = "baseline"
+        elif index < 24:
+            phase = "charge"
+        elif index < 36:
+            phase = "cool"
+        elif index < 48:
+            phase = "release"
+        elif index < 60:
+            phase = "cool"
+        elif index < 72:
+            phase = "charge"
+        elif index < 84:
+            phase = "cool"
+        else:
+            phase = "release"
+        phases.append(phase)
+        soc = 45.0 + (index % 15) * 2.5
+        soc_values.append(soc)
+        outdoor = (-5.0, 0.0, 5.0, 10.0)[index % 4]
+        outdoor_values.append(outdoor)
+        damper = 50.0 if phase == "release" else 0.0
+        damper_values.append(damper)
+        telemetry = ChargeTelemetry(
+            heater_id="salon",
+            indoor_temperature_c=18.0,
+            stored_soc_percent=soc,
+            damper_position_percent=damper,
+        )
+        heat_values.append(
+            _sample_for(
+                heater,
+                telemetry,
+                outdoor,
+                NOW + index * sample_period,
+                phase,
+            ).heat_delivered_kwh
+        )
+
+    indoor_values = [18.0]
+    duration_hours = sample_period.total_seconds() / 3600
+    alpha = loss_kw_per_c * duration_hours / 2
+    for index in range(len(heat_values) - 1):
+        average_heat = (heat_values[index] + heat_values[index + 1]) / 2
+        indoor_values.append(
+            (
+                capacity_kwh_per_c * indoor_values[index]
+                + average_heat
+                - alpha
+                * (
+                    indoor_values[index]
+                    - outdoor_values[index]
+                    - outdoor_values[index + 1]
+                )
+            )
+            / (capacity_kwh_per_c + alpha)
+        )
+
+    samples = tuple(
+        CalibrationSample(
+            observed_at=NOW + index * sample_period,
+            indoor_temperature_c=indoor_values[index],
+            outdoor_temperature_c=outdoor_values[index],
+            soc_percent=soc_values[index],
+            discharge_enabled=phases[index] == "release",
+            damper_position_percent=damper_values[index],
+            heat_delivered_kwh=heat_values[index],
+            phase=phases[index],
+        )
+        for index in range(len(heat_values))
+    )
+    return samples, capacity_kwh_per_c, loss_kw_per_c
+
+
+def test_fit_recovers_room_coefficients_from_forced_leak_and_gated_release(
+    residual_gate_calibration_samples,
+):
+    samples, expected_capacity, expected_loss = residual_gate_calibration_samples
+
+    assert any(
+        sample.discharge_enabled
+        and sample.damper_position_percent == 50.0
+        and sample.heat_delivered_kwh > 0
+        for sample in samples
+    )
+    assert any(
+        not sample.discharge_enabled and sample.heat_delivered_kwh > 0
+        for sample in samples
+    )
+
+    fit = fit_calibration(samples, capacity_kwh=expected_capacity)
+
+    assert fit.acceptable is True
+    assert fit.capacity_kwh_per_c == pytest.approx(expected_capacity, rel=1e-6)
+    assert fit.loss_kw_per_c == pytest.approx(expected_loss, rel=1e-6)
+    assert fit.quality.sufficient is True
 
 
 def test_deadline_attempts_fit_and_applies_a_sufficient_result(initialised_store, monkeypatch):

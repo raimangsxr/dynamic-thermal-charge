@@ -291,8 +291,9 @@ class Heater:
     demand_factor: float = 1.0
     temperature_targets: tuple[TemperatureTarget, ...] = ()
     # Manufacturer discharge figures.  The accumulator emits less as its core
-    # cools, so the capability decays with the state of charge from
-    # ``emission_power_kw`` down to ``static_emission_power_kw``.
+    # cools, so the controlled capability decays with the state of charge from
+    # ``emission_power_kw`` down to the continuous residual
+    # ``static_emission_power_kw`` leak.
     full_discharge_minutes: int = 600
     static_emission_percent: float = 20.0
 
@@ -420,7 +421,7 @@ class Heater:
 
     @property
     def static_emission_power_kw(self) -> float:
-        """Residual emission capability as the store approaches empty."""
+        """Continuous residual leak used by every physical room-energy step."""
         return self.emission_power_kw * self.static_emission_percent / 100
 
     @property

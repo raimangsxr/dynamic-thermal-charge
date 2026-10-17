@@ -22,7 +22,7 @@ from . import SchemaStatus, SchemaVersionError
 
 
 CONFIGURATION_SCHEMA_REVISION = 17
-APPLICATION_SCHEMA_REVISION = 12
+APPLICATION_SCHEMA_REVISION = 13
 POSTGRES_CONFIGURATION_SCHEMA = "dtc_config"
 POSTGRES_APPLICATION_SCHEMA = "dtc_app"
 
@@ -324,6 +324,14 @@ def _upgrade_application_schema(engine: Engine, revision: int, expected: int) ->
             ],
         )
         revision = 12
+    if revision == 12 and expected >= 13:
+        columns = {column["name"] for column in inspect(engine).get_columns("automatic_plan_slot")}
+        with engine.begin() as connection:
+            if "forced_heat_json" not in columns:
+                connection.execute(
+                    text("ALTER TABLE automatic_plan_slot ADD COLUMN forced_heat_json TEXT NOT NULL DEFAULT '{}'")
+                )
+        revision = 13
     if revision != expected:
         raise BootstrapIncompatibleError(
             f"application schema revision {revision} has no registered upgrade path to {expected}"

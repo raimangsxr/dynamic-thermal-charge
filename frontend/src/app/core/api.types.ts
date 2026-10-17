@@ -87,6 +87,8 @@ export interface PlanningSlotDto extends PlanSlotDto {
   indoor_temperature_next_c_by_heater: Record<string, number>;
   target_temperature_c_by_heater: Record<string, number>;
   heat_delivered_kwh_by_heater: Record<string, number>;
+  forced_heat_kwh_by_heater?: Record<string, number>;
+  controlled_heat_kwh_by_heater?: Record<string, number>;
   thermal_loss_kwh_by_heater: Record<string, number>;
   temperature_shortfall_start_c_by_heater: Record<string, number>;
   temperature_shortfall_c_by_heater: Record<string, number>;
@@ -107,6 +109,8 @@ export interface PlanningTimelineSlotDto {
   indoor_temperature_next_c_by_heater: Record<string, number>;
   target_temperature_c_by_heater: Record<string, number>;
   heat_delivered_kwh_by_heater: Record<string, number>;
+  forced_heat_kwh_by_heater?: Record<string, number>;
+  controlled_heat_kwh_by_heater?: Record<string, number>;
   thermal_loss_kwh_by_heater: Record<string, number>;
   temperature_shortfall_start_c_by_heater: Record<string, number>;
   temperature_shortfall_c_by_heater: Record<string, number>;
@@ -437,6 +441,8 @@ export interface PlanOperatorSummaryDto {
   initial_soc_percent: number | null;
   total_demand_kwh: number | null;
   total_heat_delivered_kwh: number | null;
+  total_forced_heat_kwh?: number | null;
+  total_controlled_heat_kwh?: number | null;
   total_thermal_loss_kwh: number | null;
   final_indoor_temperature_c: number | null;
   maximum_temperature_shortfall_c: number | null;
@@ -447,6 +453,7 @@ export interface PlanOperatorSummaryDto {
   total_charge_energy_kwh?: number | null;
   forecast_contribution_kwh?: number | null;
   terminal_surplus_energy_kwh?: number | null;
+  terminal_forced_heat_kwh?: number | null;
   next_constraint_at?: string | null;
   next_target_temperature_c?: number | null;
   next_target_start?: string | null;

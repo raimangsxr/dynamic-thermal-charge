@@ -78,6 +78,60 @@ def test_the_window_rules_inside_the_window_even_with_no_projected_heat():
     assert _commands(plan)["salon"] == (True, 21.0)
 
 
+def test_a_new_plan_keeps_forced_heat_alone_off_even_inside_a_target_window():
+    plan = _plan([
+        {
+            **_slot(0, targets={"salon": 21.0}, heat={"salon": 0.4}),
+            "forced_heat_kwh": {"salon": 0.4},
+            "controlled_heat_kwh": {"salon": 0.0},
+        }
+    ])
+
+    assert _commands(plan)["salon"] == (False, None)
+
+
+def test_a_new_plan_enables_only_the_controlled_component():
+    plan = _plan([
+        {
+            **_slot(0, targets={"salon": 21.0}, heat={"salon": 0.5}),
+            "forced_heat_kwh": {"salon": 0.4},
+            "controlled_heat_kwh": {"salon": 0.1},
+        }
+    ])
+
+    assert _commands(plan)["salon"] == (True, 21.0)
+
+
+def test_controlled_heat_in_the_last_slot_enables_a_target_starting_at_horizon_end():
+    horizon_end = NOW + SLOT
+    plan = _plan([
+        {
+            **_slot(0, heat={"salon": 0.5}),
+            "forced_heat_kwh": {"salon": 0.4},
+            "controlled_heat_kwh": {"salon": 0.1},
+        }
+    ])
+    plan.update(
+        {
+            "horizon_end": horizon_end,
+            "explanations": [
+                {
+                    "heater_id": "salon",
+                    "next_target_temperature_c": 20.5,
+                    "next_target_start": horizon_end.isoformat(),
+                }
+            ],
+        }
+    )
+
+    command = resolve_discharge_commands(("salon",), plan=plan, at=NOW)[0]
+
+    assert command.enabled is True
+    assert command.setpoint_c == pytest.approx(20.5)
+    assert command.payload == "ON"
+    assert command.setpoint_payload == "20.5"
+
+
 def test_the_end_of_the_window_disables_the_discharge():
     plan = _plan(
         [

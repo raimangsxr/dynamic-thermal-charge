@@ -13,9 +13,11 @@ from .charge_planning import (
     VALID,
     RoomEnergyDemandEstimator,
     RoomEnergyInterval,
+    _target_occurrence_for_at,
+    active_temperature_target,
 )
 from .models import ChargeTelemetry, Heater, TemperatureTarget
-from .scheduler import _floor_to_wall_boundary
+from .scheduler import _floor_to_wall_boundary, advance_real
 from .weather import HourlyForecastPoint
 
 
@@ -196,6 +198,34 @@ def _charge_decisions(
     return tuple(heater_id in tuple(slot.get("heater_ids") or ()) for slot in slots)
 
 
+def _terminal_guard_heaters(
+    slots: Sequence[Mapping[str, Any]],
+    heaters: Sequence[Heater],
+    targets: Mapping[str, Sequence[TemperatureTarget]],
+    slot_minutes: int,
+    timezone_name: str,
+) -> set[str]:
+    """Return heaters whose target continues through the private guard slot."""
+    if not slots:
+        return set()
+    horizon_end = _time_key(slots[-1].get("end"))
+    if horizon_end is None:
+        return set()
+    guard_end = advance_real(horizon_end, slot_minutes)
+    return {
+        heater.id
+        for heater in heaters
+        if (
+            (occurrence := _target_occurrence_for_at(
+                targets.get(heater.id, ()), horizon_end, timezone_name
+            ))
+            is not None
+            and _time_key(occurrence[2]) is not None
+            and _time_key(occurrence[2]) > _time_key(guard_end)
+        )
+    }
+
+
 def evaluate_plan_deviation(
     plan: Mapping[str, Any] | None,
     *,
@@ -246,6 +276,29 @@ def evaluate_plan_deviation(
     charge_on = {
         heater.id: _charge_decisions(slots, heater.id) for heater in checkable
     }
+    terminal_guard_heaters = _terminal_guard_heaters(
+        slots, checkable, targets, slot_minutes, timezone_name
+    )
+    horizon_end = _time_key(slots[-1].get("end"))
+    terminal_guard_targets = {
+        heater.id: active_temperature_target(
+            targets[heater.id], horizon_end, timezone_name
+        )
+        for heater in checkable
+        if heater.id in terminal_guard_heaters and horizon_end is not None
+    }
+    discharge_enabled = {
+        heater.id: tuple(
+            active_temperature_target(targets[heater.id], start, timezone_name) is not None
+            or any(
+                active_temperature_target(targets[heater.id], future, timezone_name) is not None
+                for future in starts[index + 1 :]
+            )
+            or (index == len(starts) - 1 and heater.id in terminal_guard_heaters)
+            for index, start in enumerate(starts)
+        )
+        for heater in checkable
+    }
     try:
         intervals = RoomEnergyDemandEstimator().estimate(
             checkable,
@@ -256,6 +309,8 @@ def evaluate_plan_deviation(
             timezone_name=timezone_name,
             targets={heater.id: tuple(targets[heater.id]) for heater in checkable},
             charge_on=charge_on,
+            discharge_enabled=discharge_enabled,
+            terminal_guard_targets=terminal_guard_targets,
         )
     except (TypeError, ValueError):
         return NO_DEVIATION
@@ -271,6 +326,18 @@ def evaluate_plan_deviation(
         if not projected:
             continue
         planned = _planned_shortfall_by_boundary(plan, slots, heater.id)
+        # A private terminal guard is not persisted.  If the visible plan
+        # already recorded a shortfall at the horizon boundary, carry that
+        # expectation across the guard's end boundary so the reprojection does
+        # not report the same known deficit as a new deviation.
+        if horizon_end is not None:
+            planned_guard_shortfall = planned.get(horizon_end)
+            if planned_guard_shortfall is not None:
+                for interval in projected:
+                    if _instant(interval.start) == horizon_end:
+                        planned.setdefault(
+                            _instant(interval.end), planned_guard_shortfall
+                        )
         projected_by_boundary: dict[datetime, tuple[datetime, float]] = {}
         for interval in projected:
             for boundary, shortfall in (
@@ -310,7 +377,19 @@ def evaluate_plan_deviation(
         planned_final = _planned_final_stored_kwh(plan, slots, heater.id)
         if not projected or planned_final is None or heater.capacity_kwh <= 0:
             continue
-        projected_final = projected[-1].stored_energy_next_kwh
+        visible_horizon_end = horizon_end
+        visible = (
+            projected
+            if visible_horizon_end is None
+            else [
+                interval
+                for interval in projected
+                if _instant(interval.start) < visible_horizon_end
+            ]
+        )
+        if not visible:
+            continue
+        projected_final = visible[-1].stored_energy_next_kwh
         surplus = (projected_final - planned_final) / heater.capacity_kwh * 100
         if surplus > surplus_soc_percent:
             return DeviationVerdict(

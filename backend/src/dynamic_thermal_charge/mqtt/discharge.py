@@ -64,6 +64,17 @@ def _float_or_none(value: Any) -> float | None:
     return result
 
 
+def _datetime_or_none(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
 def _slot_index_at(slots: Sequence[Mapping[str, Any]], at: datetime) -> int | None:
     moment = _instant(at)
     for index, slot in enumerate(slots):
@@ -76,7 +87,11 @@ def _slot_index_at(slots: Sequence[Mapping[str, Any]], at: datetime) -> int | No
 
 
 def _upcoming_setpoint(
-    slots: Sequence[Mapping[str, Any]], index: int, heater_id: str
+    slots: Sequence[Mapping[str, Any]],
+    index: int,
+    heater_id: str,
+    *,
+    plan: Mapping[str, Any] | None = None,
 ) -> float | None:
     """The target that motivates emission in an anticipation interval."""
     for slot in slots[index + 1 :]:
@@ -84,6 +99,26 @@ def _upcoming_setpoint(
             (slot.get("target_temperature_c") or {}).get(heater_id)
         )
         if target is not None:
+            return target
+    # A terminal guard can require controlled heat in the last visible slot
+    # even when the target starts exactly at the horizon boundary.  There is no
+    # later persisted slot to search in that case; the room explanation keeps
+    # the concrete next target occurrence for this command path.
+    if index != len(slots) - 1 or plan is None:
+        return None
+    last_end = _datetime_or_none(slots[index].get("end"))
+    if last_end is None:
+        return None
+    for explanation in plan.get("explanations") or ():
+        if not isinstance(explanation, Mapping) or explanation.get("heater_id") != heater_id:
+            continue
+        target = _float_or_none(explanation.get("next_target_temperature_c"))
+        target_start = _datetime_or_none(explanation.get("next_target_start"))
+        if (
+            target is not None
+            and target_start is not None
+            and _instant(target_start) == _instant(last_end)
+        ):
             return target
     return None
 
@@ -139,21 +174,35 @@ def resolve_discharge_commands(
     slot = slots[index]
     targets = slot.get("target_temperature_c") or {}
     heat = slot.get("heat_delivered_kwh") or {}
+    forced_heat = slot.get("forced_heat_kwh")
+    controlled_heat = slot.get("controlled_heat_kwh")
+    has_heat_decomposition = (
+        isinstance(forced_heat, Mapping)
+        and bool(forced_heat)
+        and isinstance(controlled_heat, Mapping)
+    )
     result: list[DischargeCommand] = []
     for heater_id in heater_ids:
         if modes.get(heater_id, "AUTO") != "AUTO":
             result.append(command(heater_id, False, None))
             continue
         target = _float_or_none(targets.get(heater_id))
-        if target is not None:
-            # Inside the window the window rules, not the projected heat: the
-            # thermostat needs the discharge enabled even in an interval where
-            # the plan projects no heat at all.
+        if has_heat_decomposition:
+            # New plans publish the intentional component only.  Residual heat
+            # alone must never turn the discharge relay on.
+            projected = _float_or_none(controlled_heat.get(heater_id)) or 0.0
+        else:
+            # Keep old persisted plans operable until they are replaced; their
+            # total heat was the only available signal.
+            projected = _float_or_none(heat.get(heater_id)) or 0.0
+        if target is not None and (
+            not has_heat_decomposition
+            or projected > HEAT_EPSILON_KWH
+        ):
             result.append(command(heater_id, True, target))
             continue
-        projected = _float_or_none(heat.get(heater_id)) or 0.0
         if projected > HEAT_EPSILON_KWH:
-            upcoming = _upcoming_setpoint(slots, index, heater_id)
+            upcoming = _upcoming_setpoint(slots, index, heater_id, plan=plan)
             result.append(command(heater_id, upcoming is not None, upcoming))
             continue
         result.append(command(heater_id, False, None))

@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 import logging
 from typing import Any, Mapping
 
+from .charge_planning import room_energy_step
 from .models import AppConfig, ChargeTelemetry, Heater
 from .push import WebPushDelivery
 from .thermal_calibration import (
@@ -540,18 +541,43 @@ def _sample_for(
     soc = float(telemetry.stored_soc_percent or 0.0)
     damper = telemetry.damper_position_percent
     factor = 1.0 if damper is None else max(0.0, min(1.0, damper / 100.0))
+    duration_minutes = int(SAMPLE_PERIOD.total_seconds() / 60)
     duration_hours = SAMPLE_PERIOD.total_seconds() / 3600
     emission_power = (
         heater.static_emission_power_kw
         + (heater.emission_power_kw - heater.static_emission_power_kw) * (soc / 100.0)
     )
-    heat = (
-        min(
-            heater.capacity_kwh * (soc / 100.0),
-            emission_power * duration_hours * factor,
-        )
+    stored_energy = heater.capacity_kwh * (soc / 100.0)
+    forced_only = room_energy_step(
+        heater,
+        start=now,
+        outdoor_temperature_c=float(outdoor_temperature_c),
+        target_temperature_c=None,
+        indoor_temperature_c=float(telemetry.indoor_temperature_c),
+        stored_energy_kwh=stored_energy,
+        slot_minutes=duration_minutes,
+        # The residual path is physical and is not attenuated by the damper.
+        # Calculate it separately before applying the calibration gate to the
+        # controlled component.
+        discharge_enabled=False,
+        controlled_heat_kwh=0.0,
+    )
+    ungated_total = min(stored_energy, emission_power * duration_hours)
+    controlled_heat = (
+        max(0.0, ungated_total - forced_only.forced_heat_kwh) * factor
         if discharge
         else 0.0
+    )
+    step = room_energy_step(
+        heater,
+        start=now,
+        outdoor_temperature_c=float(outdoor_temperature_c),
+        target_temperature_c=None,
+        indoor_temperature_c=float(telemetry.indoor_temperature_c),
+        stored_energy_kwh=stored_energy,
+        slot_minutes=duration_minutes,
+        discharge_enabled=discharge,
+        controlled_heat_kwh=controlled_heat,
     )
     return CalibrationSample(
         observed_at=now,
@@ -560,7 +586,7 @@ def _sample_for(
         soc_percent=soc,
         discharge_enabled=discharge,
         damper_position_percent=damper,
-        heat_delivered_kwh=max(0.0, heat),
+        heat_delivered_kwh=max(0.0, step.heat_delivered_kwh),
         synchronized=True,
         phase=phase,
     )

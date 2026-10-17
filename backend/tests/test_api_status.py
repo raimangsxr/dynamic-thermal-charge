@@ -239,6 +239,8 @@ def test_planning_endpoint_returns_hourly_series_and_all_intervals(
     assert set(first["indoor_temperature_next_c_by_heater"]) == {heater.id for heater in config.heaters}
     assert set(first["target_temperature_c_by_heater"]) == {heater.id for heater in config.heaters}
     assert set(first["heat_delivered_kwh_by_heater"]) == {heater.id for heater in config.heaters}
+    assert set(first["forced_heat_kwh_by_heater"]) == {heater.id for heater in config.heaters}
+    assert set(first["controlled_heat_kwh_by_heater"]) == {heater.id for heater in config.heaters}
     assert set(first["thermal_loss_kwh_by_heater"]) == {heater.id for heater in config.heaters}
     assert set(first["temperature_shortfall_start_c_by_heater"]) == {heater.id for heater in config.heaters}
     assert body["heaters"][0]["capacity_kwh"] == pytest.approx(config.heaters[0].capacity_kwh)
@@ -602,7 +604,7 @@ def test_planning_projection_reports_signed_room_exchange():
         heat_delivered_kwh=0.0,
     )
     assert interval.thermal_loss_kwh == pytest.approx(-0.6)
-    assert interval.indoor_temperature_next_c == pytest.approx(20.24)
+    assert interval.indoor_temperature_next_c == pytest.approx(20.4192)
 
 
 def test_planning_timeline_matches_plan_slots_by_index_not_exact_datetime_keys(
