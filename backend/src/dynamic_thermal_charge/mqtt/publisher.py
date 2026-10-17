@@ -286,6 +286,7 @@ class StoreSnapshotReader:
         relay_test_provider: Callable[[], Mapping[str, Any] | None] | None = None,
         outdoor_topic_provider: Callable[[], str | None] | None = None,
         calibration_provider: Callable[[AppConfig], Mapping[str, Any]] | None = None,
+        alerts_provider: Callable[[], Mapping[str, Any]] | None = None,
     ) -> None:
         self._config_repository = config_repository
         self._schema_gate = schema_gate
@@ -298,6 +299,7 @@ class StoreSnapshotReader:
         self._relay_test_provider = relay_test_provider or (lambda: None)
         self._outdoor_topic_provider = outdoor_topic_provider or (lambda: None)
         self._calibration_provider = calibration_provider or (lambda _config: {})
+        self._alerts_provider = alerts_provider or (lambda: {})
         self._previous_heartbeat: Heartbeat | None = None
         self._config: AppConfig | None = None
         self._state_is_current: bool | None = None
@@ -332,6 +334,22 @@ class StoreSnapshotReader:
         plan = self._plan(raw_plan)
         self._state_is_current = bool(controller.state_is_current)
         installation, heaters = project_state(config, controller, last_states, plan=plan)
+        try:
+            alert_snapshot = self._alerts_provider()
+        except Exception:
+            logger.error("Could not read active alerts for MQTT", exc_info=True)
+            alert_snapshot = {}
+        if isinstance(alert_snapshot, Mapping):
+            installation["alerts"] = dict(alert_snapshot)
+            installation["alerts_active"] = bool(alert_snapshot.get("active", False))
+            installation["alerts_count"] = int(alert_snapshot.get("count", 0))
+            installation["alerts_max_severity"] = alert_snapshot.get(
+                "maximum_severity"
+            )
+            installation["alerts_types"] = list(alert_snapshot.get("types", ()))
+            installation["alerts_messages"] = list(
+                alert_snapshot.get("messages", ())
+            )
         calibration = self._calibration_provider(config)
         for heater_id, payload in calibration.items():
             if heater_id in heaters:

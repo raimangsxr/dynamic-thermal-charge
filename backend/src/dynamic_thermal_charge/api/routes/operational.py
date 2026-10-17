@@ -97,6 +97,24 @@ class OperationalPlan(BaseModel):
     intervals: list[PlanInterval] = Field(default_factory=list)
 
 
+class OperationalAlert(BaseModel):
+    id: int
+    alert_type: str
+    severity: Literal["critical", "warning", "info"]
+    title: str
+    message: str
+    opened_at: datetime
+
+
+class OperationalAlerts(BaseModel):
+    active: bool = False
+    count: int = 0
+    maximum_severity: Literal["critical", "warning", "info"] | None = None
+    types: list[str] = Field(default_factory=list)
+    messages: list[str] = Field(default_factory=list)
+    items: list[OperationalAlert] = Field(default_factory=list)
+
+
 class OperationalInstallation(BaseModel):
     id: str
     name: str
@@ -116,6 +134,7 @@ class OperationalSnapshot(BaseModel):
     power: OperationalPower
     accumulators: list[OperationalHeater]
     plan: OperationalPlan | None = None
+    alerts: OperationalAlerts = Field(default_factory=OperationalAlerts)
 
 
 class ForecastPoint(BaseModel):
@@ -192,6 +211,11 @@ def get_operational_snapshot(
     plan = _operational_plan(store, observed_at)
     active_targets = _active_targets(config, store.planning.temperature_targets(enabled_only=True), observed_at)
     calibration = store.calibration.projection(config)
+    alert_repository = getattr(store, "alerts", None)
+    if alert_repository is None:
+        alert_page = None
+    else:
+        alert_page = alert_repository.list_alerts(view="active", limit=100)
     active_calibrations = {
         heater.id
         for heater in config.heaters
@@ -323,6 +347,26 @@ def get_operational_snapshot(
         power=OperationalPower(instant_w=power_w, confirmed_load_w=power_w, limit_w=limit_w),
         accumulators=accumulators,
         plan=plan,
+        alerts=OperationalAlerts(
+            active=bool(alert_page and alert_page.active_count),
+            count=0 if alert_page is None else alert_page.active_count,
+            maximum_severity=(None if alert_page is None else alert_page.maximum_severity),
+            types=[] if alert_page is None else [item.alert_type for item in alert_page.items],
+            messages=[] if alert_page is None else [item.body for item in alert_page.items],
+            items=[]
+            if alert_page is None
+            else [
+                OperationalAlert(
+                    id=item.id,
+                    alert_type=item.alert_type,
+                    severity=item.severity,
+                    title=item.title,
+                    message=item.body,
+                    opened_at=item.opened_at,
+                )
+                for item in alert_page.items
+            ],
+        ),
     )
 
 

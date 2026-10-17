@@ -24,6 +24,11 @@ export const routes: Routes = [
     loadComponent: () => import('./calibration/calibration').then((m) => m.Calibration),
   },
   {
+    path: 'avisos',
+    canActivate: [requireCredential],
+    loadComponent: () => import('./alerts/alerts').then((m) => m.Alerts),
+  },
+  {
     path: 'configuracion',
     canActivate: [requireCredential],
     loadComponent: () => import('./config/config').then((m) => m.Config),

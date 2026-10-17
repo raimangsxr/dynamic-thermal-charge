@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import TYPE_CHECKING, Callable
 
@@ -57,6 +58,7 @@ def create_app(
 
     from .errors import register_error_handlers
     from .security import require_token
+    from .dependencies import ControllerLivenessSupervisor
 
     default_store = None
     if settings is None:
@@ -67,6 +69,15 @@ def create_app(
     else:
         resolved = settings
 
+    @asynccontextmanager
+    async def lifespan(application):
+        supervisor = application.state.controller_liveness_supervisor
+        supervisor.start()
+        try:
+            yield
+        finally:
+            supervisor.stop()
+
     app = FastAPI(
         title="Dynamic Thermal Charge",
         description=DESCRIPTION,
@@ -76,6 +87,7 @@ def create_app(
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
+        lifespan=lifespan,
     )
     app.state.settings = resolved
     app.state.store_factory = store_factory or (
@@ -85,6 +97,13 @@ def create_app(
 
     app.state.clock = clock or utc_now
     app.state.last_heartbeat = None
+    app.state.liveness_lock = threading.RLock()
+    app.state.controller_liveness_supervisor = ControllerLivenessSupervisor(
+        app.state.store_factory,
+        settings=app.state.settings,
+        clock=app.state.clock,
+        state=app.state,
+    )
     app.state.weather_refresh_lock = threading.Lock()
     if default_store is not None and default_store.context is not None:
         default_store.context.publish_process_revision("api")
@@ -102,6 +121,7 @@ def create_app(
 
     from .routes import config as config_routes
     from .routes import calibration as calibration_routes
+    from .routes import alerts as alerts_routes
     from .routes import controller_log as controller_log_routes
     from .routes import docs as docs_routes
     from .routes import health as health_routes
@@ -150,6 +170,12 @@ def create_app(
         calibration_routes.router,
         prefix=API_PREFIX,
         tags=["calibration"],
+        dependencies=protected,
+    )
+    app.include_router(
+        alerts_routes.router,
+        prefix=API_PREFIX,
+        tags=["alerts"],
         dependencies=protected,
     )
     app.include_router(

@@ -31,6 +31,26 @@ La API debe publicar un identificador estable de instalación, revisión, salud,
 - **WHEN** el plan activo o consultado usa una previsión que supera el límite configurado
 - **THEN** Home Assistant muestra el indicador de obsolescencia, la edad y el límite del plan sin sustituir los valores de previsión por temperatura medida
 
+### Requirement: Sensor global de alertas activas
+
+El snapshot operativo incluye el resumen de alertas activas de la instalación:
+número, severidad máxima, tipos y mensajes. La integración expone un
+`binary_sensor` `Alertas activas` en el dispositivo Controller; su estado es
+`on` cuando hay al menos una alerta no acusada y sus atributos reflejan el
+resumen del snapshot. Las alertas `info` también se muestran en este sensor,
+sin convertir Home Assistant en autoridad para resolverlas.
+
+#### Scenario: Alertas visibles en Home Assistant
+
+- **WHEN** el snapshot contiene una alerta activa de cualquier severidad
+- **THEN** el sensor está encendido y publica `count`, `maximum_severity`,
+  `types` y `messages` con la misma revisión del snapshot
+
+#### Scenario: Sin alertas activas
+
+- **WHEN** todas las alertas están resueltas o acusadas
+- **THEN** el sensor está apagado y el resumen publica cero alertas
+
 ### Requirement: Control durable y autoridad del backend
 
 El backend debe persistir el control automático, el modo `AUTO/OFF` de cada acumulador y las generaciones de recálculo. Desactivar el control global o un acumulador debe invalidar su plan y producir salidas apagadas en el siguiente ciclo del controlador; activar o solicitar recálculo debe pedir una nueva planificación.

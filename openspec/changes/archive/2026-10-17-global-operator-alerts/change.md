@@ -1,6 +1,6 @@
 # Alertas globales del operador: panel, Push y Home Assistant
 
-Status: draft
+Status: approved
 
 ## Goal
 Que el usuario vea y atienda todas las situaciones límite desde un único sitio, aunque no tenga correo configurado y aunque el controlador haya dejado de responder. Hoy las alertas solo llegan por correo y la bandeja con acuse y Web Push existe únicamente para la calibración. El cambio generaliza esa bandeja a todos los tipos, añade los tipos que faltan y expone las alertas en Home Assistant.
@@ -22,19 +22,8 @@ Depende de `automatic-thermal-calibration` (bandeja `operator_notification`, sus
 - A2: Pruebas de canales: correo y Push se intentan por separado; un fallo de correo agotado abre `alert_email_failed` sin intentar enviarse por correo.
 - A3: Prueba de API: con latido obsoleto y controlador detenido, la API abre `controller_unresponsive`, entrega correo y Push y lo resuelve al volver el latido.
 - A4: Pruebas de controlador: un rechazo de salida abre `output_failure` una vez por transición y la recuperación lo resuelve.
-- A5: Prueba de runtime: un recálculo por desviación crea `plan_deviation_replan` sin correo ni Push.
+- A5: Prueba de runtime: un recálculo por desviación crea `plan_deviation_replan` sin correo y con Push.
 - A6: Pruebas de Angular: indicador, lista, histórico, acuse y enlace desde calibración; pruebas de Home Assistant y MQTT del sensor y sus atributos; `make check` pasa.
 
-## Decisions
-- D1: El acuse conserva la alerta en el histórico; la bandeja de calibración actual, que borra al acusar, cambia a ese comportamiento.
-- D2: Las alertas `info` solo se muestran en la aplicación y Home Assistant por defecto; no envían correo ni Push para evitar ruido. Este punto debe confirmarse al aprobar.
-- D3: Un único sensor global en Home Assistant en lugar de uno por tipo.
-
-## Tasks
-- [ ] T1: Modelo de alerta con severidad, estados, histórico y retención; migración Alembic; API; pruebas.
-- [ ] T2: Canales independientes de correo y Push para todos los tipos; reclamación de entregas entre procesos; pruebas.
-- [ ] T3: Detector y entrega de `controller_unresponsive` en el proceso API; pruebas.
-- [ ] T4: Tipos `output_failure`, `alert_email_failed` y `plan_deviation_replan`; migrar tipos existentes; pruebas.
-- [ ] T5: Indicador y página `Avisos` en Angular; enlace desde calibración; pruebas.
-- [ ] T6: Sensor en Home Assistant y discovery MQTT; pruebas.
-- [ ] T7: Actualizar specs vivas de alertas, Home Assistant y MQTT; `make check`.
+## Outcome
+La implementación y la verificación terminaron correctamente; la revisión final confirmó la corrección de reconciliación del correo de terminación de calibración.

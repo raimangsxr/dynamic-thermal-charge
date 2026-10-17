@@ -22,7 +22,7 @@ from . import SchemaStatus, SchemaVersionError
 
 
 CONFIGURATION_SCHEMA_REVISION = 18
-APPLICATION_SCHEMA_REVISION = 14
+APPLICATION_SCHEMA_REVISION = 15
 POSTGRES_CONFIGURATION_SCHEMA = "dtc_config"
 POSTGRES_APPLICATION_SCHEMA = "dtc_app"
 
@@ -340,6 +340,79 @@ def _upgrade_application_schema(engine: Engine, revision: int, expected: int) ->
             "attempt >= 0",
         )
         revision = 14
+    if revision == 14 and expected >= 15:
+        # Generalise calibration notifications into the durable operator-alert
+        # inbox and make channel delivery claimable by both API and controller
+        # processes. Every addition is guarded so a partially applied upgrade
+        # can be retried safely after a process interruption.
+        table_columns = {
+            table: {column["name"] for column in inspect(engine).get_columns(table)}
+            for table in ("operator_notification", "alert_delivery", "web_push_attempt")
+            if inspect(engine).has_table(table)
+        }
+        with engine.begin() as connection:
+            notification_columns = table_columns.get("operator_notification", set())
+            additions = (
+                ("alert_type", "VARCHAR(64) NOT NULL DEFAULT 'thermal_calibration_terminal'"),
+                ("severity", "VARCHAR(16) NOT NULL DEFAULT 'info'"),
+                ("episode_id", "VARCHAR(36)"),
+                ("opened_at", "DATETIME"),
+                ("resolved_at", "DATETIME"),
+            )
+            for name, definition in additions:
+                if name not in notification_columns:
+                    connection.execute(text(f"ALTER TABLE operator_notification ADD COLUMN {name} {definition}"))
+            if notification_columns or inspect(connection).has_table("operator_notification"):
+                connection.execute(
+                    text(
+                        "UPDATE operator_notification SET alert_type = kind "
+                        "WHERE alert_type IS NULL OR alert_type = ''"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "UPDATE operator_notification SET opened_at = created_at "
+                        "WHERE opened_at IS NULL"
+                    )
+                )
+                # Existing calibration notifications are event alerts: they
+                # are already resolved at creation and keep their historical
+                # visibility after this migration.
+                connection.execute(
+                    text(
+                        "UPDATE operator_notification SET resolved_at = created_at "
+                        "WHERE resolved_at IS NULL AND kind LIKE 'thermal_calibration_%'"
+                    )
+                )
+                connection.exec_driver_sql(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_operator_notification_episode "
+                    "ON operator_notification (installation_id, episode_id)"
+                )
+            delivery_columns = table_columns.get("alert_delivery", set())
+            for name, definition in (
+                ("alert_id", "INTEGER"),
+                ("episode_id", "VARCHAR(36)"),
+                ("claimed_by", "VARCHAR(128)"),
+                ("claimed_until", "DATETIME"),
+            ):
+                if name not in delivery_columns:
+                    connection.execute(text(f"ALTER TABLE alert_delivery ADD COLUMN {name} {definition}"))
+            push_columns = table_columns.get("web_push_attempt", set())
+            if "alert_id" not in push_columns:
+                connection.execute(text("ALTER TABLE web_push_attempt ADD COLUMN alert_id INTEGER"))
+            if "claimed_by" not in push_columns:
+                connection.execute(
+                    text("ALTER TABLE web_push_attempt ADD COLUMN claimed_by VARCHAR(128)")
+                )
+            if "claimed_until" not in push_columns:
+                connection.execute(
+                    text("ALTER TABLE web_push_attempt ADD COLUMN claimed_until DATETIME")
+                )
+            connection.exec_driver_sql(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_web_push_attempt_alert_browser "
+                "ON web_push_attempt (alert_id, subscription_id)"
+            )
+        revision = 15
     if revision != expected:
         raise BootstrapIncompatibleError(
             f"application schema revision {revision} has no registered upgrade path to {expected}"

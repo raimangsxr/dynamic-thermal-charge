@@ -872,6 +872,30 @@ class OperatorNotificationPage(BaseModel):
     items: list[OperatorNotificationView]
 
 
+class AlertView(BaseModel):
+    id: int
+    alert_type: str
+    severity: Literal["critical", "warning", "info"]
+    title: str
+    body: str
+    episode_id: str | None = None
+    session_id: str | None = None
+    opened_at: datetime
+    resolved_at: datetime | None = None
+    acknowledged_at: datetime | None = None
+    active: bool = False
+
+
+class AlertPage(BaseModel):
+    items: list[AlertView]
+    view: Literal["active", "history", "all"]
+    limit_applied: int
+    has_more: bool
+    next_cursor: str | None = None
+    active_count: int = 0
+    maximum_severity: Literal["critical", "warning", "info"] | None = None
+
+
 class PushRegistrationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     browser_id: str = Field(min_length=1, max_length=160)
@@ -956,6 +980,8 @@ __all__ = [
     "CalibrationSessionView",
     "OperatorNotificationPage",
     "OperatorNotificationView",
+    "AlertPage",
+    "AlertView",
     "PushRegistrationRequest",
     "PushRegistrationResponse",
     "PushRevocationRequest",

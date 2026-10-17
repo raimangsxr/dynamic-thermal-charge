@@ -10,6 +10,7 @@ asyncio API -- reintroduces greenlet, the one dependency with no armv7l wheel
 from __future__ import annotations
 
 import logging
+from threading import Event, Thread, current_thread
 from datetime import datetime, timezone
 from typing import Callable
 
@@ -28,6 +29,7 @@ logger = logging.getLogger(__name__)
 #: the engine, not with a timer: a timer would not interrupt a blocked thread.
 CONNECT_TIMEOUT_SECONDS = 5
 POOL_TIMEOUT_SECONDS = 5
+LIVENESS_CHECK_INTERVAL_SECONDS = 5.0
 
 
 def get_settings(request: Request) -> ApiSettings:
@@ -83,24 +85,109 @@ def usable_store(store: Store = Depends(get_store)) -> Store:
 
 def controller_view(request: Request, store: Store = Depends(usable_store)):
     """Evaluate what may be claimed about the controller right now."""
+    settings: ApiSettings = request.app.state.settings
+    at = request.app.state.clock()
+    lock = getattr(request.app.state, "liveness_lock", _NOOP_LOCK)
+    with lock:
+        view = _read_controller_view(request.app.state, store, settings, at)
+        _detect_controller_alert(store, view, at)
+    return view
+
+
+class ControllerLivenessSupervisor:
+    """Evaluate controller liveness without waiting for an HTTP request."""
+
+    def __init__(
+        self,
+        store_factory: Callable[[], Store],
+        *,
+        settings: ApiSettings,
+        clock: Callable[[], datetime],
+        state,
+        interval_seconds: float = LIVENESS_CHECK_INTERVAL_SECONDS,
+    ) -> None:
+        self._store_factory = store_factory
+        self._settings = settings
+        self._clock = clock
+        self._state = state
+        self._interval_seconds = max(0.1, float(interval_seconds))
+        self._stop = Event()
+        self._thread: Thread | None = None
+
+    def run_cycle(self) -> None:
+        """Run one bounded liveness/alert evaluation for deterministic tests."""
+        store = self._store_factory()
+        at = self._clock()
+        lock = getattr(self._state, "liveness_lock", _NOOP_LOCK)
+        with lock:
+            view = _read_controller_view(self._state, store, self._settings, at)
+            _detect_controller_alert(store, view, at)
+
+    # ``cycle`` is a compact alias for embedders that already drive other
+    # supervisors one tick at a time.
+    cycle = run_cycle
+
+    def run(self, max_cycles: int | None = None) -> None:
+        cycles = 0
+        while not self._stop.is_set() and (
+            max_cycles is None or cycles < max_cycles
+        ):
+            try:
+                self.run_cycle()
+            except Exception:
+                logger.exception("Could not run controller liveness cycle")
+            cycles += 1
+            if max_cycles is None or cycles < max_cycles:
+                self._stop.wait(self._interval_seconds)
+
+    def start(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._stop.clear()
+        self._thread = Thread(
+            target=self.run,
+            name="dtc-api-liveness",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        thread = self._thread
+        if thread is not None and thread is not current_thread():
+            thread.join(timeout=2.0)
+        self._thread = None
+
+
+class _NoopLock:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, _type, _value, _traceback):
+        return False
+
+
+_NOOP_LOCK = _NoopLock()
+
+
+def _read_controller_view(state, store: Store, settings: ApiSettings, at: datetime):
     from .liveness import evaluate
 
-    settings: ApiSettings = request.app.state.settings
     heartbeat = read_heartbeat(
         store.application_engine or store.engine,
         store.repository.installation_id(),
         store.location,
     )
-    previous = getattr(request.app.state, "last_heartbeat", None)
+    previous = getattr(state, "last_heartbeat", None)
     view = evaluate(
         heartbeat,
-        request.app.state.clock(),
+        at,
         override_seconds=settings.stale_seconds,
         previous=previous,
     )
     if heartbeat is not None:
         # Remembered so the next read can spot a second controller.
-        request.app.state.last_heartbeat = heartbeat
+        state.last_heartbeat = heartbeat
         if view.multiple_controllers_suspected:
             logger.warning(
                 "More than one controller appears to be running against this "
@@ -110,12 +197,59 @@ def controller_view(request: Request, store: Store = Depends(usable_store)):
     return view
 
 
+def _detect_controller_alert(store: Store, view, at: datetime) -> None:
+    """Open/resolve the liveness alert from the API process itself.
+
+    The detector is deliberately attached to the read edge: even when the
+    controller is stopped, the next API poll can persist the episode and drain
+    both independent channels. Failures are isolated from the state endpoint.
+    """
+    try:
+        from ..alerts import CONTROLLER_UNRESPONSIVE, build_alert_service
+
+        alerts = build_alert_service(store)
+        if alerts is None:
+            return
+        if not view.state_is_current or view.multiple_controllers_suspected:
+            reason = (
+                "latido obsoleto"
+                if not view.state_is_current
+                else "varios controladores sospechados"
+            )
+            alerts.raise_alert(
+                CONTROLLER_UNRESPONSIVE,
+                subject=f"[{store.repository.installation_name()}] Controlador sin respuesta",
+                body=(
+                    f"Instalación: {store.repository.installation_name()}\n"
+                    f"Momento: {at.isoformat()}\n"
+                    f"Causa: {reason}\n"
+                    f"Último latido: {view.last_seen_at.isoformat() if view.last_seen_at else 'nunca'}\n"
+                    f"Edad: {view.age_seconds if view.age_seconds is not None else 'sin dato'}"
+                ),
+            )
+        else:
+            alerts.clear_alert(CONTROLLER_UNRESPONSIVE)
+        alerts.deliver_pending()
+        from ..push import WebPushDelivery
+
+        delivery = WebPushDelivery(store.calibration, clock=lambda: at)
+        alert_repository = getattr(store, "alerts", None)
+        for alert_id in getattr(
+            alert_repository, "pending_push_alert_ids", lambda: ()
+        )():
+            delivery.deliver_pending(alert_id=alert_id)
+    except Exception:
+        logger.exception("Could not evaluate controller_unresponsive alert")
+
+
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
 __all__ = [
     "CONNECT_TIMEOUT_SECONDS",
+    "ControllerLivenessSupervisor",
+    "LIVENESS_CHECK_INTERVAL_SECONDS",
     "POOL_TIMEOUT_SECONDS",
     "controller_view",
     "get_clock",

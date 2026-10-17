@@ -142,3 +142,24 @@ estables.
 - **THEN** las entidades que dependen del estado del controlador aparecen no
   disponibles, mientras las entidades del grupo base conservan la disponibilidad
   del proceso MQTT
+
+### Requirement: Proyección MQTT de alertas activas
+
+El snapshot retenido de la instalación publica el resumen global de alertas
+activas: `active`, `count`, `maximum_severity`, `types` y `messages`. El
+descubrimiento MQTT del dispositivo Controller publica una entidad equivalente
+a `Alertas activas`, con estado encendido cuando `active` es verdadero y esos
+campos como atributos. La publicación es una proyección de solo lectura y no
+resuelve ni acusa alertas.
+
+#### Scenario: Alerta informativa proyectada
+
+- **WHEN** existe una alerta `info` activa en la bandeja
+- **THEN** el snapshot y la entidad MQTT incluyen su tipo y mensaje y la
+  entidad queda encendida
+
+#### Scenario: Resumen vacío
+
+- **WHEN** no hay alertas activas
+- **THEN** el snapshot publica `active: false`, `count: 0` y la entidad queda
+  apagada

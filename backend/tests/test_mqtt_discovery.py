@@ -63,6 +63,7 @@ def test_grouped_devices_keep_shared_entities_and_separate_live_values():
         "power_limit",
         "controller_health",
         "multiple_controllers",
+        "alerts_active",
     }
     assert installation.payload["cmps"]["controller_health"]["options"] == [
         "healthy", "degraded", "silent", "never_seen"
@@ -104,6 +105,7 @@ def test_health_and_multiple_controller_entities_are_grouped():
     entities = _entities()
     health = entities["installation_device"].payload["cmps"]["controller_health"]
     suspected = entities["installation_device"].payload["cmps"]["multiple_controllers"]
+    alerts = entities["installation_device"].payload["cmps"]["alerts_active"]
 
     assert health["p"] == "sensor"
     assert health["options"] == [
@@ -112,6 +114,10 @@ def test_health_and_multiple_controller_entities_are_grouped():
     assert suspected["p"] == "binary_sensor"
     assert suspected["payload_on"] is True
     assert suspected["payload_off"] is False
+    assert alerts["p"] == "binary_sensor"
+    assert alerts["payload_on"] is True
+    assert alerts["payload_off"] is False
+    assert "maximum_severity" in alerts["json_attributes_template"]
 
 
 def test_discovery_ids_survive_renames_and_prefix_changes():

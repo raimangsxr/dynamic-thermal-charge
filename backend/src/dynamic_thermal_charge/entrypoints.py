@@ -192,6 +192,21 @@ def run_api(
         store.close()
 
 
+def _mqtt_alert_snapshot(store) -> dict[str, object]:
+    """Compact active-alert projection shared by MQTT and Home Assistant."""
+    repository = getattr(store, "alerts", None)
+    if repository is None:
+        return {}
+    page = repository.list_alerts(view="active", limit=100)
+    return {
+        "active": bool(page.active_count),
+        "count": page.active_count,
+        "maximum_severity": page.maximum_severity,
+        "types": [item.alert_type for item in page.items],
+        "messages": [item.body for item in page.items],
+    }
+
+
 def run_mqtt() -> None:
     from .logging_config import configure_logging
     from .mqtt.client import PahoMqttClient
@@ -239,6 +254,7 @@ def run_mqtt() -> None:
             ),
             outdoor_topic_provider=lambda: settings.outdoor_topic,
             calibration_provider=lambda config: store.calibration.projection(config),
+            alerts_provider=lambda: _mqtt_alert_snapshot(store),
         )
         transport = PahoMqttClient(settings)
 

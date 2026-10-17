@@ -496,6 +496,10 @@ alert_delivery = Table(
     Column("id", Integer, primary_key=True),
     Column("installation_id", Integer, nullable=False),
     Column("alert_type", String(64), nullable=False),
+    # The canonical in-app alert this channel belongs to. Nullable keeps
+    # deliveries written by the pre-alerts schema readable during migration.
+    Column("alert_id", Integer, nullable=True),
+    Column("episode_id", String(36), nullable=True),
     Column("subject", String(512), nullable=False),
     Column("body", Text, nullable=False),
     Column("status", String(16), nullable=False, server_default="pending"),
@@ -504,6 +508,10 @@ alert_delivery = Table(
     Column("created_at", DateTime, nullable=False),
     Column("sent_at", DateTime, nullable=True),
     Column("last_error", String(512), nullable=True),
+    # A delivery may be drained by the controller or the API. The lease is
+    # short-lived so a process dying after claiming a row cannot strand it.
+    Column("claimed_by", String(128), nullable=True),
+    Column("claimed_until", DateTime, nullable=True),
     CheckConstraint(
         "status IN ('pending', 'sent', 'failed')", name="ck_alert_delivery_status"
     ),
@@ -581,11 +589,19 @@ operator_notification = Table(
     Column("installation_id", Integer, nullable=False),
     Column("session_id", String(36), nullable=True),
     Column("kind", String(64), nullable=False),
+    # ``kind`` remains as the calibration-era compatibility name. New rows
+    # write both fields and consumers use ``alert_type``.
+    Column("alert_type", String(64), nullable=False, server_default="thermal_calibration_terminal"),
+    Column("severity", String(16), nullable=False, server_default="info"),
+    Column("episode_id", String(36), nullable=True),
     Column("title", String(512), nullable=False),
     Column("body", Text, nullable=False),
     Column("created_at", DateTime, nullable=False),
+    Column("opened_at", DateTime, nullable=True),
+    Column("resolved_at", DateTime, nullable=True),
     Column("acknowledged_at", DateTime, nullable=True),
     UniqueConstraint("installation_id", "session_id", name="uq_operator_notification_session"),
+    UniqueConstraint("installation_id", "episode_id", name="uq_operator_notification_episode"),
     Index("ix_operator_notification_installation", "installation_id", "created_at"),
 )
 
@@ -624,11 +640,19 @@ web_push_attempt = Table(
         nullable=False,
     ),
     Column("session_id", String(36), nullable=False),
+    Column("alert_id", Integer, nullable=True),
     Column("status", String(16), nullable=False, server_default="pending"),
     Column("attempted_at", DateTime, nullable=True),
     Column("error", String(512), nullable=True),
+    # A short lease prevents the API and controller processes from sending the
+    # same subscription attempt concurrently. A crashed owner is reclaimable.
+    Column("claimed_by", String(128), nullable=True),
+    Column("claimed_until", DateTime, nullable=True),
     UniqueConstraint(
         "session_id", "subscription_id", name="uq_web_push_attempt_session_browser"
+    ),
+    UniqueConstraint(
+        "alert_id", "subscription_id", name="uq_web_push_attempt_alert_browser"
     ),
     CheckConstraint(
         "status IN ('pending','sent','denied','unsupported','expired','error')",
@@ -1245,6 +1269,10 @@ CONSTRAINT_FIELDS: dict[str, tuple[str, str]] = {
         "session_id",
         "a calibration session may have only one operator notification",
     ),
+    "uq_operator_notification_episode": (
+        "episode_id",
+        "an alert episode may have only one operator notification",
+    ),
     "uq_web_push_browser": (
         "browser_id",
         "a browser may have only one active Push subscription",
@@ -1260,6 +1288,10 @@ CONSTRAINT_FIELDS: dict[str, tuple[str, str]] = {
     "uq_web_push_attempt_session_browser": (
         "session_id",
         "a Push attempt may occur once per session and browser",
+    ),
+    "uq_web_push_attempt_alert_browser": (
+        "alert_id",
+        "a Push attempt may occur once per alert and browser",
     ),
     "ck_web_push_attempt_status": (
         "status",
@@ -1277,6 +1309,10 @@ CONSTRAINT_FIELDS: dict[str, tuple[str, str]] = {
 #     alive, which is the opposite of what retention is for.
 # See data-model.md of both features.
 RETAINED_TABLES: tuple[tuple[Table, str], ...] = (
+    (operator_notification, "opened_at"),
+    (alert_delivery, "created_at"),
+    (web_push_attempt, "attempted_at"),
+    (alert_episode, "last_enqueued_at"),
     (output_transition, "occurred_at"),
     (plan, "created_at"),
     (forecast, "retrieved_at"),

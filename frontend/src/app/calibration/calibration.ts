@@ -1,10 +1,11 @@
 import { Component, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { RouterLink } from '@angular/router';
 import { forkJoin } from 'rxjs';
 
 import { Api } from '../core/api';
-import type { ConfigDto, OperatorNotificationDto, RoomDto } from '../core/api.types';
+import type { ConfigDto, RoomDto } from '../core/api.types';
 
 interface RoomCard {
   heater: ConfigDto['heaters'][number];
@@ -21,7 +22,7 @@ interface RoomCard {
 
 @Component({
   selector: 'dtc-calibration',
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, RouterLink],
   templateUrl: './calibration.html',
   styleUrl: './calibration.css',
 })
@@ -32,18 +33,9 @@ export class Calibration {
   readonly loading = signal(true);
   readonly message = signal<string | null>(null);
   readonly pushStatus = signal<string | null>(null);
-  readonly notifications = signal<OperatorNotificationDto[]>([]);
 
   constructor() {
     this.refresh();
-    this.api.notifications().subscribe({ next: (page) => this.notifications.set(page.items), error: () => undefined });
-  }
-
-  acknowledge(notification: OperatorNotificationDto): void {
-    this.api.acknowledgeNotification(notification.id).subscribe({
-      next: (page) => this.notifications.set(page.items),
-      error: () => this.message.set('No se pudo acusar el aviso.'),
-    });
   }
 
   refresh(): void {
