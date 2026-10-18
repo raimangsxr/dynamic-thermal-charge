@@ -191,7 +191,9 @@ def test_the_schema_declares_every_expected_table():
             "operator_notification",
             "web_push_subscription",
             "web_push_attempt",
-    }
+            "measured_installation_sample",
+            "measured_heater_sample",
+        }
 
 
 def test_indoor_reading_uses_the_integer_heater_identity_without_cross_store_fk():

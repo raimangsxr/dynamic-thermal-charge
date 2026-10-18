@@ -7,13 +7,14 @@ Each public entrypoint is called by the deployment directly.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from collections.abc import Mapping
 from dataclasses import replace
 from datetime import datetime, time as clock_time, timedelta, timezone
 import logging
 import math
 import signal
 import time
-from typing import Callable, Iterator
+from typing import Any, Callable, Iterator
 from zoneinfo import ZoneInfo
 
 from .controller import ChargeController
@@ -55,6 +56,11 @@ from .planning_coordination import coordinated_plan
 from .plan_deviation import DeviationVerdict, SlotBoundaryGate, evaluate_plan_deviation
 from .planning_explanation import planning_evidence
 from .models import AppConfig
+from .mqtt.discharge import (
+    DischargeCommand,
+    apply_calibration_discharge_overrides,
+    resolve_discharge_commands,
+)
 from .persistence.active_plan import SqlActivePlanRepository
 from .scheduler import (
     ScheduleResult,
@@ -133,6 +139,38 @@ def _run_watchdog(
     except KeyboardInterrupt:
         logger.info("Weather watchdog stopped")
         return 0
+
+
+def _measured_discharge_commands(
+    heater_ids: tuple[str, ...],
+    *,
+    plan: Mapping[str, Any] | None,
+    at: datetime,
+    topic_prefix: str,
+    automatic_control_enabled: bool,
+    heater_modes: Mapping[str, str],
+    relay_test_in_progress: bool,
+    calibration_projection: Mapping[str, Any] | None,
+) -> tuple[DischargeCommand, ...]:
+    """Resolve the command projection that measured history should capture."""
+    commands = resolve_discharge_commands(
+        heater_ids,
+        plan=plan,
+        at=at,
+        topic_prefix=topic_prefix,
+        automatic_control_enabled=automatic_control_enabled,
+        heater_modes=heater_modes,
+        controller_state_is_current=True,
+        relay_test_in_progress=relay_test_in_progress,
+    )
+    return apply_calibration_discharge_overrides(
+        commands,
+        projection=calibration_projection,
+        at=at,
+        automatic_control_enabled=automatic_control_enabled,
+        controller_state_is_current=True,
+        relay_test_in_progress=relay_test_in_progress,
+    )
 
 
 def _run_controller(
@@ -233,6 +271,64 @@ def _run_controller(
                 expected_source=config.weather.provider,
                 config=config.weather.watchdog,
             )
+
+            def sample_measurements(now: datetime) -> None:
+                """Capture the controller's applied state without recalculating it."""
+                live_config, _live_revision = store.repository.current()
+                telemetry = store.planning.telemetry()
+                outdoor = store.outdoor_temperature.latest()
+                control = (
+                    control_repository.control_state()
+                    if control_repository is not None
+                    else None
+                )
+                relay_test = store.relay_tests.current()
+                session = relay_test.get("session") if isinstance(relay_test, dict) else None
+                safety = relay_test.get("safety") if isinstance(relay_test, dict) else None
+                relay_test_in_progress = bool(
+                    isinstance(session, dict)
+                    and session.get("status") in {"starting", "active", "ending"}
+                ) or bool(
+                    isinstance(safety, dict)
+                    and (safety.get("fault_latched") or safety.get("audit_degraded"))
+                )
+                automatic_control_enabled = (
+                    True
+                    if control is None
+                    else bool(control.automatic_control_enabled)
+                )
+                mqtt = _live_mqtt_settings(store, None if system is None else system.mqtt)
+                plan = store.planning.active_plan()
+                calibration_projection = (
+                    store.calibration.projection(live_config)
+                    if not relay_test_in_progress and automatic_control_enabled
+                    else None
+                )
+                commands = _measured_discharge_commands(
+                    tuple(heater.id for heater in live_config.heaters),
+                    plan=plan,
+                    at=now,
+                    topic_prefix=("telemetria" if mqtt is None else mqtt.prefix),
+                    automatic_control_enabled=automatic_control_enabled,
+                    heater_modes=(
+                        {}
+                        if control is None
+                        else dict(control.heater_modes or {})
+                    ),
+                    relay_test_in_progress=relay_test_in_progress,
+                    calibration_projection=calibration_projection,
+                )
+                history.record_measured(
+                    now,
+                    heaters=live_config.heaters,
+                    telemetry=telemetry,
+                    outdoor=outdoor,
+                    active_outputs=controller.active_outputs,
+                    discharge_commands=commands,
+                    indoor_max_age=timedelta(
+                        minutes=live_config.site.indoor_max_age_minutes
+                    ),
+                )
 
             # Keep the early-replan verdict next to the refresh that consumes
             # it. A boundary gate prevents repeated solver launches during the
@@ -560,6 +656,7 @@ def _run_controller(
                 ),
                 alerts=alerts,
                 deviation_check=deviation_check,
+                measurement_sampler=sample_measurements,
             )
             return service.run()
         finally:

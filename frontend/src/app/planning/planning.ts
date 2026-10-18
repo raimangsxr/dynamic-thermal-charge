@@ -9,10 +9,11 @@ import { MatTabsModule } from '@angular/material/tabs';
 import { FormsModule } from '@angular/forms';
 import { Chart } from 'chart.js/auto';
 import type { ChartOptions, TooltipItem } from 'chart.js';
+import { Observable, forkJoin, map, of, Subscription, switchMap } from 'rxjs';
 
-import { Api } from '../core/api';
+import { Api, type HistorySeriesQuery } from '../core/api';
 import { Poller } from '../core/poll';
-import type { ApiErrorDto, HourlyForecastPointDto, PlanExplanationDto, PlanHistoryDto, PlanningCheckDto, TemperatureTargetRequest, PlanningDto, PlanningDeficitDto, PlanningPreviewDto, PlanningPreviewJobDto, PlanningSlotDto, PlanningTimelineSlotDto } from '../core/api.types';
+import type { ApiErrorDto, HistorySeriesPageDto, HistorySeriesPointDto, HourlyForecastPointDto, PlanExplanationDto, PlanHistoryDto, PlanningCheckDto, TemperatureTargetRequest, PlanningDto, PlanningDeficitDto, PlanningPreviewDto, PlanningPreviewJobDto, PlanningSlotDto, PlanningTimelineSlotDto } from '../core/api.types';
 import { type Explained, UNREACHABLE, explain, messageFor } from '../core/errors';
 import { formatDateOnly, formatInstant } from '../shared/age/age';
 import { formatTemperature, truncateTemperature } from '../shared/temperature/temperature';
@@ -118,6 +119,27 @@ interface ExplanationRow {
   indoorNext: number | null;
   target: number | null;
   shortfall: number | null;
+}
+
+interface PlanningMeasuredHistory {
+  installation: HistorySeriesPageDto;
+  heaters: Map<string, HistorySeriesPageDto>;
+}
+
+interface AnalysisAxis {
+  keys: string[];
+  instants: string[];
+  labels: string[];
+}
+
+interface AnalysisCueState {
+  guaranteed: boolean[];
+  forecastInterpolated: boolean[];
+  forecastStale: boolean[];
+  chargeReasons: boolean[];
+  aggregateLimit: boolean[];
+  nowIndex: number | null;
+  guaranteedRange: { start: number; end: number } | null;
 }
 
 function previewProblems(preview: PlanningPreviewDto): PlanningDeficitDto[] {
@@ -738,6 +760,12 @@ export class Planning implements AfterViewInit, OnDestroy {
   readonly selectedTargetIndex = signal<number | null>(null);
   readonly planHistory = signal<PlanHistoryDto[]>([]);
   readonly explanationError = signal('');
+  readonly measuredHistory = signal<PlanningMeasuredHistory | null>(null);
+  /** Authoritative current instant returned by the Status endpoint. */
+  readonly analysisNow = signal<string | null>(null);
+  readonly historyWindowHours = signal<6 | 24 | 72>(24);
+  readonly historyLoading = signal(false);
+  readonly historyFailure = signal<Explained | null>(null);
   readonly selectedTarget = computed<TemperatureTargetDraft | null>(() => {
     const targets = this.draftTargets();
     if (!targets.length) return null;
@@ -754,8 +782,11 @@ export class Planning implements AfterViewInit, OnDestroy {
   @ViewChild('previewChart') private previewCanvas?: ElementRef<HTMLCanvasElement>;
   private charts: Chart[] = [];
   private readonly previewPoller = new Poller(() => this.pollPreviewJob());
+  private readonly historyPoller = new Poller(() => this.refreshMeasuredHistory());
   private readonly previewStorageKey = 'dtc.planning.preview-job';
   private previewPollInFlight = false;
+  private historyRequest: Subscription | null = null;
+  private historyRequestGeneration = 0;
   private dismissedPreviewJobId: string | null = null;
   private previewDiagnosticsPointerActivation = false;
 
@@ -770,10 +801,19 @@ export class Planning implements AfterViewInit, OnDestroy {
   ngOnDestroy(): void {
     this.destroyCharts();
     this.previewPoller.stop();
+    this.historyPoller.stop();
+    this.historyRequest?.unsubscribe();
   }
 
   onTabChange(index: number): void {
+    const changed = this.selectedTab() !== index;
     this.selectedTab.set(index);
+    if (index === 0) {
+      this.historyPoller.start();
+      if (changed || (!this.measuredHistory() && !this.historyLoading())) this.loadMeasuredHistory();
+    } else {
+      this.historyPoller.stop();
+    }
     this.scheduleChartRender();
   }
 
@@ -783,6 +823,12 @@ export class Planning implements AfterViewInit, OnDestroy {
 
   showAnalysisPlan(): void {
     this.onTabChange(0);
+  }
+
+  selectHistoryWindow(hours: 6 | 24 | 72): void {
+    const changed = this.historyWindowHours() !== hours;
+    this.historyWindowHours.set(hours);
+    if (this.selectedTab() === 0 && (changed || this.historyFailure() !== null)) this.loadMeasuredHistory();
   }
 
   showAnalysisForecast(): void {
@@ -859,6 +905,7 @@ export class Planning implements AfterViewInit, OnDestroy {
         if (restorePreview && planning.preview_job) this.acceptPreviewJob(planning.preview_job);
         if (restorePreview && !planning.preview_job) this.clearPreviewState();
         if (!restorePreview) this.clearPreviewState();
+        if (this.selectedTab() === 0) this.loadMeasuredHistory();
         this.scheduleChartRender();
       },
       error: (error: unknown) => {
@@ -870,6 +917,97 @@ export class Planning implements AfterViewInit, OnDestroy {
       next: (page) => this.planHistory.set(page.items),
       error: () => this.explanationError.set('No se pudo cargar el historial de planificaciones.'),
     });
+  }
+
+  historySampleCount(): number {
+    const history = this.measuredHistory();
+    if (!history) return 0;
+    return history.installation.items.length
+      + [...history.heaters.values()].reduce((total, page) => total + page.items.length, 0);
+  }
+
+  private refreshMeasuredHistory(): void {
+    if (this.selectedTab() === 0 && !this.historyLoading()) this.loadMeasuredHistory();
+  }
+
+  private loadMeasuredHistory(): void {
+    const planning = this.snapshot();
+    if (!planning) return;
+    this.historyRequest?.unsubscribe();
+    const generation = ++this.historyRequestGeneration;
+    this.historyLoading.set(true);
+    this.historyFailure.set(null);
+    this.measuredHistory.set(null);
+    this.analysisNow.set(null);
+    this.historyRequest = this.api.status().pipe(
+      switchMap((status) => {
+        const observedMs = Date.parse(status.observed_at);
+        if (!Number.isFinite(observedMs)) return of(null);
+        this.analysisNow.set(status.observed_at);
+        const to = new Date(observedMs).toISOString();
+        const from = new Date(observedMs - this.historyWindowHours() * 60 * 60 * 1000).toISOString();
+        const queries: HistorySeriesQuery[] = [
+          { from, to, scope: 'installation', limit: 500 },
+          ...planning.heaters.map((heater) => ({ from, to, scope: 'heater' as const, heaterId: heater.id, limit: 500 })),
+        ];
+        return forkJoin(queries.map((query) => this.fetchMeasuredHistoryPages(query, []))).pipe(
+          map((pages) => ({ observedAt: status.observed_at, pages })),
+        );
+      }),
+    ).subscribe({
+      next: (result) => {
+        if (generation !== this.historyRequestGeneration) return;
+        if (!result) {
+          this.measuredHistory.set(null);
+          this.historyFailure.set(UNREACHABLE);
+          this.historyLoading.set(false);
+          this.scheduleChartRender();
+          return;
+        }
+        this.analysisNow.set(result.observedAt);
+        const installation = result.pages[0];
+        if (!installation) {
+          this.measuredHistory.set(null);
+          this.historyFailure.set(UNREACHABLE);
+          this.historyLoading.set(false);
+          this.scheduleChartRender();
+          return;
+        }
+        const heaters = new Map<string, HistorySeriesPageDto>();
+        planning.heaters.forEach((heater, index) => {
+          const page = result.pages[index + 1];
+          if (page) heaters.set(heater.id, page);
+        });
+        this.measuredHistory.set({ installation, heaters });
+        this.historyLoading.set(false);
+        this.scheduleChartRender();
+      },
+      error: (error: unknown) => {
+        if (generation !== this.historyRequestGeneration) return;
+        this.measuredHistory.set(null);
+        this.historyFailure.set(this.describe(error));
+        this.historyLoading.set(false);
+        this.scheduleChartRender();
+      },
+      complete: () => {
+        if (generation === this.historyRequestGeneration) this.historyRequest = null;
+      },
+    });
+  }
+
+  private fetchMeasuredHistoryPages(
+    query: HistorySeriesQuery,
+    items: HistorySeriesPointDto[],
+  ): Observable<HistorySeriesPageDto> {
+    return this.api.historySeries(query).pipe(
+      switchMap((page) => {
+        const merged = [...items, ...page.items];
+        if (page.has_more && page.next_cursor) {
+          return this.fetchMeasuredHistoryPages({ ...query, cursor: page.next_cursor }, merged);
+        }
+        return of({ ...page, items: merged, has_more: false, next_cursor: null });
+      }),
+    );
   }
 
   openPlanExplanation(source: string | undefined, planId: number | undefined): void {
@@ -1396,17 +1534,38 @@ export class Planning implements AfterViewInit, OnDestroy {
     const active = this.activeTimeline();
     if (!active) return;
     const { data, slots } = active;
+    const installationMeasured = this.historySeries(this.measuredHistory()?.installation, 'measured', 'outdoor_temperature_c');
+    const installationProjected = this.historySeries(this.measuredHistory()?.installation, 'projected', 'outdoor_temperature_c');
+    const historyRows = this.historyInstants().flatMap((instant) => [
+      [
+        `Medido · ${this.dateTime(instant)}`,
+        ...data.heaters.map((heater) => this.formatTemperature(this.historySeries(this.historyPageForHeater(heater.id), 'measured', 'indoor_temperature_c').get(this.timeKey(instant)))),
+        ...data.heaters.map(() => this.formatTemperature(null)),
+        ...data.heaters.map(() => this.formatTemperature(null)),
+        this.formatTemperature(installationMeasured.get(this.timeKey(instant))),
+        this.analysisCueText(instant, data),
+      ],
+      [
+        `Proyectado · ${this.dateTime(instant)}`,
+        ...data.heaters.map((heater) => this.formatTemperature(this.historySeries(this.historyPageForHeater(heater.id), 'projected', 'indoor_temperature_c').get(this.timeKey(instant)))),
+        ...data.heaters.map(() => this.formatTemperature(null)),
+        ...data.heaters.map((heater) => this.formatTemperature(this.historySeries(this.historyPageForHeater(heater.id), 'projected', 'target_temperature_c').get(this.timeKey(instant)))),
+        this.formatTemperature(installationProjected.get(this.timeKey(instant))),
+        this.analysisCueText(instant, data),
+      ],
+    ]);
     this.openPlanningTableDetails({
       title: 'Balance térmico por acumulador',
       ariaLabel: 'Valores de temperatura interior en los bordes, objetivo y temperatura exterior por intervalo',
-      headers: ['Intervalo', ...data.heaters.map((heater) => `${heater.name} interior inicio (°C)`), ...data.heaters.map((heater) => `${heater.name} interior fin (°C)`), ...data.heaters.map((heater) => `${heater.name} objetivo (°C)`), 'Exterior (°C)'],
-      rows: slots.map((slot) => [
+      headers: ['Intervalo', ...data.heaters.map((heater) => `${heater.name} interior inicio (°C)`), ...data.heaters.map((heater) => `${heater.name} interior fin (°C)`), ...data.heaters.map((heater) => `${heater.name} objetivo (°C)`), 'Exterior (°C)', 'Señales'],
+      rows: [...historyRows, ...slots.map((slot) => [
         this.slotRangeLabel(slot),
         ...data.heaters.map((heater) => this.formatTemperature(slot.indoor_temperature_c_by_heater?.[heater.id])),
         ...data.heaters.map((heater) => this.formatTemperature(slot.indoor_temperature_next_c_by_heater?.[heater.id])),
         ...data.heaters.map((heater) => this.formatTemperature(slot.target_temperature_c_by_heater?.[heater.id])),
         this.formatTemperature(slot.temperature_c),
-      ]),
+        this.analysisCueText(slot.start, data, slot),
+      ])],
     });
   }
 
@@ -1414,15 +1573,32 @@ export class Planning implements AfterViewInit, OnDestroy {
     const active = this.activeTimeline();
     if (!active) return;
     const { data, slots } = active;
+    const installationMeasured = this.historySeries(this.measuredHistory()?.installation, 'measured', 'aggregate_charge_power_w');
+    const installationProjected = this.historySeries(this.measuredHistory()?.installation, 'projected', 'aggregate_charge_power_w');
+    const historyRows = this.historyInstants().flatMap((instant) => [
+      [
+        `Medido · ${this.dateTime(instant)}`,
+        ...data.heaters.map((heater) => this.historyPowerValue(this.historySeries(this.historyPageForHeater(heater.id), 'measured', 'confirmed_charge_power_w').get(this.timeKey(instant)) ?? null)),
+        this.historyPowerValue(installationMeasured.get(this.timeKey(instant)) ?? null),
+        this.analysisCueText(instant, data),
+      ],
+      [
+        `Proyectado · ${this.dateTime(instant)}`,
+        ...data.heaters.map((heater) => this.historyPowerValue(this.historySeries(this.historyPageForHeater(heater.id), 'projected', 'charge_power_w').get(this.timeKey(instant)) ?? null)),
+        this.historyPowerValue(installationProjected.get(this.timeKey(instant)) ?? null),
+        this.analysisCueText(instant, data),
+      ],
+    ]);
     this.openPlanningTableDetails({
       title: 'Carga por acumulador',
       ariaLabel: 'Potencia por acumulador y potencia total por intervalo',
-      headers: ['Intervalo', ...data.heaters.map((heater) => `${heater.name} (W)`), 'Total (W)'],
-      rows: slots.map((slot, index) => [
+      headers: ['Intervalo', ...data.heaters.map((heater) => `${heater.name} (W)`), 'Total (W)', 'Señales'],
+      rows: [...historyRows, ...slots.map((slot, index) => [
         this.slotRangeLabel(slot),
         ...data.heaters.map((heater) => this.powerValue(this.heaterActiveInSlot(data, index, heater.id) ? heater.power_w : 0)),
         this.powerValue(this.aggregatePowerKw(data, index) * 1000),
-      ]),
+        this.analysisCueText(slot.start, data, slot),
+      ])],
     });
   }
 
@@ -1430,17 +1606,24 @@ export class Planning implements AfterViewInit, OnDestroy {
     const active = this.activeTimeline();
     if (!active) return;
     const { data, slots } = active;
+    const installationMeasured = this.historySeries(this.measuredHistory()?.installation, 'measured', 'aggregate_charge_power_w');
+    const installationProjected = this.historySeries(this.measuredHistory()?.installation, 'projected', 'aggregate_charge_power_w');
+    const historyRows = this.historyInstants().flatMap((instant) => [
+      [`Medido · ${this.dateTime(instant)}`, this.historyPowerValue(installationMeasured.get(this.timeKey(instant)) ?? null), 'sin dato', 'sin dato', 'sin dato', this.analysisCueText(instant, data)],
+      [`Proyectado · ${this.dateTime(instant)}`, this.historyPowerValue(installationProjected.get(this.timeKey(instant)) ?? null), 'sin dato', 'sin dato', 'sin dato', this.analysisCueText(instant, data)],
+    ]);
     this.openPlanningTableDetails({
       title: 'Potencia agregada frente al límite',
       ariaLabel: 'Potencia agregada, carga base y límites por intervalo',
-      headers: ['Intervalo', 'Total (W)', 'Carga base (W)', 'Límite contratado (W)', 'Límite calefacción (W)'],
-      rows: slots.map((slot, index) => [
+      headers: ['Intervalo', 'Total (W)', 'Carga base (W)', 'Límite contratado (W)', 'Límite calefacción (W)', 'Señales'],
+      rows: [...historyRows, ...slots.map((slot, index) => [
         this.slotRangeLabel(slot),
         this.powerValue(this.aggregatePowerKw(data, index) * 1000),
         this.powerValue(data.base_load_w),
         this.powerValue(data.max_total_power_w),
         this.powerValue(data.max_heating_power_w || data.max_total_power_w),
-      ]),
+        this.analysisCueText(slot.start, data, slot),
+      ])],
     });
   }
 
@@ -1448,15 +1631,30 @@ export class Planning implements AfterViewInit, OnDestroy {
     const active = this.activeTimeline();
     if (!active) return;
     const { data, slots } = active;
+    const historyRows = this.historyInstants().flatMap((instant) => [
+      [
+        `Medido · ${this.dateTime(instant)}`,
+        ...data.heaters.map((heater) => this.energy(this.historySeries(this.historyPageForHeater(heater.id), 'measured', 'stored_energy_kwh').get(this.timeKey(instant)))),
+        ...data.heaters.map(() => this.energy(null)),
+        this.analysisCueText(instant, data),
+      ],
+      [
+        `Proyectado · ${this.dateTime(instant)}`,
+        ...data.heaters.map((heater) => this.energy(this.historySeries(this.historyPageForHeater(heater.id), 'projected', 'stored_energy_kwh').get(this.timeKey(instant)))),
+        ...data.heaters.map(() => this.energy(null)),
+        this.analysisCueText(instant, data),
+      ],
+    ]);
     this.openPlanningTableDetails({
       title: 'Energía almacenada por acumulador',
       ariaLabel: 'Energía almacenada en kWh en los bordes por acumulador y por intervalo',
-      headers: ['Intervalo', ...data.heaters.map((heater) => `${heater.name} inicio (kWh)`), ...data.heaters.map((heater) => `${heater.name} fin (kWh)`)],
-      rows: slots.map((slot, index) => [
+      headers: ['Intervalo', ...data.heaters.map((heater) => `${heater.name} inicio (kWh)`), ...data.heaters.map((heater) => `${heater.name} fin (kWh)`), 'Señales'],
+      rows: [...historyRows, ...slots.map((slot, index) => [
         this.slotRangeLabel(slot),
         ...data.heaters.map((heater) => this.energy(slot.stored_energy_kwh_by_heater?.[heater.id])),
         ...data.heaters.map((heater) => this.energy(slot.stored_energy_next_kwh_by_heater?.[heater.id])),
-      ]),
+        this.analysisCueText(slot.start, data, slot),
+      ])],
     });
   }
 
@@ -1799,6 +1997,338 @@ export class Planning implements AfterViewInit, OnDestroy {
     });
   }
 
+  private timeKey(value: string): string {
+    const timestamp = Date.parse(value);
+    return Number.isFinite(timestamp) ? String(timestamp) : value;
+  }
+
+  private analysisAxis(data: PlanningDto, timeline: PlanningTimelineSlotDto[]): AnalysisAxis {
+    const instantsByKey = new Map<string, string>();
+    const add = (value: string): void => {
+      const key = this.timeKey(value);
+      if (!instantsByKey.has(key)) instantsByKey.set(key, value);
+    };
+    const history = this.measuredHistory();
+    for (const point of history?.installation.items ?? []) add(point.at);
+    for (const page of history?.heaters.values() ?? []) {
+      for (const point of page.items) add(point.at);
+    }
+    for (const instant of this.boundaryInstants(timeline)) add(instant);
+    const ordered = [...instantsByKey.entries()].sort((left, right) => {
+      const leftAt = Date.parse(left[1]);
+      const rightAt = Date.parse(right[1]);
+      if (Number.isFinite(leftAt) && Number.isFinite(rightAt)) return leftAt - rightAt;
+      return left[1].localeCompare(right[1]);
+    });
+    const instants = ordered.map(([, instant]) => instant);
+    return { keys: ordered.map(([key]) => key), instants, labels: instants.map((instant) => this.dateTime(instant)) };
+  }
+
+  historyNowPosition(
+    observedAt: string | null | undefined,
+    instants: readonly string[] = this.historyInstants(),
+  ): number | null {
+    if (!observedAt || instants.length === 0) return null;
+    const target = Date.parse(observedAt);
+    if (!Number.isFinite(target)) return null;
+    const timestamps = instants.map((value) => Date.parse(value));
+    if (timestamps.some((value) => !Number.isFinite(value))) return null;
+    if (target <= timestamps[0]) return 0;
+    const last = timestamps.length - 1;
+    if (target >= timestamps[last]) return last;
+    const right = timestamps.findIndex((value) => value >= target);
+    if (right <= 0) return right === 0 ? 0 : null;
+    const left = timestamps[right - 1];
+    const span = timestamps[right] - left;
+    return span > 0 ? right - 1 + (target - left) / span : right;
+  }
+
+  private axisPosition(axis: AnalysisAxis, instant: string): number | null {
+    return this.historyNowPosition(instant, axis.instants);
+  }
+
+  private historyBooleanCue(
+    page: HistorySeriesPageDto | undefined,
+    cue: 'forecast_interpolated' | 'forecast_stale' | 'guaranteed' | 'aggregate_limit_reached',
+  ): Map<string, boolean | null> {
+    const values = new Map<string, boolean | null>();
+    for (const point of page?.items ?? []) {
+      const value = point.cues[cue];
+      values.set(this.timeKey(point.at), typeof value === 'boolean' ? value : null);
+    }
+    return values;
+  }
+
+  private historyReasonCue(page: HistorySeriesPageDto | undefined): Map<string, boolean | null> {
+    const values = new Map<string, boolean | null>();
+    for (const point of page?.items ?? []) {
+      const reasons = point.cues.charge_reasons;
+      values.set(this.timeKey(point.at), reasons === null ? null : reasons.length > 0);
+    }
+    return values;
+  }
+
+  private analysisCueState(data: PlanningDto, timeline: PlanningTimelineSlotDto[], axis: AnalysisAxis): AnalysisCueState {
+    const installation = this.measuredHistory()?.installation;
+    const guaranteedHistory = this.historyBooleanCue(installation, 'guaranteed');
+    const interpolatedHistory = this.historyBooleanCue(installation, 'forecast_interpolated');
+    const staleHistory = this.historyBooleanCue(installation, 'forecast_stale');
+    const limitHistory = this.historyBooleanCue(installation, 'aggregate_limit_reached');
+    const reasonHistory = new Map<string, boolean | null>();
+    for (const page of this.measuredHistory()?.heaters.values() ?? []) {
+      for (const [key, value] of this.historyReasonCue(page)) {
+        const current = reasonHistory.get(key);
+        // A positive reason from any heater wins; explicit [] remains distinct
+        // from null, which means that the persisted evidence is unavailable.
+        if (value === true || current === true) reasonHistory.set(key, true);
+        else if (value === null && current === undefined) reasonHistory.set(key, null);
+        else if (current === undefined) reasonHistory.set(key, value);
+      }
+    }
+
+    const guaranteed = axis.keys.map((key) => guaranteedHistory.get(key) === true);
+    const forecastInterpolated = axis.keys.map((key) => interpolatedHistory.get(key) === true);
+    const forecastStale = axis.keys.map((key) => staleHistory.get(key) === true);
+    const chargeReasons = axis.keys.map((key) => reasonHistory.get(key) === true);
+    const aggregateLimit = axis.keys.map((key) => limitHistory.get(key) === true);
+    const mark = (values: boolean[], instant: string, enabled: boolean): void => {
+      if (!enabled) return;
+      const index = axis.keys.indexOf(this.timeKey(instant));
+      if (index >= 0) values[index] = true;
+    };
+    for (const slot of timeline) {
+      mark(forecastInterpolated, slot.start, slot.temperature_interpolated);
+      mark(forecastInterpolated, slot.end, slot.temperature_interpolated);
+      const stale = data.forecast_stale === true || data.stale_forecast === true;
+      mark(forecastStale, slot.start, stale && slot.temperature_c !== null);
+      mark(forecastStale, slot.end, stale && slot.temperature_c !== null);
+      const aggregateLimitW = Math.min(data.max_heating_power_w, data.max_total_power_w - data.base_load_w);
+      const limitReached = Number.isFinite(aggregateLimitW) && slot.total_power_w >= aggregateLimitW;
+      mark(aggregateLimit, slot.start, limitReached);
+      mark(aggregateLimit, slot.end, limitReached);
+    }
+    const now = this.analysisNow() ?? data.observed_at;
+    const nowIndex = this.historyInstants().length
+      ? this.axisPosition(axis, now)
+      : null;
+    const nowMs = Date.parse(now);
+    const guaranteedUntilMs = Date.parse(data.guaranteed_until ?? '');
+    const guaranteedEnd = this.axisPosition(axis, data.guaranteed_until ?? '');
+    const guaranteedRange = nowIndex !== null && guaranteedEnd !== null && guaranteedEnd > nowIndex
+      ? { start: nowIndex, end: guaranteedEnd }
+      : null;
+    if (Number.isFinite(nowMs) && Number.isFinite(guaranteedUntilMs)) {
+      axis.instants.forEach((instant, index) => {
+        const at = Date.parse(instant);
+        if (Number.isFinite(at) && at >= nowMs && at < guaranteedUntilMs) guaranteed[index] = true;
+      });
+    }
+    return {
+      guaranteed,
+      forecastInterpolated,
+      forecastStale,
+      chargeReasons,
+      aggregateLimit,
+      nowIndex,
+      guaranteedRange,
+    };
+  }
+
+  private analysisCueText(instant: string, data: PlanningDto, slot?: PlanningTimelineSlotDto): string {
+    const labels: string[] = [];
+    const key = this.timeKey(instant);
+    const history = this.measuredHistory();
+    const installationPoint = history?.installation.items.find((point) => this.timeKey(point.at) === key);
+    const heaterPoints = [...(history?.heaters.values() ?? [])]
+      .map((page) => page.items.find((point) => this.timeKey(point.at) === key))
+      .filter((point): point is HistorySeriesPointDto => point !== undefined);
+    const cues = [installationPoint?.cues, ...heaterPoints.map((point) => point.cues)].filter((value): value is NonNullable<typeof value> => value !== undefined);
+    if (cues.some((cue) => cue.forecast_interpolated === true) || slot?.temperature_interpolated === true) labels.push('previsión interpolada');
+    if (cues.some((cue) => cue.forecast_stale === true) || (slot && (data.forecast_stale === true || data.stale_forecast === true))) labels.push('previsión antigua');
+    if (cues.some((cue) => cue.guaranteed === true) || this.isGuaranteedAt(instant, data)) labels.push('franja garantizada');
+    if (cues.some((cue) => cue.aggregate_limit_reached === true) || (slot && this.aggregateLimitReached(data, slot))) labels.push('límite agregado alcanzado');
+    const reasons = cues.flatMap((cue) => cue.charge_reasons ?? []).map((reason) => {
+      const value = reason['reason'];
+      return typeof value === 'string' ? this.chargeReasonLabel(value) : null;
+    }).filter((value): value is string => value !== null);
+    if (reasons.length) labels.push(`motivos de carga: ${[...new Set(reasons)].join(', ')}`);
+    if (cues.some((cue) => cue.charge_reasons === null)) labels.push('motivo de carga: no disponible');
+    return labels.length ? labels.join(', ') : 'sin señal adicional';
+  }
+
+  private chargeReasonLabel(reason: string): string {
+    return ({
+      necessary_for_target: 'carga necesaria',
+      preheating_for_next_target: 'precalentamiento',
+      residual_storage: 'residual',
+    } as Record<string, string>)[reason] ?? reason;
+  }
+
+  private isGuaranteedAt(instant: string, data: PlanningDto): boolean {
+    const at = Date.parse(instant);
+    const now = Date.parse(this.analysisNow() ?? data.observed_at);
+    const until = Date.parse(data.guaranteed_until ?? '');
+    return Number.isFinite(at) && Number.isFinite(now) && Number.isFinite(until) && at >= now && at < until;
+  }
+
+  private aggregateLimitReached(data: PlanningDto, slot: PlanningTimelineSlotDto): boolean {
+    const limit = Math.min(data.max_heating_power_w, data.max_total_power_w - data.base_load_w);
+    return Number.isFinite(limit) && slot.total_power_w >= limit;
+  }
+
+  private analysisCuePlugin(cues: AnalysisCueState): {
+    id: string;
+    beforeDatasetsDraw: (chart: Chart) => void;
+    afterDraw: (chart: Chart) => void;
+  } {
+    const draw = (chart: Chart, phase: 'background' | 'foreground'): void => {
+      const area = chart.chartArea;
+      const x = chart.scales['x'];
+      if (!area || !x) return;
+      const context = chart.ctx;
+      context.save();
+        if (phase === 'background') {
+        let start = -1;
+        cues.guaranteed.forEach((enabled, index) => {
+          if (enabled && start < 0) start = index;
+          const endOfRun = start >= 0 && (!enabled || index === cues.guaranteed.length - 1);
+          if (!endOfRun) return;
+          const end = enabled && index === cues.guaranteed.length - 1 ? index : index - 1;
+          const left = Math.max(area.left, x.getPixelForValue(start - 0.5));
+          const right = Math.min(area.right, x.getPixelForValue(end + 0.5));
+          context.fillStyle = '#05966918';
+          context.fillRect(left, area.top, Math.max(0, right - left), area.bottom - area.top);
+          start = -1;
+        });
+        if (cues.guaranteedRange) {
+          const left = Math.max(area.left, x.getPixelForValue(cues.guaranteedRange.start));
+          const right = Math.min(area.right, x.getPixelForValue(cues.guaranteedRange.end));
+          context.fillStyle = '#05966918';
+          context.fillRect(left, area.top, Math.max(0, right - left), area.bottom - area.top);
+        }
+      } else {
+        const marker = (index: number, color: string, shape: 'circle' | 'square' | 'text', text?: string): void => {
+          const pixel = x.getPixelForValue(index);
+          context.fillStyle = color;
+          if (shape === 'circle') {
+            context.beginPath();
+            context.arc(pixel, area.top + 8, 3, 0, Math.PI * 2);
+            context.fill();
+          } else if (shape === 'square') {
+            context.fillRect(pixel - 3, area.top + 14, 6, 6);
+          } else {
+            context.font = 'bold 10px sans-serif';
+            context.fillText(text ?? '', pixel - 3, text === 'L' ? area.bottom - 5 : area.top + 28);
+          }
+        };
+        cues.forecastInterpolated.forEach((enabled, index) => { if (enabled) marker(index, '#7c3aed', 'circle'); });
+        cues.forecastStale.forEach((enabled, index) => { if (enabled) marker(index, '#d97706', 'square'); });
+        cues.chargeReasons.forEach((enabled, index) => { if (enabled) marker(index, '#2563eb', 'text', 'R'); });
+        cues.aggregateLimit.forEach((enabled, index) => { if (enabled) marker(index, '#dc2626', 'text', 'L'); });
+        if (cues.nowIndex !== null) {
+          const pixel = x.getPixelForValue(cues.nowIndex);
+          context.strokeStyle = '#dc2626';
+          context.setLineDash([4, 3]);
+          context.beginPath();
+          context.moveTo(pixel, area.top);
+          context.lineTo(pixel, area.bottom);
+          context.stroke();
+          context.setLineDash([]);
+          context.font = 'bold 10px sans-serif';
+          context.fillStyle = '#dc2626';
+          context.fillText('Ahora', Math.min(pixel + 4, area.right - 30), area.top + 11);
+        }
+      }
+      context.restore();
+    };
+    return {
+      id: 'planning-history-cues',
+      beforeDatasetsDraw: (chart) => draw(chart, 'background'),
+      afterDraw: (chart) => draw(chart, 'foreground'),
+    };
+  }
+
+  private boundaryInstants(slots: PlanningTimelineSlotDto[]): string[] {
+    if (!slots.length) return [];
+    return [...slots.map((slot) => slot.start), slots[slots.length - 1].end];
+  }
+
+  private axisSeries(axis: AnalysisAxis, values: Map<string, number | null>): Array<number | null> {
+    return axis.keys.map((key) => values.has(key) ? values.get(key) ?? null : null);
+  }
+
+  private combineSeries(...series: Map<string, number | null>[]): Map<string, number | null> {
+    const combined = new Map<string, number | null>();
+    for (const values of series) {
+      for (const [key, value] of values) combined.set(key, value);
+    }
+    return combined;
+  }
+
+  private historySeries(
+    page: HistorySeriesPageDto | undefined,
+    group: 'measured' | 'projected',
+    key: string,
+    scale = 1,
+  ): Map<string, number | null> {
+    const values = new Map<string, number | null>();
+    for (const point of page?.items ?? []) {
+      const value = point[group]?.[key];
+      values.set(this.timeKey(point.at), typeof value === 'number' && Number.isFinite(value) ? value * scale : null);
+    }
+    return values;
+  }
+
+  private futureBoundarySeries(
+    slots: PlanningTimelineSlotDto[],
+    startValue: (slot: PlanningTimelineSlotDto, index: number) => number | null | undefined,
+    endValue: (slot: PlanningTimelineSlotDto, index: number) => number | null | undefined = startValue,
+  ): Map<string, number | null> {
+    const values = new Map<string, number | null>();
+    slots.forEach((slot, index) => values.set(this.timeKey(slot.start), startValue(slot, index) ?? null));
+    if (slots.length) {
+      const last = slots.length - 1;
+      values.set(this.timeKey(slots[last].end), endValue(slots[last], last) ?? null);
+    }
+    return values;
+  }
+
+  private futureDiscreteSeries(
+    slots: PlanningTimelineSlotDto[],
+    value: (slot: PlanningTimelineSlotDto, index: number) => number,
+  ): Map<string, number | null> {
+    return this.futureBoundarySeries(slots, value, value);
+  }
+
+  private historyPageForHeater(heaterId: string): HistorySeriesPageDto | undefined {
+    return this.measuredHistory()?.heaters.get(heaterId);
+  }
+
+  private historyInstants(): string[] {
+    const values = new Map<string, string>();
+    const history = this.measuredHistory();
+    for (const point of history?.installation.items ?? []) values.set(this.timeKey(point.at), point.at);
+    for (const page of history?.heaters.values() ?? []) {
+      for (const point of page.items) values.set(this.timeKey(point.at), point.at);
+    }
+    return [...values.values()].sort((left, right) => {
+      const leftAt = Date.parse(left);
+      const rightAt = Date.parse(right);
+      if (Number.isFinite(leftAt) && Number.isFinite(rightAt)) return leftAt - rightAt;
+      return left.localeCompare(right);
+    });
+  }
+
+  private historyStoredEnergyPercent(page: HistorySeriesPageDto | undefined, capacityKwh: number, group: 'measured' | 'projected'): Map<string, number | null> {
+    const values = this.historySeries(page, group, 'stored_energy_kwh');
+    if (capacityKwh <= 0) return new Map([...values.keys()].map((key) => [key, null]));
+    return new Map([...values.entries()].map(([key, value]) => [key, value === null ? null : Math.max(0, Math.min(100, value / capacityKwh * 100))]));
+  }
+
+  private historyPowerValue(value: number | null): string {
+    return value === null ? 'sin dato' : this.powerValue(value);
+  }
+
   private boundaryLabels(slots: PlanningTimelineSlotDto[]): string[] {
     if (!slots.length) return [];
     return [...slots.map((slot) => this.dateTime(slot.start)), this.dateTime(slots[slots.length - 1].end)];
@@ -1896,31 +2426,53 @@ export class Planning implements AfterViewInit, OnDestroy {
         return;
       }
       if (!data.plan || !timeline.length || !this.temperatureCanvas || !this.heaterCanvas || !this.aggregateCanvas || !this.cumulativeCanvas) return;
-      const fullLabels = this.boundaryLabels(timeline);
+      const axis = this.analysisAxis(data, timeline);
+      const fullLabels = axis.labels;
       const labels = this.intervalLabels(fullLabels);
+      const cuePlugin = this.analysisCuePlugin(this.analysisCueState(data, timeline, axis));
       const colors = ['#2457a6', '#d46b28', '#3b8c68', '#8a4f9e', '#9b7a21'];
-      const indoorSeries = data.heaters.map((heater) => this.boundarySeries(
-        timeline,
-        (slot) => slot.indoor_temperature_c_by_heater?.[heater.id],
-        (slot) => slot.indoor_temperature_next_c_by_heater?.[heater.id],
+      const installation = this.measuredHistory()?.installation;
+      const measuredOutdoor = this.historySeries(installation, 'measured', 'outdoor_temperature_c');
+      const projectedOutdoor = this.combineSeries(
+        this.historySeries(installation, 'projected', 'outdoor_temperature_c'),
+        this.futureBoundarySeries(timeline, (slot) => slot.temperature_c, (slot) => slot.temperature_c),
+      );
+      const indoorMeasured = data.heaters.map((heater) => this.historySeries(this.historyPageForHeater(heater.id), 'measured', 'indoor_temperature_c'));
+      const indoorProjected = data.heaters.map((heater) => this.combineSeries(
+        this.historySeries(this.historyPageForHeater(heater.id), 'projected', 'indoor_temperature_c'),
+        this.futureBoundarySeries(
+          timeline,
+          (slot) => slot.indoor_temperature_c_by_heater?.[heater.id],
+          (slot) => slot.indoor_temperature_next_c_by_heater?.[heater.id],
+        ),
       ));
-      const targetSeries = data.heaters.map((heater) => this.boundarySeries(
+      const targetSeries = data.heaters.map((heater) => this.futureBoundarySeries(
         timeline,
         (slot) => slot.target_temperature_c_by_heater?.[heater.id],
         (slot) => slot.target_temperature_c_by_heater?.[heater.id],
       ));
-      const outdoorSeries: Array<number | null> = [
-        ...timeline.map((slot) => slot.temperature_c),
-        timeline[timeline.length - 1].temperature_c,
-      ];
+      const indoorMeasuredSeries = indoorMeasured.map((series) => this.axisSeries(axis, series));
+      const indoorProjectedSeries = indoorProjected.map((series) => this.axisSeries(axis, series));
+      const targetAxisSeries = targetSeries.map((series) => this.axisSeries(axis, series));
+      const outdoorMeasuredSeries = this.axisSeries(axis, measuredOutdoor);
+      const outdoorProjectedSeries = this.axisSeries(axis, projectedOutdoor);
       this.charts.push(new Chart(this.temperatureCanvas.nativeElement, {
         type: 'line',
         data: {
           labels,
           datasets: [
             ...data.heaters.map((heater, index) => ({
-              label: `${heater.name} interior (°C)`,
-              data: indoorSeries[index],
+              label: `${heater.name} interior proyectado (°C)`,
+              data: indoorProjectedSeries[index],
+              borderColor: colors[index % colors.length],
+              backgroundColor: `${colors[index % colors.length]}22`,
+              tension: 0,
+              borderDash: [6, 4],
+              spanGaps: false,
+            })),
+            ...data.heaters.map((heater, index) => ({
+              label: `${heater.name} interior medido (°C)`,
+              data: indoorMeasuredSeries[index],
               borderColor: colors[index % colors.length],
               backgroundColor: `${colors[index % colors.length]}22`,
               tension: 0,
@@ -1928,7 +2480,7 @@ export class Planning implements AfterViewInit, OnDestroy {
             })),
             ...data.heaters.map((heater, index) => ({
               label: `${heater.name} objetivo (°C)`,
-              data: targetSeries[index],
+              data: targetAxisSeries[index],
               borderColor: colors[index % colors.length],
               borderDash: [4, 3],
               pointRadius: 0,
@@ -1936,51 +2488,110 @@ export class Planning implements AfterViewInit, OnDestroy {
               spanGaps: false,
             })),
             {
-              label: 'Previsión exterior (°C)',
-              data: outdoorSeries,
+              label: 'Exterior proyectado (°C)',
+              data: outdoorProjectedSeries,
               borderColor: '#6b7280',
               backgroundColor: '#6b728022',
               borderDash: [6, 4],
               tension: 0,
               spanGaps: false,
             },
+            {
+              label: 'Exterior medido (°C)',
+              data: outdoorMeasuredSeries,
+              borderColor: '#2563eb',
+              backgroundColor: '#2563eb22',
+              tension: 0,
+              spanGaps: false,
+            },
           ],
         },
-        options: this.chartOptions<'line'>(fullLabels, '°C', undefined, this.temperatureAxisRange([...indoorSeries, ...targetSeries, outdoorSeries])),
+        options: this.chartOptions<'line'>(fullLabels, '°C', undefined, this.temperatureAxisRange([...indoorMeasuredSeries, ...indoorProjectedSeries, ...targetAxisSeries, outdoorMeasuredSeries, outdoorProjectedSeries])),
+        plugins: [cuePlugin],
       }));
 
+      const heaterMeasuredSeries = data.heaters.map((heater) => this.axisSeries(axis, this.historySeries(this.historyPageForHeater(heater.id), 'measured', 'confirmed_charge_power_w', 1 / 1000)));
+      const heaterProjectedSeries = data.heaters.map((heater) => this.axisSeries(axis, this.combineSeries(
+        this.historySeries(this.historyPageForHeater(heater.id), 'projected', 'charge_power_w', 1 / 1000),
+        this.futureDiscreteSeries(timeline, (_slot, slotIndex) => this.heaterActiveInSlot(data, slotIndex, heater.id) ? this.kilowatts(heater.power_w) : 0),
+      )));
       this.charts.push(new Chart(this.heaterCanvas.nativeElement, {
         type: 'line',
-        data: { labels, datasets: data.heaters.map((heater, index) => ({
-          label: heater.name,
-          data: this.discreteSeries(timeline, (_slot, slotIndex) => this.heaterActiveInSlot(data, slotIndex, heater.id) ? this.kilowatts(heater.power_w) : 0),
-          borderColor: colors[index % colors.length],
-          backgroundColor: `${colors[index % colors.length]}cc`,
-          stepped: 'after' as const,
-          tension: 0,
-          pointRadius: 0,
-        })) },
+        data: { labels, datasets: data.heaters.flatMap((heater, index) => [
+          {
+            label: `${heater.name} proyectado`,
+            data: heaterProjectedSeries[index],
+            borderColor: colors[index % colors.length],
+            backgroundColor: `${colors[index % colors.length]}cc`,
+            borderDash: [6, 4],
+            stepped: 'after' as const,
+            tension: 0,
+            pointRadius: 0,
+            spanGaps: false,
+          },
+          {
+            label: `${heater.name} medido`,
+            data: heaterMeasuredSeries[index],
+            borderColor: colors[index % colors.length],
+            backgroundColor: `${colors[index % colors.length]}55`,
+            stepped: 'after' as const,
+            tension: 0,
+            pointRadius: 2,
+            spanGaps: false,
+          },
+        ]) },
         options: this.chartOptions<'line'>(fullLabels, 'kW'),
+        plugins: [cuePlugin],
       }));
 
+      const aggregateMeasuredSeries = this.axisSeries(axis, this.historySeries(installation, 'measured', 'aggregate_charge_power_w', 1 / 1000));
+      const aggregateProjectedSeries = this.axisSeries(axis, this.combineSeries(
+        this.historySeries(installation, 'projected', 'aggregate_charge_power_w', 1 / 1000),
+        this.futureDiscreteSeries(timeline, (_slot, slotIndex) => this.aggregatePowerKw(data, slotIndex)),
+      ));
       this.charts.push(new Chart(this.aggregateCanvas.nativeElement, {
         type: 'line',
-        data: { labels, datasets: [{ label: 'Potencia agregada (kW)', data: this.discreteSeries(timeline, (_slot, slotIndex) => this.aggregatePowerKw(data, slotIndex)), borderColor: '#2457a6', backgroundColor: '#2457a688', stepped: 'after' as const, tension: 0, pointRadius: 0 }, { label: 'Carga base (kW)', data: this.discreteSeries(timeline, () => this.kilowatts(data.base_load_w)), borderColor: '#6b7280', borderDash: [3, 3], stepped: 'after' as const, pointRadius: 0 }, { label: 'Límite contratado (kW)', data: this.discreteSeries(timeline, () => this.kilowatts(data.max_total_power_w)), borderColor: '#b33a3a', stepped: 'after' as const, pointRadius: 0 }, { label: 'Límite calefacción (kW)', data: this.discreteSeries(timeline, () => this.kilowatts(data.max_heating_power_w || data.max_total_power_w)), borderColor: '#d46b28', stepped: 'after' as const, pointRadius: 0 }] },
+        data: { labels, datasets: [{ label: 'Potencia agregada proyectada (kW)', data: aggregateProjectedSeries, borderColor: '#2457a6', backgroundColor: '#2457a688', borderDash: [6, 4], stepped: 'after' as const, tension: 0, pointRadius: 0, spanGaps: false }, { label: 'Potencia agregada medida (kW)', data: aggregateMeasuredSeries, borderColor: '#059669', backgroundColor: '#05966955', stepped: 'after' as const, pointRadius: 2, spanGaps: false }, { label: 'Carga base (kW)', data: this.axisSeries(axis, this.futureDiscreteSeries(timeline, () => this.kilowatts(data.base_load_w))), borderColor: '#6b7280', borderDash: [3, 3], stepped: 'after' as const, pointRadius: 0 }, { label: 'Límite contratado (kW)', data: this.axisSeries(axis, this.futureDiscreteSeries(timeline, () => this.kilowatts(data.max_total_power_w))), borderColor: '#b33a3a', stepped: 'after' as const, pointRadius: 0 }, { label: 'Límite calefacción (kW)', data: this.axisSeries(axis, this.futureDiscreteSeries(timeline, () => this.kilowatts(data.max_heating_power_w || data.max_total_power_w))), borderColor: '#d46b28', stepped: 'after' as const, pointRadius: 0 }] },
         options: this.chartOptions<'line'>(fullLabels, 'kW'),
+        plugins: [cuePlugin],
       }));
 
+      const storedMeasuredSeries = data.heaters.map((heater) => this.axisSeries(axis, this.historyStoredEnergyPercent(this.historyPageForHeater(heater.id), heater.capacity_kwh, 'measured')));
+      const storedProjectedSeries = data.heaters.map((heater) => this.axisSeries(axis, this.combineSeries(
+        this.historyStoredEnergyPercent(this.historyPageForHeater(heater.id), heater.capacity_kwh, 'projected'),
+        this.futureBoundarySeries(
+          timeline,
+          (_slot, slotIndex) => this.storedEnergyPercent(data, heater.id, slotIndex),
+          (_slot, slotIndex) => this.storedEnergyNextPercent(data, heater.id, slotIndex),
+        ),
+      )));
       this.charts.push(new Chart(this.cumulativeCanvas.nativeElement, {
         type: 'line',
-        data: { labels, datasets: data.heaters.map((heater, index) => ({
-          label: `${heater.name} (%)`,
-          data: this.discreteBoundarySeries(timeline, (slotIndex) => this.storedEnergyPercent(data, heater.id, slotIndex), (slotIndex) => this.storedEnergyNextPercent(data, heater.id, slotIndex)),
-          borderColor: colors[index % colors.length],
-          backgroundColor: `${colors[index % colors.length]}22`,
-          stepped: 'after' as const,
-          tension: 0,
-          pointRadius: 0,
-        })) },
+        data: { labels, datasets: data.heaters.flatMap((heater, index) => [
+          {
+            label: `${heater.name} proyectada (%)`,
+            data: storedProjectedSeries[index],
+            borderColor: colors[index % colors.length],
+            backgroundColor: `${colors[index % colors.length]}22`,
+            borderDash: [6, 4],
+            stepped: 'after' as const,
+            tension: 0,
+            pointRadius: 0,
+            spanGaps: false,
+          },
+          {
+            label: `${heater.name} medida (%)`,
+            data: storedMeasuredSeries[index],
+            borderColor: colors[index % colors.length],
+            backgroundColor: `${colors[index % colors.length]}55`,
+            stepped: 'after' as const,
+            tension: 0,
+            pointRadius: 2,
+            spanGaps: false,
+          },
+        ]) },
         options: this.chartOptions<'line'>(fullLabels, 'Energía almacenada (%)', undefined, { min: 0, max: 100 }),
+        plugins: [cuePlugin],
       }));
     } catch {
       // Canvas is unavailable in some browsers/test environments. The table is

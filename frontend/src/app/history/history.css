@@ -17,6 +17,8 @@ h2 { margin: 0; color: var(--ink); font-size: 1.3rem; letter-spacing: -.01em; }
 .filters { display: flex; align-items: flex-end; flex-wrap: wrap; gap: .75rem; margin-top: 1.15rem; }
 .filters mat-form-field { width: min(100%, 15rem); }
 .filters button { min-height: 3.5rem; }
+.history-window { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; margin-top: 1.15rem; color: var(--muted); }
+.history-window .selected-window { border-color: var(--primary); background: #e8f0ff; color: var(--primary); }
 .banner { display: flex; align-items: flex-start; justify-content: space-between; gap: .85rem 1rem; padding: .8rem 1rem; margin: 1rem 0; border-left: 4px solid; }
 .banner-content { display: flex; align-items: flex-start; gap: .65rem; min-width: 0; }
 .banner-content mat-icon { flex: 0 0 auto; }

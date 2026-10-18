@@ -13,8 +13,8 @@ active plan and the control evidence, and this module decides.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping, Sequence
 
 from .topics import accumulator_topics
@@ -209,9 +209,81 @@ def resolve_discharge_commands(
     return tuple(result)
 
 
+def apply_calibration_discharge_overrides(
+    commands: Sequence[DischargeCommand],
+    *,
+    projection: Mapping[str, Any] | None,
+    at: datetime,
+    automatic_control_enabled: bool = True,
+    controller_state_is_current: bool = True,
+    relay_test_in_progress: bool = False,
+) -> tuple[DischargeCommand, ...]:
+    """Project the durable calibration command over plan-derived discharge.
+
+    The MQTT publisher is the existing authority for this projection.  Keep
+    the exact same safety gates and short-lived authorization window available
+    to other observers so a persisted command cannot disagree with what MQTT
+    publishes during calibration.
+    """
+    if (
+        relay_test_in_progress
+        or not bool(controller_state_is_current)
+        or not bool(automatic_control_enabled)
+    ):
+        return tuple(commands)
+
+    now = at
+    calibration_projection = projection if isinstance(projection, Mapping) else {}
+    adjusted: list[DischargeCommand] = []
+    for command in commands:
+        value = calibration_projection.get(command.heater_id)
+        calibration = value if isinstance(value, Mapping) else None
+        payload = calibration.get("commands") if calibration is not None else None
+        authorized_at = _parse_instant(
+            payload.get("authorized_at") if isinstance(payload, Mapping) else None
+        )
+        if isinstance(payload, Mapping) and (
+            bool(payload.get("discharge"))
+            and authorized_at is not None
+            and timedelta(0) <= now - authorized_at <= timedelta(seconds=30)
+        ):
+            adjusted.append(
+                replace(
+                    command,
+                    enabled=True,
+                    setpoint_c=(
+                        None
+                        if payload.get("setpoint_temperature_c") is None
+                        else float(payload["setpoint_temperature_c"])
+                    ),
+                )
+            )
+        elif isinstance(calibration, Mapping) and "commands" in calibration:
+            # An active baseline/charge/cool phase owns this heater's planned
+            # discharge too. Do not let a stale plan keep releasing heat while
+            # the calibration output is OFF.
+            adjusted.append(replace(command, enabled=False, setpoint_c=None))
+        else:
+            adjusted.append(command)
+    return tuple(adjusted)
+
+
+def _parse_instant(value: object) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+
+
 __all__ = [
     "HEAT_EPSILON_KWH",
     "DischargeCommand",
     "NO_SETPOINT",
+    "apply_calibration_discharge_overrides",
     "resolve_discharge_commands",
 ]

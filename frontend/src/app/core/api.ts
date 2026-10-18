@@ -33,6 +33,7 @@ import type {
   TemperatureTargetRequest, PlanningPreviewDto, PlanningPreviewJobDto, AutomaticPlanAuditPage,
   ControllerLogPageDto, ControllerLogLevel,
   TransitionHistoryDto,
+  HistorySeriesPageDto, HistorySeriesScope,
   RelayTestStartDto, RelayTestViewDto,
   DatabaseCandidateDto, MigrationDto, OnboardingStatusDto, SecretEditDto,
   SystemConfigurationDto, SystemSection, TopologyDto, ConnectionTestDto,
@@ -51,6 +52,15 @@ export interface HistoryQuery {
   /** Opaque: passed back exactly as the API gave it. */
   cursor?: string;
   heaterId?: string;
+}
+
+export interface HistorySeriesQuery {
+  from: string;
+  to: string;
+  scope: HistorySeriesScope;
+  heaterId?: string;
+  limit?: number;
+  cursor?: string;
 }
 
 @Injectable({ providedIn: 'root' })
@@ -228,6 +238,17 @@ export class Api {
     return this.http.get<PageDto<TransitionHistoryDto>>(`${BASE}/history/transitions`, {
       params: this.historyParams(query),
     });
+  }
+  historySeries(query: HistorySeriesQuery): Observable<HistorySeriesPageDto> {
+    const params: Record<string, string | number> = {
+      from: query.from,
+      to: query.to,
+      scope: query.scope,
+    };
+    if (query.heaterId) params['heater_id'] = query.heaterId;
+    if (query.limit !== undefined) params['limit'] = query.limit;
+    if (query.cursor) params['cursor'] = query.cursor;
+    return this.http.get<HistorySeriesPageDto>(`${BASE}/history/series`, { params });
   }
   planningAudit(query: Pick<HistoryQuery, 'from' | 'to' | 'limit'> = {}): Observable<AutomaticPlanAuditPage> {
     return this.http.get<AutomaticPlanAuditPage>(`${BASE}/history/planning-audit`, { params: this.historyParams(query) });
