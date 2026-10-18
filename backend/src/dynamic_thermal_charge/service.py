@@ -74,6 +74,7 @@ class ControllerService:
         mark_recalculation_processed: Callable[[int], None] | None = None,
         alerts=None,
         deviation_check: Callable[[datetime], bool] | None = None,
+        measurement_sampler: Callable[[datetime], None] | None = None,
     ) -> None:
         self._controller = controller
         self._store = store
@@ -90,6 +91,7 @@ class ControllerService:
         self._alerts = alerts
         self._alert_failure: str | None = None
         self._deviation_check = deviation_check
+        self._measurement_sampler = measurement_sampler
         self._deviation_failure: str | None = None
         self._current_plan_ref: PlanRef | None = None
         self._degraded = False
@@ -143,6 +145,7 @@ class ControllerService:
                 ):
                     plan, next_refresh = self._try_refresh(now, plan)
                 self._controller.apply(plan, now)
+                self._sample_measurements(now)
                 # Published every iteration, not only on refresh: refreshing can
                 # be hours apart, and a dead controller would look alive for all
                 # of it. Never raises, by contract.
@@ -250,6 +253,17 @@ class ControllerService:
             ),
             plan_ref=self._current_plan_ref,
         )
+
+    def _sample_measurements(self, now: datetime) -> None:
+        if self._measurement_sampler is None:
+            return
+        try:
+            self._measurement_sampler(now)
+        except Exception:  # noqa: BLE001 - measured history is failure-open
+            logger.error(
+                "Could not sample measured history; control loop continues",
+                exc_info=True,
+            )
 
     def _deviation_detected(self, now: datetime) -> bool:
         """Whether the active plan stopped serving; never breaks the loop."""

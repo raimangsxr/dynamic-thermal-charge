@@ -4,14 +4,14 @@ import { MatDialog } from '@angular/material/dialog';
 import { TestBed, type ComponentFixture } from '@angular/core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { PlanningDto, PlanningPreviewDto, PlanningPreviewJobDto } from '../core/api.types';
+import type { HistorySeriesPageDto, PlanningDto, PlanningPreviewDto, PlanningPreviewJobDto } from '../core/api.types';
 import { Planning } from './planning';
 
-const chartState = vi.hoisted(() => ({ configs: [] as Array<{ type: string; data: { labels: unknown[]; datasets: Array<{ label?: string; data?: unknown[] }> } }> }));
+const chartState = vi.hoisted(() => ({ configs: [] as Array<{ type: string; data: { labels: unknown[]; datasets: Array<{ label?: string; data?: unknown[] }> }; plugins?: Array<{ id?: string }> }> }));
 
 vi.mock('chart.js/auto', () => ({
   Chart: class {
-    constructor(_target: unknown, config: { type: string; data: { labels: unknown[]; datasets: Array<{ label?: string }> } }) {
+    constructor(_target: unknown, config: { type: string; data: { labels: unknown[]; datasets: Array<{ label?: string; data?: unknown[] }> }; plugins?: Array<{ id?: string }> }) {
       chartState.configs.push(config);
     }
 
@@ -249,6 +249,54 @@ describe('Planning', () => {
     expect(fixture.nativeElement.querySelector('[data-testid="active-planning-tab"]')).toBeNull();
     expect(chartState.configs).toHaveLength(1);
     expect(chartState.configs[0].data.datasets[0].data).toEqual([3, 4]);
+  });
+
+  it('overlays persisted measured history on the active planning charts and preserves the 24-hour query window', async () => {
+    backend.expectOne('/api/v1/planning').flush(PLANNING);
+    await fixture.whenStable();
+    chartState.configs.length = 0;
+    await showAnalysisPlan(fixture);
+
+    const statusAt = '2026-01-16T01:07:00Z';
+    backend.expectOne('/api/v1/status').flush({ observed_at: statusAt });
+    const requests = backend.match((request) => request.url === '/api/v1/history/series');
+    expect(requests).toHaveLength(2);
+    const installationRequest = requests.find((request) => request.request.params.get('scope') === 'installation');
+    const heaterRequest = requests.find((request) => request.request.params.get('scope') === 'heater');
+    expect(installationRequest?.request.params.get('from')).toBe('2026-01-15T01:07:00.000Z');
+    expect(installationRequest?.request.params.get('to')).toBe('2026-01-16T01:07:00.000Z');
+    expect(installationRequest?.request.params.get('limit')).toBe('500');
+    expect(heaterRequest?.request.params.get('heater_id')).toBe('salon');
+
+    const at = '2026-01-15T23:55:00Z';
+    const cues = { forecast_interpolated: false, forecast_stale: false, guaranteed: true, charge_reasons: [], aggregate_limit_reached: false };
+    const installation: HistorySeriesPageDto = {
+      scope: 'installation', heater_id: null, from: '2026-01-15T01:07:00Z', to: statusAt,
+      items: [{ at, measured: { outdoor_temperature_c: 4, aggregate_charge_power_w: 1800 }, projected: { outdoor_temperature_c: 5, aggregate_charge_power_w: 2000 }, governing_plan: null, cues }],
+      limit_applied: 500, has_more: false, next_cursor: null,
+    };
+    const heater: HistorySeriesPageDto = {
+      scope: 'heater', heater_id: 'salon', from: '2026-01-15T01:07:00Z', to: statusAt,
+      items: [{ at, measured: { indoor_temperature_c: 18, stored_energy_kwh: 10, confirmed_charge_power_w: 1800 }, projected: { indoor_temperature_c: 19, stored_energy_kwh: 10.5, charge_power_w: 2000 }, governing_plan: null, cues }],
+      limit_applied: 500, has_more: false, next_cursor: null,
+    };
+    installationRequest?.flush(installation);
+    heaterRequest?.flush(heater);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const charts = chartState.configs.slice(-4);
+    expect(fixture.componentInstance.analysisNow()).toBe(statusAt);
+    expect(charts[0]?.data.labels.length).toBe(4);
+    expect(charts[0]?.data.datasets.some((dataset) => dataset.label === 'Salón interior medido (°C)' && dataset.data?.[0] === 18)).toBe(true);
+    expect(charts[1]?.data.datasets.some((dataset) => dataset.label === 'Salón medido' && dataset.data?.[0] === 1.8)).toBe(true);
+    expect(charts[2]?.data.datasets.some((dataset) => dataset.label === 'Potencia agregada medida (kW)' && dataset.data?.[0] === 1.8)).toBe(true);
+    expect(charts[3]?.data.datasets.some((dataset) => dataset.label === 'Salón medida (%)' && dataset.data?.[0] === 10 / 22.4 * 100)).toBe(true);
+    expect(charts.every((chart) => chart.plugins?.some((plugin) => plugin.id === 'planning-history-cues'))).toBe(true);
+    expect(fixture.nativeElement.querySelector('[data-testid="planning-measured-history"]')?.textContent).toContain('muestras');
+    expect(fixture.componentInstance.historyNowPosition('2026-01-16T02:00:00Z', [at])).toBe(0);
+    expect(fixture.componentInstance.historyNowPosition('bad timestamp', [at])).toBeNull();
+    expect(fixture.componentInstance.historyNowPosition('2026-01-16T02:00:00Z', [])).toBeNull();
   });
 
   it('does not expose per-accumulator discharge topic configuration', async () => {
@@ -957,12 +1005,12 @@ describe('Planning', () => {
     expect(open.mock.calls.slice(0, 4).every(([, config]) => (config as { data?: { kind?: string } }).data?.kind === 'planning-table')).toBe(true);
     expect(open.mock.calls.slice(0, 4).every(([, config]) => (config as { width?: string; maxWidth?: string }).width === 'min(98vw, 192rem)' && (config as { maxWidth?: string }).maxWidth === '98vw')).toBe(true);
     expect((open.mock.calls[0][1] as { data?: { table?: { headers: string[]; rows: string[][] } } }).data?.table).toMatchObject({
-      headers: ['Intervalo', 'Salón interior inicio (°C)', 'Salón interior fin (°C)', 'Salón objetivo (°C)', 'Exterior (°C)'],
-      rows: [[fixture.componentInstance.slotRangeLabel(PLANNING.timeline[0]), '18.5', '18.9', '21.0', '3.0'], [fixture.componentInstance.slotRangeLabel(PLANNING.timeline[1]), '18.9', '18.2', '21.0', '3.5']],
+      headers: ['Intervalo', 'Salón interior inicio (°C)', 'Salón interior fin (°C)', 'Salón objetivo (°C)', 'Exterior (°C)', 'Señales'],
+      rows: [[fixture.componentInstance.slotRangeLabel(PLANNING.timeline[0]), '18.5', '18.9', '21.0', '3.0', 'sin señal adicional'], [fixture.componentInstance.slotRangeLabel(PLANNING.timeline[1]), '18.9', '18.2', '21.0', '3.5', 'sin señal adicional']],
     });
-    expect((open.mock.calls[1][1] as { data?: { table?: { headers: string[]; rows: string[][] } } }).data?.table?.headers).toEqual(['Intervalo', 'Salón (W)', 'Total (W)']);
-    expect((open.mock.calls[2][1] as { data?: { table?: { headers: string[] } } }).data?.table?.headers).toEqual(['Intervalo', 'Total (W)', 'Carga base (W)', 'Límite contratado (W)', 'Límite calefacción (W)']);
-    expect((open.mock.calls[3][1] as { data?: { table?: { headers: string[] } } }).data?.table?.headers).toEqual(['Intervalo', 'Salón inicio (kWh)', 'Salón fin (kWh)']);
+    expect((open.mock.calls[1][1] as { data?: { table?: { headers: string[]; rows: string[][] } } }).data?.table?.headers).toEqual(['Intervalo', 'Salón (W)', 'Total (W)', 'Señales']);
+    expect((open.mock.calls[2][1] as { data?: { table?: { headers: string[] } } }).data?.table?.headers).toEqual(['Intervalo', 'Total (W)', 'Carga base (W)', 'Límite contratado (W)', 'Límite calefacción (W)', 'Señales']);
+    expect((open.mock.calls[3][1] as { data?: { table?: { headers: string[] } } }).data?.table?.headers).toEqual(['Intervalo', 'Salón inicio (kWh)', 'Salón fin (kWh)', 'Señales']);
     expect((open.mock.calls[4][1] as { data?: { kind?: string } }).data?.kind).toBe('chart');
     expect((open.mock.calls[5][1] as { data?: { kind?: string } }).data?.kind).toBe('preview');
     expect((open.mock.calls[4][1] as { data?: { chart?: { labels: string[] } } }).data?.chart?.labels.length).toBe(2);
@@ -976,10 +1024,10 @@ describe('Planning', () => {
     await showAnalysisPlan(fixture);
     const element = fixture.nativeElement as HTMLElement;
     const details = [
-      { testId: 'temperature-chart-detail-button', headers: ['Intervalo', 'Salón interior inicio (°C)', 'Salón interior fin (°C)', 'Salón objetivo (°C)', 'Exterior (°C)'], values: ['18.5', '18.9', '21.0', '3.0'] },
-      { testId: 'heater-chart-detail-button', headers: ['Intervalo', 'Salón (W)', 'Total (W)'], values: ['2800', '2800'] },
-      { testId: 'aggregate-chart-detail-button', headers: ['Intervalo', 'Total (W)', 'Carga base (W)', 'Límite contratado (W)', 'Límite calefacción (W)'], values: ['2800', '600', '5200', '4200'] },
-      { testId: 'cumulative-chart-detail-button', headers: ['Intervalo', 'Salón inicio (kWh)', 'Salón fin (kWh)'], values: ['10.90 kWh', '10.50 kWh'] },
+      { testId: 'temperature-chart-detail-button', headers: ['Intervalo', 'Salón interior inicio (°C)', 'Salón interior fin (°C)', 'Salón objetivo (°C)', 'Exterior (°C)', 'Señales'], values: ['18.5', '18.9', '21.0', '3.0', 'sin señal adicional'] },
+      { testId: 'heater-chart-detail-button', headers: ['Intervalo', 'Salón (W)', 'Total (W)', 'Señales'], values: ['2800', '2800', 'sin señal adicional'] },
+      { testId: 'aggregate-chart-detail-button', headers: ['Intervalo', 'Total (W)', 'Carga base (W)', 'Límite contratado (W)', 'Límite calefacción (W)', 'Señales'], values: ['2800', '600', '5200', '4200', 'sin señal adicional'] },
+      { testId: 'cumulative-chart-detail-button', headers: ['Intervalo', 'Salón inicio (kWh)', 'Salón fin (kWh)', 'Señales'], values: ['10.90 kWh', '10.50 kWh', 'sin señal adicional'] },
     ];
 
     for (const detail of details) {
@@ -1015,7 +1063,7 @@ describe('Planning', () => {
     await fixture.whenStable();
 
     const table = document.querySelector<HTMLTableElement>('[data-testid="planning-detail-table"]');
-    expect(Array.from(table?.querySelectorAll('tbody tr:first-child td') ?? []).map((cell) => cell.textContent?.trim())).toEqual(['sin dato', '18.9', '21.0', 'sin dato']);
+    expect(Array.from(table?.querySelectorAll('tbody tr:first-child td') ?? []).map((cell) => cell.textContent?.trim())).toEqual(['sin dato', '18.9', '21.0', 'sin dato', 'sin señal adicional']);
     document.querySelector<HTMLButtonElement>('[data-testid="detail-dialog-close"]')?.click();
     await new Promise((resolve) => setTimeout(resolve, 100));
   });

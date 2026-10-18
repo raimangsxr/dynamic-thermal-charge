@@ -128,6 +128,24 @@
               </div>
             }
 
+            <section class="workspace-panel" aria-labelledby="measured-history-title" data-testid="planning-measured-history">
+              <div class="card-header">
+                <div><h2 id="measured-history-title">Histórico medido</h2><p class="hint">Las gráficas combinan la serie persistida de 5 minutos con el futuro de este plan. Los huecos conservan la ausencia de telemetría.</p></div>
+                @if (measuredHistory()) { <span class="status-chip" data-testid="planning-history-count">{{ historySampleCount() }} muestras</span> }
+                <div class="card-actions" role="group" aria-label="Ventana histórica pasada">
+                  <span>Pasado</span>
+                  <button mat-stroked-button type="button" [class.selected-window]="historyWindowHours() === 6" (click)="selectHistoryWindow(6)">6 h</button>
+                  <button mat-stroked-button type="button" [class.selected-window]="historyWindowHours() === 24" (click)="selectHistoryWindow(24)">24 h</button>
+                  <button mat-stroked-button type="button" [class.selected-window]="historyWindowHours() === 72" (click)="selectHistoryWindow(72)">72 h</button>
+                </div>
+              </div>
+              @if (historyLoading()) { <p class="inline-loading" role="status" aria-live="polite" data-testid="planning-history-loading">Cargando histórico medido…</p> }
+              @if (historyFailure(); as historyError) { <div class="banner alert" role="alert" data-testid="planning-history-error"><strong>{{ historyError.title }}</strong><p>{{ historyError.action }}</p><button mat-stroked-button type="button" (click)="selectHistoryWindow(historyWindowHours())" [disabled]="historyLoading()">Volver a intentar</button></div> }
+              @if (!historyLoading() && !historyFailure() && measuredHistory() && historySampleCount() === 0) { <p class="empty" role="status" data-testid="planning-history-empty">No hay muestras medidas en la ventana seleccionada.</p> }
+              <p class="chart-cues" data-testid="planning-chart-cues"><span class="cue-dot cue-now" aria-hidden="true"></span> Ahora @if (analysisNow()) { ({{ dateTime(analysisNow()) }}) } <span class="cue-dot cue-guaranteed" aria-hidden="true"></span> Franja garantizada <span class="cue-dot cue-interpolated" aria-hidden="true"></span> Previsión interpolada <span class="cue-dot cue-stale" aria-hidden="true"></span> Previsión antigua <span class="cue-key">R</span> Motivo de carga <span class="cue-key cue-limit-key">L</span> Límite agregado
+              </p>
+            </section>
+
             <section class="visualization card" data-testid="temperature-card" aria-labelledby="temperature-title">
               <div class="card-header"><h2 id="temperature-title">Balance térmico por acumulador</h2><button mat-stroked-button type="button" (click)="openTemperatureChartDetails()" data-testid="temperature-chart-detail-button">Ver detalle</button></div>
               <p class="hint">Temperatura interior proyectada, objetivo programado y previsión exterior por intervalo.</p>
