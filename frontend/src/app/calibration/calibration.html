@@ -1,7 +1,7 @@
 <main class="calibration-page">
   <header class="page-heading">
-    <div><p class="eyebrow">Modelo térmico</p><h1>Calibración automática</h1><p>Una estancia por acumulador. La calibración ejecuta ciclos controlados y nunca sustituye un resultado fallido automáticamente.</p><a routerLink="/avisos">Ver la bandeja global de avisos</a></div>
-    <div class="push-actions"><button type="button" (click)="registerPush()">Activar avisos del navegador</button><button type="button" (click)="revokePush()">Revocar avisos</button>@if (pushStatus(); as status) { <span role="status">{{ status }}</span> }</div>
+    <div><p class="eyebrow">Modelo térmico</p><h1>Calibración automática</h1><p>Una estancia por acumulador. La calibración ejecuta ciclos controlados y nunca sustituye un resultado fallido automáticamente.</p></div>
+    <div class="push-actions"><button type="button" (click)="registerPush()">Activar avisos del navegador</button><button type="button" (click)="revokePush()">Revocar avisos</button>@if (pushStatus(); as status) { <span role="status" aria-live="polite" [attr.data-push-status]="status">{{ pushStatusText(status) }}</span> }</div>
   </header>
   @if (message(); as text) { <p class="message" role="status">{{ text }}</p> }
   @if (loading()) { <p>Cargando estancias…</p> }
@@ -11,7 +11,7 @@
         <header><div><h2>{{ card.heater.name }}</h2><p>{{ card.heater.id }}</p></div><strong class="status" [attr.data-status]="card.room.status">{{ statusLabel(card.room.status) }}</strong></header>
         @if (card.room.session; as session) { <p class="progress">Fase: {{ session.phase }} · {{ progress(session) | number:'1.0-0' }}%</p> }
         @if (card.room.terminal_cause) { <p class="cause">{{ card.room.terminal_cause }}</p> }
-        <dl><div><dt>Capacidad</dt><dd>{{ card.room.capacity_kwh_per_c }} kWh/°C</dd></div><div><dt>Pérdida</dt><dd>{{ card.room.loss_kw_per_c }} kW/°C</dd></div><div><dt>Calidad</dt><dd>{{ card.room.quality?.sufficient ? 'suficiente' : 'pendiente' }}</dd></div></dl>
+        <dl><div><dt>Capacidad</dt><dd>{{ card.room.capacity_kwh_per_c | number:'1.0-2' }} kWh/°C</dd></div><div><dt>Pérdida</dt><dd>{{ card.room.loss_kw_per_c | number:'1.0-2' }} kW/°C</dd></div><div><dt>Calidad</dt><dd>{{ card.room.quality?.sufficient ? 'suficiente' : 'pendiente' }}</dd></div></dl>
         <p class="ages">Entradas: interior {{ card.room.input_ages_minutes['indoor_temperature'] === null ? 'sin dato' : (card.room.input_ages_minutes['indoor_temperature'] | number:'1.0-0') + ' min' }} · SOC {{ card.room.input_ages_minutes['soc'] === null ? 'sin dato' : (card.room.input_ages_minutes['soc'] | number:'1.0-0') + ' min' }} · exterior {{ card.room.input_ages_minutes['outdoor_temperature'] === null ? 'sin dato' : (card.room.input_ages_minutes['outdoor_temperature'] | number:'1.0-0') + ' min' }}</p>
         @if (card.room.quality; as quality) { <p class="quality">Muestras {{ quality.sample_count }} · {{ quality.elapsed_hours | number:'1.1-1' }} h · calentamiento {{ quality.heating_windows }} · enfriamiento {{ quality.cooling_windows }} · RMSE {{ quality.rmse_c ?? '—' }} · sesgo {{ quality.bias_c ?? '—' }}</p> }
         @if (card.room.terminal_result; as result) { <details class="result"><summary>Resultado aplicado</summary><pre>{{ result | json }}</pre></details> }

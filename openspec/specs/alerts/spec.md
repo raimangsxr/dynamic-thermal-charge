@@ -69,9 +69,24 @@ planificación.
 Cada terminación de calibración crea un aviso duradero en la bandeja de la
 aplicación. El backend intenta correo por la cola existente de forma
 independiente y crea una tentativa Web Push por cada suscripción activa; cada
-pareja sesión/navegador se deduplica. Falta de VAPID, permiso, suscripción o
-entrega marca `unsupported`, `denied`, `expired` o `error` y nunca cambia el
-resultado de calibración, que sigue visible en la bandeja.
+pareja sesión/navegador se deduplica. La interfaz registra la suscripción con
+las APIs estándar de Notification, Web Push y service worker, y separa el
+navegador o contexto no apto, el permiso, la configuración VAPID y los errores
+de suscripción o registro. En el backend, la falta de VAPID, permiso,
+suscripción o entrega marca `unsupported`, `denied`, `expired` o `error`; la
+interfaz traduce esos estados a mensajes localizados y accionables sin mostrar
+el literal técnico `unsupported`. Ningún fallo cambia el resultado de
+calibración, que sigue visible en la bandeja.
+
+#### Scenario: Activación Web Push compatible
+
+- **WHEN** el navegador está en un contexto seguro, expone Notification, Web Push y service worker, y el operador concede permiso
+- **THEN** la interfaz obtiene la clave pública VAPID, registra el service worker, crea o reutiliza la suscripción y la registra sin clasificar la plataforma como incompatible
+
+#### Scenario: Degradación de activación accionable
+
+- **WHEN** el navegador, el contexto, el permiso, la configuración VAPID o la suscripción impiden activar avisos
+- **THEN** la interfaz muestra un estado localizado y accionable que explica el siguiente paso y no expone el literal técnico `unsupported`
 
 #### Scenario: Push endpoint expired
 

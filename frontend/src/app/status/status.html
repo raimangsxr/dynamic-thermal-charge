@@ -102,7 +102,7 @@
       @if (heaters().length === 0) {
         <p class="empty" data-testid="status-empty">La instalación no tiene ningún acumulador configurado.</p>
       } @else {
-        <ul class="heater-list">
+        <ul class="heater-list" data-testid="heater-list">
           @for (item of heaters(); track item.dto.id) {
             <li class="heater-card" [class.disabled]="!item.dto.enabled" [attr.data-heater]="item.dto.id">
               <div class="heater-card-heading">
