@@ -5,22 +5,41 @@
       <p class="summary" aria-live="polite">{{ current.active_count }} activas · máxima {{ current.maximum_severity ?? '—' }}</p>
     }
   </header>
-  <nav class="tabs" aria-label="Vista de avisos">
-    <button type="button" [class.active]="view() === 'active'" (click)="selectView('active')">Activas</button>
-    <button type="button" [class.active]="view() === 'history'" (click)="selectView('history')">Histórico</button>
-  </nav>
-  @if (message(); as text) { <p role="status" class="message">{{ text }}</p> }
-  @if (loading()) { <p>Cargando avisos…</p> }
-  @if (!loading() && page(); as current) {
-    @if (!current.items.length) { <p class="empty">No hay avisos en esta vista.</p> }
-    <section class="alert-list" aria-label="Lista de avisos">
-      @for (alert of current.items; track alert.id) {
-        <article class="alert-card" [attr.data-severity]="alert.severity">
-          <div class="alert-copy"><div class="alert-meta"><span>{{ alert.severity }}</span><time [attr.datetime]="alert.opened_at">{{ alert.opened_at | date:'short' }}</time></div><h2>{{ alert.title }}</h2><p>{{ alert.body }}</p>@if (alert.resolved_at) { <small>Resuelto {{ alert.resolved_at | date:'short' }}</small> } @if (alert.acknowledged_at) { <small>Acusado {{ alert.acknowledged_at | date:'short' }}</small> }</div>
-          @if (!alert.acknowledged_at) { <button type="button" (click)="acknowledge(alert.id)">Acusar</button> }
-        </article>
-      }
-    </section>
-    @if (current.has_more) { <button type="button" class="load-more" (click)="nextPage()">Cargar más</button> }
-  }
+  <mat-tab-group
+    class="tabs"
+    [selectedIndex]="view() === 'active' ? 0 : 1"
+    (selectedIndexChange)="selectTab($event)"
+    animationDuration="0ms"
+    aria-label="Vista de avisos"
+    data-testid="alerts-tabs">
+    <mat-tab label="Activas">
+      <ng-template matTabContent>
+        <ng-container [ngTemplateOutlet]="alertPanel" [ngTemplateOutletContext]="{ view: 'active' }" />
+      </ng-template>
+    </mat-tab>
+    <mat-tab label="Histórico">
+      <ng-template matTabContent>
+        <ng-container [ngTemplateOutlet]="alertPanel" [ngTemplateOutletContext]="{ view: 'history' }" />
+      </ng-template>
+    </mat-tab>
+  </mat-tab-group>
 </main>
+
+<ng-template #alertPanel let-view="view">
+  <section class="alert-tab-panel" [attr.data-testid]="'alerts-panel-' + view" [attr.aria-label]="view === 'active' ? 'Avisos activos' : 'Avisos históricos'">
+    @if (message(); as text) { <p role="status" class="message">{{ text }}</p> }
+    @if (loading()) { <p>Cargando avisos…</p> }
+    @if (!loading() && page(); as current) {
+      @if (!current.items.length) { <p class="empty">No hay avisos en esta vista.</p> }
+      <section class="alert-list" aria-label="Lista de avisos">
+        @for (alert of current.items; track alert.id) {
+          <mat-card class="alert-card" [attr.data-severity]="alert.severity">
+            <mat-card-content class="alert-copy"><div class="alert-meta"><span>{{ alert.severity }}</span><time [attr.datetime]="alert.opened_at">{{ alert.opened_at | date:'short' }}</time></div><h2>{{ alert.title }}</h2><p>{{ alert.body }}</p>@if (alert.resolved_at) { <small>Resuelto {{ alert.resolved_at | date:'short' }}</small> } @if (alert.acknowledged_at) { <small>Acusado {{ alert.acknowledged_at | date:'short' }}</small> }</mat-card-content>
+            @if (!alert.acknowledged_at) { <mat-card-actions align="end"><button mat-stroked-button color="primary" type="button" (click)="acknowledge(alert.id)"><mat-icon aria-hidden="true">done</mat-icon>Acusar</button></mat-card-actions> }
+          </mat-card>
+        }
+      </section>
+      @if (current.has_more) { <button mat-flat-button color="primary" type="button" class="load-more" (click)="nextPage()"><mat-icon aria-hidden="true">expand_more</mat-icon>Cargar más</button> }
+    }
+  </section>
+</ng-template>

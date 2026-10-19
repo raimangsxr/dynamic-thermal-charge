@@ -1,4 +1,8 @@
 import { CommonModule } from '@angular/common';
+import { MatButtonModule } from '@angular/material/button';
+import { MatCardModule } from '@angular/material/card';
+import { MatIconModule } from '@angular/material/icon';
+import { MatTabsModule } from '@angular/material/tabs';
 import { Component, inject, signal } from '@angular/core';
 
 import { Api } from '../core/api';
@@ -8,7 +12,7 @@ type AlertView = 'active' | 'history';
 
 @Component({
   selector: 'dtc-alerts',
-  imports: [CommonModule],
+  imports: [CommonModule, MatButtonModule, MatCardModule, MatIconModule, MatTabsModule],
   templateUrl: './alerts.html',
   styleUrl: './alerts.css',
 })
@@ -26,6 +30,10 @@ export class Alerts {
   selectView(view: AlertView): void {
     this.view.set(view);
     this.refresh();
+  }
+
+  selectTab(index: number): void {
+    this.selectView(index === 1 ? 'history' : 'active');
   }
 
   acknowledge(id: number): void {

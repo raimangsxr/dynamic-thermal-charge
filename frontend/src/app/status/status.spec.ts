@@ -328,6 +328,20 @@ describe('Status', () => {
     expect(entrada?.textContent).toContain('En reposo');
   });
 
+  it('keeps equipment in one accessible list with name, power and state', () => {
+    const element = load(statusDto());
+    const list = testId(element, 'heater-list');
+    const cards = [...(list?.querySelectorAll<HTMLElement>('[data-heater]') ?? [])];
+
+    expect(cards).toHaveLength(2);
+    expect(cards[0]?.textContent).toContain('Salón');
+    expect(cards[0]?.textContent).toContain('2.8 kW');
+    expect(cards[0]?.textContent).toContain('Cargando');
+    expect(cards[1]?.textContent).toContain('Entrada');
+    expect(cards[1]?.textContent).toContain('2.4 kW');
+    expect(cards[1]?.textContent).toContain('En reposo');
+  });
+
   it('localizes automatic status and deficits while keeping heater names friendly', () => {
     const element = load({
       ...statusDto(),
