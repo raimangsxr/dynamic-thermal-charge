@@ -9,6 +9,7 @@ import { Api } from '../core/api';
 import type { AlertPageDto } from '../core/api.types';
 
 type AlertView = 'active' | 'history';
+type AlertPageSize = 5 | 10 | 20 | 50;
 
 @Component({
   selector: 'dtc-alerts',
@@ -22,6 +23,8 @@ export class Alerts {
   readonly page = signal<AlertPageDto | null>(null);
   readonly loading = signal(true);
   readonly message = signal<string | null>(null);
+  readonly pageSizeOptions: readonly AlertPageSize[] = [5, 10, 20, 50];
+  readonly pageSize = signal<AlertPageSize>(10);
 
   constructor() {
     this.refresh();
@@ -32,12 +35,22 @@ export class Alerts {
     this.refresh();
   }
 
+  selectPageSize(value: number | string): void {
+    const parsed = Number(value);
+    if (!this.pageSizeOptions.some((option) => option === parsed)) return;
+    const size = parsed as AlertPageSize;
+    if (size === this.pageSize()) return;
+    this.pageSize.set(size);
+    this.page.set(null);
+    this.refresh();
+  }
+
   selectTab(index: number): void {
     this.selectView(index === 1 ? 'history' : 'active');
   }
 
   acknowledge(id: number): void {
-    this.api.acknowledgeAlert(id, this.view()).subscribe({
+    this.api.acknowledgeAlert(id, this.view(), this.pageSize()).subscribe({
       next: (page) => this.page.set(page),
       error: () => this.message.set('No se pudo acusar el aviso.'),
     });
@@ -46,7 +59,7 @@ export class Alerts {
   nextPage(): void {
     const current = this.page();
     if (!current?.has_more || !current.next_cursor) return;
-    this.api.alerts(this.view(), 50, current.next_cursor).subscribe({
+    this.api.alerts(this.view(), this.pageSize(), current.next_cursor).subscribe({
       next: (page) => this.page.set({ ...page, items: [...(current.items ?? []), ...page.items] }),
       error: () => this.message.set('No se pudo cargar el histórico.'),
     });
@@ -55,7 +68,7 @@ export class Alerts {
   refresh(): void {
     this.loading.set(true);
     this.message.set(null);
-    this.api.alerts(this.view()).subscribe({
+    this.api.alerts(this.view(), this.pageSize()).subscribe({
       next: (page) => { this.page.set(page); this.loading.set(false); },
       error: () => { this.message.set('No se pudieron cargar los avisos.'); this.loading.set(false); },
     });

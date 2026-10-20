@@ -15,10 +15,6 @@
           [readFailed]="failure() !== null"
         />
       }
-      <button mat-stroked-button type="button" (click)="refresh()" [disabled]="refreshing()" aria-label="Volver a leer el estado de la instalación" data-testid="refresh-status">
-        <mat-icon aria-hidden="true">refresh</mat-icon>
-        {{ refreshing() ? 'Actualizando…' : 'Actualizar' }}
-      </button>
     </div>
   </header>
 
@@ -48,8 +44,6 @@
   }
 
   @if (snapshot(); as data) {
-    <dtc-controller-health [health]="data.controller" />
-
     <div class="summary-grid" aria-label="Indicadores operativos">
       <article class="summary-card metric-card power" data-testid="power" aria-labelledby="power-title">
         <div class="summary-card-heading"><mat-icon aria-hidden="true">bolt</mat-icon><h2 id="power-title">Potencia confirmada</h2></div>
@@ -111,42 +105,24 @@
                 @if (!item.dto.enabled) { <span class="status-chip">Deshabilitado</span> }
               </div>
               <dtc-output-indicator [state]="item.state" />
+              @let telemetry = telemetryFor(item.dto.id);
+              <div class="heater-telemetry" [attr.data-testid]="'heater-telemetry-' + item.dto.id" [attr.data-telemetry-state]="telemetry?.state ?? 'telemetry_stale'">
+                <div class="heater-telemetry-readings">
+                  <div><span>Interior</span><strong>{{ temperature(telemetry?.indoor_temperature_c) }}</strong></div>
+                  <div><span>SOC</span><strong>{{ telemetry?.stored_soc_percent === null || telemetry?.stored_soc_percent === undefined ? 'sin dato' : telemetry.stored_soc_percent + ' %' }}</strong></div>
+                </div>
+                <span class="state-chip" [class.state-ok]="telemetry?.state === 'ready'" [class.state-warning]="telemetry?.state !== 'ready'"><mat-icon aria-hidden="true">{{ telemetryStateIcon(telemetry) }}</mat-icon>{{ telemetryStateLabel(telemetry) }}</span>
+                @if (telemetryMissingFields(telemetry).length) { <small>Falta: {{ telemetryMissingFields(telemetry).join(', ') }}</small> }
+              </div>
             </li>
           }
         </ul>
       }
     </section>
 
-    @if (unmet().length > 0) {
-      <div class="banner warn" role="status" data-testid="unmet">
-        <div class="banner-content"><mat-icon aria-hidden="true">warning</mat-icon><div><strong>Carga solicitada sin atender</strong><ul>@for (allocation of unmet(); track allocation.heater_id) { <li>{{ heaterText(allocation.heater_id) }}: faltan {{ hours(allocation.unmet_minutes) }} h de {{ hours(allocation.requested_minutes) }} h solicitadas</li> }</ul><p>El plan no cabe en la ventana o en el límite de potencia.</p></div></div>
-      </div>
-    }
-
-    @if (isConvergingStatus(data.plan_status)) {
-      <div class="banner warn" role="status" data-testid="plan-converging">
-        <div class="banner-content"><mat-icon aria-hidden="true">autorenew</mat-icon><div><strong>Plan en convergencia</strong><p>El plan activo sigue siendo utilizable y está adaptándose al objetivo térmico.</p><p>Objetivo alcanzado: {{ convergenceText(data) }}@if (data.guaranteed_until) { · cobertura garantizada hasta {{ instant(data.guaranteed_until) }} }.</p></div></div>
-      </div>
-    }
-    @if (data.best_effort) {
-      <div class="banner warn" role="status" data-testid="plan-best-effort">
-        <div class="banner-content"><mat-icon aria-hidden="true">warning</mat-icon><div><strong>Mejor esfuerzo activo</strong><p>El controlador ejecuta el mejor plan físicamente validado y seguirá intentando converger.</p>@if (excludedHeaterText(data); as telemetryExcluded) { <p>Acumuladores excluidos por telemetría incompleta: {{ telemetryExcluded }}</p> }</div></div>
-      </div>
-    } @else if (isDegradedStatus(data.plan_status)) {
-      <div class="banner warn" role="alert" data-testid="plan-degraded">
-        <div class="banner-content"><mat-icon aria-hidden="true">warning</mat-icon><div><strong>Resultado degradado: no activable</strong><p>Se muestra el último plan utilizable, si existe; este resultado no gobierna las salidas.</p></div></div>
-      </div>
-    }
-
     @if (calibratingHeaterText(data); as calibrating) {
       <div class="banner" role="status" data-testid="status-calibration-active">
         <div class="banner-content"><mat-icon aria-hidden="true">thermostat</mat-icon><div><strong>En calibración</strong><p>{{ calibrating }} queda fuera del cálculo mientras dura la sesión. Se reincorporará automáticamente al terminar; no es necesario recuperar telemetría.</p></div></div>
-      </div>
-    }
-
-    @if (data.deficits?.length) {
-      <div class="banner warn" role="status" data-testid="plan-deficits">
-        <div class="banner-content"><mat-icon aria-hidden="true">warning</mat-icon><div><strong>Avisos de planificación</strong><ul>@for (deficit of data.deficits; track $index) { <li>{{ deficitText(deficit) }}</li> }</ul></div></div>
       </div>
     }
 
@@ -169,6 +145,34 @@
         <p class="empty" data-testid="no-plan">{{ absenceText(data.absence_reason) }}</p>
         @if (isInvalidStatus(data.plan_status) || data.absence_reason === 'invalid_automatic_plan') { <p class="warning-text" data-testid="invalid-plan">Las salidas automáticas permanecen apagadas porque el plan no es válido.</p> }
       }
+    @if (unmet().length > 0 || isConvergingStatus(data.plan_status) || data.best_effort || isDegradedStatus(data.plan_status) || data.deficits?.length) {
+      <aside class="planning-notices" aria-label="Avisos de planificación" data-testid="planning-notices">
+        @if (unmet().length > 0) {
+          <div class="banner warn" role="status" data-testid="unmet">
+            <div class="banner-content"><mat-icon aria-hidden="true">warning</mat-icon><div><strong>Carga solicitada sin atender</strong><ul>@for (allocation of unmet(); track allocation.heater_id) { <li>{{ heaterText(allocation.heater_id) }}: faltan {{ hours(allocation.unmet_minutes) }} h de {{ hours(allocation.requested_minutes) }} h solicitadas</li> }</ul><p>El plan no cabe en la ventana o en el límite de potencia.</p></div></div>
+          </div>
+        }
+        @if (isConvergingStatus(data.plan_status)) {
+          <div class="banner warn" role="status" data-testid="plan-converging">
+            <div class="banner-content"><mat-icon aria-hidden="true">autorenew</mat-icon><div><strong>Plan en convergencia</strong><p>El plan activo sigue siendo utilizable y está adaptándose al objetivo térmico.</p><p>Objetivo alcanzado: {{ convergenceText(data) }}@if (data.guaranteed_until) { · cobertura garantizada hasta {{ instant(data.guaranteed_until) }} }.</p></div></div>
+          </div>
+        }
+        @if (data.best_effort) {
+          <div class="banner warn" role="status" data-testid="plan-best-effort">
+            <div class="banner-content"><mat-icon aria-hidden="true">warning</mat-icon><div><strong>Mejor esfuerzo activo</strong><p>El controlador ejecuta el mejor plan físicamente validado y seguirá intentando converger.</p>@if (excludedHeaterText(data); as telemetryExcluded) { <p>Acumuladores excluidos por telemetría incompleta: {{ telemetryExcluded }}</p> }</div></div>
+          </div>
+        } @else if (isDegradedStatus(data.plan_status)) {
+          <div class="banner warn" role="alert" data-testid="plan-degraded">
+            <div class="banner-content"><mat-icon aria-hidden="true">warning</mat-icon><div><strong>Resultado degradado: no activable</strong><p>Se muestra el último plan utilizable, si existe; este resultado no gobierna las salidas.</p></div></div>
+          </div>
+        }
+        @if (data.deficits?.length) {
+          <div class="banner warn" role="status" data-testid="plan-deficits">
+            <div class="banner-content"><mat-icon aria-hidden="true">warning</mat-icon><div><strong>Avisos de planificación</strong><ul>@for (deficit of data.deficits; track $index) { <li>{{ deficitText(deficit) }}</li> }</ul></div></div>
+          </div>
+        }
+      </aside>
+    }
     </section>
 
     <section class="workspace-panel" aria-labelledby="telemetry-title">
@@ -213,7 +217,7 @@
         <div><dt>Última consulta correcta</dt><dd data-testid="forecast-last-success">{{ instant(data.forecast_last_success_at) }}</dd></div>
         <div><dt>Estado de consulta</dt><dd>{{ forecastStatusText(data.forecast_status) }}</dd></div>
         <div><dt>Intentos del ciclo</dt><dd>{{ data.forecast_attempt ?? 0 }} · próximo reintento {{ instant(data.forecast_next_retry_at) }}</dd></div>
-        <div><dt>{{ forecastNextText(data.forecast_next_run_kind) }}</dt><dd>{{ instant(data.forecast_next_run_at) }}</dd></div>
+        <div><dt>{{ forecastNextText(data.forecast_next_run_kind) }}</dt><dd>{{ data.forecast_next_run_at ? instant(data.forecast_next_run_at) : 'No programada' }}</dd></div>
       </dl>
       @if (data.forecast_last_error) { <p class="warning-text" data-testid="forecast-error">Último error del proveedor: {{ data.forecast_last_error }}</p> }
       @if (data.stale_forecast || data.forecast_stale) { <p class="warning-text">La previsión supera la antigüedad configurada y el plan se ejecuta como mejor esfuerzo.</p> }

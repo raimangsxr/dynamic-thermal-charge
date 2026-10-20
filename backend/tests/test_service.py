@@ -70,6 +70,67 @@ def test_service_persists_plan_and_executes_slots(tmp_path) -> None:
     assert driver.changes[-1].enabled is False
 
 
+def test_service_keeps_plan_cadence_separate_from_forecast_cadence() -> None:
+    start = datetime(2026, 1, 1)
+    current = [start]
+    plan_refreshes = []
+    forecast_refreshes = []
+
+    def clock():
+        return current[0]
+
+    def wait(seconds):
+        current[0] += timedelta(seconds=seconds)
+
+    def refresh_plan(now):
+        plan_refreshes.append(now)
+        return PlanRefresh(service_plan(start), 5 * 60)
+
+    def refresh_forecast(now):
+        forecast_refreshes.append(now)
+        return 60
+
+    service = ControllerService(
+        controller=ChargeController(("a", "b"), SimulatedOutputDriver()),
+        store=MemoryActivePlanStore(),
+        refresh_plan=refresh_plan,
+        poll_seconds=60,
+        error_retry_seconds=60,
+        clock=clock,
+        wait=wait,
+        forecast_refresh=refresh_forecast,
+    )
+
+    assert service.run(max_cycles=7) == 0
+    assert plan_refreshes == [start, start + timedelta(minutes=5)]
+    assert forecast_refreshes == [
+        start + timedelta(minutes=minute) for minute in range(0, 7)
+    ]
+
+
+def test_service_uses_the_current_retry_cadence_after_a_generic_failure() -> None:
+    start = datetime(2026, 1, 1)
+    retry_seconds = [15 * 60]
+
+    def fail(_now):
+        raise RuntimeError("forecast unavailable")
+
+    service = ControllerService(
+        controller=ChargeController(("a",), SimulatedOutputDriver()),
+        store=MemoryActivePlanStore(),
+        refresh_plan=fail,
+        poll_seconds=1,
+        error_retry_seconds=lambda: retry_seconds[0],
+    )
+
+    _plan, next_retry = service._try_refresh(start, None)
+    assert next_retry == start + timedelta(minutes=15)
+
+    retry_seconds[0] = 7 * 60
+    _plan, next_retry = service._try_refresh(start + timedelta(minutes=15), None)
+    assert next_retry == start + timedelta(minutes=22)
+
+
 def test_service_keeps_outputs_off_without_any_valid_plan(tmp_path, caplog) -> None:
     now = datetime(2026, 1, 1)
     times = iter((now, now, now))

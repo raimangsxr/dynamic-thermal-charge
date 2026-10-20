@@ -135,20 +135,159 @@ def test_daily_aemet_cycle_continues_an_failed_episode_after_local_midnight():
     manager = DailyAemetForecastManager(
         OfflineProvider(), query_hour=12, timezone_name="UTC"
     )
-    first = datetime(2026, 1, 16, 12, tzinfo=timezone.utc)
+    first = datetime(2026, 1, 16, 23, 30, tzinfo=timezone.utc)
     state = manager.poll(first).state
-    for _ in range(6):
-        state = manager.poll(state.next_retry_at, state).state
 
-    next_day = datetime(2026, 1, 17, 0, 5, tzinfo=timezone.utc)
-    result = manager.poll(next_day, state)
+    crossed_midnight = datetime(2026, 1, 17, 0, 5, tzinfo=timezone.utc)
+    waiting = manager.poll(crossed_midnight, state)
 
-    assert result.state.local_date == next_day.date()
-    assert result.state.completed is False
-    assert result.state.stale is True
-    assert result.state.attempt == 8
-    assert result.state.next_retry_at == next_day + timedelta(hours=1)
-    assert calls[-1] == next_day.date()
+    assert waiting.state.local_date == crossed_midnight.date()
+    assert waiting.state.completed is False
+    assert waiting.state.stale is True
+    assert waiting.state.attempt == 1
+    assert waiting.state.next_retry_at == first + timedelta(hours=1)
+    assert calls == [first.date()]
+
+    result = manager.poll(first + timedelta(hours=1), waiting.state)
+
+    assert result.state.attempt == 2
+    assert result.state.next_retry_at == first + timedelta(hours=2)
+    assert calls[-1] == crossed_midnight.date()
+
+
+def test_daily_aemet_cycle_uses_configured_refresh_and_retry_intervals():
+    calls = []
+
+    class Provider:
+        def forecast_for(self, requested_date):
+            calls.append(requested_date)
+            if len(calls) == 2:
+                raise RuntimeError("offline")
+            return _forecast()
+
+    manager = DailyAemetForecastManager(
+        Provider(),
+        query_hour=12,
+        timezone_name="UTC",
+        retry_minutes=7,
+        refresh_minutes=45,
+    )
+    first = datetime(2026, 1, 16, 12, tzinfo=timezone.utc)
+    successful = manager.poll(first)
+
+    assert successful.state.next_run_at == first + timedelta(minutes=45)
+    assert successful.next_poll_seconds == 45 * 60
+    waiting = manager.poll(first + timedelta(minutes=44), successful.state)
+    assert waiting.forecast == successful.forecast
+    assert len(calls) == 1
+    assert waiting.state == successful.state
+
+    failed = manager.poll(first + timedelta(minutes=45), successful.state)
+    assert failed.state.next_retry_at == first + timedelta(minutes=52)
+    assert failed.next_poll_seconds == 7 * 60
+
+
+def test_daily_aemet_cycle_preserves_a_refresh_after_the_next_daily_anchor():
+    calls = []
+
+    class Provider:
+        def forecast_for(self, requested_date):
+            calls.append(requested_date)
+            return _forecast(
+                datetime.combine(requested_date, datetime.min.time(), tzinfo=timezone.utc)
+            )
+
+    manager = DailyAemetForecastManager(
+        Provider(),
+        query_hour=12,
+        timezone_name="UTC",
+        refresh_minutes=15 * 60,
+    )
+    successful_at = datetime(2026, 1, 16, 23, 30, tzinfo=timezone.utc)
+    successful = manager.poll(successful_at)
+    refresh_at = successful_at + timedelta(minutes=15 * 60)
+    before_refresh = datetime(2026, 1, 17, 12, 5, tzinfo=timezone.utc)
+
+    waiting = manager.poll(before_refresh, successful.state)
+
+    assert waiting.state.completed is True
+    assert waiting.state.next_run_at == refresh_at
+    assert waiting.next_poll_seconds == int((refresh_at - before_refresh).total_seconds())
+    assert calls == [successful_at.date()]
+
+    refreshed = manager.poll(refresh_at, waiting.state)
+
+    assert refreshed.state.last_result == "success"
+    assert calls[-1] == refresh_at.date()
+
+
+def test_daily_aemet_refresh_uses_updated_system_intervals_on_next_cycle(
+    initialised_store, recorder
+):
+    calls = []
+
+    class Provider:
+        def forecast_for(self, requested_date):
+            calls.append(requested_date)
+            if len(calls) == 2:
+                raise RuntimeError("offline")
+            return _forecast(
+                datetime.combine(requested_date, datetime.min.time(), tzinfo=timezone.utc)
+            )
+
+    first = API_NOW
+    initial_delay = _refresh_daily_aemet_forecast(
+        initialised_store,
+        recorder,
+        Provider(),
+        first,
+        query_hour=1,
+        timezone_name="UTC",
+    )
+    initial_next = initialised_store.planning.forecast_cycle_status()[
+        "forecast_next_run_at"
+    ]
+    assert initial_next == first + timedelta(minutes=180)
+    assert initial_delay == 180 * 60
+
+    snapshot = initialised_store.system_configuration.current()
+    initialised_store.system_configuration.update_section(
+        "weather",
+        {"retry_minutes": 7, "refresh_minutes": 23},
+        expected_revision=snapshot.revision,
+        actor="test",
+    )
+
+    failed_at = initial_next
+    retry_delay = _refresh_daily_aemet_forecast(
+        initialised_store,
+        recorder,
+        Provider(),
+        failed_at,
+        query_hour=1,
+        timezone_name="UTC",
+    )
+    retry_at = initialised_store.planning.forecast_cycle_status()[
+        "forecast_next_retry_at"
+    ]
+    assert retry_at == failed_at + timedelta(minutes=7)
+    assert retry_delay == 7 * 60
+
+    refresh_delay = _refresh_daily_aemet_forecast(
+        initialised_store,
+        recorder,
+        Provider(),
+        retry_at,
+        query_hour=1,
+        timezone_name="UTC",
+    )
+
+    assert (
+        initialised_store.planning.forecast_cycle_status()["forecast_next_run_at"]
+        == retry_at + timedelta(minutes=23)
+    )
+    assert refresh_delay == 23 * 60
+    assert calls == [first.date(), failed_at.date(), retry_at.date()]
 
 
 def test_replan_cadence_waits_for_a_slot_boundary_and_never_underflows():

@@ -23,13 +23,17 @@ import {
 } from '@angular/core';
 
 import { Api } from '../core/api';
-import type { ApiErrorDto, PlanningDeficitDto, StatusDto } from '../core/api.types';
+import type {
+  ApiErrorDto,
+  ChargeTelemetryDto,
+  PlanningDeficitDto,
+  StatusDto,
+} from '../core/api.types';
 import { type Explained, UNREACHABLE, explain } from '../core/errors';
 import { outputStateOf } from '../core/output-state';
 import { Poller } from '../core/poll';
 import { OutputIndicator } from '../shared/output-indicator/output-indicator';
 import { formatAge, formatInstant } from '../shared/age/age';
-import { ControllerHealth } from './controller-health/controller-health';
 import { ControllerHealthIndicator } from './controller-health/controller-health-indicator';
 import { formatTemperature } from '../shared/temperature/temperature';
 import {
@@ -44,7 +48,7 @@ import {
 
 @Component({
   selector: 'dtc-status',
-  imports: [DecimalPipe, MatButtonModule, MatIconModule, ControllerHealth, ControllerHealthIndicator, OutputIndicator],
+  imports: [DecimalPipe, MatButtonModule, MatIconModule, ControllerHealthIndicator, OutputIndicator],
   templateUrl: './status.html',
   styleUrl: './status.css',
 })
@@ -85,6 +89,30 @@ export class Status {
   readonly resting = computed(() => this.heaters().filter((item) => item.state.kind === 'off'));
   readonly telemetryReady = computed(() => (this.snapshot()?.telemetry ?? []).filter((item) => item.state === 'ready').length);
   readonly telemetryTotal = computed(() => this.snapshot()?.telemetry?.length ?? 0);
+
+  telemetryFor(heaterId: string): ChargeTelemetryDto | null {
+    return this.snapshot()?.telemetry?.find((item) => item.heater_id === heaterId) ?? null;
+  }
+
+  telemetryStateLabel(telemetry: ChargeTelemetryDto | null): string {
+    if (telemetry?.state === 'calibrating') return 'En calibración';
+    if (telemetry?.state === 'ready') return 'Válida';
+    return telemetry?.state_label || 'Caducada o incompleta';
+  }
+
+  telemetryStateIcon(telemetry: ChargeTelemetryDto | null): string {
+    if (telemetry?.state === 'calibrating') return 'thermostat';
+    if (telemetry?.state === 'ready') return 'check_circle';
+    return 'warning';
+  }
+
+  telemetryMissingFields(telemetry: ChargeTelemetryDto | null): string[] {
+    return telemetry?.missing_fields?.length
+      ? telemetry.missing_fields
+      : telemetry
+        ? []
+        : ['indoor_temperature_c', 'stored_soc_percent'];
+  }
 
   planStatus(status: string | null | undefined): string {
     return planStatusLabel(status);

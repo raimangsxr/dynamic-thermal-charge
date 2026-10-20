@@ -102,17 +102,25 @@ class ForecastCycleState:
 
 
 class DailyAemetCycle:
-    """Schedule one daily request and retry hourly until it succeeds.
+    """Schedule the initial daily request and retry until it succeeds.
 
     The state is deliberately serialisable and injectable; a process restart can
     restore it without resetting the retry count or fabricating a forecast.
     """
 
-    def __init__(self, query_hour: int = 12, timezone_name: str = "UTC") -> None:
+    def __init__(
+        self,
+        query_hour: int = 12,
+        timezone_name: str = "UTC",
+        retry_minutes: int = 60,
+    ) -> None:
         if not 0 <= query_hour <= 23:
             raise ValueError("query_hour must be between 0 and 23")
+        if retry_minutes <= 0:
+            raise ValueError("retry_minutes must be positive")
         self._query_hour = query_hour
         self._zone = ZoneInfo(timezone_name)
+        self._retry_interval = timedelta(minutes=retry_minutes)
 
     def initial_state(self, local_date: date) -> ForecastCycleState:
         scheduled = datetime.combine(local_date, datetime.min.time(), tzinfo=self._zone).replace(hour=self._query_hour)
@@ -129,18 +137,32 @@ class DailyAemetCycle:
             and state.last_result == "error"
             and state.next_retry_at is None
         )
-        return (not state.completed) and (
-            (state.attempt == 0 and moment >= state.scheduled_at)
-            or (state.next_retry_at is not None and moment >= state.next_retry_at)
-            or legacy_retry_due
-        )
+        return (
+            state.attempt == 0
+            and not state.completed
+            and moment >= state.scheduled_at
+        ) or (
+            state.next_retry_at is not None
+            and now.astimezone(timezone.utc) >= state.next_retry_at
+        ) or (
+            state.next_run_at is not None
+            and now.astimezone(timezone.utc) >= state.next_run_at
+        ) or legacy_retry_due
 
     def success(self, state: ForecastCycleState) -> ForecastCycleState:
         return replace(state, next_retry_at=None, last_error=None, stale=False, completed=True)
 
     def failure(self, state: ForecastCycleState, now: datetime, error: str) -> ForecastCycleState:
         attempt = state.attempt + 1
-        return replace(state, attempt=attempt, next_retry_at=now.astimezone(timezone.utc) + timedelta(hours=1), last_error=error, stale=True)
+        return replace(
+            state,
+            attempt=attempt,
+            next_retry_at=now.astimezone(timezone.utc) + self._retry_interval,
+            last_error=error,
+            stale=True,
+            completed=False,
+            next_run_at=None,
+        )
 
 
 class AemetWeatherProvider:

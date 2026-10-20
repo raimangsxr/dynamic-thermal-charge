@@ -27,6 +27,32 @@ evento nacen resueltas.
 - **THEN** la persistencia confirma una sola alerta y una sola entrega por
   suscripción
 
+### Requirement: Proyección compacta y contextual de avisos
+
+La barra superior conserva un enlace a Avisos con contador y nombre accesible;
+su control mide 48 px y su glifo 24 px. La bandeja conserva las vistas
+`active`/`history` y la paginación por cursor, y muestra filas o tarjetas
+compactas con espaciado responsive. El selector ofrece exactamente `5`, `10`,
+`20` y `50`, comienza en `10`, y cada consulta, acuse y página siguiente usa
+el tamaño seleccionado; cambiarlo reinicia el cursor. En Automatización, los
+avisos derivados de asignaciones incumplidas, convergencia, mejor esfuerzo,
+resultado degradado y déficits se muestran una sola vez y al final, después
+del resumen del plan; el aviso específico de calibración queda fuera de ese
+bloque.
+
+#### Scenario: Cambio de tamaño de página
+
+- **WHEN** el operador cambia el tamaño de una vista de Avisos
+- **THEN** la siguiente consulta comienza sin cursor con el nuevo `limit`, y
+  las páginas siguientes y los acuses conservan la vista y ese tamaño
+
+#### Scenario: Avisos de planificación junto al plan
+
+- **WHEN** un plan produce avisos de asignación, convergencia, mejor esfuerzo,
+  degradación o déficit
+- **THEN** cada aviso aparece una vez al final de Automatización, después del
+  resumen del plan, y una alerta de calibración no se duplica en ese bloque
+
 ### Requirement: Canales independientes y alertas informativas
 
 Cada apertura intenta de forma independiente correo y Web Push por cada

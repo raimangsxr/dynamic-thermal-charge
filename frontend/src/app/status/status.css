@@ -54,6 +54,14 @@ h3 { margin: 0; color: var(--ink); font-size: 1rem; }
 .heater-card p { margin: .2rem 0 0; font-size: .84rem; }
 .heater-avatar, .forecast-icon { display: grid; flex: 0 0 auto; place-items: center; width: 2.4rem; height: 2.4rem; border-radius: .7rem; background: #eaf2fd; color: var(--primary); }
 .heater-card dtc-output-indicator { padding-top: .75rem; border-top: 1px solid var(--border); }
+.heater-telemetry { display: grid; gap: .55rem; padding-top: .75rem; border-top: 1px solid var(--border); }
+.heater-telemetry-readings { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .55rem; }
+.heater-telemetry-readings div { display: grid; gap: .12rem; min-width: 0; }
+.heater-telemetry-readings span, .heater-telemetry small { color: var(--muted); font-size: .75rem; }
+.heater-telemetry-readings strong { overflow-wrap: anywhere; font-size: .88rem; }
+.heater-telemetry .state-chip { width: fit-content; }
+.planning-notices { display: grid; gap: .75rem; margin-top: .85rem; }
+.planning-notices .banner { margin: 0; }
 .summary-list { display: grid; gap: .65rem; margin: 1rem 0 0; }
 .summary-list div { display: grid; grid-template-columns: minmax(8rem, .6fr) 1fr; gap: 1rem; }
 .summary-list dt { font-size: .86rem; font-weight: 650; }
