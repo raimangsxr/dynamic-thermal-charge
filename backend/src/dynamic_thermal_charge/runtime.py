@@ -71,7 +71,12 @@ from .scheduler import (
 from .service import ControllerService, PlanRefresh
 from .system_settings import MqttSystemSettings
 from .watchdog import DailyAemetForecastManager, ForecastWatchdog
-from .weather import OutdoorForecast, WeatherProvider, weather_config_from_system
+from .weather import (
+    OutdoorForecast,
+    WeatherProvider,
+    WeatherProviderError,
+    weather_config_from_system,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -180,12 +185,14 @@ def _run_controller(
     provider: WeatherProvider,
     driver_name: str = "simulated",
     system=None,
+    clock: Callable[[], datetime] | None = None,
 ) -> int:
     from .persistence.heartbeat import SqlHeartbeatPublisher
     from .persistence.history import SqlHistoryRecorder
     from .persistence.controller_log import ControllerLogHandler
 
     assert config.weather is not None
+    runtime_clock = clock or (lambda: datetime.now(timezone.utc))
     if store.context is not None:
         store.context.publish_process_revision("controller")
     installation_id = store.repository.installation_id()
@@ -234,7 +241,7 @@ def _run_controller(
             calibration = CalibrationCoordinator(
                 store,
                 owner=heartbeat.runner_id,
-                clock=lambda: datetime.now(timezone.utc),
+                clock=runtime_clock,
                 alerts=alerts,
             )
             controller = ChargeController(
@@ -245,7 +252,7 @@ def _run_controller(
                 allowed_outputs_provider=allowed_outputs,
                 calibration_provider=calibration.outputs,
                 calibration_ownership_provider=lambda: set(
-                    calibration.owned_heater_ids(at=datetime.now(timezone.utc))
+                    calibration.owned_heater_ids(at=runtime_clock())
                 ),
                 calibration_confirmation_provider=(
                     lambda heater_id, _enabled, at: store.calibration.confirm_command(
@@ -346,6 +353,7 @@ def _run_controller(
                     query_hour=int(planning_site["aemet_query_hour"]),
                     timezone_name=timezone_name,
                     weather_fallback=config.weather,
+                    clock=runtime_clock,
                 )
 
             def deviation_check(now: datetime) -> bool:
@@ -602,28 +610,47 @@ def _run_controller(
                 try:
                     cycle = watchdog.poll(start.date())
                 except Exception as exc:
+                    completed_at = runtime_clock()
                     _record_forecast_cycle(
                         store,
                         local_date=start.date(),
                         scheduled_at=now,
-                        attempted_at=now,
+                        attempted_at=completed_at,
                         result="error",
                         error=_safe_forecast_error(exc),
-                        next_run_at=now + timedelta(
+                        next_run_at=completed_at + timedelta(
                             minutes=live_weather.watchdog.retry_minutes
                         ),
                     )
                     raise
+                completed_at = runtime_clock()
                 forecast_ref = history.record_forecast(cycle.forecast)
+                cycle_result = "error" if cycle.degraded else "success"
+                cycle_error = (
+                    _safe_forecast_error(
+                        WeatherProviderError(
+                            f"unexpected forecast source: {cycle.forecast.source}"
+                        )
+                    )
+                    if cycle.degraded
+                    else None
+                )
                 _record_forecast_cycle(
                     store,
                     local_date=start.date(),
                     scheduled_at=now,
-                    attempted_at=now,
-                    result="success",
-                    error=None,
-                    next_run_at=now + timedelta(seconds=cycle.next_poll_seconds),
+                    attempted_at=completed_at,
+                    result=cycle_result,
+                    error=cycle_error,
+                    next_run_at=completed_at + timedelta(
+                        seconds=cycle.next_poll_seconds
+                    ),
                     forecast_ref=forecast_ref,
+                )
+                next_refresh_seconds = _seconds_to_forecast_refresh(
+                    now,
+                    completed_at,
+                    cycle.next_poll_seconds,
                 )
                 plan = _build_plan(
                     live_config,
@@ -638,7 +665,7 @@ def _run_controller(
                     store.context.refresh_fallback(plan=_json_ready(plan))
                 return PlanRefresh(
                     plan=plan,
-                    next_refresh_seconds=cycle.next_poll_seconds,
+                    next_refresh_seconds=next_refresh_seconds,
                     plan_ref=None,
                     installation_revision=live_revision,
                     forecast_ref=forecast_ref,
@@ -667,6 +694,7 @@ def _run_controller(
                     store, config.weather
                 ),
                 forecast_refresh=refresh_aemet,
+                clock=runtime_clock,
             )
             return service.run()
         finally:
@@ -1138,6 +1166,14 @@ def _seconds_to_next_replan(
     )
 
 
+def _seconds_to_forecast_refresh(
+    now: datetime, completed_at: datetime, interval_seconds: int
+) -> int:
+    """Return the delay to the forecast interval after provider completion."""
+    next_run_at = completed_at + timedelta(seconds=interval_seconds)
+    return max(1, math.ceil((next_run_at - now).total_seconds()))
+
+
 def _refresh_daily_aemet_forecast(
     store,
     history,
@@ -1147,8 +1183,9 @@ def _refresh_daily_aemet_forecast(
     query_hour: int,
     timezone_name: str,
     retry_minutes: int | None = None,
-    refresh_minutes: int | None = None,
+    refresh_hours: int | None = None,
     weather_fallback=None,
+    clock: Callable[[], datetime] | None = None,
 ) -> int:
     """Run and durably record the AEMET cycle without stopping planning."""
     zone = ZoneInfo(timezone_name)
@@ -1164,17 +1201,18 @@ def _refresh_daily_aemet_forecast(
                 if retry_minutes is None
                 else retry_minutes
             )
-            refresh_minutes = (
-                live_weather.watchdog.refresh_minutes
-                if refresh_minutes is None
-                else refresh_minutes
+            refresh_hours = (
+                live_weather.watchdog.refresh_hours
+                if refresh_hours is None
+                else refresh_hours
             )
         manager = DailyAemetForecastManager(
             provider,
             query_hour=query_hour,
             timezone_name=timezone_name,
             retry_minutes=60 if retry_minutes is None else retry_minutes,
-            refresh_minutes=180 if refresh_minutes is None else refresh_minutes,
+            refresh_hours=4 if refresh_hours is None else refresh_hours,
+            clock=clock,
         )
         current = store.planning.forecast_cycle(local_date, scheduled_at, now=now)
         result = manager.poll(now, current)

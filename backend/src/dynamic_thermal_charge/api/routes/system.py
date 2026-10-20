@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import timedelta
+from datetime import timedelta, timezone
 import logging
 import socket
 from typing import Any, Literal
@@ -267,7 +267,7 @@ def test_weather(store: Store = Depends(usable_store)) -> dict[str, object]:
     summary="Refresh the AEMET forecast now",
 )
 def refresh_weather(request: Request, store: Store = Depends(usable_store)) -> WeatherRefreshResponse:
-    """Run one additional AEMET request without changing the automatic timer."""
+    """Run one additional AEMET request and restart its durable refresh timer."""
     lock = getattr(request.app.state, "weather_refresh_lock", None)
     if lock is None or not lock.acquire(blocking=False):
         raise ApiError(409, "weather_refresh_in_progress", "ya hay una consulta meteorológica en curso")
@@ -292,10 +292,10 @@ def refresh_weather(request: Request, store: Store = Depends(usable_store)) -> W
         local_date = now.astimezone(ZoneInfo(timezone_name)).date()
         planning = store.planning
         cycle = planning.forecast_cycle(local_date, now)
-        next_run_at = cycle.next_run_at or now + timedelta(minutes=settings.refresh_minutes)
         try:
             forecast = provider.forecast_for(local_date)
         except Exception as exc:
+            completed_at = request.app.state.clock().astimezone(timezone.utc)
             safe_error = _safe_weather_error(exc, secret.value)
             logger.warning(
                 "Manual AEMET refresh failed (%s): %s",
@@ -305,16 +305,18 @@ def refresh_weather(request: Request, store: Store = Depends(usable_store)) -> W
             failed = replace(
                 cycle,
                 attempt=cycle.attempt + 1,
-                last_attempt_at=now,
+                last_attempt_at=completed_at,
                 last_result="error",
                 last_error=safe_error,
                 stale=True,
-                next_retry_at=now + timedelta(minutes=settings.retry_minutes),
+                next_retry_at=completed_at + timedelta(minutes=settings.retry_minutes),
                 next_run_at=None,
             )
             _save_forecast_cycle(planning, failed)
             raise ApiError(503, "weather_refresh_failed", safe_error) from exc
 
+        completed_at = request.app.state.clock().astimezone(timezone.utc)
+        next_run_at = completed_at + timedelta(hours=settings.refresh_hours)
         history = SqlHistoryRecorder(
             store.application_engine or store.engine,
             store.repository.installation_id(),
@@ -323,7 +325,7 @@ def refresh_weather(request: Request, store: Store = Depends(usable_store)) -> W
         forecast_ref = history.record_forecast(forecast)
         completed = replace(
             cycle,
-            last_attempt_at=now,
+            last_attempt_at=completed_at,
             last_result="success",
             last_error=None,
             stale=False,
@@ -334,11 +336,11 @@ def refresh_weather(request: Request, store: Store = Depends(usable_store)) -> W
         return WeatherRefreshResponse(
             status="success",
             forecast_status="success",
-            forecast_last_attempt_at=now,
+            forecast_last_attempt_at=completed_at,
             forecast_last_error=None,
             forecast_next_run_at=next_run_at,
             forecast_next_run_kind="refresh",
-            forecast=_forecast_response(forecast, now),
+            forecast=_forecast_response(forecast, completed_at),
         )
     finally:
         lock.release()

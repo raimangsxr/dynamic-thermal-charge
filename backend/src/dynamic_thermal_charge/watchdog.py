@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 import logging
+from typing import Callable
 
 from .models import WeatherWatchdogConfig
 from .weather import DailyAemetCycle, ForecastCycleState, OutdoorForecast, WeatherProvider, WeatherProviderError
@@ -44,18 +45,20 @@ class ForecastWatchdog:
             logger.info("Weather watchdog recovered primary forecast provider")
 
         self._was_degraded = degraded
-        delay_minutes = (
-            self._config.retry_minutes if degraded else self._config.refresh_minutes
+        delay_seconds = (
+            self._config.retry_minutes * 60
+            if degraded
+            else self._config.refresh_hours * 60 * 60
         )
         logger.info(
-            "Weather watchdog next poll in %d minutes (degraded=%s)",
-            delay_minutes,
+            "Weather watchdog next poll in %d seconds (degraded=%s)",
+            delay_seconds,
             degraded,
         )
         return WatchdogCycle(
             forecast=forecast,
             degraded=degraded,
-            next_poll_seconds=delay_minutes * 60,
+            next_poll_seconds=delay_seconds,
         )
 
 
@@ -80,17 +83,23 @@ class DailyAemetForecastManager:
         query_hour: int = 12,
         timezone_name: str = "UTC",
         retry_minutes: int = 60,
-        refresh_minutes: int = 180,
+        refresh_hours: int = 4,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._provider = provider
-        if refresh_minutes <= 0:
-            raise ValueError("refresh_minutes must be positive")
+        if (
+            isinstance(refresh_hours, bool)
+            or not isinstance(refresh_hours, int)
+            or refresh_hours <= 0
+        ):
+            raise ValueError("refresh_hours must be a positive integer")
         self._cycle = DailyAemetCycle(
             query_hour,
             timezone_name,
             retry_minutes=retry_minutes,
+            refresh_hours=refresh_hours,
         )
-        self._refresh_minutes = refresh_minutes
+        self._clock = clock
         self._last_valid: OutdoorForecast | None = None
 
     def poll(self, now: datetime, state: ForecastCycleState | None = None) -> DailyForecastResult:
@@ -149,20 +158,20 @@ class DailyAemetForecastManager:
                     f"unexpected forecast source: {forecast.source}"
                 )
         except Exception as exc:
+            completed_at = now if self._clock is None else self._clock()
             updated = replace(
-                self._cycle.failure(current, now, str(exc)),
-                last_attempt_at=now,
+                self._cycle.failure(current, completed_at, str(exc)),
+                last_attempt_at=completed_at.astimezone(timezone.utc),
                 last_result="error",
                 next_run_at=None,
             )
             return DailyForecastResult(self._last_valid, updated, _seconds_until(updated, now))
         self._last_valid = forecast
+        completed_at = now if self._clock is None else self._clock()
         updated = replace(
-            self._cycle.success(current),
-            last_attempt_at=now,
+            self._cycle.success(current, completed_at),
+            last_attempt_at=completed_at.astimezone(timezone.utc),
             last_result="success",
-            next_run_at=now.astimezone(timezone.utc)
-            + timedelta(minutes=self._refresh_minutes),
         )
         return DailyForecastResult(forecast, updated, _seconds_until(updated, now))
 

@@ -124,7 +124,7 @@ def example_installation() -> AppConfig:
                 api_key_env="AEMET_API_KEY",
                 timeout_seconds=10.0,
             ),
-            watchdog=WeatherWatchdogConfig(retry_minutes=15, refresh_minutes=180),
+            watchdog=WeatherWatchdogConfig(retry_minutes=15, refresh_hours=4),
         ),
         runtime=RuntimeConfig(poll_seconds=5.0),
     )

@@ -170,20 +170,20 @@ def test_daily_aemet_cycle_uses_configured_refresh_and_retry_intervals():
         query_hour=12,
         timezone_name="UTC",
         retry_minutes=7,
-        refresh_minutes=45,
+        refresh_hours=2,
     )
     first = datetime(2026, 1, 16, 12, tzinfo=timezone.utc)
     successful = manager.poll(first)
 
-    assert successful.state.next_run_at == first + timedelta(minutes=45)
-    assert successful.next_poll_seconds == 45 * 60
-    waiting = manager.poll(first + timedelta(minutes=44), successful.state)
+    assert successful.state.next_run_at == first + timedelta(hours=2)
+    assert successful.next_poll_seconds == 2 * 60 * 60
+    waiting = manager.poll(first + timedelta(hours=1, minutes=59), successful.state)
     assert waiting.forecast == successful.forecast
     assert len(calls) == 1
     assert waiting.state == successful.state
 
-    failed = manager.poll(first + timedelta(minutes=45), successful.state)
-    assert failed.state.next_retry_at == first + timedelta(minutes=52)
+    failed = manager.poll(first + timedelta(hours=2), successful.state)
+    assert failed.state.next_retry_at == first + timedelta(hours=2, minutes=7)
     assert failed.next_poll_seconds == 7 * 60
 
 
@@ -201,11 +201,11 @@ def test_daily_aemet_cycle_preserves_a_refresh_after_the_next_daily_anchor():
         Provider(),
         query_hour=12,
         timezone_name="UTC",
-        refresh_minutes=15 * 60,
+        refresh_hours=15,
     )
     successful_at = datetime(2026, 1, 16, 23, 30, tzinfo=timezone.utc)
     successful = manager.poll(successful_at)
-    refresh_at = successful_at + timedelta(minutes=15 * 60)
+    refresh_at = successful_at + timedelta(hours=15)
     before_refresh = datetime(2026, 1, 17, 12, 5, tzinfo=timezone.utc)
 
     waiting = manager.poll(before_refresh, successful.state)
@@ -247,13 +247,13 @@ def test_daily_aemet_refresh_uses_updated_system_intervals_on_next_cycle(
     initial_next = initialised_store.planning.forecast_cycle_status()[
         "forecast_next_run_at"
     ]
-    assert initial_next == first + timedelta(minutes=180)
-    assert initial_delay == 180 * 60
+    assert initial_next == first + timedelta(hours=4)
+    assert initial_delay == 4 * 60 * 60
 
     snapshot = initialised_store.system_configuration.current()
     initialised_store.system_configuration.update_section(
         "weather",
-        {"retry_minutes": 7, "refresh_minutes": 23},
+        {"retry_minutes": 7, "refresh_hours": 2},
         expected_revision=snapshot.revision,
         actor="test",
     )
@@ -284,9 +284,9 @@ def test_daily_aemet_refresh_uses_updated_system_intervals_on_next_cycle(
 
     assert (
         initialised_store.planning.forecast_cycle_status()["forecast_next_run_at"]
-        == retry_at + timedelta(minutes=23)
+        == retry_at + timedelta(hours=2)
     )
-    assert refresh_delay == 23 * 60
+    assert refresh_delay == 2 * 60 * 60
     assert calls == [first.date(), failed_at.date(), retry_at.date()]
 
 

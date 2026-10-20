@@ -658,13 +658,21 @@ class AemetConfig:
 @dataclass(frozen=True)
 class WeatherWatchdogConfig:
     retry_minutes: int = 15
-    refresh_minutes: int = 180
+    refresh_hours: int = 4
 
     def __post_init__(self) -> None:
-        if self.retry_minutes <= 0:
+        if (
+            isinstance(self.retry_minutes, bool)
+            or not isinstance(self.retry_minutes, int)
+            or self.retry_minutes <= 0
+        ):
             raise ValueError("weather watchdog retry_minutes must be positive")
-        if self.refresh_minutes <= 0:
-            raise ValueError("weather watchdog refresh_minutes must be positive")
+        if (
+            isinstance(self.refresh_hours, bool)
+            or not isinstance(self.refresh_hours, int)
+            or self.refresh_hours <= 0
+        ):
+            raise ValueError("weather watchdog refresh_hours must be a positive integer")
 
 
 @dataclass(frozen=True)

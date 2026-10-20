@@ -21,7 +21,7 @@ from .topology import BootstrapCorruptError, BootstrapIncompatibleError
 from . import SchemaStatus, SchemaVersionError
 
 
-CONFIGURATION_SCHEMA_REVISION = 18
+CONFIGURATION_SCHEMA_REVISION = 19
 APPLICATION_SCHEMA_REVISION = 15
 POSTGRES_CONFIGURATION_SCHEMA = "dtc_config"
 POSTGRES_APPLICATION_SCHEMA = "dtc_app"
@@ -897,6 +897,14 @@ def _upgrade_configuration_schema(engine: Engine, revision: int, expected: int) 
             "forecast_max_age_hours >= 1 AND forecast_max_age_hours <= 168",
         )
         revision = 18
+    if revision == 18 and expected >= 19:
+        from .aemet_refresh_migration import migrate_refresh_configuration_engine
+
+        # The conversion validates every persisted source before changing the
+        # table or document, and runs as one transaction so a bad cadence or a
+        # conflict cannot leave a half-migrated configuration behind.
+        migrate_refresh_configuration_engine(engine)
+        revision = 19
     if revision != expected:
         raise BootstrapIncompatibleError(
             f"configuration schema revision {revision} has no registered upgrade path to {expected}"

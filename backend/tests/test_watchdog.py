@@ -33,7 +33,7 @@ def test_retries_quickly_in_degraded_mode_and_refreshes_after_recovery(
     watchdog = ForecastWatchdog(
         SequenceProvider([forecast("unsupported"), forecast("aemet", 7)]),
         expected_source="aemet",
-        config=WeatherWatchdogConfig(retry_minutes=10, refresh_minutes=120),
+        config=WeatherWatchdogConfig(retry_minutes=10, refresh_hours=2),
     )
 
     with caplog.at_level(logging.INFO):

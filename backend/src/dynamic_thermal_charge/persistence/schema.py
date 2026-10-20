@@ -148,12 +148,12 @@ weather_config = Table(
     Column("aemet_api_key_env", String(64), nullable=True),
     Column("aemet_timeout_seconds", Float, nullable=True),
     Column("watchdog_retry_minutes", Integer, nullable=False, server_default="15"),
-    Column("watchdog_refresh_minutes", Integer, nullable=False, server_default="180"),
+    Column("watchdog_refresh_hours", Integer, nullable=False, server_default="4"),
     CheckConstraint(
         "provider = 'aemet'", name="ck_weather_provider"
     ),
     CheckConstraint("watchdog_retry_minutes > 0", name="ck_weather_retry"),
-    CheckConstraint("watchdog_refresh_minutes > 0", name="ck_weather_refresh"),
+    CheckConstraint("watchdog_refresh_hours > 0", name="ck_weather_refresh"),
     CheckConstraint(
         "aemet_timeout_seconds IS NULL OR aemet_timeout_seconds > 0",
         name="ck_weather_timeout",
@@ -1190,7 +1190,7 @@ CONSTRAINT_FIELDS: dict[str, tuple[str, str]] = {
     ),
     "ck_weather_provider": ("provider", "the provider must be aemet"),
     "ck_weather_retry": ("retry_minutes", "retry_minutes must be positive"),
-    "ck_weather_refresh": ("refresh_minutes", "refresh_minutes must be positive"),
+    "ck_weather_refresh": ("refresh_hours", "refresh_hours must be a positive integer"),
     "ck_weather_timeout": ("timeout_seconds", "timeout_seconds must be positive"),
     "ck_heater_power": ("power_kw", "the heater power must be positive"),
     "ck_heater_full_charge": (

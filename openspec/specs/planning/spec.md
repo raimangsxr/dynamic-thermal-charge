@@ -622,21 +622,50 @@ explicación no cambia.
 
 La consulta AEMET debe conservar su estado entre reinicios. La primera consulta
 diaria se ancla a la hora local configurada; después de una consulta correcta,
-la siguiente se programa con `weather.refresh_minutes` y, tras un fallo, con
-`weather.retry_minutes`. El ciclo respeta la activación `next_cycle`; al
-cambiar el día local, un ciclo fallido continúa reintentando sin esperar de
-nuevo a la hora de consulta. Mientras falla, conserva la última previsión AEMET
-válida como obsoleta para recalcular, sin habilitar carga automática con
-previsiones de respaldo o simuladas, y expone el número de intento, el próximo
-instante y si es actualización o reintento.
+la siguiente se programa con `weather.refresh_hours`, un entero positivo cuyo
+valor predeterminado es 4, y, tras un fallo, con `weather.retry_minutes`. El
+intervalo automático tiene representación en horas de extremo a extremo: API,
+documento persistido, tabla funcional, runtime y UI usan `refresh_hours` (y
+`watchdog_refresh_hours` en la tabla). El ciclo respeta la activación
+`next_cycle`; al cambiar el día local, un ciclo fallido continúa reintentando
+sin esperar de nuevo a la hora de consulta. Mientras falla, conserva la última
+previsión AEMET válida como obsoleta para recalcular, sin habilitar carga
+automática con previsiones de respaldo o simuladas, y expone el número de
+intento, el próximo instante y si es actualización o reintento.
+
+La migración de instalaciones existentes convierte
+`refresh_minutes`/`watchdog_refresh_minutes` a horas únicamente cuando el valor
+es divisible exactamente por 60 (180 minutos se convierte en 3 horas). Un
+valor no divisible, inválido o discrepante entre las dos superficies
+persistidas aborta la migración de forma transaccional y exige corrección
+explícita; nunca se redondea ni se descarta precisión silenciosamente.
 
 #### Scenario: Cadencia configurable del ciclo
 
-- **WHEN** la configuración establece `refresh_minutes` y `retry_minutes`
-- **THEN** una consulta correcta programa la siguiente actualización con
-  `refresh_minutes`, una consulta fallida programa el reintento con
+- **WHEN** la configuración establece `refresh_hours` y `retry_minutes` y una
+  consulta termina correctamente en el instante `success_at`
+- **THEN** la siguiente actualización queda exactamente en
+  `success_at + refresh_hours`, una consulta fallida programa el reintento con
   `retry_minutes`, y la proyección distingue ambos tipos mediante
   `forecast_next_run_at` y `forecast_next_run_kind`
+
+#### Scenario: Consulta manual reinicia la cadencia
+
+- **WHEN** el operador llama a `POST /api/v1/system/weather/refresh` mientras
+  existe una actualización automática pendiente
+- **THEN** un éxito persiste y devuelve la siguiente consulta exactamente
+  `refresh_hours` después del instante en que termina la consulta manual, y no
+  conserva el temporizador anterior; un fallo limpia ese refresco, conserva la
+  previsión válida y proyecta únicamente el próximo reintento
+
+#### Scenario: Intervalo y reloj en cambios de zona
+
+- **WHEN** una consulta correcta o un reinicio ocurre cerca de un cambio DST
+  de la zona de la instalación
+- **THEN** la fecha diaria usa la zona local configurada, pero el intervalo se
+  suma al instante UTC persistido, de modo que `refresh_hours` representa la
+  misma duración real y el ciclo se recupera sin adelantar ni duplicar la
+  consulta
 
 #### Scenario: Fallo de AEMET durante una replanificación
 
