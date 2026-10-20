@@ -66,15 +66,9 @@ h3 { margin: 0; color: var(--ink); font-size: 1rem; }
 .summary-list div { display: grid; grid-template-columns: minmax(8rem, .6fr) 1fr; gap: 1rem; }
 .summary-list dt { font-size: .86rem; font-weight: 650; }
 .summary-list dd { margin: 0; }
-.table-scroll { overflow-x: auto; margin-top: 1.25rem; }
-table { width: 100%; min-width: 42rem; border-collapse: collapse; background: var(--surface); }
-th, td { padding: .65rem .75rem; border-bottom: 1px solid var(--border); text-align: left; vertical-align: middle; }
-thead th { color: var(--muted); font-size: .82rem; }
-.stale { background: #fff8e8; color: #684000; }
 .forecast-summary { display: flex; align-items: flex-start; gap: .75rem; margin-top: 1rem; padding: .9rem 1rem; border: 1px solid #c9dcf5; border-radius: .6rem; background: #f2f7ff; color: #27415f; }
 .forecast-summary p { margin: .2rem 0 0; }
 .empty { color: var(--muted); font-style: italic; }
-.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
 @media (max-width: 66rem) {
   .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

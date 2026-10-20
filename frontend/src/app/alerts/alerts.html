@@ -28,9 +28,9 @@
 <ng-template #alertPanel let-view="view">
   <section class="alert-tab-panel" [attr.data-testid]="'alerts-panel-' + view" [attr.aria-label]="view === 'active' ? 'Avisos activos' : 'Avisos históricos'">
     @if (message(); as text) { <p role="status" class="message">{{ text }}</p> }
-    @if (loading()) { <p>Cargando avisos…</p> }
+    @if (loading() && !page()) { <p class="loading" role="status" aria-live="polite">Cargando avisos…</p> }
     @if (!loading() && page(); as current) {
-      <div class="alert-toolbar">
+      <div class="alert-toolbar" role="group" aria-label="Opciones de avisos">
         <label for="alert-page-size">Avisos por página</label>
         <select id="alert-page-size" class="page-size" data-testid="alert-page-size" [value]="pageSize()" (change)="selectPageSize($any($event.target).value)">
           @for (size of pageSizeOptions; track size) { <option [value]="size" [selected]="size === pageSize()">{{ size }}</option> }
@@ -45,7 +45,14 @@
           </mat-card>
         }
       </section>
-      @if (current.has_more) { <button mat-flat-button color="primary" type="button" class="load-more" (click)="nextPage()"><mat-icon aria-hidden="true">expand_more</mat-icon>Cargar más</button> }
+      <footer class="paging" aria-label="Paginación de avisos">
+        <span>Mostrando {{ current.items.length }} de un máximo de {{ current.limit_applied }}</span>
+        @if (current.has_more) {
+          <button mat-stroked-button color="primary" type="button" class="next-page" (click)="nextPage()" data-testid="next-page"><mat-icon aria-hidden="true">arrow_forward</mat-icon>Siguiente página</button>
+        } @else {
+          <span class="end" data-testid="alerts-end">— no hay más resultados</span>
+        }
+      </footer>
     }
   </section>
 </ng-template>

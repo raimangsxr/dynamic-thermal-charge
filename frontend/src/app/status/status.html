@@ -175,34 +175,6 @@
     }
     </section>
 
-    <section class="workspace-panel" aria-labelledby="telemetry-title">
-      <div class="section-heading">
-        <div><p class="eyebrow">Lecturas</p><h2 id="telemetry-title">Telemetría</h2></div>
-        <span class="revision-chip">{{ telemetryReady() }} de {{ telemetryTotal() }} completa</span>
-      </div>
-      @if (data.telemetry?.length) {
-        <div class="table-scroll">
-          <table>
-            <caption class="sr-only">Telemetría independiente por acumulador</caption>
-            <thead><tr><th scope="col">Acumulador</th><th scope="col">Temperatura interior</th><th scope="col">SOC almacenado</th><th scope="col">Energía almacenada</th><th scope="col">Estado</th></tr></thead>
-            <tbody>
-              @for (item of data.telemetry; track item.heater_id) {
-              <tr [class.stale]="item.state === 'telemetry_stale'">
-                  <th scope="row">{{ heaterText(item.heater_id) }}</th>
-                  <td>{{ temperature(item.indoor_temperature_c) }}</td>
-                  <td>{{ item.stored_soc_percent === null ? 'sin dato' : item.stored_soc_percent + ' %' }}</td>
-                  <td>{{ item.stored_energy_kwh === null ? 'sin dato' : item.stored_energy_kwh.toFixed(2) + ' kWh' }}</td>
-                  <td>@if (item.state === 'calibrating') { <span class="state-chip state-warning"><mat-icon aria-hidden="true">thermostat</mat-icon>En calibración</span> } @else if (item.state === 'telemetry_stale') { <span class="state-chip state-warning"><mat-icon aria-hidden="true">warning</mat-icon>Caducada o incompleta</span> } @else { <span class="state-chip state-ok"><mat-icon aria-hidden="true">check_circle</mat-icon>Válida</span> }</td>
-                </tr>
-              }
-            </tbody>
-          </table>
-        </div>
-      } @else {
-        <p class="empty">No hay telemetría recibida.</p>
-      }
-    </section>
-
     <section class="workspace-panel" aria-labelledby="forecast-title">
       <div class="section-heading"><div><p class="eyebrow">Datos de contexto</p><h2 id="forecast-title">Previsión</h2></div></div>
       @if (data.forecast; as forecast) {

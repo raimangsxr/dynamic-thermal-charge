@@ -112,12 +112,15 @@ declare const __APP_VERSION__: string;
     .menu-button { margin-right: .5rem; }
     .toolbar-title { font-size: 1rem; font-weight: 500; }
     .toolbar-spacer { flex: 1 1 auto; }
-    .alert-indicator { display: inline-flex; align-items: center; justify-content: center; gap: .2rem; box-sizing: border-box; width: 48px; height: 48px; color: #fff; text-decoration: none; padding: 0; border-radius: .4rem; margin-right: .4rem; }
+    .alert-indicator { position: relative; display: inline-flex; align-items: center; justify-content: center; gap: .2rem; box-sizing: border-box; width: 48px; min-width: 48px; height: 48px; min-height: 48px; color: #fff; text-decoration: none; padding: 0 .25rem; border-radius: .4rem; margin-right: .25rem; background: transparent; }
+    .alert-indicator::before { position: absolute; inset: .55rem .25rem; border-radius: .35rem; background: #5a6578; content: ''; }
+    .alert-indicator:focus-visible { outline: 3px solid #77b9ff; outline-offset: 2px; }
+    .alert-indicator mat-icon, .alert-count { position: relative; z-index: 1; }
     .alert-indicator mat-icon { width: 24px; height: 24px; font-size: 24px; line-height: 24px; }
-    .alert-count { font-size: .82rem; font-weight: 700; line-height: 1; }
-    .alert-indicator[data-severity="critical"] { background: #b3261e; }
-    .alert-indicator[data-severity="warning"] { background: #8a5b00; }
-    .alert-indicator[data-severity="info"] { background: #1c5d99; }
+    .alert-count { min-width: 1rem; font-size: .78rem; font-weight: 700; line-height: 1; text-align: center; }
+    .alert-indicator[data-severity="critical"]::before { background: #b3261e; }
+    .alert-indicator[data-severity="warning"]::before { background: #8a5b00; }
+    .alert-indicator[data-severity="info"]::before { background: #1c5d99; }
     .shell-content { height: 100%; overflow-y: auto; }
     .page-content { min-width: 0; min-height: 100%; }
     .global-mode { padding: .65rem max(1rem, calc((100vw - 76rem) / 2)); background: #fff1c7; border-bottom: 2px solid var(--warning); }

@@ -32,10 +32,16 @@ evento nacen resueltas.
 La barra superior conserva un enlace a Avisos con contador y nombre accesible;
 su control mide 48 px y su glifo 24 px. La bandeja conserva las vistas
 `active`/`history` y la paginación por cursor, y muestra filas o tarjetas
-compactas con espaciado responsive. El selector ofrece exactamente `5`, `10`,
-`20` y `50`, comienza en `10`, y cada consulta, acuse y página siguiente usa
-el tamaño seleccionado; cambiarlo reinicia el cursor. En Automatización, los
-avisos derivados de asignaciones incumplidas, convergencia, mejor esfuerzo,
+compactas con espaciado responsive. Las pestañas, la barra de herramientas del
+selector, la lista y la paginación son zonas visualmente separadas; cada
+tarjeta conserva severidad, fecha, título, cuerpo y acuse cuando corresponda.
+El selector ofrece exactamente `5`, `10`, `20` y `50`, comienza en `10`, y
+cada consulta, acuse y página siguiente usa el tamaño seleccionado; cambiarlo
+reinicia el cursor. Cuando hay más resultados, la paginación ofrece una acción
+identificada como `Siguiente página`, reenvía literalmente el cursor opaco y
+sustituye la página visible sin duplicarla; cuando no quedan resultados,
+comunica explícitamente el fin y no muestra `Cargar más`. En Automatización,
+los avisos derivados de asignaciones incumplidas, convergencia, mejor esfuerzo,
 resultado degradado y déficits se muestran una sola vez y al final, después
 del resumen del plan; el aviso específico de calibración queda fuera de ese
 bloque.
@@ -45,6 +51,13 @@ bloque.
 - **WHEN** el operador cambia el tamaño de una vista de Avisos
 - **THEN** la siguiente consulta comienza sin cursor con el nuevo `limit`, y
   las páginas siguientes y los acuses conservan la vista y ese tamaño
+
+#### Scenario: Página siguiente y fin de Avisos
+
+- **WHEN** la vista devuelve `has_more` con un `next_cursor`
+- **THEN** muestra `Siguiente página`, consulta literalmente ese cursor y
+  reemplaza la página visible sin repetir sus avisos; cuando no hay más
+  resultados, muestra un estado explícito de fin y no `Cargar más`
 
 #### Scenario: Avisos de planificación junto al plan
 

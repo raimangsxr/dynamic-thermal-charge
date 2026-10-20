@@ -90,10 +90,14 @@ describe('Alerts', () => {
     expect(tabs[0]?.getAttribute('aria-controls')).toBe(activePanel?.id);
     expect(activePanel?.querySelector('[data-testid="alerts-panel-active"]')).not.toBeNull();
     expect(activePanel?.querySelector('.alert-tab-panel')?.classList.contains('alert-tab-panel')).toBe(true);
+    expect(activePanel?.querySelector('.alert-toolbar')).not.toBeNull();
     expect(activePanel?.querySelector('.alert-list')).not.toBeNull();
-    expect(activePanel?.querySelector('.load-more')).not.toBeNull();
+    expect(activePanel?.querySelector('.paging')).not.toBeNull();
+    expect(activePanel?.querySelector('.next-page')).not.toBeNull();
+    expect(activePanel?.querySelector('.next-page')?.textContent).toContain('Siguiente página');
+    expect(activePanel?.querySelector('.load-more')).toBeNull();
     expect(element.querySelector('main > .alert-list')).toBeNull();
-    expect(element.querySelector('main > .load-more')).toBeNull();
+    expect(element.querySelector('main > .next-page')).toBeNull();
   });
 
   it('moves history content into its labelled panel without changing the flow', async () => {
@@ -138,7 +142,7 @@ describe('Alerts', () => {
     request.flush(alertPage({ items: [alertDto(1, { acknowledged_at: '2026-01-16T01:05:00Z' })] }));
   });
 
-  it('appends the next cursor page without changing pagination semantics', () => {
+  it('replaces the visible page and sends the opaque cursor and selected size', () => {
     load(alertPage({ has_more: true, next_cursor: 'opaque-cursor' }));
 
     fixture.componentInstance.nextPage();
@@ -146,8 +150,13 @@ describe('Alerts', () => {
     expect(request.request.params.get('view')).toBe('active');
     expect(request.request.params.get('limit')).toBe('10');
     request.flush(alertPage({ items: [alertDto(2)], has_more: false, next_cursor: null }));
+    fixture.detectChanges();
 
-    expect(fixture.componentInstance.page()?.items.map((item) => item.id)).toEqual([1, 2]);
+    expect(fixture.componentInstance.page()?.items.map((item) => item.id)).toEqual([2]);
+    expect((fixture.nativeElement as HTMLElement).querySelectorAll('[data-testid="alert-row"]')).toHaveLength(1);
+    expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="alert-row"]')?.textContent).toContain('Aviso 2');
+    expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="next-page"]')).toBeNull();
+    expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="alerts-end"]')?.textContent).toContain('no hay más resultados');
   });
 
   it('applies a selected size and resets the cursor for the next request', () => {

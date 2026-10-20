@@ -1,31 +1,37 @@
-.alerts-page { max-width: 76rem; margin: 0 auto; padding: 1.5rem clamp(1rem, 3vw, 3rem) 3rem; }
-.page-heading { display: flex; justify-content: space-between; gap: 1rem; align-items: end; margin-bottom: .85rem; }
+.alerts-page { max-width: 76rem; margin: 0 auto; padding: 1rem clamp(1rem, 3vw, 3rem) 2rem; }
+.page-heading { display: flex; justify-content: space-between; gap: .7rem 1rem; align-items: end; margin-bottom: .55rem; }
 .eyebrow { margin: 0; color: var(--primary); font-size: .75rem; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
-h1, h2 { margin: .25rem 0; }
-.summary { color: var(--muted); }
-.tabs { margin-bottom: .5rem; }
-.alert-tab-panel { padding-top: .5rem; }
-.alert-toolbar { display: flex; align-items: center; justify-content: flex-end; gap: .55rem; margin-bottom: .55rem; color: var(--muted); font-size: .82rem; }
+.page-heading h1 { margin: .15rem 0; }
+.page-heading > div > p:last-child { margin: .2rem 0 0; line-height: 1.3; }
+.summary { margin: .2rem 0; color: var(--muted); line-height: 1.3; }
+.tabs { display: block; margin-bottom: .75rem; }
+.alert-tab-panel { display: grid; gap: .65rem; min-width: 0; padding: .75rem; }
+.alert-toolbar { display: flex; align-items: center; justify-content: flex-end; gap: .55rem; margin: 0; padding: .45rem .8rem; border: 1px solid var(--border); border-radius: .55rem; background: #fbfcfe; color: var(--muted); font-size: .82rem; line-height: 1.2; }
 .page-size { min-width: 4.25rem; padding: .3rem .45rem; border: 1px solid var(--border); border-radius: .35rem; background: var(--surface); color: var(--ink); font: inherit; }
-.alert-list { display: grid; gap: .45rem; }
-.alert-card { display: flex; justify-content: space-between; gap: .75rem; border: 1px solid var(--border); border-left: .25rem solid var(--muted); border-radius: .45rem; padding: .6rem .7rem; background: var(--surface); }
+.alert-list { display: grid; gap: .5rem; min-width: 0; margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+.alert-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .5rem 1rem; min-height: 0; border: 1px solid var(--border); border-left: .25rem solid var(--muted); border-radius: .45rem; padding: .35rem .7rem; background: var(--surface); }
 .alert-card[data-severity="critical"] { border-left-color: var(--danger); }
 .alert-card[data-severity="warning"] { border-left-color: var(--warning); }
 .alert-card[data-severity="info"] { border-left-color: var(--primary); }
-.alert-meta { display: flex; flex-wrap: wrap; gap: .5rem; color: var(--muted); font-size: .74rem; }
-.alert-copy h2 { font-size: .98rem; }
-.alert-copy p { white-space: pre-line; margin: .25rem 0; font-size: .86rem; line-height: 1.35; }
-.alert-copy small { display: block; color: var(--muted); }
-.alert-card mat-card-content { min-width: 0; padding: 0; }
-.alert-card mat-card-actions { margin: 0; padding: 0; align-self: center; }
-.load-more { margin-top: .65rem; }
-.empty, .message { padding: .75rem; }
+.alert-meta { display: flex; flex-wrap: wrap; gap: .35rem .5rem; color: var(--muted); font-size: .74rem; line-height: 1.2; }
+.alert-copy h2 { margin: .1rem 0; font-size: .98rem; line-height: 1.2; }
+.alert-copy p { white-space: pre-line; margin: .15rem 0; font-size: .86rem; line-height: 1.25; }
+.alert-copy small { display: block; color: var(--muted); line-height: 1.2; }
+.alert-card .mat-mdc-card-content,
+.alert-card .mat-mdc-card-content:first-child,
+.alert-card .mat-mdc-card-content:last-child { min-width: 0; min-height: 0; margin: 0; padding: 0 !important; }
+.alert-card .mat-mdc-card-actions { align-self: center; min-height: 0; margin: 0; padding: 0; }
+.alert-card mat-card-actions button { min-width: 48px; min-height: 48px; }
+.paging { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem 1rem; margin: 0; padding: .5rem 0 0; border-top: 1px solid var(--border); color: var(--muted); font-size: .88rem; line-height: 1.2; }
+.paging .end { margin-left: auto; }
+.empty, .message { margin: 0; padding: .5rem .75rem; }
+.loading { margin: 0; }
 @media (max-width: 48rem) {
   .page-heading { display: block; }
   .summary { margin-bottom: .35rem; }
   .alert-toolbar { justify-content: space-between; }
-  .alert-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
-  .alert-card mat-card-actions { padding: 0; }
+  .paging { align-items: flex-start; }
+  .paging .end { margin-left: 0; }
 }
 @media (max-width: 34rem) {
   .alerts-page { padding-inline: .75rem; }
