@@ -60,8 +60,8 @@ export class Alerts {
     const current = this.page();
     if (!current?.has_more || !current.next_cursor) return;
     this.api.alerts(this.view(), this.pageSize(), current.next_cursor).subscribe({
-      next: (page) => this.page.set({ ...page, items: [...(current.items ?? []), ...page.items] }),
-      error: () => this.message.set('No se pudo cargar el histórico.'),
+      next: (page) => this.page.set(page),
+      error: () => this.message.set('No se pudo cargar la página siguiente.'),
     });
   }
 

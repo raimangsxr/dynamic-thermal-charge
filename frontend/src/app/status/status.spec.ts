@@ -399,8 +399,9 @@ describe('Status', () => {
       ),
     });
     expect(element.querySelector('[data-testid="heater-telemetry-salon"]')?.textContent).toContain('En calibración');
-    expect(element.querySelector('#telemetry-title')).not.toBeNull();
-    expect(element.querySelector('table tbody tr')?.textContent).toContain('20.5');
+    expect(element.querySelector('#telemetry-title')).toBeNull();
+    expect(element.querySelector('table')).toBeNull();
+    expect(element.querySelector('[data-testid="heater-telemetry-salon"]')?.textContent).toContain('20.5 °C');
   });
 
   it('marks every equipment card as incomplete when no telemetry is ready', () => {
@@ -417,7 +418,7 @@ describe('Status', () => {
     const element = load(dto);
     expect(testId(element, 'telemetry-summary')?.textContent).toContain('0 / 2');
     expect(element.querySelectorAll('[data-telemetry-state="telemetry_stale"]')).toHaveLength(2);
-    expect(element.querySelectorAll('table tbody tr')).toHaveLength(2);
+    expect(element.querySelector('table')).toBeNull();
   });
 
   it('localizes automatic status and deficits while keeping heater names friendly', () => {
