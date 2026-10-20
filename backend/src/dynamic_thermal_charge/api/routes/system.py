@@ -309,7 +309,7 @@ def refresh_weather(request: Request, store: Store = Depends(usable_store)) -> W
                 last_result="error",
                 last_error=safe_error,
                 stale=True,
-                next_retry_at=now + timedelta(hours=1),
+                next_retry_at=now + timedelta(minutes=settings.retry_minutes),
                 next_run_at=None,
             )
             _save_forecast_cycle(planning, failed)
@@ -337,7 +337,7 @@ def refresh_weather(request: Request, store: Store = Depends(usable_store)) -> W
             forecast_last_attempt_at=now,
             forecast_last_error=None,
             forecast_next_run_at=next_run_at,
-            forecast_next_run_kind="daily",
+            forecast_next_run_kind="refresh",
             forecast=_forecast_response(forecast, now),
         )
     finally:

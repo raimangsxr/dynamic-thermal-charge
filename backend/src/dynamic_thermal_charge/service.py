@@ -64,7 +64,7 @@ class ControllerService:
         store: ActivePlanRepository,
         refresh_plan: Callable[[datetime], PlanRefresh],
         poll_seconds: float,
-        error_retry_seconds: int,
+        error_retry_seconds: int | Callable[[], int],
         clock: Callable[[], datetime] | None = None,
         wait: Callable[[float], None] = time.sleep,
         history: HistoryRecorder | None = None,
@@ -75,12 +75,16 @@ class ControllerService:
         alerts=None,
         deviation_check: Callable[[datetime], bool] | None = None,
         measurement_sampler: Callable[[datetime], None] | None = None,
+        forecast_refresh: Callable[[datetime], int | None] | None = None,
     ) -> None:
         self._controller = controller
         self._store = store
         self._refresh_plan = refresh_plan
         self._poll_seconds = poll_seconds
         self._error_retry_seconds = error_retry_seconds
+        self._error_retry_fallback = (
+            int(error_retry_seconds) if not callable(error_retry_seconds) else 60
+        )
         self._clock = clock or (lambda: datetime.now().astimezone())
         self._wait = wait
         self._history = history
@@ -92,6 +96,7 @@ class ControllerService:
         self._alert_failure: str | None = None
         self._deviation_check = deviation_check
         self._measurement_sampler = measurement_sampler
+        self._forecast_refresh = forecast_refresh
         self._deviation_failure: str | None = None
         self._current_plan_ref: PlanRef | None = None
         self._degraded = False
@@ -108,9 +113,12 @@ class ControllerService:
                 self._enter_degraded(exc)
                 plan = None
             next_refresh = now
+            next_forecast_refresh = now if self._forecast_refresh is not None else None
             cycles = 0
             while max_cycles is None or cycles < max_cycles:
                 now = self._clock()
+                if next_forecast_refresh is not None and now >= next_forecast_refresh:
+                    next_forecast_refresh = self._try_forecast_refresh(now)
                 durable_control = self._read_control_state()
                 if durable_control is not None and not getattr(
                     durable_control, "automatic_control_enabled", True
@@ -119,7 +127,9 @@ class ControllerService:
                     # process allowed to switch outputs.  The next loop applies
                     # the all-off state without waiting for a solver refresh.
                     plan = None
-                    next_refresh = now + timedelta(seconds=self._error_retry_seconds)
+                    next_refresh = now + timedelta(
+                        seconds=self._current_error_retry_seconds()
+                    )
                 elif durable_control is not None and getattr(
                     durable_control, "recalculation_pending", False
                 ):
@@ -178,7 +188,7 @@ class ControllerService:
         except ConfigStoreUnavailableError as exc:
             self._enter_degraded(exc)
             self._warn_if_planless(plan)
-            return plan, now + timedelta(seconds=self._error_retry_seconds)
+            return plan, now + timedelta(seconds=self._current_error_retry_seconds())
         except ConfigStoreError as exc:
             # Empty, invalid or unreadable-schema configuration. Not transient:
             # retrying cannot fix it, so stop trying and say so once.
@@ -190,16 +200,17 @@ class ControllerService:
                 exc,
             )
             self._warn_if_planless(plan)
-            return plan, now + timedelta(seconds=self._error_retry_seconds)
+            return plan, now + timedelta(seconds=self._current_error_retry_seconds())
         except Exception as exc:
+            retry_seconds = self._current_error_retry_seconds()
             logger.error(
                 "Plan refresh failed; retaining persisted plan and retrying in %d "
                 "seconds: %s",
-                self._error_retry_seconds,
+                retry_seconds,
                 exc,
             )
             self._warn_if_planless(plan)
-            return plan, now + timedelta(seconds=self._error_retry_seconds)
+            return plan, now + timedelta(seconds=retry_seconds)
 
         self._leave_degraded()
         if refreshed.persist_plan:
@@ -219,11 +230,36 @@ class ControllerService:
             logger.warning(
                 "The configuration database became unreachable; retaining the running "
                 "plan and retrying every %d seconds: %s",
-                self._error_retry_seconds,
+                self._current_error_retry_seconds(),
                 exc,
             )
         else:
             logger.debug("Configuration database still unreachable: %s", exc)
+
+    def _try_forecast_refresh(self, now: datetime) -> datetime:
+        try:
+            delay_seconds = self._forecast_refresh(now)
+            if delay_seconds is None:
+                delay_seconds = self._current_error_retry_seconds()
+        except Exception as exc:
+            delay_seconds = self._current_error_retry_seconds()
+            logger.error(
+                "Forecast refresh failed; retrying in %d seconds: %s",
+                delay_seconds,
+                exc,
+            )
+        return now + timedelta(seconds=max(1, int(delay_seconds)))
+
+    def _current_error_retry_seconds(self) -> int:
+        try:
+            configured = (
+                self._error_retry_seconds()
+                if callable(self._error_retry_seconds)
+                else self._error_retry_seconds
+            )
+            return max(1, int(configured))
+        except Exception:
+            return max(1, self._error_retry_fallback)
 
     def _leave_degraded(self) -> None:
         if self._degraded:

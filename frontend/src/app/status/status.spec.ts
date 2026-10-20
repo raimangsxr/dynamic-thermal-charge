@@ -67,6 +67,32 @@ function statusDto(overrides: Partial<StatusDto> = {}): StatusDto {
       maximum_temperature_c: 13,
       municipality: 'Noia, A Coruña',
     },
+    telemetry: [
+      {
+        heater_id: 'salon',
+        indoor_temperature_c: 20.5,
+        stored_soc_percent: 65,
+        indoor_received_at: '2026-01-16T00:59:00Z',
+        stored_soc_received_at: '2026-01-16T00:59:00Z',
+        state: 'ready',
+        state_label: 'Válida',
+        missing_fields: [],
+        oldest_age_seconds: 60,
+        stored_energy_kwh: 5.2,
+      },
+      {
+        heater_id: 'entrada',
+        indoor_temperature_c: null,
+        stored_soc_percent: null,
+        indoor_received_at: null,
+        stored_soc_received_at: null,
+        state: 'telemetry_stale',
+        state_label: 'Caducada o incompleta',
+        missing_fields: ['indoor_temperature_c', 'stored_soc_percent'],
+        oldest_age_seconds: null,
+        stored_energy_kwh: null,
+      },
+    ],
     forecast_last_success_at: '2026-01-16T01:00:00Z',
     allocations: [
       {
@@ -308,6 +334,7 @@ describe('Status', () => {
     expect(testId(element, 'status-calibration-active')?.textContent).toContain('Salón');
     expect(testId(element, 'plan-best-effort')).toBeNull();
     expect(element.textContent).not.toContain('Acumuladores excluidos por telemetría incompleta');
+    expect(testId(element, 'status-calibration-active')?.closest('[data-testid="planning-notices"]')).toBeNull();
   });
 
   it('shows the last successful forecast in the installation timezone', () => {
@@ -318,6 +345,11 @@ describe('Status', () => {
   it('shows the absence marker when no successful forecast exists', () => {
     const element = load(statusDto({ forecast: null, forecast_last_success_at: null }));
     expect(testId(element, 'forecast-last-success')?.textContent).toContain('—');
+  });
+
+  it('shows an explicit absence when no next forecast query is scheduled', () => {
+    const element = load(statusDto({ forecast_next_run_at: null, forecast_next_run_kind: null }));
+    expect(testId(element, 'forecast-status')?.textContent).toContain('No programada');
   });
 
   it('shows each heater with its confirmed state', () => {
@@ -340,6 +372,52 @@ describe('Status', () => {
     expect(cards[1]?.textContent).toContain('Entrada');
     expect(cards[1]?.textContent).toContain('2.4 kW');
     expect(cards[1]?.textContent).toContain('En reposo');
+  });
+
+  it('shows each heater telemetry summary without inventing unavailable values', () => {
+    const element = load(statusDto());
+    const ready = element.querySelector('[data-testid="heater-telemetry-salon"]');
+    expect(ready?.textContent).toContain('20.5 °C');
+    expect(ready?.textContent).toContain('65 %');
+    expect(ready?.textContent).toContain('Válida');
+
+    const stale = element.querySelector('[data-testid="heater-telemetry-entrada"]');
+    expect(stale?.textContent).toContain('sin dato');
+    expect(stale?.textContent).toContain('Caducada o incompleta');
+    expect(stale?.textContent).toContain('indoor_temperature_c');
+    expect(stale?.textContent).not.toContain('0 °C');
+    expect(stale?.textContent).not.toContain('0 %');
+  });
+
+  it('shows calibration state in the equipment summary while keeping detailed readings', () => {
+    const element = load({
+      ...statusDto(),
+      telemetry: statusDto().telemetry?.map((item) =>
+        item.heater_id === 'salon'
+          ? { ...item, state: 'calibrating', state_label: 'En calibración' }
+          : item,
+      ),
+    });
+    expect(element.querySelector('[data-testid="heater-telemetry-salon"]')?.textContent).toContain('En calibración');
+    expect(element.querySelector('#telemetry-title')).not.toBeNull();
+    expect(element.querySelector('table tbody tr')?.textContent).toContain('20.5');
+  });
+
+  it('marks every equipment card as incomplete when no telemetry is ready', () => {
+    const dto = statusDto({
+      telemetry: statusDto().telemetry?.map((item) => ({
+        ...item,
+        indoor_temperature_c: null,
+        stored_soc_percent: null,
+        state: 'telemetry_stale',
+        state_label: 'Caducada o incompleta',
+        missing_fields: ['indoor_temperature_c', 'stored_soc_percent'],
+      })),
+    });
+    const element = load(dto);
+    expect(testId(element, 'telemetry-summary')?.textContent).toContain('0 / 2');
+    expect(element.querySelectorAll('[data-telemetry-state="telemetry_stale"]')).toHaveLength(2);
+    expect(element.querySelectorAll('table tbody tr')).toHaveLength(2);
   });
 
   it('localizes automatic status and deficits while keeping heater names friendly', () => {
@@ -366,6 +444,12 @@ describe('Status', () => {
     expect(deficits?.textContent).toContain('Objetivo térmico');
     expect(deficits?.textContent).not.toContain('insufficient_capacity_or_power');
     expect(testId(element, 'plan-degraded')).not.toBeNull();
+    expect(element.querySelectorAll('[data-testid="plan-deficits"]')).toHaveLength(1);
+    const planPanel = element.querySelector('[aria-labelledby="plan-title"]');
+    const notices = testId(element, 'planning-notices');
+    expect(notices).not.toBeNull();
+    expect(notices?.parentElement).toBe(planPanel);
+    expect(planPanel && notices && Boolean(planPanel.lastElementChild === notices)).toBe(true);
   });
 
   it('presents converging as an activable non-blocking warning with its guarantee', () => {
@@ -445,16 +529,11 @@ describe('Status', () => {
     expect(element.textContent).toContain('ningún acumulador');
   });
 
-  it('offers a manual refresh while retaining the automatic poller', () => {
+  it('removes the header refresh action while retaining the compact health indicator', () => {
     const element = load(statusDto());
-    const button = element.querySelector<HTMLButtonElement>('[data-testid="refresh-status"]');
-
-    button?.click();
-    fixture.detectChanges();
-    expect(button?.disabled).toBe(true);
-    backend.expectOne('/api/v1/status').flush(statusDto({ observed_at: '2026-01-16T01:05:00Z' }));
-    fixture.detectChanges();
-    expect(button?.disabled).toBe(false);
+    expect(testId(element, 'refresh-status')).toBeNull();
+    expect(element.querySelector('dtc-controller-health')).toBeNull();
+    expect(testId(element, 'controller-health-indicator')).not.toBeNull();
   });
 
   /* ------------------------------------------------------------------ unmet */
@@ -541,12 +620,6 @@ describe('Status', () => {
       'Controlador: estado no confirmado',
     );
     expect(testId(element, 'controller-health-trigger')?.getAttribute('aria-describedby')).toBeNull();
-    expect(testId(element, 'controller-health-detail')?.textContent).toContain(
-      'El controlador responde con normalidad',
-    );
-    expect(testId(element, 'controller-health-detail')?.textContent).toContain(
-      'La vista conserva la última lectura como información no actual',
-    );
 
     // A later successful read replaces the error state with the new liveness.
     fixture.componentInstance.refresh();

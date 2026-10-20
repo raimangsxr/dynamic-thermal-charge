@@ -292,6 +292,12 @@ La antigüedad máxima de la temperatura interior y del SOC es la misma y la
 define `indoor_max_age_minutes` de la instalación. Una lectura futura tampoco
 es válida. Preview, planificación periódica, vistas de estado y desviación
 aplican ese límite a las dos medidas antes de considerarlas utilizables.
+Cada tarjeta de Equipos muestra la temperatura interior y el SOC utilizables,
+o un estado explícito de falta, caducidad o calibración; no sustituye una
+lectura ausente por cero o por un valor actual inventado. La tabla Lecturas
+conserva el detalle completo. Estado mantiene el sondeo automático y su
+indicador compacto de salud, pero solo ofrece reintento explícito tras un error
+de lectura.
 
 #### Scenario: Telemetría incompleta
 
@@ -337,6 +343,14 @@ aplican ese límite a las dos medidas antes de considerarlas utilizables.
 - **WHEN** ningún acumulador habilitado tiene temperatura interior y SOC frescos
 - **THEN** el resultado es `INVALID`, publica cero intervalos con decisiones y
   conserva la lista de acumuladores excluidos y sus déficits explicables
+
+#### Scenario: Tarjeta sin telemetría utilizable
+
+- **WHEN** una tarjeta de Equipos no tiene temperatura interior o SOC utilizables,
+  o el acumulador está calibrándose
+- **THEN** muestra la causa localizada correspondiente, sin fabricar lecturas,
+  y Estado conserva la proyección del próximo estado AEMET aunque no haya
+  ningún elemento `ready`
 
 #### Scenario: Validación independiente de exclusiones
 
@@ -606,19 +620,30 @@ explicación no cambia.
 
 ### Requirement: Ciclo de previsión AEMET durable
 
-La consulta AEMET debe ejecutarse a la hora local configurada y conservar su
-estado entre reinicios. Tras un fallo debe reintentar cada hora sin límite hasta
-obtener una previsión AEMET; al cambiar el día local, un ciclo fallido debe
-continuar reintentando sin esperar de nuevo a la hora de consulta. Mientras
-falla, debe conservar la última previsión AEMET válida como obsoleta para
-recalcular, sin habilitar carga automática con previsiones de respaldo o
-simuladas, y exponer el número de intento y el próximo reintento.
+La consulta AEMET debe conservar su estado entre reinicios. La primera consulta
+diaria se ancla a la hora local configurada; después de una consulta correcta,
+la siguiente se programa con `weather.refresh_minutes` y, tras un fallo, con
+`weather.retry_minutes`. El ciclo respeta la activación `next_cycle`; al
+cambiar el día local, un ciclo fallido continúa reintentando sin esperar de
+nuevo a la hora de consulta. Mientras falla, conserva la última previsión AEMET
+válida como obsoleta para recalcular, sin habilitar carga automática con
+previsiones de respaldo o simuladas, y expone el número de intento, el próximo
+instante y si es actualización o reintento.
+
+#### Scenario: Cadencia configurable del ciclo
+
+- **WHEN** la configuración establece `refresh_minutes` y `retry_minutes`
+- **THEN** una consulta correcta programa la siguiente actualización con
+  `refresh_minutes`, una consulta fallida programa el reintento con
+  `retry_minutes`, y la proyección distingue ambos tipos mediante
+  `forecast_next_run_at` y `forecast_next_run_kind`
 
 #### Scenario: Fallo de AEMET durante una replanificación
 
 - **WHEN** falla una consulta AEMET programada
-- **THEN** se persiste el intento, se programa el reintento correspondiente y
-  la replanificación continúa con la última previsión almacenada apta
+- **THEN** se persiste el intento, se programa el reintento con
+  `weather.retry_minutes` y la replanificación continúa con la última
+  previsión almacenada apta
 
 #### Scenario: Estado tras un intento fallido posterior
 
@@ -627,15 +652,22 @@ simuladas, y exponer el número de intento y el próximo reintento.
 - **THEN** el estado conserva `forecast_last_success_at` derivado de
   `forecast.retrieved_at` y expone por separado el estado, error y próximo
   intento de la consulta más reciente, incluido el número de intento y el
-  próximo reintento horario
+  próximo reintento configurado
 
 #### Scenario: Reintentos continuos y cambio de día
 
 - **WHEN** seis o más consultas consecutivas fallan y comienza un nuevo día
   local
-- **THEN** el ciclo permanece obsoleto y no completado, conserva un próximo
-  reintento a una hora y vuelve a intentar inmediatamente en el nuevo día sin
-  esperar a la hora de consulta diaria
+- **THEN** el ciclo permanece obsoleto y no completado, conserva el próximo
+  reintento según `weather.retry_minutes` y vuelve a intentar inmediatamente en
+  el nuevo día sin esperar a la hora de consulta diaria
+
+#### Scenario: Estado del ciclo sin telemetría utilizable
+
+- **WHEN** Estado no tiene ninguna lectura `ready` utilizable
+- **THEN** conserva la proyección del próximo estado AEMET; si no existe un
+  instante programado, muestra su ausencia explícita en vez de fabricar una
+  hora
 
 #### Scenario: Municipio AEMET con codificación heredada
 

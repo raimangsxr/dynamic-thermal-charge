@@ -30,7 +30,7 @@ declare const __APP_VERSION__: string;
         <span class="toolbar-title">Panel de control</span><span class="toolbar-spacer"></span>
         <a class="alert-indicator" routerLink="/avisos" [attr.data-severity]="alertSummary()?.maximum_severity ?? null"
            [attr.aria-label]="'Avisos activos: ' + (alertSummary()?.active_count ?? 0)" data-testid="alerts-indicator">
-          <mat-icon aria-hidden="true">notifications</mat-icon><span>{{ alertSummary()?.active_count ?? 0 }}</span>
+          <mat-icon aria-hidden="true">notifications</mat-icon><span class="alert-count">{{ alertSummary()?.active_count ?? 0 }}</span>
         </a>
         <button mat-icon-button type="button" (click)="signOut()" aria-label="Cerrar sesión" data-testid="logout">
           <mat-icon aria-hidden="true">logout</mat-icon>
@@ -112,7 +112,9 @@ declare const __APP_VERSION__: string;
     .menu-button { margin-right: .5rem; }
     .toolbar-title { font-size: 1rem; font-weight: 500; }
     .toolbar-spacer { flex: 1 1 auto; }
-    .alert-indicator { display: inline-flex; align-items: center; gap: .2rem; color: #fff; text-decoration: none; padding: .35rem .55rem; border-radius: .4rem; margin-right: .4rem; }
+    .alert-indicator { display: inline-flex; align-items: center; justify-content: center; gap: .2rem; box-sizing: border-box; width: 48px; height: 48px; color: #fff; text-decoration: none; padding: 0; border-radius: .4rem; margin-right: .4rem; }
+    .alert-indicator mat-icon { width: 24px; height: 24px; font-size: 24px; line-height: 24px; }
+    .alert-count { font-size: .82rem; font-weight: 700; line-height: 1; }
     .alert-indicator[data-severity="critical"] { background: #b3261e; }
     .alert-indicator[data-severity="warning"] { background: #8a5b00; }
     .alert-indicator[data-severity="info"] { background: #1c5d99; }

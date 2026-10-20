@@ -30,10 +30,16 @@
     @if (message(); as text) { <p role="status" class="message">{{ text }}</p> }
     @if (loading()) { <p>Cargando avisos…</p> }
     @if (!loading() && page(); as current) {
+      <div class="alert-toolbar">
+        <label for="alert-page-size">Avisos por página</label>
+        <select id="alert-page-size" class="page-size" data-testid="alert-page-size" [value]="pageSize()" (change)="selectPageSize($any($event.target).value)">
+          @for (size of pageSizeOptions; track size) { <option [value]="size" [selected]="size === pageSize()">{{ size }}</option> }
+        </select>
+      </div>
       @if (!current.items.length) { <p class="empty">No hay avisos en esta vista.</p> }
       <section class="alert-list" aria-label="Lista de avisos">
         @for (alert of current.items; track alert.id) {
-          <mat-card class="alert-card" [attr.data-severity]="alert.severity">
+          <mat-card class="alert-card" [attr.data-severity]="alert.severity" data-testid="alert-row">
             <mat-card-content class="alert-copy"><div class="alert-meta"><span>{{ alert.severity }}</span><time [attr.datetime]="alert.opened_at">{{ alert.opened_at | date:'short' }}</time></div><h2>{{ alert.title }}</h2><p>{{ alert.body }}</p>@if (alert.resolved_at) { <small>Resuelto {{ alert.resolved_at | date:'short' }}</small> } @if (alert.acknowledged_at) { <small>Acusado {{ alert.acknowledged_at | date:'short' }}</small> }</mat-card-content>
             @if (!alert.acknowledged_at) { <mat-card-actions align="end"><button mat-stroked-button color="primary" type="button" (click)="acknowledge(alert.id)"><mat-icon aria-hidden="true">done</mat-icon>Acusar</button></mat-card-actions> }
           </mat-card>

@@ -2,6 +2,7 @@ from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 
 from dynamic_thermal_charge.persistence.system_configuration import SecretAction, SecretMutation
+from dynamic_thermal_charge.api.read_model import forecast_cycle_context
 from dynamic_thermal_charge.runtime import _record_forecast_cycle
 from dynamic_thermal_charge.weather import HourlyForecastPoint, OutdoorForecast, WeatherProviderError
 from tests.conftest import API_NOW, AUTH
@@ -33,6 +34,73 @@ def _configure_aemet(store) -> None:
     )
 
 
+def test_initial_cycle_projection_has_the_daily_anchor_without_a_forecast(initialised_store):
+    cycle = initialised_store.planning.forecast_cycle(API_NOW.date(), API_NOW)
+
+    context = forecast_cycle_context(initialised_store.planning)
+
+    assert cycle.last_result is None
+    assert context["forecast_next_run_at"] == cycle.scheduled_at
+    assert context["forecast_next_run_kind"] == "daily"
+
+
+def test_next_cycle_carries_a_successful_refresh_after_the_daily_anchor(initialised_store):
+    successful_at = datetime(2026, 1, 16, 23, 30, tzinfo=timezone.utc)
+    refresh_at = successful_at + timedelta(hours=14)
+    _record_forecast_cycle(
+        initialised_store,
+        local_date=successful_at.date(),
+        scheduled_at=successful_at,
+        attempted_at=successful_at,
+        result="success",
+        error=None,
+        next_run_at=refresh_at,
+    )
+
+    next_cycle = initialised_store.planning.forecast_cycle(
+        refresh_at.date(),
+        datetime(2026, 1, 17, 12, tzinfo=timezone.utc),
+        now=datetime(2026, 1, 17, 12, 5, tzinfo=timezone.utc),
+    )
+
+    assert next_cycle.next_run_at == refresh_at
+    assert next_cycle.completed is True
+    assert forecast_cycle_context(initialised_store.planning)["forecast_next_run_kind"] == "refresh"
+
+
+def test_persisted_failed_episode_keeps_retry_cadence_across_local_midnight(
+    initialised_store,
+):
+    failed_at = datetime(2026, 1, 16, 23, 30, tzinfo=timezone.utc)
+    retry_at = failed_at + timedelta(hours=1)
+    cycle = initialised_store.planning.forecast_cycle(
+        failed_at.date(), failed_at
+    )
+    initialised_store.planning.save_forecast_cycle(
+        replace(
+            cycle,
+            attempt=1,
+            next_retry_at=retry_at,
+            last_attempt_at=failed_at,
+            last_result="error",
+            last_error="AEMET unavailable",
+            stale=True,
+            completed=False,
+        )
+    )
+
+    next_cycle = initialised_store.planning.forecast_cycle(
+        retry_at.date(),
+        datetime(2026, 1, 17, 12, tzinfo=timezone.utc),
+        now=datetime(2026, 1, 17, 0, 5, tzinfo=timezone.utc),
+    )
+
+    assert next_cycle.attempt == 1
+    assert next_cycle.next_retry_at == retry_at
+    assert next_cycle.last_result == "error"
+    assert next_cycle.stale is True
+
+
 def test_forecast_cycle_persists_success_and_failure_without_replacing_forecast(
     initialised_store, recorder
 ):
@@ -57,6 +125,9 @@ def test_forecast_cycle_persists_success_and_failure_without_replacing_forecast(
         "forecast_next_retry_at": None,
         "forecast_stale": False,
     }
+    context = forecast_cycle_context(initialised_store.planning)
+    assert context["forecast_next_run_at"] == next_run
+    assert context["forecast_next_run_kind"] == "refresh"
 
     _record_forecast_cycle(
         initialised_store,
@@ -71,6 +142,9 @@ def test_forecast_cycle_persists_success_and_failure_without_replacing_forecast(
     assert status["forecast_status"] == "error"
     assert status["forecast_last_error"].startswith("WeatherProviderError")
     assert initialised_store.planning.latest_forecast()
+    context = forecast_cycle_context(initialised_store.planning)
+    assert context["forecast_next_run_kind"] == "retry"
+    assert context["forecast_next_run_at"] == API_NOW + timedelta(minutes=15)
 
 
 def test_forecast_cycle_does_not_resume_stale_episode_after_success(initialised_store):
@@ -104,7 +178,8 @@ def test_forecast_cycle_does_not_resume_stale_episode_after_success(initialised_
     assert next_cycle.attempt == 0
     assert next_cycle.next_retry_at is None
     assert next_cycle.stale is False
-    assert next_cycle.completed is False
+    assert next_cycle.completed is True
+    assert next_cycle.next_run_at == third_day
 
 
 def test_manual_aemet_refresh_returns_forecast_and_preserves_automatic_timer(

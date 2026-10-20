@@ -55,15 +55,19 @@ def forecast_cycle_context(planning) -> dict[str, Any]:
         context.setdefault("forecast_attempt", None)
         context.setdefault("forecast_next_retry_at", None)
         return context
-    context["forecast_next_run_kind"] = (
-        "retry"
-        if cycle.get("next_retry_at") is not None
-        else "daily"
-        if cycle.get("next_run_at") is not None
-        else None
-    )
     if cycle.get("next_retry_at") is not None:
         context["forecast_next_run_at"] = cycle["next_retry_at"]
+        context["forecast_next_run_kind"] = "retry"
+    elif cycle.get("next_run_at") is not None:
+        context["forecast_next_run_at"] = cycle["next_run_at"]
+        context["forecast_next_run_kind"] = "refresh"
+    elif cycle.get("last_result") is None and cycle.get("scheduled_at") is not None:
+        context["forecast_next_run_at"] = cycle["scheduled_at"]
+        context["forecast_next_run_kind"] = "daily"
+    elif cycle.get("stale") and cycle.get("last_result") == "error":
+        context["forecast_next_run_kind"] = "retry"
+    else:
+        context["forecast_next_run_kind"] = None
     context["forecast_stale"] = bool(cycle.get("stale", False))
     context["forecast_attempt"] = cycle.get("attempt")
     context["forecast_next_retry_at"] = cycle.get("next_retry_at")

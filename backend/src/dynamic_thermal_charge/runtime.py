@@ -71,7 +71,7 @@ from .scheduler import (
 from .service import ControllerService, PlanRefresh
 from .system_settings import MqttSystemSettings
 from .watchdog import DailyAemetForecastManager, ForecastWatchdog
-from .weather import OutdoorForecast, WeatherProvider
+from .weather import OutdoorForecast, WeatherProvider, weather_config_from_system
 
 logger = logging.getLogger(__name__)
 
@@ -266,12 +266,6 @@ def _run_controller(
                     )
                 ),
             )
-            watchdog = ForecastWatchdog(
-                provider,
-                expected_source=config.weather.provider,
-                config=config.weather.watchdog,
-            )
-
             def sample_measurements(now: datetime) -> None:
                 """Capture the controller's applied state without recalculating it."""
                 live_config, _live_revision = store.repository.current()
@@ -335,6 +329,24 @@ def _run_controller(
             # same wall-clock slot.
             pending_deviation: list[DeviationVerdict] = []
             boundary_gate = SlotBoundaryGate()
+
+            def refresh_aemet(now: datetime) -> int:
+                live_config, _live_revision = store.repository.current()
+                planning_site = store.planning.site()
+                timezone_name = (
+                    live_config.schedule.timezone
+                    if live_config.schedule is not None
+                    else "UTC"
+                )
+                return _refresh_daily_aemet_forecast(
+                    store,
+                    history,
+                    provider,
+                    now,
+                    query_hour=int(planning_site["aemet_query_hour"]),
+                    timezone_name=timezone_name,
+                    weather_fallback=config.weather,
+                )
 
             def deviation_check(now: datetime) -> bool:
                 live_config, _live_revision = store.repository.current()
@@ -424,19 +436,6 @@ def _run_controller(
                     ),
                     store.planning.active_plan() is not None,
                     planning_site["replan_minutes"],
-                )
-                timezone_name = (
-                    live_config.schedule.timezone
-                    if live_config.schedule is not None
-                    else "UTC"
-                )
-                _refresh_daily_aemet_forecast(
-                    store,
-                    history,
-                    provider,
-                    now,
-                    query_hour=int(planning_site["aemet_query_hour"]),
-                    timezone_name=timezone_name,
                 )
                 room_energy_targets = _room_energy_targets(
                     store, live_config, control
@@ -594,6 +593,12 @@ def _run_controller(
                     if live_config.schedule is not None
                     else now
                 )
+                live_weather = _live_weather_config(store, config.weather)
+                watchdog = ForecastWatchdog(
+                    provider,
+                    expected_source=live_weather.provider,
+                    config=live_weather.watchdog,
+                )
                 try:
                     cycle = watchdog.poll(start.date())
                 except Exception as exc:
@@ -604,7 +609,9 @@ def _run_controller(
                         attempted_at=now,
                         result="error",
                         error=_safe_forecast_error(exc),
-                        next_run_at=now + timedelta(minutes=config.weather.watchdog.retry_minutes),
+                        next_run_at=now + timedelta(
+                            minutes=live_weather.watchdog.retry_minutes
+                        ),
                     )
                     raise
                 forecast_ref = history.record_forecast(cycle.forecast)
@@ -642,7 +649,6 @@ def _run_controller(
                 store=active_plan,
                 refresh_plan=refresh_plan,
                 poll_seconds=(config.runtime.poll_seconds if system is None else system.operations.controller_poll_seconds),
-                error_retry_seconds=config.weather.watchdog.retry_minutes * 60,
                 history=history,
                 retention_days=(config.retention_days if system is None else system.operations.retention_days),
                 heartbeat=heartbeat,
@@ -657,6 +663,10 @@ def _run_controller(
                 alerts=alerts,
                 deviation_check=deviation_check,
                 measurement_sampler=sample_measurements,
+                error_retry_seconds=lambda: _weather_retry_seconds(
+                    store, config.weather
+                ),
+                forecast_refresh=refresh_aemet,
             )
             return service.run()
         finally:
@@ -1136,17 +1146,36 @@ def _refresh_daily_aemet_forecast(
     *,
     query_hour: int,
     timezone_name: str,
-) -> None:
+    retry_minutes: int | None = None,
+    refresh_minutes: int | None = None,
+    weather_fallback=None,
+) -> int:
     """Run and durably record the AEMET cycle without stopping planning."""
-    manager = DailyAemetForecastManager(
-        provider, query_hour=query_hour, timezone_name=timezone_name
-    )
     zone = ZoneInfo(timezone_name)
     local_date = now.astimezone(zone).date()
     scheduled_at = datetime.combine(
         local_date, clock_time(hour=query_hour), tzinfo=zone
     )
     try:
+        live_weather = _live_weather_config(store, weather_fallback)
+        if live_weather is not None:
+            retry_minutes = (
+                live_weather.watchdog.retry_minutes
+                if retry_minutes is None
+                else retry_minutes
+            )
+            refresh_minutes = (
+                live_weather.watchdog.refresh_minutes
+                if refresh_minutes is None
+                else refresh_minutes
+            )
+        manager = DailyAemetForecastManager(
+            provider,
+            query_hour=query_hour,
+            timezone_name=timezone_name,
+            retry_minutes=60 if retry_minutes is None else retry_minutes,
+            refresh_minutes=180 if refresh_minutes is None else refresh_minutes,
+        )
         current = store.planning.forecast_cycle(local_date, scheduled_at, now=now)
         result = manager.poll(now, current)
         forecast_ref = (
@@ -1165,8 +1194,10 @@ def _refresh_daily_aemet_forecast(
             forecast_ref is not None,
             result.state.next_retry_at.isoformat() if result.state.next_retry_at else None,
         )
+        return result.next_poll_seconds
     except Exception:
         logger.error("Could not refresh the daily AEMET forecast", exc_info=True)
+        return _weather_retry_seconds(store, weather_fallback)
 
 
 def _record_forecast_cycle(
@@ -1191,12 +1222,13 @@ def _record_forecast_cycle(
             last_error=error,
             stale=result == "error",
             next_retry_at=(
-                attempted_at.astimezone(timezone.utc) + timedelta(hours=1)
+                next_run_at.astimezone(timezone.utc)
                 if result == "error"
                 else None
             ),
             next_run_at=(None if result == "error" else next_run_at),
             attempt=(current.attempt + 1 if result == "error" else 0),
+            completed=result == "success",
         )
         planning.save_forecast_cycle(state, forecast_ref)
     except Exception:
@@ -1215,6 +1247,19 @@ def _live_mqtt_settings(
     if store.system_configuration is None:
         return fallback
     return store.system_configuration.current().configuration.mqtt
+
+
+def _live_weather_config(store, fallback):
+    if store.system_configuration is None:
+        return fallback
+    return weather_config_from_system(
+        store.system_configuration.current().configuration.weather
+    )
+
+
+def _weather_retry_seconds(store, fallback) -> int:
+    weather = _live_weather_config(store, fallback)
+    return 60 * 60 if weather is None else weather.watchdog.retry_minutes * 60
 
 
 def _build_output_driver(config: AppConfig, driver_name: str) -> OutputDriver:

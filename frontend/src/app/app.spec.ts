@@ -75,6 +75,9 @@ describe('App shell', () => {
     fixture.detectChanges();
 
     expect(fixture.componentInstance.alertSummary()?.active_count).toBe(2);
+    const indicator = (fixture.nativeElement as HTMLElement).querySelector<HTMLElement>('[data-testid="alerts-indicator"]');
+    expect(indicator?.querySelector('.alert-count')?.textContent).toContain('2');
+    expect(indicator?.querySelector('mat-icon')?.textContent).toContain('notifications');
     fixture.destroy();
     vi.useRealTimers();
   });

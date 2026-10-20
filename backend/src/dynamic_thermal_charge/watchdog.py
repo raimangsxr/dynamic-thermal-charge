@@ -67,15 +67,30 @@ class DailyForecastResult:
 
 
 class DailyAemetForecastManager:
-    """AEMET-specific daily retrieval with durable hourly retry semantics.
+    """AEMET-specific retrieval with durable refresh and retry semantics.
 
     A failed cycle returns the last real forecast marked stale by the caller;
     it never asks a simulated provider to replace it.
     """
 
-    def __init__(self, provider: WeatherProvider, *, query_hour: int = 12, timezone_name: str = "UTC") -> None:
+    def __init__(
+        self,
+        provider: WeatherProvider,
+        *,
+        query_hour: int = 12,
+        timezone_name: str = "UTC",
+        retry_minutes: int = 60,
+        refresh_minutes: int = 180,
+    ) -> None:
         self._provider = provider
-        self._cycle = DailyAemetCycle(query_hour, timezone_name)
+        if refresh_minutes <= 0:
+            raise ValueError("refresh_minutes must be positive")
+        self._cycle = DailyAemetCycle(
+            query_hour,
+            timezone_name,
+            retry_minutes=retry_minutes,
+        )
+        self._refresh_minutes = refresh_minutes
         self._last_valid: OutdoorForecast | None = None
 
     def poll(self, now: datetime, state: ForecastCycleState | None = None) -> DailyForecastResult:
@@ -85,17 +100,39 @@ class DailyAemetForecastManager:
             # A failed cycle must not wait for the next configured query hour
             # after midnight.  Start the new local-day record immediately,
             # carrying the retry episode forward until the provider succeeds.
-            previous_failed = current.stale and not current.completed
+            previous_failed = current.stale and current.last_result == "error"
+            previous_success = current.last_result == "success"
             initial = self._cycle.initial_state(local_date)
+            carry_refresh = (
+                previous_success
+                and current.next_run_at is not None
+            )
+            inherited_success = previous_success and carry_refresh
             current = replace(
                 initial,
                 attempt=current.attempt if previous_failed else 0,
                 next_retry_at=(
-                    now.astimezone(timezone.utc) if previous_failed else None
+                    current.next_retry_at if previous_failed else None
                 ),
                 last_error=current.last_error if previous_failed else None,
                 stale=previous_failed,
-                last_forecast_id=current.last_forecast_id if previous_failed else None,
+                completed=inherited_success,
+                last_attempt_at=(
+                    current.last_attempt_at
+                    if previous_failed or inherited_success
+                    else None
+                ),
+                last_result=(
+                    current.last_result
+                    if previous_failed or inherited_success
+                    else None
+                ),
+                last_forecast_id=(
+                    current.last_forecast_id
+                    if previous_failed or inherited_success
+                    else None
+                ),
+                next_run_at=current.next_run_at if carry_refresh else None,
             )
         logger.debug(
             "Daily AEMET forecast poll: local_date=%s attempt=%d due=%s",
@@ -124,12 +161,16 @@ class DailyAemetForecastManager:
             self._cycle.success(current),
             last_attempt_at=now,
             last_result="success",
-            next_run_at=now.astimezone(self._cycle.timezone) + timedelta(days=1),
+            next_run_at=now.astimezone(timezone.utc)
+            + timedelta(minutes=self._refresh_minutes),
         )
-        return DailyForecastResult(forecast, updated, 24 * 60 * 60)
+        return DailyForecastResult(forecast, updated, _seconds_until(updated, now))
 
 
 def _seconds_until(state: ForecastCycleState, now: datetime) -> int:
-    if state.next_retry_at is None:
+    target = state.next_retry_at or state.next_run_at
+    if target is None and not state.completed:
+        target = state.scheduled_at
+    if target is None:
         return 24 * 60 * 60
-    return max(1, round((state.next_retry_at - now.astimezone(timezone.utc)).total_seconds()))
+    return max(1, round((target - now.astimezone(timezone.utc)).total_seconds()))

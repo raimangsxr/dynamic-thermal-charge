@@ -1525,7 +1525,7 @@ class SqlPlanningRepository:
         with transaction(self._application, self._application_location) as connection:
             row = connection.execute(select(forecast_cycle).where((forecast_cycle.c.installation_id == self._installation_id) & (forecast_cycle.c.local_date == local_date))).mappings().first()
             if row is None:
-                previous = connection.execute(
+                previous_row = connection.execute(
                     select(forecast_cycle)
                     .where(
                         forecast_cycle.c.installation_id == self._installation_id
@@ -1533,16 +1533,43 @@ class SqlPlanningRepository:
                     .order_by(forecast_cycle.c.updated_at.desc(), forecast_cycle.c.id.desc())
                     .limit(1)
                 ).mappings().first()
-                if previous is not None and not (
-                    bool(previous["stale"]) and previous["last_result"] == "error"
-                ):
-                    previous = None
+                previous_failed = previous_row is not None and (
+                    bool(previous_row["stale"]) and previous_row["last_result"] == "error"
+                )
+                previous = previous_row if previous_failed else None
+                previous_success = (
+                    previous_row is not None
+                    and previous_row["last_result"] == "success"
+                )
                 inherited_stale = previous is not None
                 inherited_attempt = 0 if previous is None else int(previous["attempt"])
                 retry_at = (
                     None
                     if previous is None
-                    else to_utc(now or datetime.now(timezone.utc))
+                    else from_utc(previous_row["next_retry_at"])
+                )
+                carried_refresh_at = None
+                if previous_success:
+                    previous_next_run = from_utc(previous_row["next_run_at"])
+                    if previous_next_run is not None:
+                        carried_refresh_at = previous_next_run
+                inherited_success = previous_success and carried_refresh_at is not None
+                inherited_last_result = (
+                    previous_row["last_result"]
+                    if previous_failed or inherited_success
+                    else None
+                )
+                inherited_last_attempt = (
+                    from_utc(previous_row["last_attempt_at"])
+                    if previous_failed or inherited_success
+                    else None
+                )
+                inherited_forecast_id = (
+                    None
+                    if previous_row is None
+                    or not (previous_failed or inherited_success)
+                    or previous_row["last_forecast_id"] is None
+                    else int(previous_row["last_forecast_id"])
                 )
                 connection.execute(insert(forecast_cycle).values(
                     installation_id=self._installation_id,
@@ -1551,11 +1578,15 @@ class SqlPlanningRepository:
                     attempt=inherited_attempt,
                     next_retry_at=retry_at,
                     last_error=None if previous is None else previous["last_error"],
-                    last_forecast_id=None if previous is None else previous["last_forecast_id"],
+                    last_forecast_id=inherited_forecast_id,
                     stale=inherited_stale,
-                    last_attempt_at=None,
-                    last_result=None,
-                    next_run_at=None,
+                    last_attempt_at=inherited_last_attempt,
+                    last_result=inherited_last_result,
+                    next_run_at=(
+                        None
+                        if carried_refresh_at is None
+                        else to_utc(carried_refresh_at)
+                    ),
                     updated_at=to_utc(datetime.now(timezone.utc)),
                 ))
                 return ForecastCycleState(
@@ -1565,11 +1596,11 @@ class SqlPlanningRepository:
                     retry_at,
                     None if previous is None else previous["last_error"],
                     inherited_stale,
-                    False,
-                    None,
-                    None,
-                    None,
-                    None if previous is None else previous["last_forecast_id"],
+                    inherited_success,
+                    inherited_last_attempt,
+                    inherited_last_result,
+                    carried_refresh_at,
+                    inherited_forecast_id,
                 )
         attempt = int(row["attempt"])
         return ForecastCycleState(
