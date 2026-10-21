@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-from sqlalchemy import delete, func, inspect, insert, select
+from sqlalchemy import MetaData, Table, delete, func, inspect, insert, select
 
 from .bootstrap import initialise_at, open_legacy_store
+from .aemet_refresh_migration import migrate_refresh_configuration_engine
 from .locator import DatabaseDriver, DatabaseLocator
 from .migration import MigrationCoordinator
 from .paths import StorePaths
@@ -48,13 +50,19 @@ def import_legacy(
     if not database_url:
         raise ValueError("legacy environment has no DTC_DATABASE_URL")
     source = open_legacy_store({"DTC_DATABASE_URL": database_url})
-    config, _revision = source.repository.current()
+    if apply:
+        # Legacy sources may still expose either the old table column or the
+        # old system document key.  Convert both sources before reading or
+        # copying them, with the same exact/conflict checks as active-schema
+        # migration.  The dry-run path remains non-mutating.
+        migrate_refresh_configuration_engine(source.engine)
     source_tables = set(inspect(source.engine).get_table_names())
     table_counts = {}
     with source.engine.connect() as connection:
         for name in sorted(source_tables & set(metadata.tables)):
+            source_table = Table(name, MetaData(), autoload_with=connection)
             table_counts[name] = int(connection.execute(
-                select(func.count()).select_from(metadata.tables[name])
+                select(func.count()).select_from(source_table)
             ).scalar_one())
     known = tuple(sorted(set(environment) & _LEGACY_KEYS))
     missing = tuple(sorted(_LEGACY_KEYS - set(environment)))
@@ -66,6 +74,7 @@ def import_legacy(
     if not apply:
         return report
 
+    config, _revision = source.repository.current()
     target, _init_report, _token = initialise_at(target_paths, allow_seed=False)
     if not target.repository.is_empty():
         current, _ = target.repository.current()
@@ -93,7 +102,27 @@ def _copy_legacy_tables(source_engine, destination_engine, destination_metadata)
         for target in reversed(targets):
             destination.execute(delete(target))
         for target in targets:
-            rows = source.execute(select(metadata.tables[target.name])).mappings().all()
+            source_table = Table(target.name, MetaData(), autoload_with=source)
+            rows = source.execute(select(source_table)).mappings().all()
+            if target.name == "weather_config":
+                from .aemet_refresh_migration import canonical_weather_row
+
+                rows = [canonical_weather_row(row) for row in rows]
+            elif target.name == "system_configuration":
+                from .aemet_refresh_migration import canonical_weather_document
+
+                converted = []
+                for row in rows:
+                    values = dict(row)
+                    weather = json.loads(values["weather_json"])
+                    values["weather_json"] = json.dumps(
+                        canonical_weather_document(weather),
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        allow_nan=False,
+                    )
+                    converted.append(values)
+                rows = converted
             if rows:
                 destination.execute(insert(target), [dict(row) for row in rows])
 
@@ -124,7 +153,7 @@ def _apply_system_environment(repository, environment, functional) -> None:
             "municipality_code": None if aemet is None else aemet.municipality_code,
             "timeout_seconds": 10.0 if aemet is None else aemet.timeout_seconds,
             "retry_minutes": 15 if weather is None else weather.watchdog.retry_minutes,
-            "refresh_minutes": 180 if weather is None else weather.watchdog.refresh_minutes,
+            "refresh_hours": 4 if weather is None else weather.watchdog.refresh_hours,
         },
         "logging": {
             "level": functional.logging.level,

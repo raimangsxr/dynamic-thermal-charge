@@ -182,7 +182,7 @@ def test_forecast_cycle_does_not_resume_stale_episode_after_success(initialised_
     assert next_cycle.next_run_at == third_day
 
 
-def test_manual_aemet_refresh_returns_forecast_and_preserves_automatic_timer(
+def test_manual_aemet_refresh_returns_forecast_and_restarts_automatic_timer(
     client, initialised_store, monkeypatch
 ):
     _configure_aemet(initialised_store)
@@ -208,13 +208,40 @@ def test_manual_aemet_refresh_returns_forecast_and_preserves_automatic_timer(
     body = response.json()
     assert body["forecast_status"] == "success"
     assert body["forecast"]["hourly_points"]
-    assert body["forecast_next_run_at"].startswith("2026-01-16T03:00")
+    expected_next = API_NOW + timedelta(hours=4)
+    assert body["forecast_next_run_at"].startswith("2026-01-16T05:00")
     assert "sentinel-aemet-key" not in response.text
-    assert initialised_store.planning.forecast_cycle_status()["forecast_next_run_at"] == automatic_next
+    assert initialised_store.planning.forecast_cycle_status()["forecast_next_run_at"] == expected_next
 
     configuration = client.get("/api/v1/system/configuration", headers=AUTH).json()
     assert configuration["sections"]["weather"]["forecast_status"] == "success"
     assert configuration["sections"]["weather"]["forecast_last_attempt_at"].startswith("2026-01-16T01:00")
+
+
+def test_manual_aemet_refresh_schedules_from_actual_completion(
+    client, initialised_store, api_clock, monkeypatch
+):
+    _configure_aemet(initialised_store)
+
+    class Provider:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def forecast_for(self, _forecast_date):
+            api_clock.advance(minutes=30)
+            return _forecast()
+
+    monkeypatch.setattr(
+        "dynamic_thermal_charge.api.routes.system.AemetWeatherProvider", Provider
+    )
+    response = client.post("/api/v1/system/weather/refresh", headers=AUTH)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    expected_completed = API_NOW + timedelta(minutes=30)
+    expected_next = expected_completed + timedelta(hours=4)
+    assert body["forecast_last_attempt_at"].startswith("2026-01-16T01:30")
+    assert body["forecast_next_run_at"].startswith("2026-01-16T05:30")
+    assert initialised_store.planning.forecast_cycle_status()["forecast_next_run_at"] == expected_next
 
 
 def test_manual_aemet_refresh_exposes_safe_error_and_keeps_last_forecast(
@@ -240,4 +267,5 @@ def test_manual_aemet_refresh_exposes_safe_error_and_keeps_last_forecast(
     weather = configuration["sections"]["weather"]
     assert weather["forecast_status"] == "error"
     assert weather["forecast_last_error"].startswith("WeatherProviderError")
+    assert weather["forecast_next_run_kind"] == "retry"
     assert initialised_store.planning.latest_forecast()

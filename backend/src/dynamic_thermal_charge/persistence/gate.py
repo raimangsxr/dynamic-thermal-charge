@@ -63,6 +63,7 @@ KNOWN_REVISIONS: tuple[str, ...] = (
     "0027_forecast_max_age",
     "0028_global_operator_alerts",
     "0029_measured_history_and_chart_cues",
+    "0030_aemet_refresh_hours",
 )
 EXPECTED_REVISION = KNOWN_REVISIONS[-1]
 

@@ -109,14 +109,14 @@ def test_weather_system_section_round_trips_all_fields_and_secret(client):
                 "municipality_code": "28079",
                 "timeout_seconds": 12.5,
                 "retry_minutes": 20,
-                "refresh_minutes": 240,
+                "refresh_hours": 4,
             },
             "secrets": {"aemet_api_key": {"action": "replace", "value": "secret-key"}},
         },
     )
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["sections"]["weather"]["refresh_minutes"] == 240
+    assert body["sections"]["weather"]["refresh_hours"] == 4
     assert body["secrets"]["aemet_api_key"]["configured"] is True
     assert "secret-key" not in response.text
 

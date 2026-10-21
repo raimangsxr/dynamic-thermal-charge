@@ -82,7 +82,7 @@ const SYSTEM: Record<string, Record<string, string>> = {
       'Código INE de 5 dígitos del municipio para AEMET. Obligatorio con proveedor AEMET.',
     timeout_seconds: 'Tiempo máximo de espera de cada petición HTTP a la API meteorológica.',
     retry_minutes: 'Minutos entre reintentos tras un error de consulta meteorológica.',
-    refresh_minutes: 'Minutos entre consultas automáticas de previsión.',
+    refresh_hours: 'Horas enteras entre consultas automáticas de previsión. El temporizador se reinicia al terminar cada consulta correcta.',
   },
   planning: {
     replan_minutes:

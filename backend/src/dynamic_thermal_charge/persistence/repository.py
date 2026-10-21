@@ -219,9 +219,24 @@ class SqlConfigRepository:
                 "initialise it before using the service"
             )
         installation_id = installation_row["id"]
+        weather_columns = {
+            column["name"]
+            for column in inspect(connection).get_columns(weather_table.name)
+        }
+        if "watchdog_refresh_hours" in weather_columns:
+            weather_read_table = weather_table
+        else:
+            # A phase-1 database is readable before its maintenance migration
+            # runs; the row mapper converts the historical minutes field to
+            # canonical hours for the domain model.
+            weather_read_table = Table(
+                weather_table.name,
+                MetaData(),
+                autoload_with=connection,
+            )
         weather_row = connection.execute(
-            select(weather_table).where(
-                weather_table.c.installation_id == installation_id
+            select(weather_read_table).where(
+                weather_read_table.c.installation_id == installation_id
             )
         ).mappings().first()
         heater_rows = connection.execute(
@@ -470,9 +485,33 @@ class SqlConfigRepository:
                 )
             ).inserted_primary_key[0]
             if config.weather is not None:
+                weather_values = weather_params(config.weather, installation_id)
+                weather_columns = {
+                    column["name"]
+                    for column in inspect(connection).get_columns(weather_table.name)
+                }
+                if (
+                    "watchdog_refresh_hours" not in weather_columns
+                    and "watchdog_refresh_minutes" in weather_columns
+                ):
+                    # A phase-1 database is seeded before its maintenance
+                    # migration runs. Preserve the current domain value in
+                    # that historical column exactly; the 0030 migration
+                    # converts it back to canonical hours.
+                    hours = weather_values.pop("watchdog_refresh_hours")
+                    weather_values["watchdog_refresh_minutes"] = hours * 60
+                    weather_insert_table = Table(
+                        weather_table.name,
+                        MetaData(),
+                        autoload_with=connection,
+                    )
+                else:
+                    weather_insert_table = weather_table
                 connection.execute(
-                    insert(weather_table).values(
-                        **weather_params(config.weather, installation_id)
+                    insert(weather_insert_table).values(
+                        **self._compatible_params(
+                            connection, weather_table.name, weather_values
+                        )
                     )
                 )
             for position, heater in enumerate(config.heaters):

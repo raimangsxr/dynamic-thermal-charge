@@ -255,7 +255,7 @@ const SYSTEM_FIELDS: Record<SystemSection, readonly FieldDefinition[]> = {
     { name: 'municipality_code', label: 'Código de municipio AEMET', type: 'text', hint: 'Código INE de 5 dígitos.' },
     { name: 'timeout_seconds', label: 'Tiempo de espera (s)', type: 'number', min: '1', step: '1' },
     { name: 'retry_minutes', label: 'Reintento tras error (min)', type: 'number', min: '1', step: '1' },
-    { name: 'refresh_minutes', label: 'Actualización automática (min)', type: 'number', min: '1', step: '1' },
+    { name: 'refresh_hours', label: 'Actualización automática (horas)', type: 'number', min: '1', step: '1' },
   ],
   output: [{ name: 'driver', label: 'Modo global de salida', type: 'select', options: OUTPUT_DRIVERS, hint: 'Define si el controlador usa salidas simuladas o GPIO.' }],
   logging: [
@@ -524,8 +524,8 @@ export class Config {
     if (section === 'weather') {
       return [
         { title: 'Proveedor y ubicación', fields: fields.slice(0, 3) },
-        { title: 'Temperaturas simuladas y respaldo', fields: fields.slice(3, 7) },
-        { title: 'Actualización', fields: fields.slice(7) },
+        { title: 'Cadencia de reintento', fields: fields.slice(3, 4) },
+        { title: 'Actualización automática', fields: fields.slice(4) },
       ];
     }
     return [{ title: 'Parámetros', fields }];

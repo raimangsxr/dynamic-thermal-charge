@@ -62,7 +62,7 @@ function systemConfigurationDto(overrides: Partial<SystemConfigurationDto> = {})
       database: { driver: 'sqlite', host: null, port: null, database: null, tls: true, trusted_no_tls: false },
       api: { host: '127.0.0.1', port: 8080, cors_origins: [], stale_seconds: null },
       mqtt: { enabled: false, host: null, port: 1883, tls: false, prefix: 'telemetria', discovery_prefix: 'homeassistant', publish_seconds: 15 },
-      weather: { provider: 'aemet', municipality_code: null, timeout_seconds: 10, retry_minutes: 15, refresh_minutes: 180 },
+      weather: { provider: 'aemet', municipality_code: null, timeout_seconds: 10, retry_minutes: 15, refresh_hours: 4 },
       output: { driver: 'simulated' },
       logging: { level: 'INFO', max_events: 1000 },
       operations: { controller_poll_seconds: 5, heartbeat_stale_multiplier: 3, relay_test_lease_seconds: 30, relay_test_state_poll_seconds: 1, relay_test_lease_renew_seconds: 10, retention_days: 365, fallback_max_age_minutes: 1440 },
@@ -194,6 +194,21 @@ describe('Config', () => {
     expect(element.querySelector('.output-note')?.textContent).toContain('driver efectivo: Simulado');
     expect(element.querySelector('.output-note')?.textContent).toContain('prevalece la simulación global');
     expect(element.querySelector('.output-note')?.textContent).toContain('Salón');
+  });
+
+  it('renders the AEMET refresh cadence as canonical positive integer hours', () => {
+    const element = loadUnified();
+    fixture.componentInstance.chooseArea('integrations');
+    fixture.componentInstance.chooseIntegration('weather');
+    fixture.detectChanges();
+
+    const refresh = element.querySelector<HTMLInputElement>('#weather-refresh_hours');
+    expect(refresh).not.toBeNull();
+    expect(refresh?.getAttribute('min')).toBe('1');
+    expect(refresh?.getAttribute('step')).toBe('1');
+    expect(element.querySelector('#weather-refresh_minutes')).toBeNull();
+    expect(element.textContent).toContain('Actualización automática (horas)');
+    expect(paramHelpText('refresh_hours', 'weather')).toContain('Horas enteras');
   });
 
   it('keeps a replaced secret out of the DOM after saving from the merged page', async () => {

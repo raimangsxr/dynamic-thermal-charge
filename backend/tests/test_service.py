@@ -111,6 +111,7 @@ def test_service_keeps_plan_cadence_separate_from_forecast_cadence() -> None:
 def test_service_uses_the_current_retry_cadence_after_a_generic_failure() -> None:
     start = datetime(2026, 1, 1)
     retry_seconds = [15 * 60]
+    completion = [start]
 
     def fail(_now):
         raise RuntimeError("forecast unavailable")
@@ -121,19 +122,21 @@ def test_service_uses_the_current_retry_cadence_after_a_generic_failure() -> Non
         refresh_plan=fail,
         poll_seconds=1,
         error_retry_seconds=lambda: retry_seconds[0],
+        clock=lambda: completion[0],
     )
 
     _plan, next_retry = service._try_refresh(start, None)
     assert next_retry == start + timedelta(minutes=15)
 
     retry_seconds[0] = 7 * 60
-    _plan, next_retry = service._try_refresh(start + timedelta(minutes=15), None)
+    completion[0] = start + timedelta(minutes=15)
+    _plan, next_retry = service._try_refresh(completion[0], None)
     assert next_retry == start + timedelta(minutes=22)
 
 
 def test_service_keeps_outputs_off_without_any_valid_plan(tmp_path, caplog) -> None:
     now = datetime(2026, 1, 1)
-    times = iter((now, now, now))
+    times = iter((now, now, now, now))
     driver = SimulatedOutputDriver()
 
     def fail(_now):

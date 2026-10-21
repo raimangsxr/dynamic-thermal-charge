@@ -201,7 +201,7 @@ def test_weather_settings_round_trip_and_runtime_projection(system_repository):
             "municipality_code": "28079",
             "timeout_seconds": 12.5,
             "retry_minutes": 20,
-            "refresh_minutes": 240,
+            "refresh_hours": 4,
         },
         expected_revision=1,
         secret_mutations={
@@ -216,7 +216,7 @@ def test_weather_settings_round_trip_and_runtime_projection(system_repository):
         municipality_code="28079",
         timeout_seconds=12.5,
         retry_minutes=20,
-        refresh_minutes=240,
+        refresh_hours=4,
     )
     runtime = weather_config_from_system(snapshot.configuration.weather)
     assert runtime.provider == "aemet"
@@ -228,6 +228,28 @@ def test_weather_settings_round_trip_and_runtime_projection(system_repository):
     assert public["sections"]["weather"]["municipality_code"] == "28079"
     assert "aemet_api_key" not in str(public["sections"]["weather"])
     assert public["secrets"]["aemet_api_key"]["configured"] is True
+
+
+def test_weather_refresh_hours_is_canonical_strict_and_atomic(system_repository):
+    repository, _engines = system_repository
+    before = repository.current()
+    for patch, message in (
+        ({"refresh_minutes": 180}, "unknown fields"),
+        ({"refresh_hours": True}, "positive integer"),
+        ({"refresh_hours": 1.5}, "positive integer"),
+        ({"refresh_hours": 0}, "positive integer"),
+        ({"refresh_hours": -1}, "positive integer"),
+    ):
+        with pytest.raises(ConfigValidationError, match=message):
+            repository.update_section(
+                "weather",
+                patch,
+                expected_revision=before.revision,
+                actor="admin",
+            )
+        assert repository.current() == before
+
+    assert before.configuration.weather.refresh_hours == 4
 
 
 def test_public_catalog_is_allow_list_complete():

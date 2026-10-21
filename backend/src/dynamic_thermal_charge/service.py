@@ -203,6 +203,7 @@ class ControllerService:
             return plan, now + timedelta(seconds=self._current_error_retry_seconds())
         except Exception as exc:
             retry_seconds = self._current_error_retry_seconds()
+            completed_at = self._clock()
             logger.error(
                 "Plan refresh failed; retaining persisted plan and retrying in %d "
                 "seconds: %s",
@@ -210,7 +211,7 @@ class ControllerService:
                 exc,
             )
             self._warn_if_planless(plan)
-            return plan, now + timedelta(seconds=retry_seconds)
+            return plan, completed_at + timedelta(seconds=retry_seconds)
 
         self._leave_degraded()
         if refreshed.persist_plan:

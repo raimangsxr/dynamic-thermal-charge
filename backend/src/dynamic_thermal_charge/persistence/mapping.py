@@ -33,6 +33,7 @@ from ..models import (
     WeatherWatchdogConfig,
 )
 from . import ConfigValidationError
+from .aemet_refresh_migration import refresh_hours_from_minutes
 
 
 # --------------------------------------------------------------------------- #
@@ -191,12 +192,26 @@ def weather_from_row(row: Mapping[str, Any] | None) -> WeatherConfig | None:
                 api_key_env=str(row.get("aemet_api_key_env") or "AEMET_API_KEY"),
                 timeout_seconds=float(row.get("aemet_timeout_seconds") or 10.0),
             )
+        refresh_hours = row.get("watchdog_refresh_hours")
+        if "watchdog_refresh_minutes" in row:
+            # The compatibility importer may inspect a pre-0030 source before
+            # copying it into the canonical schema.  Keep this conversion
+            # exact; normal application reads only see watchdog_refresh_hours.
+            legacy_hours = refresh_hours_from_minutes(
+                row["watchdog_refresh_minutes"], "watchdog_refresh_minutes"
+            )
+            if refresh_hours is not None and int(refresh_hours) != legacy_hours:
+                raise ValueError(
+                    "watchdog_refresh_hours conflicts with watchdog_refresh_minutes"
+                )
+            if refresh_hours is None:
+                refresh_hours = legacy_hours
         return WeatherConfig(
             provider=provider,
             aemet=aemet,
             watchdog=WeatherWatchdogConfig(
                 retry_minutes=int(row["watchdog_retry_minutes"]),
-                refresh_minutes=int(row["watchdog_refresh_minutes"]),
+                refresh_hours=refresh_hours,
             ),
         )
 
@@ -389,7 +404,7 @@ def weather_params(config: WeatherConfig, installation_id: int) -> dict[str, Any
             None if config.aemet is None else config.aemet.timeout_seconds
         ),
         "watchdog_retry_minutes": config.watchdog.retry_minutes,
-        "watchdog_refresh_minutes": config.watchdog.refresh_minutes,
+        "watchdog_refresh_hours": config.watchdog.refresh_hours,
     }
 
 

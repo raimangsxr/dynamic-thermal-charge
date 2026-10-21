@@ -113,14 +113,22 @@ class DailyAemetCycle:
         query_hour: int = 12,
         timezone_name: str = "UTC",
         retry_minutes: int = 60,
+        refresh_hours: int = 4,
     ) -> None:
         if not 0 <= query_hour <= 23:
             raise ValueError("query_hour must be between 0 and 23")
         if retry_minutes <= 0:
             raise ValueError("retry_minutes must be positive")
+        if (
+            isinstance(refresh_hours, bool)
+            or not isinstance(refresh_hours, int)
+            or refresh_hours <= 0
+        ):
+            raise ValueError("refresh_hours must be a positive integer")
         self._query_hour = query_hour
         self._zone = ZoneInfo(timezone_name)
         self._retry_interval = timedelta(minutes=retry_minutes)
+        self._refresh_interval = timedelta(hours=refresh_hours)
 
     def initial_state(self, local_date: date) -> ForecastCycleState:
         scheduled = datetime.combine(local_date, datetime.min.time(), tzinfo=self._zone).replace(hour=self._query_hour)
@@ -149,15 +157,28 @@ class DailyAemetCycle:
             and now.astimezone(timezone.utc) >= state.next_run_at
         ) or legacy_retry_due
 
-    def success(self, state: ForecastCycleState) -> ForecastCycleState:
-        return replace(state, next_retry_at=None, last_error=None, stale=False, completed=True)
+    def success(
+        self, state: ForecastCycleState, completed_at: datetime
+    ) -> ForecastCycleState:
+        completed_at = completed_at.astimezone(timezone.utc)
+        return replace(
+            state,
+            next_retry_at=None,
+            last_error=None,
+            stale=False,
+            completed=True,
+            next_run_at=completed_at + self._refresh_interval,
+        )
 
-    def failure(self, state: ForecastCycleState, now: datetime, error: str) -> ForecastCycleState:
+    def failure(
+        self, state: ForecastCycleState, completed_at: datetime, error: str
+    ) -> ForecastCycleState:
         attempt = state.attempt + 1
+        completed_at = completed_at.astimezone(timezone.utc)
         return replace(
             state,
             attempt=attempt,
-            next_retry_at=now.astimezone(timezone.utc) + self._retry_interval,
+            next_retry_at=completed_at + self._retry_interval,
             last_error=error,
             stale=True,
             completed=False,
@@ -258,7 +279,7 @@ def weather_config_from_system(settings: WeatherSystemSettings) -> WeatherConfig
         aemet=aemet,
         watchdog=WeatherWatchdogConfig(
             retry_minutes=settings.retry_minutes,
-            refresh_minutes=settings.refresh_minutes,
+            refresh_hours=settings.refresh_hours,
         ),
     )
 

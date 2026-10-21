@@ -87,7 +87,7 @@ class WeatherSystemSettings:
     municipality_code: str | None = None
     timeout_seconds: float = 10.0
     retry_minutes: int = 15
-    refresh_minutes: int = 180
+    refresh_hours: int = 4
 
     def __post_init__(self) -> None:
         if self.provider != "aemet":
@@ -98,10 +98,18 @@ class WeatherSystemSettings:
             raise ValueError("weather.municipality_code must contain 5 digits")
         if self.timeout_seconds <= 0:
             raise ValueError("weather.timeout_seconds must be positive")
-        if self.retry_minutes <= 0:
+        if (
+            isinstance(self.retry_minutes, bool)
+            or not isinstance(self.retry_minutes, int)
+            or self.retry_minutes <= 0
+        ):
             raise ValueError("weather.retry_minutes must be positive")
-        if self.refresh_minutes <= 0:
-            raise ValueError("weather.refresh_minutes must be positive")
+        if (
+            isinstance(self.refresh_hours, bool)
+            or not isinstance(self.refresh_hours, int)
+            or self.refresh_hours <= 0
+        ):
+            raise ValueError("weather.refresh_hours must be a positive integer")
 
 
 @dataclass(frozen=True)
@@ -297,7 +305,7 @@ ACTIVATION_POLICIES: dict[str, ActivationPolicy] = {
     "weather.municipality_code": ActivationPolicy.NEXT_CYCLE,
     "weather.timeout_seconds": ActivationPolicy.NEXT_CYCLE,
     "weather.retry_minutes": ActivationPolicy.NEXT_CYCLE,
-    "weather.refresh_minutes": ActivationPolicy.NEXT_CYCLE,
+    "weather.refresh_hours": ActivationPolicy.NEXT_CYCLE,
     "output.driver": ActivationPolicy.RESTART,
     "logging.level": ActivationPolicy.HOT,
     "logging.max_events": ActivationPolicy.HOT,
